@@ -2,6 +2,7 @@ const Application = require('../../models/Application');
 const User = require('../../models/User');
 const Residence = require('../../models/Residence');
 const { validationResult } = require('express-validator');
+const { sendEmail } = require('../../utils/email');
 
 // Get all applications with room status
 exports.getApplications = async (req, res) => {
@@ -14,7 +15,6 @@ exports.getApplications = async (req, res) => {
 
         // Get applications
         const applications = await Application.find(query)
-            .populate('student', 'firstName lastName email phone program year')
             .sort({ applicationDate: -1 });
 
         // Get all residences to check room status
@@ -36,23 +36,21 @@ exports.getApplications = async (req, res) => {
         // Transform applications to match frontend format
         const transformedApplications = applications.map(app => ({
             id: app._id,
-            studentId: app.student._id,
-            studentName: `${app.student.firstName} ${app.student.lastName}`,
-            email: app.student.email,
-            contact: app.student.phone,
-            program: app.student.program,
-            year: app.student.year,
+            studentName: `${app.firstName} ${app.lastName}`,
+            email: app.email,
+            contact: app.phone,
             requestType: app.requestType,
             status: app.status,
             paymentStatus: app.paymentStatus,
             applicationDate: app.applicationDate.toISOString().split('T')[0],
             preferredRoom: app.preferredRoom,
-            alternateRooms: app.alternateRooms,
+            alternateRooms: app.alternateRooms || [],
             currentRoom: app.currentRoom,
             requestedRoom: app.requestedRoom,
             reason: app.reason,
             allocatedRoom: app.allocatedRoom,
-            waitlistedRoom: app.waitlistedRoom
+            waitlistedRoom: app.waitlistedRoom,
+            applicationCode: app.applicationCode
         }));
 
         res.json({
@@ -64,7 +62,7 @@ exports.getApplications = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in getApplications:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Server error', details: error.message });
     }
 };
 
@@ -72,31 +70,18 @@ exports.getApplications = async (req, res) => {
 exports.updateApplicationStatus = async (req, res) => {
     try {
         const { action, roomNumber } = req.body;
-        const { applicationId } = req.params;
+        
+        if (!action) {
+            return res.status(400).json({ error: 'Action is required' });
+        }
 
-        const application = await Application.findById(applicationId)
-            .populate('student', 'firstName lastName email');
+        if (action === 'approve' && !roomNumber) {
+            return res.status(400).json({ error: 'Room number is required for approval' });
+        }
 
+        const application = await Application.findById(req.params.applicationId);
         if (!application) {
             return res.status(404).json({ error: 'Application not found' });
-        }
-
-        // Check if room exists and has capacity (for approve and waitlist actions)
-        if ((action === 'approve' || action === 'waitlist') && !roomNumber) {
-            return res.status(400).json({ error: 'Room number is required for this action' });
-        }
-
-        if (action === 'approve' || action === 'waitlist') {
-            // Find residence containing the room
-            const residence = await Residence.findOne({ 'rooms.roomNumber': roomNumber });
-            if (!residence) {
-                return res.status(404).json({ error: 'Room not found' });
-            }
-
-            const room = residence.rooms.find(r => r.roomNumber === roomNumber);
-            if (room.status !== 'available' && action === 'approve') {
-                return res.status(400).json({ error: 'Room is not available' });
-            }
         }
 
         // Update application based on action
@@ -105,20 +90,101 @@ exports.updateApplicationStatus = async (req, res) => {
                 application.status = 'approved';
                 application.allocatedRoom = roomNumber;
                 application.paymentStatus = 'unpaid';
-                // Update room status to reserved
-                await Residence.findOneAndUpdate(
-                    { 'rooms.roomNumber': roomNumber },
-                    { $set: { 'rooms.$.status': 'reserved' } }
-                );
+
+                // Generate application code if not exists
+                if (!application.applicationCode) {
+                    const year = new Date().getFullYear().toString().substr(-2);
+                    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+                    application.applicationCode = `APP${year}${random}`;
+                }
+
+                try {
+                    // Update room status to reserved
+                    const residence = await Residence.findOneAndUpdate(
+                        { 'rooms.roomNumber': roomNumber },
+                        { $set: { 'rooms.$.status': 'reserved' } },
+                        { new: true }
+                    );
+
+                    if (!residence) {
+                        throw new Error('Room not found');
+                    }
+
+                    // Send approval email
+                    await sendEmail({
+                        to: application.email,
+                        subject: 'Application Approved - Alamait Student Accommodation',
+                        text: `
+                            Dear ${application.firstName} ${application.lastName},
+
+                            We are pleased to inform you that your application for Alamait Student Accommodation has been approved.
+
+                            Application Details:
+                            - Application Code: ${application.applicationCode}
+                            - Allocated Room: ${roomNumber}
+
+                            Please use this application code when registering on our platform.
+
+                            Next Steps:
+                            1. Register on our platform using your application code
+                            2. Complete your profile
+                            3. Make the required payments
+                            4. Submit any additional documents
+
+                            If you have any questions, please don't hesitate to contact us.
+
+                            Best regards,
+                            Alamait Student Accommodation Team
+                        `
+                    });
+                } catch (error) {
+                    console.error('Error in approval process:', error);
+                    return res.status(400).json({ 
+                        error: 'Failed to complete approval process',
+                        details: error.message 
+                    });
+                }
                 break;
 
             case 'reject':
                 application.status = 'rejected';
+                
+                // Send rejection email
+                await sendEmail({
+                    to: application.email,
+                    subject: 'Application Status Update - Alamait Student Accommodation',
+                    text: `
+                        Dear ${application.firstName} ${application.lastName},
+
+                        We regret to inform you that we are unable to approve your application at this time.
+
+                        If you have any questions or would like to discuss alternative options, please don't hesitate to contact us.
+
+                        Best regards,
+                        Alamait Student Accommodation Team
+                    `
+                });
                 break;
 
             case 'waitlist':
                 application.status = 'waitlisted';
                 application.waitlistedRoom = roomNumber;
+
+                // Send waitlist email
+                await sendEmail({
+                    to: application.email,
+                    subject: 'Application Waitlisted - Alamait Student Accommodation',
+                    text: `
+                        Dear ${application.firstName} ${application.lastName},
+
+                        Your application has been placed on our waitlist for room ${roomNumber}.
+
+                        We will contact you as soon as a space becomes available.
+
+                        Best regards,
+                        Alamait Student Accommodation Team
+                    `
+                });
                 break;
 
             default:
@@ -129,12 +195,25 @@ exports.updateApplicationStatus = async (req, res) => {
         application.actionBy = req.user._id;
         await application.save();
 
-        // TODO: Send notification to student about application status change
-
-        res.json(application);
+        res.json({
+            message: `Application ${action}ed successfully`,
+            application: {
+                id: application._id,
+                status: application.status,
+                applicationCode: application.applicationCode,
+                email: application.email,
+                firstName: application.firstName,
+                lastName: application.lastName,
+                allocatedRoom: application.allocatedRoom,
+                paymentStatus: application.paymentStatus
+            }
+        });
     } catch (error) {
         console.error('Error in updateApplicationStatus:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ 
+            error: 'Server error', 
+            details: error.message 
+        });
     }
 };
 
