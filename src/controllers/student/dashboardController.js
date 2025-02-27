@@ -1,5 +1,5 @@
 const User = require('../../models/User');
-const Room = require('../../models/Room');
+const Residence = require('../../models/Residence');
 const Payment = require('../../models/Payment');
 const Maintenance = require('../../models/Maintenance');
 const Message = require('../../models/Message');
@@ -78,37 +78,55 @@ exports.getDashboardData = async (req, res) => {
 // Get available rooms
 exports.getAvailableRooms = async (req, res) => {
     try {
-        const { search, status, capacity } = req.query;
-        const query = { status: 'available' };
+        const { search, type, minPrice, maxPrice } = req.query;
 
+        // Find all active residences
+        const residences = await Residence.find({ status: 'active' })
+            .populate('manager', 'firstName lastName email');
+
+        // Extract all available rooms from residences
+        let availableRooms = [];
+        residences.forEach(residence => {
+            const rooms = residence.rooms
+                .filter(room => room.status === 'available')
+                .map(room => ({
+                    id: room._id,
+                    residenceId: residence._id,
+                    residenceName: residence.name,
+                    roomNumber: room.roomNumber,
+                    type: room.type,
+                    price: room.price,
+                    features: room.features,
+                    floor: room.floor,
+                    area: room.area,
+                    amenities: residence.amenities,
+                    address: residence.address,
+                    contactInfo: residence.contactInfo
+                }));
+            availableRooms = [...availableRooms, ...rooms];
+        });
+
+        // Apply filters if provided
         if (search) {
-            query.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { features: { $in: [new RegExp(search, 'i')] } }
-            ];
+            availableRooms = availableRooms.filter(room => 
+                room.residenceName.toLowerCase().includes(search.toLowerCase()) ||
+                room.roomNumber.toLowerCase().includes(search.toLowerCase())
+            );
         }
 
-        if (capacity && capacity !== 'all') {
-            query.capacity = parseInt(capacity);
+        if (type) {
+            availableRooms = availableRooms.filter(room => room.type === type);
         }
 
-        const rooms = await Room.find(query)
-            .populate('residence', 'name')
-            .lean();
+        if (minPrice) {
+            availableRooms = availableRooms.filter(room => room.price >= parseFloat(minPrice));
+        }
 
-        // Transform rooms to match frontend format
-        const transformedRooms = rooms.map(room => ({
-            id: room._id,
-            name: room.name,
-            capacity: room.capacity,
-            price: room.price,
-            status: room.status,
-            features: room.features,
-            amenities: room.amenities,
-            image: room.image || 'default-room-image.jpg'
-        }));
+        if (maxPrice) {
+            availableRooms = availableRooms.filter(room => room.price <= parseFloat(maxPrice));
+        }
 
-        res.json(transformedRooms);
+        res.json(availableRooms);
     } catch (error) {
         console.error('Error in getAvailableRooms:', error);
         res.status(500).json({ error: 'Server error' });

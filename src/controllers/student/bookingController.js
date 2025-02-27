@@ -83,24 +83,25 @@ exports.createBooking = async (req, res) => {
             return res.status(400).json({ error: 'Room is already booked for these dates' });
         }
 
-        // Create booking
-        const booking = new Booking({
+        // Create booking with proper room structure
+        const bookingData = {
             student: req.user._id,
             residence: residenceId,
             room: {
-                roomNumber,
+                roomNumber: room.roomNumber,
                 type: room.type,
                 price: room.price
             },
-            startDate,
-            endDate,
+            startDate: new Date(startDate),
+            endDate: new Date(endDate),
             specialRequests,
             emergencyContact,
             status: 'pending',
             paymentStatus: 'pending',
             totalAmount: room.price
-        });
+        };
 
+        const booking = new Booking(bookingData);
         await booking.save();
 
         // Update room status
@@ -113,7 +114,12 @@ exports.createBooking = async (req, res) => {
         res.status(201).json(populatedBooking);
     } catch (error) {
         console.error('Error in createBooking:', error);
-        res.status(500).json({ error: 'Server error' });
+        // Send more detailed error information in development
+        const errorResponse = {
+            error: 'Server error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        };
+        res.status(500).json(errorResponse);
     }
 };
 
