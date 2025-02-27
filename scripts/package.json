@@ -1,0 +1,14 @@
+{
+  "name": "alamait-scripts",
+  "version": "1.0.0",
+  "description": "Scripts for Alamait Property Management System",
+  "main": "saveStKildaProperty.js",
+  "scripts": {
+    "save-stkilda": "node saveStKildaProperty.js",
+    "get-token": "node getAuthToken.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "dotenv": "^16.0.3"
+  }
+}

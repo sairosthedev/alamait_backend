@@ -14,10 +14,12 @@ exports.register = async (req, res) => {
 
     try {
         const { email, password, firstName, lastName, phone, applicationCode } = req.body;
+        console.log('Registration attempt for email:', email);
 
         // Check if user exists
         let user = await User.findOne({ email });
         if (user) {
+            console.log('User already exists:', email);
             return res.status(400).json({ error: 'User already exists' });
         }
 
@@ -29,26 +31,26 @@ exports.register = async (req, res) => {
             phone,
             applicationCode,
             role: 'student', // Default role for registration
-            isVerified: false
+            isVerified: true  // Set to true since we're not doing email verification
         });
 
-        // Hash password
+        // Hash password before saving
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(password, salt);
-
-        // Generate email verification token
-        user.emailVerificationToken = crypto.randomBytes(20).toString('hex');
-        user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+        console.log('Setting hashed password for user:', email);
 
         await user.save();
+        console.log('User saved successfully:', email);
+        console.log('Saved user role:', user.role);
+        console.log('Password after save:', user.password.substring(0, 10) + '...');
 
         // Send verification email
-        try {
-            await sendVerificationEmail(user.email, user.emailVerificationToken);
-        } catch (emailError) {
-            console.error('Failed to send verification email:', emailError);
-            // Continue with registration even if email fails
-        }
+        // try {
+        //     await sendVerificationEmail(user.email, user.emailVerificationToken);
+        // } catch (emailError) {
+        //     console.error('Failed to send verification email:', emailError);
+        //     // Continue with registration even if email fails
+        // }
 
         // Generate JWT
         const payload = {
@@ -86,17 +88,23 @@ exports.login = async (req, res) => {
 
     try {
         const { email, password } = req.body;
+        console.log('Login attempt for email:', email);
 
         // Check if user exists
         const user = await User.findOne({ email });
         if (!user) {
-            return res.status(400).json({ error: 'Invalid credentials' });
+            console.log('User not found with email:', email);
+            return res.status(401).json({ error: 'Invalid credentials' });
         }
+        console.log('User found:', user.email, 'Role:', user.role);
 
-        // Verify password
-        const isMatch = await bcrypt.compare(password, user.password);
+        // Verify password using the model's method
+        const isMatch = await user.comparePassword(password);
+        console.log('Password match result:', isMatch);
+        
         if (!isMatch) {
-            return res.status(400).json({ error: 'Invalid credentials' });
+            console.log('Password verification failed for user:', email);
+            return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         // Generate JWT
@@ -223,6 +231,30 @@ exports.resetPassword = async (req, res) => {
         res.json({ message: 'Password reset successful' });
     } catch (error) {
         console.error('Error in resetPassword:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Temporary admin endpoint to reset user password
+exports.adminResetPassword = async (req, res) => {
+    try {
+        const { email, newPassword } = req.body;
+        
+        const user = await User.findOne({ email });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Hash new password
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+        
+        await user.save();
+        console.log('Password reset successfully for user:', email);
+
+        res.json({ message: 'Password reset successful' });
+    } catch (error) {
+        console.error('Error in adminResetPassword:', error);
         res.status(500).json({ error: 'Server error' });
     }
 }; 

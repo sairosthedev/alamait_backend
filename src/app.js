@@ -20,6 +20,7 @@ if (process.env.NODE_ENV === 'production') {
 // Import routes
 const authRoutes = require('./routes/auth');
 const publicApplicationRoutes = require('./routes/public/applicationRoutes');
+const publicResidenceRoutes = require('./routes/public/residenceRoutes');
 
 // Admin routes
 const adminUserRoutes = require('./routes/admin/userRoutes');
@@ -95,6 +96,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOp
 
 // Public routes
 app.use('/api/applications', publicApplicationRoutes);
+app.use('/api/residences', publicResidenceRoutes);
 
 // Auth routes (public)
 app.use('/api/auth', authRoutes);

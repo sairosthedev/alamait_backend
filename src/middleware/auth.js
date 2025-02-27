@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Application = require('../models/Application');
 
 const auth = async (req, res, next) => {
     try {
@@ -46,7 +47,17 @@ const verifyApplicationCode = async (req, res, next) => {
             return res.status(400).json({ error: 'Application code is required.' });
         }
 
-        // Check if application code exists and hasn't been used
+        // Check if application code exists in an approved application
+        const application = await Application.findOne({ 
+            applicationCode,
+            status: 'approved'
+        });
+
+        if (!application) {
+            return res.status(400).json({ error: 'Invalid application code. Please use the code sent to you when your application was approved.' });
+        }
+
+        // Check if application code has already been used
         const existingUser = await User.findOne({ applicationCode });
         if (existingUser) {
             return res.status(400).json({ error: 'Application code has already been used.' });

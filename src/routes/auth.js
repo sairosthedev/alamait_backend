@@ -6,8 +6,10 @@ const {
     login,
     verifyEmail,
     forgotPassword,
-    resetPassword
+    resetPassword,
+    adminResetPassword
 } = require('../controllers/auth/authController');
+const { verifyApplicationCode } = require('../middleware/auth');
 
 // Validation middleware
 const registerValidation = [
@@ -38,5 +40,18 @@ router.post('/login', loginValidation, login);
 router.get('/verify-email/:token', verifyEmail);
 router.post('/forgot-password', forgotPasswordValidation, forgotPassword);
 router.post('/reset-password/:token', resetPasswordValidation, resetPassword);
+
+// Validate application code
+router.post('/validate-code', [
+    check('applicationCode', 'Application code is required').notEmpty()
+], verifyApplicationCode, (req, res) => {
+    res.json({ valid: true });
+});
+
+// Temporary admin route to reset password
+router.post('/admin-reset-password', [
+    check('email', 'Please include a valid email').isEmail(),
+    check('newPassword', 'Password is required').exists()
+], adminResetPassword);
 
 module.exports = router; 

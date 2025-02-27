@@ -33,6 +33,7 @@ router.use(roleMiddleware(['property_manager']));
 // Routes
 router.post('/', residenceValidation, residenceController.addResidence);
 router.get('/', residenceController.getAllResidences);
+router.get('/st-kilda', residenceController.getStKildaResidence);
 router.get('/:id', residenceController.getResidence);
 router.put('/:id', residenceValidation, residenceController.updateResidence);
 router.delete('/:id', residenceController.deleteResidence);

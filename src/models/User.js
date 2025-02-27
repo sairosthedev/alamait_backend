@@ -61,22 +61,20 @@ const userSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Hash password before saving
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
-
 // Method to compare password
 userSchema.methods.comparePassword = async function(candidatePassword) {
-  return bcrypt.compare(candidatePassword, this.password);
+  try {
+    console.log('Comparing passwords for user:', this.email);
+    console.log('Stored hashed password:', this.password);
+    console.log('Candidate password length:', candidatePassword.length);
+    
+    const isMatch = await bcrypt.compare(candidatePassword, this.password);
+    console.log('Password comparison result:', isMatch);
+    return isMatch;
+  } catch (error) {
+    console.error('Error comparing passwords:', error);
+    throw new Error('Error comparing passwords');
+  }
 };
 
 // Method to get public profile (excludes sensitive information)

@@ -1,6 +1,31 @@
 const Residence = require('../models/Residence');
 const { validationResult } = require('express-validator');
 
+// Get St Kilda residence
+exports.getStKildaResidence = async (req, res) => {
+    try {
+        const residence = await Residence.findOne({ name: "St Kilda Student House" });
+
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'St Kilda residence not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: residence
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching St Kilda residence',
+            error: error.message
+        });
+    }
+};
+
 // Add a new residence
 exports.addResidence = async (req, res) => {
     try {
