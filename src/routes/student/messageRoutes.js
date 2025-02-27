@@ -1,44 +1,38 @@
 const express = require('express');
-const { check } = require('express-validator');
 const router = express.Router();
+const { body } = require('express-validator');
 const { auth, checkRole } = require('../../middleware/auth');
-const {
-    sendMessage,
-    getInbox,
-    getSentMessages,
-    getMessage,
-    updateMessageStatus,
-    deleteMessage,
-    getMessageThread
-} = require('../../controllers/student/messageController');
+const messageController = require('../../controllers/student/messageController');
 
 // Validation middleware
 const messageValidation = [
-    check('recipient', 'Recipient ID is required').notEmpty().isMongoId(),
-    check('subject', 'Subject is required')
-        .notEmpty()
-        .isLength({ min: 1, max: 200 }),
-    check('content', 'Message content is required')
-        .notEmpty()
-        .isLength({ min: 1, max: 5000 })
+    body('title').trim().notEmpty().withMessage('Title is required'),
+    body('content').trim().notEmpty().withMessage('Content is required'),
+    body('recipient').isIn(['admin', 'all-students', 'specific-student']).withMessage('Invalid recipient type'),
+    body('specificStudent').optional().isMongoId().withMessage('Invalid student ID')
 ];
 
-const statusValidation = [
-    check('status', 'Invalid status')
-        .isIn(['unread', 'read', 'archived'])
+const replyValidation = [
+    body('content').trim().notEmpty().withMessage('Reply content is required')
 ];
 
-// All routes require student role
-router.use(auth);
-router.use(checkRole('student'));
+// Get all messages (with filtering and pagination)
+router.get('/', auth, checkRole(['student']), messageController.getMessages);
 
-// Routes
-router.post('/', messageValidation, sendMessage);
-router.get('/inbox', getInbox);
-router.get('/sent', getSentMessages);
-router.get('/:id', getMessage);
-router.get('/:id/thread', getMessageThread);
-router.patch('/:id/status', statusValidation, updateMessageStatus);
-router.delete('/:id', deleteMessage);
+// Create new message
+router.post('/', 
+    auth, 
+    checkRole(['student']), 
+    messageValidation,
+    messageController.createMessage
+);
+
+// Add reply to message
+router.post('/:messageId/reply',
+    auth,
+    checkRole(['student']),
+    replyValidation,
+    messageController.addReply
+);
 
 module.exports = router; 

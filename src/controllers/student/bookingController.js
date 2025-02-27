@@ -2,47 +2,103 @@ const Booking = require('../../models/Booking');
 const Residence = require('../../models/Residence');
 const { validationResult } = require('express-validator');
 
+// Get all bookings for a student
+exports.getBookings = async (req, res) => {
+    try {
+        const { status, page = 1, limit = 10 } = req.query;
+        const query = { student: req.user._id };
+
+        if (status) {
+            query.status = status;
+        }
+
+        const skip = (page - 1) * limit;
+
+        const bookings = await Booking.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .populate('residence', 'name address');
+
+        const total = await Booking.countDocuments(query);
+
+        res.json({
+            bookings,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / limit),
+            total
+        });
+    } catch (error) {
+        console.error('Error in getBookings:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
 // Create new booking
 exports.createBooking = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
     try {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
-        }
-
-        const { residenceId, roomNumber, startDate, endDate } = req.body;
-
-        // Check if room is available
-        const isAvailable = await Booking.checkAvailability(
+        const {
             residenceId,
             roomNumber,
-            new Date(startDate),
-            new Date(endDate)
-        );
+            startDate,
+            endDate,
+            specialRequests,
+            emergencyContact
+        } = req.body;
 
-        if (!isAvailable) {
-            return res.status(400).json({ error: 'Room is not available for selected dates' });
+        // Check if residence exists and room is available
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({ error: 'Residence not found' });
         }
 
-        // Get room details from residence
-        const residence = await Residence.findById(residenceId);
         const room = residence.rooms.find(r => r.roomNumber === roomNumber);
-        
         if (!room) {
             return res.status(404).json({ error: 'Room not found' });
         }
 
+        if (room.status !== 'available') {
+            return res.status(400).json({ error: 'Room is not available' });
+        }
+
+        // Check for overlapping bookings
+        const overlappingBooking = await Booking.findOne({
+            residence: residenceId,
+            'room.roomNumber': roomNumber,
+            status: { $in: ['pending', 'confirmed'] },
+            $or: [
+                {
+                    startDate: { $lte: new Date(endDate) },
+                    endDate: { $gte: new Date(startDate) }
+                }
+            ]
+        });
+
+        if (overlappingBooking) {
+            return res.status(400).json({ error: 'Room is already booked for these dates' });
+        }
+
+        // Create booking
         const booking = new Booking({
             student: req.user._id,
             residence: residenceId,
             room: {
-                roomNumber: room.roomNumber,
+                roomNumber,
                 type: room.type,
                 price: room.price
             },
             startDate,
             endDate,
-            totalAmount: room.price * Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24))
+            specialRequests,
+            emergencyContact,
+            status: 'pending',
+            paymentStatus: 'pending',
+            totalAmount: room.price
         });
 
         await booking.save();
@@ -52,76 +108,93 @@ exports.createBooking = async (req, res) => {
         await residence.save();
 
         const populatedBooking = await Booking.findById(booking._id)
-            .populate('residence', 'name address')
-            .populate('student', 'firstName lastName email');
+            .populate('residence', 'name address');
 
         res.status(201).json(populatedBooking);
     } catch (error) {
-        console.error('Create booking error:', error);
-        res.status(500).json({ error: 'Error creating booking' });
+        console.error('Error in createBooking:', error);
+        res.status(500).json({ error: 'Server error' });
     }
 };
 
-// Get student's bookings
-exports.getMyBookings = async (req, res) => {
+// Get booking details
+exports.getBookingDetails = async (req, res) => {
     try {
-        const bookings = await Booking.find({ student: req.user._id })
-            .populate('residence', 'name address')
-            .sort('-createdAt');
-
-        res.json(bookings);
-    } catch (error) {
-        console.error('Get bookings error:', error);
-        res.status(500).json({ error: 'Error fetching bookings' });
-    }
-};
-
-// Get single booking
-exports.getBooking = async (req, res) => {
-    try {
-        const booking = await Booking.findById(req.params.id)
-            .populate('residence', 'name address')
-            .populate('student', 'firstName lastName email');
+        const booking = await Booking.findOne({
+            _id: req.params.bookingId,
+            student: req.user._id
+        }).populate('residence', 'name address');
 
         if (!booking) {
             return res.status(404).json({ error: 'Booking not found' });
         }
 
-        // Check if user is authorized to view this booking
-        if (booking.student._id.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ error: 'Not authorized' });
-        }
-
         res.json(booking);
     } catch (error) {
-        console.error('Get booking error:', error);
-        res.status(500).json({ error: 'Error fetching booking' });
+        console.error('Error in getBookingDetails:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Update booking
+exports.updateBooking = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+        const booking = await Booking.findOne({
+            _id: req.params.bookingId,
+            student: req.user._id
+        });
+
+        if (!booking) {
+            return res.status(404).json({ error: 'Booking not found' });
+        }
+
+        if (booking.status !== 'pending') {
+            return res.status(400).json({ error: 'Cannot update confirmed or cancelled booking' });
+        }
+
+        const { specialRequests, emergencyContact } = req.body;
+
+        if (specialRequests) booking.specialRequests = specialRequests;
+        if (emergencyContact) booking.emergencyContact = emergencyContact;
+
+        await booking.save();
+
+        const updatedBooking = await Booking.findById(booking._id)
+            .populate('residence', 'name address');
+
+        res.json(updatedBooking);
+    } catch (error) {
+        console.error('Error in updateBooking:', error);
+        res.status(500).json({ error: 'Server error' });
     }
 };
 
 // Cancel booking
 exports.cancelBooking = async (req, res) => {
     try {
-        const booking = await Booking.findById(req.params.id);
-        
+        const booking = await Booking.findOne({
+            _id: req.params.bookingId,
+            student: req.user._id
+        });
+
         if (!booking) {
             return res.status(404).json({ error: 'Booking not found' });
         }
 
-        // Check if user is authorized to cancel this booking
-        if (booking.student.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ error: 'Not authorized' });
+        if (booking.status === 'cancelled') {
+            return res.status(400).json({ error: 'Booking is already cancelled' });
         }
 
-        // Check if booking can be cancelled (e.g., not too close to start date)
-        const today = new Date();
-        const startDate = new Date(booking.startDate);
-        const daysUntilStart = Math.ceil((startDate - today) / (1000 * 60 * 60 * 24));
-
-        if (daysUntilStart < 7) {
-            return res.status(400).json({ error: 'Booking cannot be cancelled within 7 days of start date' });
+        if (booking.status === 'completed') {
+            return res.status(400).json({ error: 'Cannot cancel completed booking' });
         }
 
+        // Update booking status
         booking.status = 'cancelled';
         await booking.save();
 
@@ -131,10 +204,10 @@ exports.cancelBooking = async (req, res) => {
         room.status = 'available';
         await residence.save();
 
-        res.json(booking);
+        res.json({ message: 'Booking cancelled successfully' });
     } catch (error) {
-        console.error('Cancel booking error:', error);
-        res.status(500).json({ error: 'Error cancelling booking' });
+        console.error('Error in cancelBooking:', error);
+        res.status(500).json({ error: 'Server error' });
     }
 };
 

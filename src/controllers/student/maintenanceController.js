@@ -1,7 +1,66 @@
 const Maintenance = require('../../models/Maintenance');
 const { validationResult } = require('express-validator');
 
-// Create maintenance request
+// Get all maintenance requests for a student
+exports.getMaintenanceRequests = async (req, res) => {
+    try {
+        const { status, page = 1, limit = 10 } = req.query;
+        const skip = (page - 1) * limit;
+
+        // Build query
+        let query = { student: req.user._id };
+        if (status) {
+            query.status = status;
+        }
+
+        // Get total count for pagination
+        const total = await Maintenance.countDocuments(query);
+
+        // Fetch requests with pagination
+        const requests = await Maintenance.find(query)
+            .sort({ requestDate: -1 })
+            .skip(skip)
+            .limit(limit)
+            .populate('assignedTo', 'firstName lastName')
+            .lean();
+
+        // Format requests to match frontend structure
+        const formattedRequests = requests.map(request => ({
+            id: request._id,
+            title: request.title,
+            description: request.description,
+            location: request.location,
+            category: request.category,
+            priority: request.priority,
+            status: request.status,
+            requestDate: request.requestDate || request.createdAt,
+            expectedCompletion: request.estimatedCompletion,
+            updates: request.updates ? request.updates.map(update => ({
+                date: update.date,
+                message: update.message,
+                author: update.author
+            })) : []
+        }));
+
+        // Group requests by status
+        const active = formattedRequests.filter(r => 
+            ['pending', 'assigned', 'in-progress', 'on-hold'].includes(r.status));
+        const completed = formattedRequests.filter(r => r.status === 'completed');
+
+        res.json({
+            active,
+            completed,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / limit),
+            total
+        });
+    } catch (error) {
+        console.error('Error in getMaintenanceRequests:', error);
+        res.status(500).json({ error: 'Error retrieving maintenance requests' });
+    }
+};
+
+// Create new maintenance request
 exports.createMaintenanceRequest = async (req, res) => {
     try {
         const errors = validationResult(req);
@@ -9,137 +68,117 @@ exports.createMaintenanceRequest = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const maintenance = new Maintenance({
-            ...req.body,
-            student: req.user._id
+        const { title, description, category, priority, location, images } = req.body;
+
+        const newRequest = new Maintenance({
+            student: req.user._id,
+            title,
+            description,
+            category,
+            priority: priority || 'low',
+            location,
+            status: 'pending',
+            requestDate: new Date(),
+            images: images || [],
+            updates: [{
+                date: new Date(),
+                message: 'Maintenance request submitted',
+                author: 'System'
+            }]
         });
 
-        await maintenance.save();
+        await newRequest.save();
 
-        const populatedMaintenance = await Maintenance.findById(maintenance._id)
-            .populate('residence', 'name address')
-            .populate('assignedTo', 'firstName lastName');
-
-        res.status(201).json(populatedMaintenance);
+        res.status(201).json(newRequest);
     } catch (error) {
-        console.error('Create maintenance request error:', error);
+        console.error('Error in createMaintenanceRequest:', error);
         res.status(500).json({ error: 'Error creating maintenance request' });
     }
 };
 
-// Get student's maintenance requests
-exports.getMyMaintenanceRequests = async (req, res) => {
+// Get single maintenance request details
+exports.getMaintenanceRequestDetails = async (req, res) => {
     try {
-        const maintenance = await Maintenance.find({ student: req.user._id })
-            .populate('residence', 'name address')
-            .populate('assignedTo', 'firstName lastName')
-            .sort('-createdAt');
+        const request = await Maintenance.findOne({
+            _id: req.params.requestId,
+            student: req.user._id
+        })
+        .populate('assignedTo', 'firstName lastName')
+        .lean();
 
-        res.json(maintenance);
-    } catch (error) {
-        console.error('Get maintenance requests error:', error);
-        res.status(500).json({ error: 'Error fetching maintenance requests' });
-    }
-};
-
-// Get single maintenance request
-exports.getMaintenanceRequest = async (req, res) => {
-    try {
-        const maintenance = await Maintenance.findById(req.params.id)
-            .populate('residence', 'name address')
-            .populate('assignedTo', 'firstName lastName')
-            .populate('comments.user', 'firstName lastName role');
-
-        if (!maintenance) {
+        if (!request) {
             return res.status(404).json({ error: 'Maintenance request not found' });
         }
 
-        // Check if user is authorized
-        if (maintenance.student.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ error: 'Not authorized' });
-        }
-
-        res.json(maintenance);
+        res.json(request);
     } catch (error) {
-        console.error('Get maintenance request error:', error);
-        res.status(500).json({ error: 'Error fetching maintenance request' });
+        console.error('Error in getMaintenanceRequestDetails:', error);
+        res.status(500).json({ error: 'Error retrieving maintenance request details' });
     }
 };
 
 // Update maintenance request
 exports.updateMaintenanceRequest = async (req, res) => {
     try {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
+        const request = await Maintenance.findOne({
+            _id: req.params.requestId,
+            student: req.user._id,
+            status: 'pending'
+        });
+
+        if (!request) {
+            return res.status(404).json({ error: 'Maintenance request not found or cannot be updated' });
         }
 
-        const maintenance = await Maintenance.findById(req.params.id);
-        
-        if (!maintenance) {
-            return res.status(404).json({ error: 'Maintenance request not found' });
-        }
+        const { title, description, category, priority } = req.body;
 
-        // Check if user is authorized
-        if (maintenance.student.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ error: 'Not authorized' });
-        }
+        // Update allowed fields
+        if (title) request.title = title;
+        if (description) request.description = description;
+        if (category) request.category = category;
+        if (priority) request.priority = priority;
 
-        // Students can only update certain fields
-        const allowedUpdates = ['description', 'images'];
-        const updates = Object.keys(req.body)
-            .filter(key => allowedUpdates.includes(key))
-            .reduce((obj, key) => {
-                obj[key] = req.body[key];
-                return obj;
-            }, {});
+        // Add update to history
+        request.updates.push({
+            date: new Date(),
+            message: 'Request details updated by student',
+            author: 'Student'
+        });
 
-        Object.assign(maintenance, updates);
-        await maintenance.save();
+        await request.save();
 
-        const updatedMaintenance = await Maintenance.findById(req.params.id)
-            .populate('residence', 'name address')
-            .populate('assignedTo', 'firstName lastName');
-
-        res.json(updatedMaintenance);
+        res.json(request);
     } catch (error) {
-        console.error('Update maintenance request error:', error);
+        console.error('Error in updateMaintenanceRequest:', error);
         res.status(500).json({ error: 'Error updating maintenance request' });
     }
 };
 
-// Add comment to maintenance request
-exports.addComment = async (req, res) => {
+// Cancel maintenance request
+exports.cancelMaintenanceRequest = async (req, res) => {
     try {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
-        }
-
-        const maintenance = await Maintenance.findById(req.params.id);
-        
-        if (!maintenance) {
-            return res.status(404).json({ error: 'Maintenance request not found' });
-        }
-
-        // Check if user is authorized
-        if (maintenance.student.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ error: 'Not authorized' });
-        }
-
-        maintenance.comments.push({
-            user: req.user._id,
-            text: req.body.text
+        const request = await Maintenance.findOne({
+            _id: req.params.requestId,
+            student: req.user._id,
+            status: 'pending'
         });
 
-        await maintenance.save();
+        if (!request) {
+            return res.status(404).json({ error: 'Maintenance request not found or cannot be cancelled' });
+        }
 
-        const updatedMaintenance = await Maintenance.findById(req.params.id)
-            .populate('comments.user', 'firstName lastName role');
+        request.status = 'cancelled';
+        request.updates.push({
+            date: new Date(),
+            message: 'Request cancelled by student',
+            author: 'Student'
+        });
 
-        res.json(updatedMaintenance);
+        await request.save();
+
+        res.json({ message: 'Maintenance request cancelled successfully' });
     } catch (error) {
-        console.error('Add comment error:', error);
-        res.status(500).json({ error: 'Error adding comment' });
+        console.error('Error in cancelMaintenanceRequest:', error);
+        res.status(500).json({ error: 'Error cancelling maintenance request' });
     }
 }; 

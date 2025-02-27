@@ -1,65 +1,42 @@
 const express = require('express');
-const { check } = require('express-validator');
 const router = express.Router();
-const { auth, checkRole } = require('../../middleware/auth');
-const {
-    getManagedResidences,
-    getResidence,
-    createResidence,
-    updateResidence,
-    addRoom,
-    updateRoom,
-    getRoomAvailability
-} = require('../../controllers/property_manager/residenceController');
+const { body } = require('express-validator');
+const residenceController = require('../../controllers/residenceController');
+const authMiddleware = require('../../middleware/authMiddleware');
+const roleMiddleware = require('../../middleware/roleMiddleware');
 
 // Validation middleware
 const residenceValidation = [
-    check('name', 'Name is required').notEmpty(),
-    check('description', 'Description is required').notEmpty(),
-    check('address').isObject().withMessage('Address must be an object')
-        .custom(value => {
-            if (!value.street || !value.city || !value.country) {
-                throw new Error('Address must include street, city, and country');
-            }
-            return true;
-        }),
-    check('location.coordinates').isArray().withMessage('Coordinates must be an array')
-        .custom(value => {
-            if (!Array.isArray(value) || value.length !== 2) {
-                throw new Error('Coordinates must be [longitude, latitude]');
-            }
-            return true;
-        })
+    body('name').notEmpty().trim().withMessage('Name is required'),
+    body('description').notEmpty().withMessage('Description is required'),
+    body('address').notEmpty().withMessage('Address is required'),
+    body('location.coordinates').isArray().withMessage('Location coordinates are required'),
+    body('rooms').isArray().withMessage('Rooms information is required'),
+    body('rooms.*.roomNumber').notEmpty().withMessage('Room number is required'),
+    body('rooms.*.type').isIn(['single', 'double', 'studio', 'apartment']).withMessage('Invalid room type'),
+    body('rooms.*.price').isNumeric().withMessage('Room price must be a number')
 ];
 
 const roomValidation = [
-    check('roomNumber', 'Room number is required').notEmpty(),
-    check('type', 'Invalid room type')
-        .isIn(['single', 'double', 'studio', 'apartment']),
-    check('price', 'Price must be a positive number')
-        .isFloat({ min: 0 }),
-    check('status', 'Invalid status')
-        .optional()
-        .isIn(['available', 'occupied', 'maintenance', 'reserved']),
-    check('floor', 'Floor must be a number')
-        .optional()
-        .isInt(),
-    check('area', 'Area must be a positive number')
-        .optional()
-        .isFloat({ min: 0 })
+    body('roomNumber').notEmpty().withMessage('Room number is required'),
+    body('type').isIn(['single', 'double', 'studio', 'apartment']).withMessage('Invalid room type'),
+    body('price').isFloat({ min: 0 }).withMessage('Price must be a positive number'),
+    body('status').optional().isIn(['available', 'occupied', 'maintenance', 'reserved']).withMessage('Invalid status'),
+    body('floor').optional().isInt().withMessage('Floor must be a number'),
+    body('area').optional().isFloat({ min: 0 }).withMessage('Area must be a positive number')
 ];
 
-// All routes require property manager role
-router.use(auth);
-router.use(checkRole('property_manager'));
+// Apply auth middleware to all routes
+router.use(authMiddleware);
+router.use(roleMiddleware(['property_manager']));
 
 // Routes
-router.get('/', getManagedResidences);
-router.get('/:id', getResidence);
-router.post('/', residenceValidation, createResidence);
-router.patch('/:id', residenceValidation, updateResidence);
-router.post('/:id/rooms', roomValidation, addRoom);
-router.patch('/:residenceId/rooms/:roomNumber', roomValidation, updateRoom);
-router.get('/:residenceId/rooms/:roomNumber/availability', getRoomAvailability);
+router.post('/', residenceValidation, residenceController.addResidence);
+router.get('/', residenceController.getAllResidences);
+router.get('/:id', residenceController.getResidence);
+router.put('/:id', residenceValidation, residenceController.updateResidence);
+router.delete('/:id', residenceController.deleteResidence);
+router.post('/:id/rooms', roomValidation, residenceController.addRoom);
+router.patch('/:residenceId/rooms/:roomNumber', roomValidation, residenceController.updateRoom);
 
 module.exports = router; 

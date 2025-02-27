@@ -1,6 +1,56 @@
 const Event = require('../../models/Event');
 const { validationResult } = require('express-validator');
 
+// Get all events
+exports.getEvents = async (req, res) => {
+    try {
+        const { filter = 'all' } = req.query;
+        const currentDate = new Date();
+
+        // Base query to get events
+        const query = {
+            $or: [
+                { visibility: 'all' },
+                { participants: req.user._id }
+            ]
+        };
+
+        // Get upcoming and past events based on filter
+        const upcomingEvents = filter !== 'past' ? await Event.find({
+            ...query,
+            date: { $gte: currentDate }
+        }).sort({ date: 1 }) : [];
+
+        const pastEvents = filter !== 'upcoming' ? await Event.find({
+            ...query,
+            date: { $lt: currentDate }
+        }).sort({ date: -1 }) : [];
+
+        // Transform events to match frontend format
+        const formatEvent = (event) => ({
+            id: event._id,
+            title: event.title,
+            date: event.date.toISOString().split('T')[0],
+            time: `${event.startTime} - ${event.endTime}`,
+            location: event.location,
+            category: event.category,
+            status: event.participants.includes(req.user._id) ? 'Registered' : 
+                   event.required ? 'Required' : 'Open',
+            description: event.description
+        });
+
+        const response = {
+            upcoming: upcomingEvents.map(formatEvent),
+            past: pastEvents.map(formatEvent)
+        };
+
+        res.json(response);
+    } catch (error) {
+        console.error('Error in getEvents:', error);
+        res.status(500).json({ error: 'Error retrieving events' });
+    }
+};
+
 // Get available events
 exports.getAvailableEvents = async (req, res) => {
     try {
@@ -64,41 +114,26 @@ exports.getMyEvents = async (req, res) => {
 // Register for event
 exports.registerForEvent = async (req, res) => {
     try {
-        const event = await Event.findById(req.params.id);
+        const event = await Event.findById(req.params.eventId);
         
         if (!event) {
             return res.status(404).json({ error: 'Event not found' });
         }
 
-        // Check if event is still open for registration
-        if (event.status !== 'upcoming') {
-            return res.status(400).json({ error: 'Event is no longer open for registration' });
+        if (event.date < new Date()) {
+            return res.status(400).json({ error: 'Cannot register for past events' });
         }
 
-        // Check if already registered
-        if (event.participants.some(p => 
-            p.student.toString() === req.user._id.toString() && 
-            p.status === 'registered'
-        )) {
+        if (event.participants.includes(req.user._id)) {
             return res.status(400).json({ error: 'Already registered for this event' });
         }
 
-        // Check capacity
-        if (event.isFull()) {
-            return res.status(400).json({ error: 'Event is at full capacity' });
-        }
-
-        // Register participant
-        event.registerParticipant(req.user._id);
+        event.participants.push(req.user._id);
         await event.save();
 
-        const updatedEvent = await Event.findById(req.params.id)
-            .populate('residence', 'name location')
-            .populate('organizer', 'firstName lastName');
-
-        res.json(updatedEvent);
+        res.json({ message: 'Successfully registered for event' });
     } catch (error) {
-        console.error('Register for event error:', error);
+        console.error('Error in registerForEvent:', error);
         res.status(500).json({ error: 'Error registering for event' });
     }
 };
@@ -144,46 +179,32 @@ exports.cancelRegistration = async (req, res) => {
     }
 };
 
-// Add feedback for event
-exports.addFeedback = async (req, res) => {
+// Submit event feedback
+exports.submitEventFeedback = async (req, res) => {
     try {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
-        }
-
-        const event = await Event.findById(req.params.id);
+        const { rating, comment } = req.body;
+        const event = await Event.findById(req.params.eventId);
         
         if (!event) {
             return res.status(404).json({ error: 'Event not found' });
         }
 
-        // Check if user attended the event
-        const participant = event.participants.find(p => 
-            p.student.toString() === req.user._id.toString() && 
-            p.status === 'attended'
-        );
-
-        if (!participant) {
-            return res.status(400).json({ error: 'Must have attended the event to provide feedback' });
-        }
-
-        // Check if user already provided feedback
-        if (event.feedback.some(f => f.student.toString() === req.user._id.toString())) {
-            return res.status(400).json({ error: 'Already provided feedback for this event' });
+        if (!event.participants.includes(req.user._id)) {
+            return res.status(403).json({ error: 'Must be registered for event to submit feedback' });
         }
 
         event.feedback.push({
             student: req.user._id,
-            rating: req.body.rating,
-            comment: req.body.comment
+            rating,
+            comment,
+            date: new Date()
         });
 
         await event.save();
 
-        res.json({ message: 'Feedback added successfully' });
+        res.json({ message: 'Feedback submitted successfully' });
     } catch (error) {
-        console.error('Add feedback error:', error);
-        res.status(500).json({ error: 'Error adding feedback' });
+        console.error('Error in submitEventFeedback:', error);
+        res.status(500).json({ error: 'Error submitting feedback' });
     }
 }; 

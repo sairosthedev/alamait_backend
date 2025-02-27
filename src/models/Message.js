@@ -1,60 +1,70 @@
 const mongoose = require('mongoose');
 
-const messageSchema = new mongoose.Schema({
-    sender: {
+const replySchema = new mongoose.Schema({
+    author: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
-    },
-    recipient: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
-    },
-    subject: {
-        type: String,
-        required: true,
-        trim: true
     },
     content: {
         type: String,
         required: true
     },
-    status: {
-        type: String,
-        enum: ['unread', 'read', 'archived'],
-        default: 'unread'
-    },
-    parentMessage: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Message'
-    },
-    attachments: [{
-        name: String,
-        url: String,
-        type: String
-    }],
-    isSystemMessage: {
-        type: Boolean,
-        default: false
-    },
-    metadata: {
-        relatedTo: {
-            type: String,
-            enum: ['maintenance', 'booking', 'event', 'payment', 'general'],
-            default: 'general'
-        },
-        referenceId: mongoose.Schema.Types.ObjectId
+    timestamp: {
+        type: Date,
+        default: Date.now
     }
 }, {
     timestamps: true
 });
 
-// Indexes for common queries
-messageSchema.index({ sender: 1, recipient: 1 });
-messageSchema.index({ recipient: 1, status: 1 });
-messageSchema.index({ parentMessage: 1 });
+const messageSchema = new mongoose.Schema({
+    author: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    title: {
+        type: String,
+        required: true
+    },
+    content: {
+        type: String,
+        required: true
+    },
+    type: {
+        type: String,
+        enum: ['announcement', 'discussion'],
+        required: true
+    },
+    recipients: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
+    pinned: {
+        type: Boolean,
+        default: false
+    },
+    replies: [replySchema],
+    readBy: [{
+        user: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        readAt: {
+            type: Date,
+            default: Date.now
+        }
+    }]
+}, {
+    timestamps: true
+});
 
-const Message = mongoose.model('Message', messageSchema);
+// Add indexes for common queries
+messageSchema.index({ type: 1 });
+messageSchema.index({ author: 1 });
+messageSchema.index({ 'recipients': 1 });
+messageSchema.index({ pinned: 1 });
+messageSchema.index({ createdAt: -1 });
 
-module.exports = Message; 
+module.exports = mongoose.model('Message', messageSchema); 
