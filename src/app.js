@@ -8,6 +8,15 @@ const path = require('path');
 // Load Swagger document
 const swaggerDocument = YAML.load(path.join(__dirname, '../swagger.yaml'));
 
+// Update Swagger host and schemes based on environment
+if (process.env.NODE_ENV === 'production') {
+    swaggerDocument.host = 'alamait-backend.onrender.com';
+    swaggerDocument.schemes = ['https'];
+} else {
+    swaggerDocument.host = 'localhost:5000';
+    swaggerDocument.schemes = ['http'];
+}
+
 // Import routes
 const authRoutes = require('./routes/auth');
 
@@ -56,7 +65,11 @@ app.use(express.urlencoded({ extended: true }));
 
 // Basic route for root path
 app.get('/', (req, res) => {
-    res.json({ message: 'Welcome to Alamait Property Management System API' });
+    res.json({ 
+        message: 'Welcome to Alamait Property Management System API',
+        documentation: '/api-docs',
+        health: '/health'
+    });
 });
 
 // Health check route
@@ -64,12 +77,20 @@ app.get('/health', (req, res) => {
     res.status(200).json({ 
         status: 'ok',
         timestamp: new Date(),
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        environment: process.env.NODE_ENV
     });
 });
 
-// Swagger UI
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+// Swagger UI with custom options
+const swaggerOptions = {
+    explorer: true,
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: "Alamait API Documentation",
+    customfavIcon: "/favicon.ico"
+};
+
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOptions));
 
 // Auth routes (public)
 app.use('/api/auth', authRoutes);

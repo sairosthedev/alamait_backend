@@ -1,7 +1,7 @@
 services:
   - type: web
     name: alamait-backend
-    env: node
+    runtime: node
     buildCommand: npm install
     startCommand: npm start
     envVars:
@@ -16,4 +16,15 @@ services:
       - key: EMAIL_USER
         sync: false
       - key: EMAIL_APP_PASSWORD
-        sync: false 
+        sync: false
+    headers:
+      - path: /*
+        name: Access-Control-Allow-Origin
+        value: "*"
+    routes:
+      - type: rewrite
+        source: /api-docs/*
+        destination: /api-docs
+      - type: rewrite
+        source: /*
+        destination: / 
