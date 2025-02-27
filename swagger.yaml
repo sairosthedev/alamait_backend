@@ -8,7 +8,8 @@ info:
     email: macdonaldsairos24@gmail.com
 
 servers:
-  - url: http://localhost:5000/api
+  - url: http://localhost:10000/api
+    description: Development server
   - url: https://alamait-backend.onrender.com/api
     description: Production server
 
@@ -78,6 +79,10 @@ components:
         createdAt:
           type: string
           format: date-time
+        replies:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageReply'
 
     Booking:
       type: object
@@ -501,17 +506,17 @@ components:
       properties:
         _id:
           type: string
-        studentId:
-          type: string
-        studentName:
-          type: string
+        student:
+          $ref: '#/components/schemas/User'
         email:
           type: string
-        contact:
+        firstName:
           type: string
-        program:
+        lastName:
           type: string
-        year:
+        phone:
+          type: string
+        applicationCode:
           type: string
         requestType:
           type: string
@@ -524,7 +529,7 @@ components:
           enum: [unpaid, paid]
         applicationDate:
           type: string
-          format: date
+          format: date-time
         preferredRoom:
           type: string
         alternateRooms:
@@ -541,6 +546,19 @@ components:
           type: string
         waitlistedRoom:
           type: string
+        adminComment:
+          type: string
+        actionDate:
+          type: string
+          format: date-time
+        actionBy:
+          $ref: '#/components/schemas/User'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
 
     Room:
       type: object
@@ -638,59 +656,56 @@ components:
       properties:
         id:
           type: string
-          description: Unique identifier for the maintenance request
         title:
           type: string
-          description: Title of the maintenance request
         description:
           type: string
-          description: Detailed description of the issue
         location:
           type: string
-          description: Location of the maintenance issue
         category:
           type: string
           enum: [plumbing, electrical, hvac, appliance, structural, other]
-          description: Category of maintenance request
         priority:
           type: string
           enum: [low, medium, high]
-          description: Priority level of the request
         status:
           type: string
           enum: [pending, assigned, in-progress, on-hold, completed]
-          description: Current status of the request
-        requestedBy:
-          $ref: '#/components/schemas/User'
-          description: Student who made the request
+        student:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
         residence:
-          $ref: '#/components/schemas/Residence'
-          description: Residence where maintenance is needed
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
         roomNumber:
           type: string
-          description: Room number requiring maintenance
+        assignedTo:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
         requestDate:
           type: string
           format: date-time
-          description: Date when request was created
         scheduledDate:
           type: string
           format: date-time
-          description: Date scheduled for maintenance
         estimatedCompletion:
           type: string
           format: date-time
-          description: Estimated completion date
         completedDate:
           type: string
           format: date-time
-          description: Actual completion date
-        assignedTo:
-          $ref: '#/components/schemas/User'
-          description: Maintenance staff assigned to the request
-        estimatedCost:
-          type: number
-          description: Estimated cost of repairs
         updates:
           type: array
           items:
@@ -702,19 +717,12 @@ components:
               message:
                 type: string
               author:
-                $ref: '#/components/schemas/User'
-        comments:
-          type: array
-          items:
-            type: object
-            properties:
-              user:
-                $ref: '#/components/schemas/User'
-              text:
-                type: string
-              createdAt:
-                type: string
-                format: date-time
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
         images:
           type: array
           items:
@@ -725,14 +733,6 @@ components:
               uploadedAt:
                 type: string
                 format: date-time
-      required:
-        - title
-        - description
-        - location
-        - category
-        - requestedBy
-        - residence
-        - roomNumber
 
     MaintenanceStats:
       type: object
@@ -1052,10 +1052,30 @@ components:
               image:
                 type: string
                 description: URL of room image
-              type:
+              roomtype:
                 type: string
                 enum: [upgrade, downgrade]
                 description: Type of room option
+
+    MessageReply:
+      type: object
+      properties:
+        id:
+          type: string
+        author:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            role:
+              type: string
+        content:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
 
 paths:
   /auth/register:
@@ -1192,21 +1212,54 @@ paths:
 
   /student/profile:
     get:
+      tags:
+        - Student
       summary: Get student profile
-      tags: [Student Profile]
+      description: Retrieve the authenticated student's profile information
       security:
         - BearerAuth: []
       responses:
-        '200':
+        200:
           description: Student profile retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/User'
-    
+                type: object
+                properties:
+                  id:
+                    type: string
+                  firstName:
+                    type: string
+                  lastName:
+                    type: string
+                  email:
+                    type: string
+                  phone:
+                    type: string
+                  studentId:
+                    type: string
+                  program:
+                    type: string
+                  year:
+                    type: string
+                  emergencyContact:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      relationship:
+                        type: string
+                      phone:
+                        type: string
+        401:
+          description: Unauthorized - Invalid or missing token
+        500:
+          description: Server error
     put:
+      tags:
+        - Student
       summary: Update student profile
-      tags: [Student Profile]
+      description: Update the authenticated student's profile information
       security:
         - BearerAuth: []
       requestBody:
@@ -1232,39 +1285,93 @@ paths:
                     phone:
                       type: string
       responses:
-        '200':
+        200:
           description: Profile updated successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/User'
+                $ref: '#/components/schemas/Student'
+        400:
+          description: Invalid request data
+        401:
+          description: Unauthorized - Invalid or missing token
+        500:
+          description: Server error
+
+  /student/profile/password:
+    put:
+      tags:
+        - Student
+      summary: Change student password
+      description: Update the authenticated student's password
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currentPassword:
+                  type: string
+                newPassword:
+                  type: string
+      responses:
+        200:
+          description: Password changed successfully
+        400:
+          description: Invalid password data
+        401:
+          description: Unauthorized - Invalid or missing token
+        500:
+          description: Server error
 
   /student/messages:
     get:
-      summary: Get student's messages
-      tags: [Student Messages]
+      tags:
+        - Student
+      summary: Get student messages
+      description: Retrieve messages, announcements, and discussions
       security:
         - BearerAuth: []
       parameters:
         - in: query
+          name: filter
+          schema:
+            type: string
+            enum: [all, announcements, discussions]
+          description: Filter messages by type
+        - in: query
+          name: search
+          schema:
+            type: string
+          description: Search messages by content
+        - in: query
           name: page
           schema:
             type: integer
-          description: Page number for pagination
+            default: 1
+          description: Page number
         - in: query
           name: limit
           schema:
             type: integer
-          description: Number of items per page
+            default: 10
+          description: Items per page
       responses:
-        '200':
-          description: List of messages
+        200:
+          description: Successfully retrieved messages
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  messages:
+                  announcements:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+                  discussions:
                     type: array
                     items:
                       $ref: '#/components/schemas/Message'
@@ -1272,10 +1379,20 @@ paths:
                     type: integer
                   totalPages:
                     type: integer
+                  total:
+                    type: integer
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Not a student
+        500:
+          description: Server error
 
     post:
-      summary: Send a new message
-      tags: [Student Messages]
+      tags:
+        - Student
+      summary: Create new message
+      description: Create a new message or discussion
       security:
         - BearerAuth: []
       requestBody:
@@ -1285,23 +1402,78 @@ paths:
             schema:
               type: object
               required:
-                - recipient
-                - subject
+                - title
                 - content
+                - recipient
               properties:
-                recipient:
-                  type: string
-                subject:
+                title:
                   type: string
                 content:
                   type: string
+                recipient:
+                  type: string
+                  enum: [admin, all-students, specific-student]
+                specificStudent:
+                  type: string
+                  description: Required when recipient is 'specific-student'
       responses:
-        '201':
-          description: Message sent successfully
+        201:
+          description: Message created successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
+        400:
+          description: Invalid request data
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Not a student
+        500:
+          description: Server error
+
+  /student/messages/{messageId}/reply:
+    post:
+      tags:
+        - Student
+      summary: Reply to a message
+      description: Add a reply to an existing message
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: messageId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - content
+              properties:
+                content:
+                  type: string
+      responses:
+        201:
+          description: Reply added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageReply'
+        400:
+          description: Invalid request data
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Not a student
+        404:
+          description: Message not found
+        500:
+          description: Server error
 
   /student/bookings:
     get:
@@ -1460,8 +1632,10 @@ paths:
 
   /student/maintenance:
     get:
+      tags:
+        - Student
       summary: Get student's maintenance requests
-      tags: [Student Maintenance]
+      description: Retrieve all maintenance requests for the authenticated student
       security:
         - BearerAuth: []
       parameters:
@@ -1469,17 +1643,22 @@ paths:
           name: status
           schema:
             type: string
-            enum: [pending, in_progress, completed, cancelled]
+            enum: [pending, assigned, in-progress, on-hold, completed]
+          description: Filter requests by status
         - in: query
           name: page
           schema:
             type: integer
+            default: 1
+          description: Page number for pagination
         - in: query
           name: limit
           schema:
             type: integer
+            default: 10
+          description: Number of items per page
       responses:
-        '200':
+        200:
           description: List of maintenance requests
           content:
             application/json:
@@ -1489,15 +1668,25 @@ paths:
                   requests:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Maintenance'
+                      $ref: '#/components/schemas/MaintenanceRequest'
                   currentPage:
                     type: integer
                   totalPages:
                     type: integer
+                  total:
+                    type: integer
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Not a student
+        500:
+          description: Server error
 
     post:
+      tags:
+        - Student
       summary: Create maintenance request
-      tags: [Student Maintenance]
+      description: Submit a new maintenance request
       security:
         - BearerAuth: []
       requestBody:
@@ -1507,47 +1696,50 @@ paths:
             schema:
               type: object
               required:
-                - residenceId
-                - roomNumber
                 - title
                 - description
                 - category
+                - location
               properties:
-                residenceId:
-                  type: string
-                roomNumber:
-                  type: string
                 title:
                   type: string
                 description:
                   type: string
                 category:
                   type: string
-                  enum: [plumbing, electrical, furniture, appliance, structural, other]
+                  enum: [plumbing, electrical, hvac, appliance, structural, other]
                 priority:
                   type: string
-                  enum: [low, medium, high, urgent]
+                  enum: [low, medium, high]
+                  default: low
+                location:
+                  type: string
                 images:
                   type: array
                   items:
-                    type: object
-                    properties:
-                      url:
-                        type: string
-                      caption:
-                        type: string
+                    type: string
       responses:
-        '201':
-          description: Maintenance request created successfully
+        201:
+          description: Maintenance request created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Maintenance'
+                $ref: '#/components/schemas/MaintenanceRequest'
+        400:
+          description: Invalid request data
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Not a student
+        500:
+          description: Server error
 
   /student/maintenance/{requestId}:
     get:
+      tags:
+        - Student
       summary: Get maintenance request details
-      tags: [Student Maintenance]
+      description: Get detailed information about a specific maintenance request
       security:
         - BearerAuth: []
       parameters:
@@ -1557,16 +1749,26 @@ paths:
           schema:
             type: string
       responses:
-        '200':
-          description: Maintenance request details retrieved successfully
+        200:
+          description: Maintenance request details
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Maintenance'
+                $ref: '#/components/schemas/MaintenanceRequest'
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Not a student
+        404:
+          description: Request not found
+        500:
+          description: Server error
 
     put:
+      tags:
+        - Student
       summary: Update maintenance request
-      tags: [Student Maintenance]
+      description: Update an existing maintenance request (only if pending)
       security:
         - BearerAuth: []
       parameters:
@@ -1588,21 +1790,33 @@ paths:
                   type: string
                 category:
                   type: string
-                  enum: [plumbing, electrical, furniture, appliance, structural, other]
+                  enum: [plumbing, electrical, hvac, appliance, structural, other]
                 priority:
                   type: string
-                  enum: [low, medium, high, urgent]
+                  enum: [low, medium, high]
       responses:
-        '200':
-          description: Maintenance request updated successfully
+        200:
+          description: Maintenance request updated
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Maintenance'
+                $ref: '#/components/schemas/MaintenanceRequest'
+        400:
+          description: Invalid request data or request cannot be updated
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Not a student
+        404:
+          description: Request not found
+        500:
+          description: Server error
 
     delete:
+      tags:
+        - Student
       summary: Cancel maintenance request
-      tags: [Student Maintenance]
+      description: Cancel a pending maintenance request
       security:
         - BearerAuth: []
       parameters:
@@ -1612,97 +1826,131 @@ paths:
           schema:
             type: string
       responses:
-        '200':
-          description: Maintenance request cancelled successfully
+        200:
+          description: Request cancelled successfully
+        400:
+          description: Request cannot be cancelled
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Not a student
+        404:
+          description: Request not found
+        500:
+          description: Server error
 
   /student/events:
     get:
-      summary: Get available events
-      tags: [Student Events]
+      tags:
+        - [Student Events]
+      summary: Get student events
+      description: Retrieves upcoming and past events for the student
       security:
         - BearerAuth: []
       parameters:
         - in: query
-          name: category
+          name: filter
           schema:
             type: string
-            enum: [social, academic, sports, cultural, other]
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [upcoming, ongoing, completed, cancelled]
-        - in: query
-          name: page
-          schema:
-            type: integer
-        - in: query
-          name: limit
-          schema:
-            type: integer
+            enum: [all, upcoming, past]
+          description: Filter events by time period
       responses:
         '200':
-          description: List of events
+          description: Successfully retrieved events
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  events:
+                  upcoming:
                     type: array
                     items:
                       $ref: '#/components/schemas/Event'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
+                  past:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Event'
+        '401':
+          description: Unauthorized - User not authenticated
+        '403':
+          description: Forbidden - User not authorized
+        '500':
+          description: Server error
 
-  /student/events/{eventId}/register:
-    post:
-      summary: Register for an event
-      tags: [Student Events]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: eventId
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Successfully registered for event
-
-  /student/events/{eventId}/feedback:
-    post:
-      summary: Submit event feedback
-      tags: [Student Events]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: eventId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
+    /student/events/{eventId}/register:
+      post:
+        tags:
+          - Student
+        summary: Register for an event
+        description: Register the authenticated student for a specific event
+        security:
+          - BearerAuth: []
+        parameters:
+          - in: path
+            name: eventId
+            required: true
             schema:
-              type: object
-              required:
-                - rating
-              properties:
-                rating:
-                  type: number
-                  minimum: 1
-                  maximum: 5
-                comment:
-                  type: string
-      responses:
-        '201':
-          description: Feedback submitted successfully
+              type: string
+            description: ID of the event to register for
+        responses:
+          '200':
+            description: Successfully registered for event
+          '400':
+            description: Bad request - Already registered or past event
+          '401':
+            description: Unauthorized - User not authenticated
+          '403':
+            description: Forbidden - User not authorized
+          '404':
+            description: Event not found
+          '500':
+            description: Server error
+
+    /student/events/{eventId}/feedback:
+      post:
+        tags:
+          - Student
+        summary: Submit event feedback
+        description: Submit feedback for an attended event
+        security:
+          - BearerAuth: []
+        parameters:
+          - in: path
+            name: eventId
+            required: true
+            schema:
+              type: string
+            description: ID of the event to submit feedback for
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - rating
+                properties:
+                  rating:
+                    type: integer
+                    minimum: 1
+                    maximum: 5
+                    description: Rating from 1 to 5
+                  comment:
+                    type: string
+                    description: Optional feedback comment
+        responses:
+          '200':
+            description: Successfully submitted feedback
+          '400':
+            description: Bad request - Invalid rating
+          '401':
+            description: Unauthorized - User not authenticated
+          '403':
+            description: Forbidden - Not registered for event
+          '404':
+            description: Event not found
+          '500':
+            description: Server error
 
   /property-manager/residences:
     get:
@@ -3289,3 +3537,344 @@ paths:
           description: Forbidden - User not authorized to access payment history
         '500':
           description: Server error 
+
+  /student/profile:
+    get:
+      tags:
+        - Student
+      summary: Get student profile
+      description: Retrieve the authenticated student's profile information
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Student profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  firstName:
+                    type: string
+                  lastName:
+                    type: string
+                  email:
+                    type: string
+                  phone:
+                    type: string
+                  studentId:
+                    type: string
+                  program:
+                    type: string
+                  year:
+                    type: string
+                  emergencyContact:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      relationship:
+                        type: string
+                      phone:
+                        type: string
+        401:
+          description: Unauthorized - Invalid or missing token
+        500:
+          description: Server error
+    put:
+      tags:
+        - Student
+      summary: Update student profile
+      description: Update the authenticated student's profile information
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+                phone:
+                  type: string
+                emergencyContact:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    relationship:
+                      type: string
+                    phone:
+                      type: string
+      responses:
+        200:
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Student'
+        400:
+          description: Invalid request data
+        401:
+          description: Unauthorized - Invalid or missing token
+        500:
+          description: Server error
+
+  /student/profile/password:
+    put:
+      tags:
+        - Student
+      summary: Change student password
+      description: Update the authenticated student's password
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currentPassword:
+                  type: string
+                newPassword:
+                  type: string
+      responses:
+        200:
+          description: Password changed successfully
+        400:
+          description: Invalid password data
+        401:
+          description: Unauthorized - Invalid or missing token
+        500:
+          description: Server error
+
+  /applications/submit:
+    post:
+      tags:
+        - Applications
+      summary: Submit a new application
+      description: Submit a new application for student accommodation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - firstName
+                - lastName
+                - email
+                - phone
+                - preferredRoom
+              properties:
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+                email:
+                  type: string
+                phone:
+                  type: string
+                preferredRoom:
+                  type: string
+                alternateRooms:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Application submitted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  application:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      status:
+                        type: string
+                      applicationDate:
+                        type: string
+                        format: date-time
+        '400':
+          description: Invalid input
+        '500':
+          description: Server error
+
+  /applications/status/{email}:
+    get:
+      tags:
+        - Applications
+      summary: Get application status
+      description: Get the status of an application by email
+      parameters:
+        - in: path
+          name: email
+          required: true
+          schema:
+            type: string
+          description: Email address used in the application
+      responses:
+        '200':
+          description: Application status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '404':
+          description: Application not found
+        '500':
+          description: Server error
+
+  /admin/applications:
+    get:
+      tags:
+        - Admin - Applications
+      summary: Get all applications
+      description: Get a list of all applications with room status information
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: type
+          schema:
+            type: string
+            enum: [new, upgrade]
+          description: Filter by application type
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, approved, rejected, waitlisted]
+          description: Filter by application status
+      responses:
+        '200':
+          description: List of applications retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  applications:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Application'
+                  rooms:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        capacity:
+                          type: integer
+                        price:
+                          type: number
+                        status:
+                          type: string
+                        residenceName:
+                          type: string
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Not an admin
+        '500':
+          description: Server error
+
+  /admin/applications/{applicationId}:
+    put:
+      tags:
+        - Admin - Applications
+      summary: Update application status
+      description: Update the status of an application (approve/reject/waitlist)
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: applicationId
+          required: true
+          schema:
+            type: string
+          description: ID of the application to update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - action
+              properties:
+                action:
+                  type: string
+                  enum: [approve, reject, waitlist]
+                roomNumber:
+                  type: string
+                  description: Required when action is 'approve'
+      responses:
+        '200':
+          description: Application status updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  application:
+                    $ref: '#/components/schemas/Application'
+        '400':
+          description: Invalid input or action
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Not an admin
+        '404':
+          description: Application not found
+        '500':
+          description: Server error
+
+  /admin/applications/{applicationId}/payment:
+    put:
+      tags:
+        - Admin - Applications
+      summary: Update application payment status
+      description: Update the payment status of an approved application
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: applicationId
+          required: true
+          schema:
+            type: string
+          description: ID of the application to update
+      responses:
+        '200':
+          description: Payment status updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '400':
+          description: Invalid application status
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Not an admin
+        '404':
+          description: Application not found
+        '500':
+          description: Server error
