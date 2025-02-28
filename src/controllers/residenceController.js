@@ -26,6 +26,31 @@ exports.getStKildaResidence = async (req, res) => {
     }
 };
 
+// Get Belvedere residence
+exports.getBelvedereResidence = async (req, res) => {
+    try {
+        const residence = await Residence.findOne({ name: "Belvedere Student House" });
+
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Belvedere residence not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: residence
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching Belvedere residence',
+            error: error.message
+        });
+    }
+};
+
 // Add a new residence
 exports.addResidence = async (req, res) => {
     try {
@@ -267,6 +292,28 @@ exports.updateRoom = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error updating room',
+            error: error.message
+        });
+    }
+};
+
+// Get residence by name
+exports.getResidenceByName = async (req, res) => {
+    try {
+        const residence = await Residence.findOne({ name: req.params.name });
+
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        res.status(200).json(residence);
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching residence',
             error: error.message
         });
     }

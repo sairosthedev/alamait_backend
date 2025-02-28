@@ -90,6 +90,7 @@ exports.updateApplicationStatus = async (req, res) => {
                 application.status = 'approved';
                 application.allocatedRoom = roomNumber;
                 application.paymentStatus = 'unpaid';
+                const approvalDate = new Date();
 
                 // Generate application code if not exists
                 if (!application.applicationCode) {
@@ -110,6 +111,22 @@ exports.updateApplicationStatus = async (req, res) => {
                         throw new Error('Room not found');
                     }
 
+                    // Calculate validity period (4 months from approval date)
+                    const validUntil = new Date(approvalDate);
+                    validUntil.setMonth(approvalDate.getMonth() + 4);
+
+                    // Update student's current room and validity
+                    await User.findByIdAndUpdate(
+                        application.student,
+                        {
+                            $set: {
+                                currentRoom: roomNumber,
+                                roomValidUntil: validUntil,
+                                roomApprovalDate: approvalDate
+                            }
+                        }
+                    );
+
                     // Send approval email
                     await sendEmail({
                         to: application.email,
@@ -122,6 +139,8 @@ exports.updateApplicationStatus = async (req, res) => {
                             Application Details:
                             - Application Code: ${application.applicationCode}
                             - Allocated Room: ${roomNumber}
+                            - Approval Date: ${approvalDate.toLocaleDateString()}
+                            - Valid Until: ${validUntil.toLocaleDateString()}
 
                             Please use this application code when registering on our platform.
 
@@ -136,6 +155,12 @@ exports.updateApplicationStatus = async (req, res) => {
                             Best regards,
                             Alamait Student Accommodation Team
                         `
+                    });
+
+                    await application.save();
+                    res.json({ 
+                        message: 'Application approved successfully',
+                        application 
                     });
                 } catch (error) {
                     console.error('Error in approval process:', error);
@@ -191,29 +216,11 @@ exports.updateApplicationStatus = async (req, res) => {
                 return res.status(400).json({ error: 'Invalid action' });
         }
 
-        application.actionDate = new Date();
-        application.actionBy = req.user._id;
         await application.save();
-
-        res.json({
-            message: `Application ${action}ed successfully`,
-            application: {
-                id: application._id,
-                status: application.status,
-                applicationCode: application.applicationCode,
-                email: application.email,
-                firstName: application.firstName,
-                lastName: application.lastName,
-                allocatedRoom: application.allocatedRoom,
-                paymentStatus: application.paymentStatus
-            }
-        });
+        res.json(application);
     } catch (error) {
         console.error('Error in updateApplicationStatus:', error);
-        res.status(500).json({ 
-            error: 'Server error', 
-            details: error.message 
-        });
+        res.status(500).json({ error: 'Server error' });
     }
 };
 
@@ -276,6 +283,35 @@ exports.deleteApplication = async (req, res) => {
         res.json({ message: 'Application deleted successfully' });
     } catch (error) {
         console.error('Error in deleteApplication:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Update room validity
+exports.updateRoomValidity = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        // Set base date to March 2025
+        const baseDate = new Date(2025, 2, 28); // March 28, 2025
+        const validUntil = new Date(baseDate);
+        validUntil.setMonth(baseDate.getMonth() + 4); // Add 4 months to get to July 2025
+
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $set: { roomValidUntil: validUntil } },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({
+            message: 'Room validity updated successfully',
+            roomValidUntil: validUntil
+        });
+    } catch (error) {
+        console.error('Error updating room validity:', error);
         res.status(500).json({ error: 'Server error' });
     }
 }; 

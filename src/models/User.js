@@ -45,6 +45,14 @@ const userSchema = new mongoose.Schema({
   emailVerificationExpires: Date,
   resetPasswordToken: String,
   resetPasswordExpires: Date,
+  currentRoom: {
+    type: String,
+    default: null
+  },
+  roomValidUntil: {
+    type: Date,
+    default: null
+  },
   emergencyContact: {
     name: String,
     relationship: String,

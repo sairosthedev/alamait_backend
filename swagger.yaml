@@ -508,51 +508,16 @@ components:
           type: string
         student:
           $ref: '#/components/schemas/User'
-        email:
-          type: string
-        firstName:
-          type: string
-        lastName:
-          type: string
-        phone:
-          type: string
-        applicationCode:
-          type: string
-        requestType:
-          type: string
-          enum: [new, upgrade]
+        residence:
+          $ref: '#/components/schemas/Residence'
         status:
           type: string
           enum: [pending, approved, rejected, waitlisted]
         paymentStatus:
           type: string
-          enum: [unpaid, paid]
-        applicationDate:
+          enum: [pending, paid, failed]
+        roomNumber:
           type: string
-          format: date-time
-        preferredRoom:
-          type: string
-        alternateRooms:
-          type: array
-          items:
-            type: string
-        currentRoom:
-          type: string
-        requestedRoom:
-          type: string
-        reason:
-          type: string
-        allocatedRoom:
-          type: string
-        waitlistedRoom:
-          type: string
-        adminComment:
-          type: string
-        actionDate:
-          type: string
-          format: date-time
-        actionBy:
-          $ref: '#/components/schemas/User'
         createdAt:
           type: string
           format: date-time
@@ -1076,6 +1041,66 @@ components:
         timestamp:
           type: string
           format: date-time
+
+    ResidenceInput:
+      type: object
+      required:
+        - name
+        - description
+        - address
+        - location
+        - rooms
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        address:
+          type: string
+        location:
+          type: object
+          properties:
+            type:
+              type: string
+              default: Point
+            coordinates:
+              type: array
+              items:
+                type: number
+        rooms:
+          type: array
+          items:
+            type: object
+            required:
+              - roomNumber
+              - type
+              - price
+            properties:
+              roomNumber:
+                type: string
+              type:
+                type: string
+                enum: [single, double, studio, apartment]
+              price:
+                type: number
+              status:
+                type: string
+                enum: [available, occupied, maintenance]
+                default: available
+
+    Residence:
+      allOf:
+        - $ref: '#/components/schemas/ResidenceInput'
+        - type: object
+          properties:
+            _id:
+              type: string
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
 
 paths:
   /auth/register:
@@ -3740,74 +3765,38 @@ paths:
 
   /admin/applications:
     get:
-      tags:
-        - Admin - Applications
       summary: Get all applications
-      description: Get a list of all applications with room status information
+      tags:
+        - Applications
       security:
         - BearerAuth: []
-      parameters:
-        - in: query
-          name: type
-          schema:
-            type: string
-            enum: [new, upgrade]
-          description: Filter by application type
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [pending, approved, rejected, waitlisted]
-          description: Filter by application status
       responses:
         '200':
-          description: List of applications retrieved successfully
+          description: List of all applications
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  applications:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Application'
-                  rooms:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        name:
-                          type: string
-                        capacity:
-                          type: integer
-                        price:
-                          type: number
-                        status:
-                          type: string
-                        residenceName:
-                          type: string
+                type: array
+                items:
+                  $ref: '#/components/schemas/Application'
         '401':
           description: Unauthorized
         '403':
-          description: Forbidden - Not an admin
-        '500':
-          description: Server error
-
+          description: Forbidden - Admin access required
+    
   /admin/applications/{applicationId}:
     put:
-      tags:
-        - Admin - Applications
       summary: Update application status
-      description: Update the status of an application (approve/reject/waitlist)
+      tags:
+        - Applications
       security:
         - BearerAuth: []
       parameters:
-        - in: path
-          name: applicationId
+        - name: applicationId
+          in: path
           required: true
           schema:
             type: string
-          description: ID of the application to update
       requestBody:
         required: true
         content:
@@ -3826,55 +3815,241 @@ paths:
       responses:
         '200':
           description: Application status updated successfully
+        '400':
+          description: Invalid request parameters
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+        '404':
+          description: Application not found
+
+  /admin/applications/{applicationId}/payment:
+    put:
+      summary: Update application payment status
+      tags:
+        - Applications
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - paymentStatus
+              properties:
+                paymentStatus:
+                  type: string
+                  enum: [pending, paid, failed]
+      responses:
+        '200':
+          description: Payment status updated successfully
+        '400':
+          description: Invalid request parameters
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+        '404':
+          description: Application not found
+
+  /admin/residences:
+    post:
+      summary: Add a new residence
+      tags:
+        - Residences
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResidenceInput'
+      responses:
+        '201':
+          description: Residence created successfully
+        '400':
+          description: Invalid request parameters
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+
+    get:
+      summary: Get all residences
+      tags:
+        - Residences
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of all residences
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Residence'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+
+  /admin/residences/{id}:
+    get:
+      summary: Get a specific residence
+      tags:
+        - Residences
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Residence details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Residence'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+        '404':
+          description: Residence not found
+
+    put:
+      summary: Update a residence
+      tags:
+        - Residences
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResidenceInput'
+      responses:
+        '200':
+          description: Residence updated successfully
+        '400':
+          description: Invalid request parameters
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+        '404':
+          description: Residence not found
+
+    delete:
+      summary: Delete a residence
+      tags:
+        - Residences
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Residence deleted successfully
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+        '404':
+          description: Residence not found
+
+  /public/residences/st-kilda:
+    get:
+      summary: Get St Kilda residence details
+      tags:
+        - Public
+      description: Public endpoint to get details about St Kilda Student House
+      responses:
+        '200':
+          description: St Kilda residence details retrieved successfully
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  message:
-                    type: string
-                  application:
-                    $ref: '#/components/schemas/Application'
-        '400':
-          description: Invalid input or action
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Residence'
         '404':
-          description: Application not found
+          description: St Kilda residence not found
         '500':
           description: Server error
 
-  /admin/applications/{applicationId}/payment:
-    put:
+  /public/residences/belvedere:
+    get:
+      summary: Get Belvedere residence details
       tags:
-        - Admin - Applications
-      summary: Update application payment status
-      description: Update the payment status of an approved application
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: applicationId
-          required: true
-          schema:
-            type: string
-          description: ID of the application to update
+        - Public
+      description: Public endpoint to get details about Belvedere Student House
       responses:
         '200':
-          description: Payment status updated successfully
+          description: Belvedere residence details retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Application'
-        '400':
-          description: Invalid application status
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Residence'
         '404':
-          description: Application not found
+          description: Belvedere residence not found
+        '500':
+          description: Server error
+
+  /public/residences/name/{name}:
+    get:
+      summary: Get residence by name
+      tags:
+        - Public
+      description: Public endpoint to get details about a specific residence by name
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Name of the residence
+      responses:
+        '200':
+          description: Residence details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Residence'
+        '404':
+          description: Residence not found
         '500':
           description: Server error

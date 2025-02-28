@@ -48,8 +48,10 @@ const residenceSchema = new mongoose.Schema({
             default: 'available'
         },
         features: [String],
+        amenities: [String],
         floor: Number,
-        area: Number // in square meters/feet
+        area: Number, // in square meters/feet
+        images: [String] // Add the images field as an array of strings
     }],
     amenities: [{
         name: String,

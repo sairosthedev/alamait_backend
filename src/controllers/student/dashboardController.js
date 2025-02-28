@@ -8,9 +8,18 @@ const Message = require('../../models/Message');
 exports.getDashboardData = async (req, res) => {
     try {
         // Get student profile
-        const student = await User.findById(req.user._id)
-            .select('-password')
-            .lean();
+        const student = await User.findById(req.user._id);
+        
+        if (student.currentRoom && student.roomApprovalDate) {
+            // Calculate validity period (4 months from approval date)
+            const validUntil = new Date(student.roomApprovalDate);
+            validUntil.setMonth(student.roomApprovalDate.getMonth() + 4);
+            
+            if (!student.roomValidUntil || student.roomValidUntil.getTime() !== validUntil.getTime()) {
+                student.roomValidUntil = validUntil;
+                await student.save();
+            }
+        }
 
         // Get next payment
         const nextPayment = await Payment.findOne({
@@ -55,7 +64,8 @@ exports.getDashboardData = async (req, res) => {
                 },
                 room: {
                     status: student.currentRoom ? 'Active' : 'None',
-                    validUntil: student.roomValidUntil
+                    validUntil: student.roomValidUntil,
+                    approvalDate: student.roomApprovalDate
                 },
                 maintenance: {
                     activeCount: activeMaintenanceCount,
@@ -147,6 +157,82 @@ exports.getNotifications = async (req, res) => {
         res.json(notifications);
     } catch (error) {
         console.error('Error in getNotifications:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Refresh dashboard data
+exports.refreshDashboardData = async (req, res) => {
+    try {
+        // Get student profile
+        const student = await User.findById(req.user._id);
+        
+        if (student.currentRoom && student.roomApprovalDate) {
+            // Calculate validity period (4 months from approval date)
+            const validUntil = new Date(student.roomApprovalDate);
+            validUntil.setMonth(student.roomApprovalDate.getMonth() + 4);
+            
+            student.roomValidUntil = validUntil;
+            await student.save();
+        }
+
+        // Get updated data
+        const nextPayment = await Payment.findOne({
+            student: req.user._id,
+            status: 'Pending'
+        })
+        .sort({ date: 1 })
+        .lean();
+
+        const activeMaintenanceCount = await Maintenance.countDocuments({
+            student: req.user._id,
+            status: { $in: ['pending', 'in-progress'] }
+        });
+
+        const unreadMessagesCount = await Message.countDocuments({
+            recipient: req.user._id,
+            read: false
+        });
+
+        const latestMessage = await Message.findOne({
+            recipient: req.user._id
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+        // Format dashboard data
+        const dashboardData = {
+            profile: {
+                name: `${student.firstName} ${student.lastName}`,
+                id: student.studentId,
+                program: student.program,
+                year: student.year,
+                image: student.profileImage
+            },
+            cards: {
+                payment: {
+                    amount: nextPayment ? nextPayment.totalAmount : 0,
+                    dueDate: nextPayment ? nextPayment.date : null
+                },
+                room: {
+                    status: student.currentRoom ? 'Active' : 'None',
+                    validUntil: student.roomValidUntil,
+                    approvalDate: student.roomApprovalDate
+                },
+                maintenance: {
+                    activeCount: activeMaintenanceCount,
+                    status: activeMaintenanceCount > 0 ? 'In Progress' : 'No Active Requests'
+                },
+                messages: {
+                    unreadCount: unreadMessagesCount,
+                    latestMessageTime: latestMessage ? latestMessage.createdAt : null
+                }
+            }
+        };
+
+        res.json(dashboardData);
+    } catch (error) {
+        console.error('Error in refreshDashboardData:', error);
         res.status(500).json({ error: 'Server error' });
     }
 }; 

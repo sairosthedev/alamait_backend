@@ -4,7 +4,8 @@ const { auth, checkRole } = require('../../middleware/auth');
 const {
     getDashboardData,
     getAvailableRooms,
-    getNotifications
+    getNotifications,
+    refreshDashboardData
 } = require('../../controllers/student/dashboardController');
 
 // All routes require student role
@@ -19,5 +20,8 @@ router.get('/rooms', getAvailableRooms);
 
 // Get notifications
 router.get('/notifications', getNotifications);
+
+// Refresh dashboard data
+router.post('/refresh', refreshDashboardData);
 
 module.exports = router; 

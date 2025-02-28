@@ -5,4 +5,10 @@ const residenceController = require('../../controllers/residenceController');
 // Public route to get St Kilda residence
 router.get('/st-kilda', residenceController.getStKildaResidence);
 
+// Public route to get Belvedere residence
+router.get('/belvedere', residenceController.getBelvedereResidence);
+
+// Public route to get residence by name
+router.get('/name/:name', residenceController.getResidenceByName);
+
 module.exports = router; 

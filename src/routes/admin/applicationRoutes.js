@@ -5,7 +5,9 @@ const { check } = require('express-validator');
 const {
     getApplications,
     updateApplicationStatus,
-    updatePaymentStatus
+    updatePaymentStatus,
+    deleteApplication,
+    updateRoomValidity
 } = require('../../controllers/admin/applicationController');
 
 // All routes require admin role
@@ -31,5 +33,11 @@ router.put('/:applicationId', updateStatusValidation, updateApplicationStatus);
 
 // Update payment status
 router.put('/:applicationId/payment', updatePaymentStatus);
+
+// Delete application
+router.delete('/:applicationId', deleteApplication);
+
+// Update room validity
+router.put('/user/:userId/room-validity', updateRoomValidity);
 
 module.exports = router; 
