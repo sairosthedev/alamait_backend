@@ -2,6 +2,9 @@ const Student = require('../../models/Student');
 const { validationResult } = require('express-validator');
 const User = require('../../models/User');
 const bcrypt = require('bcryptjs');
+const Residence = require('../../models/Residence');
+const Application = require('../../models/Application');
+const Booking = require('../../models/Booking');
 
 // Get all students
 const getAllStudents = async (req, res) => {
@@ -189,6 +192,46 @@ const changePassword = async (req, res) => {
     }
 };
 
+// @route   GET /api/student/current-residence
+// @desc    Get student's current residence details
+// @access  Private (Student only)
+const getCurrentResidence = async (req, res) => {
+    try {
+        // Get current active booking
+        const currentBooking = await Booking.findOne({
+            student: req.user._id,
+            status: 'active'
+        })
+        .populate('residence', 'name address image')
+        .populate('room', 'roomNumber type features price floor')
+        .lean();
+
+        if (!currentBooking) {
+            return res.status(404).json({ error: 'No active booking found' });
+        }
+
+        const response = {
+            name: currentBooking.residence.name,
+            address: currentBooking.residence.address,
+            room: {
+                number: currentBooking.room.roomNumber,
+                type: currentBooking.room.type,
+                floor: currentBooking.room.floor,
+                features: currentBooking.room.features
+            },
+            status: currentBooking.status,
+            validUntil: currentBooking.endDate,
+            approvalDate: currentBooking.startDate,
+            image: currentBooking.residence.image
+        };
+
+        res.json(response);
+    } catch (error) {
+        console.error('Error in getCurrentResidence:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
 module.exports = {
     getAllStudents,
     getStudentById,
@@ -197,5 +240,6 @@ module.exports = {
     deleteStudent,
     getProfile,
     updateProfile,
-    changePassword
+    changePassword,
+    getCurrentResidence
 }; 

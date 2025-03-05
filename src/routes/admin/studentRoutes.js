@@ -10,6 +10,7 @@ const {
     deleteStudent,
     getStudentPayments
 } = require('../../controllers/admin/studentController');
+const User = require('../../models/User');
 
 // Validation middleware
 const studentValidation = [
@@ -27,8 +28,25 @@ const studentValidation = [
 router.use(auth);
 router.use(checkRole('admin'));
 
-// Routes
-router.get('/', getStudents);
+// Modified GET students route to handle both list and detailed views
+router.get('/', async (req, res) => {
+    try {
+        // If list parameter is true, return simplified list for message recipients
+        if (req.query.list === 'true') {
+            const students = await User.find({ role: 'student' })
+                .select('_id firstName lastName')
+                .sort('firstName')
+                .lean();
+            return res.json(students);
+        }
+        // Otherwise, use the original getStudents controller
+        return getStudents(req, res);
+    } catch (error) {
+        console.error('Error fetching students:', error);
+        res.status(500).json({ error: 'Error fetching students' });
+    }
+});
+
 router.post('/', studentValidation, createStudent);
 router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);

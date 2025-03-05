@@ -2,13 +2,13 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const { auth, checkRole } = require('../../middleware/auth');
-const messageController = require('../../controllers/student/messageController');
+const messageController = require('../../controllers/admin/messageController');
 
 // Validation middleware
 const messageValidation = [
     body('title').trim().notEmpty().withMessage('Title is required'),
     body('content').trim().notEmpty().withMessage('Content is required'),
-    body('recipient').isIn(['admin', 'all-students', 'specific-student']).withMessage('Invalid recipient type'),
+    body('recipient').isIn(['all-students', 'specific-student']).withMessage('Invalid recipient type'),
     body('specificStudent').optional().isMongoId().withMessage('Invalid student ID')
 ];
 
@@ -17,12 +17,12 @@ const replyValidation = [
 ];
 
 // Get all messages (with filtering and pagination)
-router.get('/', auth, checkRole('student'), messageController.getMessages);
+router.get('/', auth, checkRole('admin'), messageController.getMessages);
 
-// Create new message
+// Create new message (announcement)
 router.post('/', 
     auth, 
-    checkRole('student'), 
+    checkRole('admin'), 
     messageValidation,
     messageController.createMessage
 );
@@ -30,9 +30,16 @@ router.post('/',
 // Add reply to message
 router.post('/:messageId/reply',
     auth,
-    checkRole('student'),
+    checkRole('admin'),
     replyValidation,
     messageController.addReply
+);
+
+// Pin/unpin message
+router.patch('/:messageId/pin',
+    auth,
+    checkRole('admin'),
+    messageController.togglePinMessage
 );
 
 module.exports = router; 

@@ -1105,8 +1105,10 @@ components:
 paths:
   /auth/register:
     post:
+      tags:
+        - Authentication
       summary: Register a new user
-      tags: [Authentication]
+      description: Register a new user with email verification
       requestBody:
         required: true
         content:
@@ -1136,20 +1138,17 @@ paths:
       responses:
         '201':
           description: User registered successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  token:
-                    type: string
-                  user:
-                    $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid input data
+        '409':
+          description: Email already exists
 
   /auth/login:
     post:
-      summary: Login user
-      tags: [Authentication]
+      tags:
+        - Authentication
+      summary: User login
+      description: Authenticate user and return JWT token
       requestBody:
         required: true
         content:
@@ -1174,13 +1173,14 @@ paths:
                 properties:
                   token:
                     type: string
-                  user:
-                    $ref: '#/components/schemas/User'
+        '401':
+          description: Invalid credentials
 
   /auth/verify-email/{token}:
     get:
-      summary: Verify user email
-      tags: [Authentication]
+      tags:
+        - Authentication
+      summary: Verify email address
       parameters:
         - in: path
           name: token
@@ -1190,11 +1190,14 @@ paths:
       responses:
         '200':
           description: Email verified successfully
+        '400':
+          description: Invalid or expired token
 
   /auth/forgot-password:
     post:
+      tags:
+        - Authentication
       summary: Request password reset
-      tags: [Authentication]
       requestBody:
         required: true
         content:
@@ -1209,1938 +1212,113 @@ paths:
       responses:
         '200':
           description: Password reset email sent
+        '404':
+          description: User not found
 
-  /auth/reset-password/{token}:
-    post:
-      summary: Reset password
-      tags: [Authentication]
-      parameters:
-        - in: path
-          name: token
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - newPassword
-              properties:
-                newPassword:
-                  type: string
-      responses:
-        '200':
-          description: Password reset successful
-
-  /student/profile:
+  /monitoring/metrics:
     get:
       tags:
-        - Student
-      summary: Get student profile
-      description: Retrieve the authenticated student's profile information
+        - Monitoring
+      summary: Get Prometheus metrics
       security:
         - BearerAuth: []
       responses:
-        200:
-          description: Student profile retrieved successfully
+        '200':
+          description: Prometheus metrics in text format
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+
+  /monitoring/health:
+    get:
+      tags:
+        - Monitoring
+      summary: Get system health status
+      description: Returns detailed system health metrics including memory usage and uptime
+      responses:
+        '200':
+          description: System health information
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  id:
+                  status:
                     type: string
-                  firstName:
+                  timestamp:
                     type: string
-                  lastName:
+                    format: date-time
+                  uptime:
+                    type: number
+                  environment:
                     type: string
-                  email:
-                    type: string
-                  phone:
-                    type: string
-                  studentId:
-                    type: string
-                  program:
-                    type: string
-                  year:
-                    type: string
-                  emergencyContact:
+                  memory:
                     type: object
                     properties:
-                      name:
+                      heapUsed:
                         type: string
-                      relationship:
+                      heapTotal:
                         type: string
-                      phone:
+                      rss:
                         type: string
-        401:
-          description: Unauthorized - Invalid or missing token
-        500:
-          description: Server error
-    put:
-      tags:
-        - Student
-      summary: Update student profile
-      description: Update the authenticated student's profile information
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                firstName:
-                  type: string
-                lastName:
-                  type: string
-                phone:
-                  type: string
-                emergencyContact:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    relationship:
-                      type: string
-                    phone:
-                      type: string
-      responses:
-        200:
-          description: Profile updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Student'
-        400:
-          description: Invalid request data
-        401:
-          description: Unauthorized - Invalid or missing token
-        500:
-          description: Server error
-
-  /student/profile/password:
-    put:
-      tags:
-        - Student
-      summary: Change student password
-      description: Update the authenticated student's password
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                currentPassword:
-                  type: string
-                newPassword:
-                  type: string
-      responses:
-        200:
-          description: Password changed successfully
-        400:
-          description: Invalid password data
-        401:
-          description: Unauthorized - Invalid or missing token
-        500:
-          description: Server error
 
   /student/messages:
     get:
       tags:
         - Student
       summary: Get student messages
-      description: Retrieve messages, announcements, and discussions
       security:
         - BearerAuth: []
-      parameters:
-        - in: query
-          name: filter
-          schema:
-            type: string
-            enum: [all, announcements, discussions]
-          description: Filter messages by type
-        - in: query
-          name: search
-          schema:
-            type: string
-          description: Search messages by content
-        - in: query
-          name: page
-          schema:
-            type: integer
-            default: 1
-          description: Page number
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            default: 10
-          description: Items per page
-      responses:
-        200:
-          description: Successfully retrieved messages
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  announcements:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Message'
-                  discussions:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Message'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
-                  total:
-                    type: integer
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden - Not a student
-        500:
-          description: Server error
-
-    post:
-      tags:
-        - Student
-      summary: Create new message
-      description: Create a new message or discussion
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - title
-                - content
-                - recipient
-              properties:
-                title:
-                  type: string
-                content:
-                  type: string
-                recipient:
-                  type: string
-                  enum: [admin, all-students, specific-student]
-                specificStudent:
-                  type: string
-                  description: Required when recipient is 'specific-student'
-      responses:
-        201:
-          description: Message created successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Message'
-        400:
-          description: Invalid request data
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden - Not a student
-        500:
-          description: Server error
-
-  /student/messages/{messageId}/reply:
-    post:
-      tags:
-        - Student
-      summary: Reply to a message
-      description: Add a reply to an existing message
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: messageId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - content
-              properties:
-                content:
-                  type: string
-      responses:
-        201:
-          description: Reply added successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MessageReply'
-        400:
-          description: Invalid request data
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden - Not a student
-        404:
-          description: Message not found
-        500:
-          description: Server error
-
-  /student/bookings:
-    get:
-      summary: Get student's bookings
-      tags: [Student Bookings]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [pending, confirmed, cancelled, completed]
-        - in: query
-          name: page
-          schema:
-            type: integer
-        - in: query
-          name: limit
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: List of bookings
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  bookings:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Booking'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
-
-    post:
-      summary: Create a new booking
-      tags: [Student Bookings]
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - residenceId
-                - roomNumber
-                - startDate
-                - endDate
-              properties:
-                residenceId:
-                  type: string
-                roomNumber:
-                  type: string
-                startDate:
-                  type: string
-                  format: date
-                endDate:
-                  type: string
-                  format: date
-                specialRequests:
-                  type: string
-                emergencyContact:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    relationship:
-                      type: string
-                    phone:
-                      type: string
-      responses:
-        '201':
-          description: Booking created successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Booking'
-
-  /student/bookings/{bookingId}:
-    get:
-      summary: Get booking details
-      tags: [Student Bookings]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: bookingId
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Booking details retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Booking'
-
-    put:
-      summary: Update booking
-      tags: [Student Bookings]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: bookingId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                specialRequests:
-                  type: string
-                emergencyContact:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    relationship:
-                      type: string
-                    phone:
-                      type: string
-      responses:
-        '200':
-          description: Booking updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Booking'
-
-    delete:
-      summary: Cancel booking
-      tags: [Student Bookings]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: bookingId
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Booking cancelled successfully
-
-  /student/maintenance:
-    get:
-      tags:
-        - Student
-      summary: Get student's maintenance requests
-      description: Retrieve all maintenance requests for the authenticated student
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [pending, assigned, in-progress, on-hold, completed]
-          description: Filter requests by status
-        - in: query
-          name: page
-          schema:
-            type: integer
-            default: 1
-          description: Page number for pagination
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            default: 10
-          description: Number of items per page
-      responses:
-        200:
-          description: List of maintenance requests
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  requests:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MaintenanceRequest'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
-                  total:
-                    type: integer
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden - Not a student
-        500:
-          description: Server error
-
-    post:
-      tags:
-        - Student
-      summary: Create maintenance request
-      description: Submit a new maintenance request
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - title
-                - description
-                - category
-                - location
-              properties:
-                title:
-                  type: string
-                description:
-                  type: string
-                category:
-                  type: string
-                  enum: [plumbing, electrical, hvac, appliance, structural, other]
-                priority:
-                  type: string
-                  enum: [low, medium, high]
-                  default: low
-                location:
-                  type: string
-                images:
-                  type: array
-                  items:
-                    type: string
-      responses:
-        201:
-          description: Maintenance request created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MaintenanceRequest'
-        400:
-          description: Invalid request data
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden - Not a student
-        500:
-          description: Server error
-
-  /student/maintenance/{requestId}:
-    get:
-      tags:
-        - Student
-      summary: Get maintenance request details
-      description: Get detailed information about a specific maintenance request
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: requestId
-          required: true
-          schema:
-            type: string
-      responses:
-        200:
-          description: Maintenance request details
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MaintenanceRequest'
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden - Not a student
-        404:
-          description: Request not found
-        500:
-          description: Server error
-
-    put:
-      tags:
-        - Student
-      summary: Update maintenance request
-      description: Update an existing maintenance request (only if pending)
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: requestId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                title:
-                  type: string
-                description:
-                  type: string
-                category:
-                  type: string
-                  enum: [plumbing, electrical, hvac, appliance, structural, other]
-                priority:
-                  type: string
-                  enum: [low, medium, high]
-      responses:
-        200:
-          description: Maintenance request updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MaintenanceRequest'
-        400:
-          description: Invalid request data or request cannot be updated
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden - Not a student
-        404:
-          description: Request not found
-        500:
-          description: Server error
-
-    delete:
-      tags:
-        - Student
-      summary: Cancel maintenance request
-      description: Cancel a pending maintenance request
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: requestId
-          required: true
-          schema:
-            type: string
-      responses:
-        200:
-          description: Request cancelled successfully
-        400:
-          description: Request cannot be cancelled
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden - Not a student
-        404:
-          description: Request not found
-        500:
-          description: Server error
-
-  /student/events:
-    get:
-      tags:
-        - [Student Events]
-      summary: Get student events
-      description: Retrieves upcoming and past events for the student
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: filter
-          schema:
-            type: string
-            enum: [all, upcoming, past]
-          description: Filter events by time period
-      responses:
-        '200':
-          description: Successfully retrieved events
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  upcoming:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Event'
-                  past:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Event'
-        '401':
-          description: Unauthorized - User not authenticated
-        '403':
-          description: Forbidden - User not authorized
-        '500':
-          description: Server error
-
-    /student/events/{eventId}/register:
-      post:
-        tags:
-          - Student
-        summary: Register for an event
-        description: Register the authenticated student for a specific event
-        security:
-          - BearerAuth: []
-        parameters:
-          - in: path
-            name: eventId
-            required: true
-            schema:
-              type: string
-            description: ID of the event to register for
-        responses:
-          '200':
-            description: Successfully registered for event
-          '400':
-            description: Bad request - Already registered or past event
-          '401':
-            description: Unauthorized - User not authenticated
-          '403':
-            description: Forbidden - User not authorized
-          '404':
-            description: Event not found
-          '500':
-            description: Server error
-
-    /student/events/{eventId}/feedback:
-      post:
-        tags:
-          - Student
-        summary: Submit event feedback
-        description: Submit feedback for an attended event
-        security:
-          - BearerAuth: []
-        parameters:
-          - in: path
-            name: eventId
-            required: true
-            schema:
-              type: string
-            description: ID of the event to submit feedback for
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                  - rating
-                properties:
-                  rating:
-                    type: integer
-                    minimum: 1
-                    maximum: 5
-                    description: Rating from 1 to 5
-                  comment:
-                    type: string
-                    description: Optional feedback comment
-        responses:
-          '200':
-            description: Successfully submitted feedback
-          '400':
-            description: Bad request - Invalid rating
-          '401':
-            description: Unauthorized - User not authenticated
-          '403':
-            description: Forbidden - Not registered for event
-          '404':
-            description: Event not found
-          '500':
-            description: Server error
-
-  /property-manager/residences:
-    get:
-      summary: Get managed residences
-      tags: [Property Manager]
-      security:
-        - BearerAuth: []
-      responses:
-        '200':
-          description: List of managed residences
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Residence'
-
-    post:
-      summary: Create a new residence
-      tags: [Property Manager]
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - name
-                - description
-                - address
-                - location
-              properties:
-                name:
-                  type: string
-                description:
-                  type: string
-                address:
-                  type: object
-                  properties:
-                    street:
-                      type: string
-                    city:
-                      type: string
-                    state:
-                      type: string
-                    zipCode:
-                      type: string
-                    country:
-                      type: string
-                location:
-                  type: object
-                  properties:
-                    coordinates:
-                      type: array
-                      items:
-                        type: number
-                rooms:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      roomNumber:
-                        type: string
-                      type:
-                        type: string
-                        enum: [single, double, studio, apartment]
-                      price:
-                        type: number
-                      features:
-                        type: array
-                        items:
-                          type: string
-                      floor:
-                        type: number
-                      area:
-                        type: number
-                amenities:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      name:
-                        type: string
-                      description:
-                        type: string
-                      icon:
-                        type: string
-      responses:
-        '201':
-          description: Residence created successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Residence'
-
-  /property-manager/residences/{residenceId}:
-    get:
-      summary: Get residence details
-      tags: [Property Manager]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: residenceId
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Residence details retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Residence'
-
-    put:
-      summary: Update residence
-      tags: [Property Manager]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: residenceId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/Residence'
-      responses:
-        '200':
-          description: Residence updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Residence'
-
-  /property-manager/residences/{residenceId}/rooms:
-    post:
-      summary: Add room to residence
-      tags: [Property Manager]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: residenceId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - roomNumber
-                - type
-                - price
-              properties:
-                roomNumber:
-                  type: string
-                type:
-                  type: string
-                  enum: [single, double, studio, apartment]
-                price:
-                  type: number
-                features:
-                  type: array
-                  items:
-                    type: string
-                floor:
-                  type: number
-                area:
-                  type: number
-      responses:
-        '201':
-          description: Room added successfully
-
-  /property-manager/maintenance:
-    get:
-      summary: Get maintenance requests for managed properties
-      tags: [Property Manager]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [pending, in_progress, completed, cancelled]
-        - in: query
-          name: priority
-          schema:
-            type: string
-            enum: [low, medium, high, urgent]
-        - in: query
-          name: page
-          schema:
-            type: integer
-        - in: query
-          name: limit
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: List of maintenance requests
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  requests:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Maintenance'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
-
-  /property-manager/maintenance/{requestId}:
-    put:
-      summary: Update maintenance request status
-      tags: [Property Manager]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: requestId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - status
-              properties:
-                status:
-                  type: string
-                  enum: [pending, in_progress, completed, cancelled]
-                assignedTo:
-                  type: string
-                scheduledDate:
-                  type: string
-                  format: date-time
-                estimatedCost:
-                  type: number
-                comment:
-                  type: string
-      responses:
-        '200':
-          description: Maintenance request updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Maintenance'
-
-  /admin/users:
-    get:
-      summary: Get all users
-      tags: [Admin]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: role
-          schema:
-            type: string
-            enum: [student, admin, property_manager]
-        - in: query
-          name: page
-          schema:
-            type: integer
-        - in: query
-          name: limit
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: List of users
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  users:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/User'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
-
-    post:
-      summary: Create new user
-      tags: [Admin]
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - email
-                - password
-                - firstName
-                - lastName
-                - role
-                - phone
-              properties:
-                email:
-                  type: string
-                password:
-                  type: string
-                firstName:
-                  type: string
-                lastName:
-                  type: string
-                role:
-                  type: string
-                  enum: [student, admin, property_manager]
-                phone:
-                  type: string
-      responses:
-        '201':
-          description: User created successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/User'
-
-  /admin/users/{userId}:
-    get:
-      summary: Get user details
-      tags: [Admin]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: userId
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: User details retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/User'
-
-    put:
-      summary: Update user
-      tags: [Admin]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: userId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                email:
-                  type: string
-                firstName:
-                  type: string
-                lastName:
-                  type: string
-                role:
-                  type: string
-                  enum: [student, admin, property_manager]
-                phone:
-                  type: string
-                isVerified:
-                  type: boolean
-      responses:
-        '200':
-          description: User updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/User'
-
-    delete:
-      summary: Delete user
-      tags: [Admin]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: userId
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: User deleted successfully
-
-  /admin/reports/occupancy:
-    get:
-      summary: Get occupancy report
-      tags: [Admin Reports]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: startDate
-          schema:
-            type: string
-            format: date
-          description: Start date for report
-        - in: query
-          name: endDate
-          schema:
-            type: string
-            format: date
-          description: End date for report
-      responses:
-        '200':
-          description: Occupancy report data
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  totalRooms:
-                    type: integer
-                  occupiedRooms:
-                    type: integer
-                  occupancyRate:
-                    type: number
-
-  /admin/reports/revenue:
-    get:
-      summary: Get revenue report
-      tags: [Admin Reports]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: startDate
-          schema:
-            type: string
-            format: date
-          description: Start date for report
-        - in: query
-          name: endDate
-          schema:
-            type: string
-            format: date
-          description: End date for report
-      responses:
-        '200':
-          description: Revenue report data
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  totalRevenue:
-                    type: number
-                  paidAmount:
-                    type: number
-                  pendingAmount:
-                    type: number
-                  bookingsByStatus:
-                    type: object
-                    additionalProperties:
-                      type: integer
-
-  /api/admin/students:
-    get:
-      tags:
-        - Admin
-      summary: Get all students with pagination and filters
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: page
-          schema:
-            type: integer
-          description: Page number
-        - in: query
-          name: limit
-          schema:
-            type: integer
-          description: Number of items per page
-        - in: query
-          name: search
-          schema:
-            type: string
-          description: Search by name or email
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [active, inactive, pending]
-          description: Filter by student status
-      responses:
-        200:
-          description: List of students
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  students:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Student'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
-                  total:
-                    type: integer
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden
-
-    post:
-      tags:
-        - Admin
-      summary: Create a new student
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StudentInput'
-      responses:
-        201:
-          description: Student created successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Student'
-        400:
-          description: Invalid input
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden
-
-  /api/admin/students/{studentId}:
-    get:
-      tags:
-        - Admin
-      summary: Get student details by ID
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: studentId
-          required: true
-          schema:
-            type: string
-      responses:
-        200:
-          description: Student details
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Student'
-        404:
-          description: Student not found
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden
-
-    put:
-      tags:
-        - Admin
-      summary: Update student details
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: studentId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StudentInput'
-      responses:
-        200:
-          description: Student updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Student'
-        400:
-          description: Invalid input
-        404:
-          description: Student not found
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden
-
-    delete:
-      tags:
-        - Admin
-      summary: Delete student
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: studentId
-          required: true
-          schema:
-            type: string
-      responses:
-        200:
-          description: Student deleted successfully
-        404:
-          description: Student not found
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden
-
-  /api/admin/students/{studentId}/payments:
-    get:
-      tags:
-        - Admin
-      summary: Get student payment history
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: studentId
-          required: true
-          schema:
-            type: string
-      responses:
-        200:
-          description: Student payment history
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Payment'
-        404:
-          description: Student not found
-        401:
-          description: Unauthorized
-        403:
-          description: Forbidden
-
-  /api/admin/applications:
-    get:
-      tags:
-        - Admin
-      summary: Get all applications with filters
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: type
-          schema:
-            type: string
-            enum: [new, upgrade]
-          description: Filter by application type
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [pending, approved, rejected, waitlisted]
-          description: Filter by application status
-      responses:
-        200:
-          description: List of applications and room status
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  applications:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Application'
-                  rooms:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Room'
-
-    post:
-      tags:
-        - Admin
-      summary: Create a new application
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - studentId
-                - requestType
-              properties:
-                studentId:
-                  type: string
-                requestType:
-                  type: string
-                  enum: [new, upgrade]
-                preferredRoom:
-                  type: string
-                alternateRooms:
-                  type: array
-                  items:
-                    type: string
-                currentRoom:
-                  type: string
-                requestedRoom:
-                  type: string
-                reason:
-                  type: string
-      responses:
-        201:
-          description: Application created successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Application'
-
-  /api/admin/applications/{applicationId}:
-    put:
-      tags:
-        - Admin
-      summary: Update application status
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: applicationId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - action
-              properties:
-                action:
-                  type: string
-                  enum: [approve, reject, waitlist]
-                roomName:
-                  type: string
-                  description: Required for approve and waitlist actions
-      responses:
-        200:
-          description: Application updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Application'
-
-  /api/admin/applications/{applicationId}/payment:
-    put:
-      tags:
-        - Admin
-      summary: Update application payment status
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: applicationId
-          required: true
-          schema:
-            type: string
-      responses:
-        200:
-          description: Payment status updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Application'
-
-  /admin/payments:
-    get:
-      summary: Get all payments
-      tags: [Admin Payments]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 10
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [Pending, Confirmed, Failed]
-        - in: query
-          name: startDate
-          schema:
-            type: string
-            format: date
-        - in: query
-          name: endDate
-          schema:
-            type: string
-            format: date
-      responses:
-        '200':
-          description: List of payments
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  payments:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Payment'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
-                  total:
-                    type: integer
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '500':
-          description: Server error
-    
-    post:
-      summary: Create new payment
-      tags: [Admin Payments]
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PaymentInput'
-      responses:
-        '201':
-          description: Payment created successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Payment'
-        '400':
-          description: Invalid input
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '404':
-          description: Student not found
-        '500':
-          description: Server error
-
-  /admin/payments/{paymentId}/status:
-    put:
-      summary: Update payment status
-      tags: [Admin Payments]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: paymentId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - status
-              properties:
-                status:
-                  type: string
-                  enum: [Pending, Confirmed, Failed]
-      responses:
-        '200':
-          description: Payment status updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Payment'
-        '400':
-          description: Invalid status
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '404':
-          description: Payment not found
-        '500':
-          description: Server error
-
-  /api/admin/messages:
-    get:
-      summary: Get all messages
-      tags: [Admin Messages]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: type
-          schema:
-            type: string
-            enum: [sent, received, all]
-          description: Filter messages by type
-        - in: query
-          name: read
-          schema:
-            type: boolean
-          description: Filter by read status
-        - in: query
-          name: search
-          schema:
-            type: string
-          description: Search in message content or recipient name
-        - in: query
-          name: page
-          schema:
-            type: integer
-            default: 1
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            default: 10
       responses:
         '200':
           description: List of messages
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  messages:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/AdminMessage'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
-                  total:
-                    type: integer
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '500':
-          description: Server error
-    
-    post:
-      summary: Send a new message
-      tags: [Admin Messages]
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - recipient
-                - message
-              properties:
-                recipient:
-                  type: string
-                  description: Recipient ID or 'All Students' for broadcast
-                message:
-                  type: string
-                  description: Message content
-                subject:
-                  type: string
-                  description: Optional message subject
-      responses:
-        '201':
-          description: Message sent successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AdminMessage'
-        '400':
-          description: Invalid input
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '404':
-          description: Recipient not found
-        '500':
-          description: Server error
+                type: array
+                items:
+                  $ref: '#/components/schemas/Message'
 
-  /api/admin/maintenance/stats:
+  /student/bookings:
     get:
-      summary: Get maintenance dashboard statistics
-      tags: [Admin Maintenance]
+      tags:
+        - Student
+      summary: Get student bookings
       security:
         - BearerAuth: []
       responses:
         '200':
-          description: Dashboard statistics retrieved successfully
+          description: List of bookings
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MaintenanceStats'
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '500':
-          description: Server error
+                type: array
+                items:
+                  $ref: '#/components/schemas/Booking'
 
-  /api/admin/maintenance:
+  /student/maintenance:
     get:
-      summary: Get all maintenance requests
-      tags: [Admin Maintenance]
+      tags:
+        - Student
+      summary: Get maintenance requests
       security:
         - BearerAuth: []
-      parameters:
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [all, pending, assigned, in-progress, on-hold, completed]
-          description: Filter by request status
-        - in: query
-          name: priority
-          schema:
-            type: string
-            enum: [low, medium, high]
-          description: Filter by priority level
-        - in: query
-          name: category
-          schema:
-            type: string
-            enum: [plumbing, electrical, hvac, appliance, structural, other]
-          description: Filter by maintenance category
-        - in: query
-          name: search
-          schema:
-            type: string
-          description: Search in title, description, or location
-        - in: query
-          name: residence
-          schema:
-            type: string
-          description: Filter by residence ID
-        - in: query
-          name: assignedTo
-          schema:
-            type: string
-          description: Filter by assigned staff ID
-        - in: query
-          name: startDate
-          schema:
-            type: string
-            format: date
-          description: Filter by request date range start
-        - in: query
-          name: endDate
-          schema:
-            type: string
-            format: date
-          description: Filter by request date range end
-        - in: query
-          name: page
-          schema:
-            type: integer
-            default: 1
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            default: 10
       responses:
         '200':
           description: List of maintenance requests
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  requests:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MaintenanceRequest'
-                  currentPage:
-                    type: integer
-                  totalPages:
-                    type: integer
-                  total:
-                    type: integer
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '500':
-          description: Server error
-
-  /api/admin/maintenance/{requestId}/assign:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Maintenance'
     post:
-      summary: Assign maintenance request to staff
-      tags: [Admin Maintenance]
+      tags:
+        - Student
+      summary: Create maintenance request
       security:
         - BearerAuth: []
-      parameters:
-        - in: path
-          name: requestId
-          required: true
-          schema:
-            type: string
       requestBody:
         required: true
         content:
@@ -3148,420 +1326,68 @@ paths:
             schema:
               type: object
               required:
-                - staffId
-                - scheduledDate
+                - title
+                - description
+                - priority
+                - category
               properties:
-                staffId:
+                title:
                   type: string
-                  description: ID of the maintenance staff to assign
-                scheduledDate:
+                description:
                   type: string
-                  format: date-time
-                  description: Scheduled date for maintenance
-                estimatedCompletion:
-                  type: string
-                  format: date-time
-                  description: Estimated completion date
-                comment:
-                  type: string
-                  description: Optional comment about the assignment
-      responses:
-        '200':
-          description: Maintenance request assigned successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MaintenanceRequest'
-        '400':
-          description: Invalid input
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '404':
-          description: Request or staff not found
-        '500':
-          description: Server error
-
-  /api/admin/maintenance/staff:
-    get:
-      summary: Get maintenance staff list
-      tags: [Admin Maintenance]
-      security:
-        - BearerAuth: []
-      responses:
-        '200':
-          description: Maintenance staff list retrieved successfully
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/MaintenanceStaff'
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '500':
-          description: Server error
-
-  /api/admin/maintenance/{requestId}:
-    put:
-      summary: Update maintenance request
-      tags: [Admin Maintenance]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: path
-          name: requestId
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                status:
-                  type: string
-                  enum: [pending, assigned, in-progress, on-hold, completed]
                 priority:
                   type: string
-                  enum: [low, medium, high]
-                estimatedCompletion:
+                  enum: [low, medium, high, urgent]
+                category:
                   type: string
-                  format: date-time
-                comment:
-                  type: string
+                  enum: [plumbing, electrical, furniture, appliance, structural, other]
+                images:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                      caption:
+                        type: string
       responses:
-        '200':
-          description: Maintenance request updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MaintenanceRequest'
+        '201':
+          description: Maintenance request created
         '400':
-          description: Invalid input
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '404':
-          description: Maintenance request not found
-        '500':
-          description: Server error
+          description: Invalid input data
 
-  /api/admin/profile:
-    get:
-      summary: Get admin profile
-      tags: [Admin Profile]
-      security:
-        - BearerAuth: []
-      responses:
-        '200':
-          description: Admin profile retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/User'
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '404':
-          description: Admin not found
-        '500':
-          description: Server error
-
-    put:
-      summary: Update admin profile
-      tags: [Admin Profile]
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AdminProfileUpdate'
-      responses:
-        '200':
-          description: Admin profile updated successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/User'
-        '400':
-          description: Invalid input
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '404':
-          description: Admin not found
-        '500':
-          description: Server error
-
-  /api/admin/profile/change-password:
-    put:
-      summary: Change admin password
-      tags: [Admin Profile]
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AdminPasswordChange'
-      responses:
-        '200':
-          description: Password changed successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Password updated successfully
-        '400':
-          description: Invalid input or incorrect current password
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden - Not an admin
-        '404':
-          description: Admin not found
-        '500':
-          description: Server error
-
-  /api/student/dashboard:
-    get:
-      tags:
-        - Student Dashboard
-      summary: Get student dashboard data
-      description: Returns student profile information and dashboard card data
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: Dashboard data retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StudentDashboardResponse'
-        '401':
-          description: Unauthorized - Invalid or missing token
-        '403':
-          description: Forbidden - Not a student
-        '500':
-          description: Server error
-
-  /api/student/dashboard/rooms:
-    get:
-      tags:
-        - Student Dashboard
-      summary: Get available rooms
-      description: Returns list of available rooms with filters
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: search
-          schema:
-            type: string
-          description: Search rooms by name or features
-        - in: query
-          name: capacity
-          schema:
-            type: string
-            enum: [all, "1", "2", "3", "4"]
-          description: Filter by room capacity
-      responses:
-        '200':
-          description: Available rooms retrieved successfully
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/AvailableRoom'
-        '401':
-          description: Unauthorized - Invalid or missing token
-        '403':
-          description: Forbidden - Not a student
-        '500':
-          description: Server error
-
-  /api/student/dashboard/notifications:
-    get:
-      tags:
-        - Student Dashboard
-      summary: Get student notifications
-      description: Returns recent unread notifications
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: Notifications retrieved successfully
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/StudentNotification'
-        '401':
-          description: Unauthorized - Invalid or missing token
-        '403':
-          description: Forbidden - Not a student
-        '500':
-          description: Server error
-
-  /api/student/bookingdetails:
-    get:
-      summary: Get student booking details
-      description: Retrieves current booking, booking history, and available room options for the student
-      tags:
-        - Student Bookings
-      security:
-        - BearerAuth: []
-      responses:
-        '200':
-          description: Successful retrieval of booking details
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StudentBookingDetails'
-        '401':
-          description: Unauthorized - Invalid or missing token
-        '403':
-          description: Forbidden - Not a student
-        '404':
-          description: No booking found
-        '500':
-          description: Server error
-
-  /student/paymenthistory:
+  /student/dashboard:
     get:
       tags:
         - Student
-      summary: Get student payment history and details
-      description: Retrieves the student's payment history, fee structure, and current period details
+      summary: Get student dashboard data
       security:
         - BearerAuth: []
       responses:
         '200':
-          description: Successfully retrieved payment history and details
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  studentInfo:
-                    type: object
-                    properties:
-                      name:
-                        type: string
-                        description: Student's full name
-                      roll:
-                        type: string
-                        description: Student's ID number
-                      course:
-                        type: string
-                        description: Student's program/course
-                      year:
-                        type: string
-                        description: Student's year of study
-                      institution:
-                        type: string
-                        description: Student's institution
-                      currentDue:
-                        type: string
-                        description: Current amount due
-                      pastDue:
-                        type: string
-                        description: Past due amount
-                      pastOverDue:
-                        type: string
-                        description: Past overdue amount
-                  feeStructure:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id:
-                          type: integer
-                          description: Fee item ID
-                        description:
-                          type: string
-                          description: Fee description
-                        amount:
-                          type: string
-                          description: Fee amount
-                  paymentHistory:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        date:
-                          type: string
-                          description: Payment date (DD/MM/YY)
-                        amount:
-                          type: string
-                          description: Payment amount
-                        type:
-                          type: string
-                          enum: [Rent, Initial]
-                          description: Payment type
-                        ref:
-                          type: string
-                          description: Payment reference number
-                        status:
-                          type: string
-                          enum: [Verified, Pending, Payment Due]
-                          description: Payment status
-                        month:
-                          type: string
-                          description: Payment month
-                        paymentMethod:
-                          type: string
-                          description: Method of payment
-                        processingTime:
-                          type: string
-                          description: Payment processing time
-                  currentPeriod:
-                    type: object
-                    properties:
-                      totalDue:
-                        type: string
-                        description: Total amount due for current period
-                      amountPaid:
-                        type: string
-                        description: Amount paid in current period
-                      balance:
-                        type: string
-                        description: Remaining balance
-                      startDate:
-                        type: string
-                        description: Period start date
-                      endDate:
-                        type: string
-                        description: Period end date
-                      lastPayment:
-                        type: string
-                        description: Last payment amount
-                      nextDue:
-                        type: string
-                        description: Next payment due date
-        '401':
-          description: Unauthorized - User not authenticated
-        '403':
-          description: Forbidden - User not authorized to access payment history
-        '500':
-          description: Server error 
+          description: Dashboard information including notifications, upcoming payments, and recent activities
+
+  /student/payment-history:
+    get:
+      tags:
+        - Student
+      summary: Get payment history
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of payment transactions
+
+  /student/events:
+    get:
+      tags:
+        - Student
+      summary: Get residence events
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of upcoming and past events
 
   /student/profile:
     get:
@@ -4053,3 +1879,230 @@ paths:
           description: Residence not found
         '500':
           description: Server error
+
+  /api/monitoring/health:
+    get:
+      tags:
+        - Monitoring
+      summary: Get system health status
+      description: Returns detailed system health information including memory usage, uptime, and metrics
+      responses:
+        200:
+          description: Successful health check
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  timestamp:
+                    type: string
+                    format: date-time
+                  uptime:
+                    type: number
+                    description: System uptime in seconds
+                  environment:
+                    type: string
+                    example: "development"
+                  memory:
+                    type: object
+                    properties:
+                      heapUsed:
+                        type: string
+                        example: "50MB"
+                      heapTotal:
+                        type: string
+                        example: "100MB"
+                      rss:
+                        type: string
+                        example: "150MB"
+                  metrics:
+                    type: array
+                    items:
+                      type: object
+                      description: Prometheus metrics
+
+  /api/monitoring/metrics:
+    get:
+      tags:
+        - Monitoring
+      summary: Get Prometheus metrics
+      description: Returns Prometheus-formatted metrics for system monitoring
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Admin access required
+
+  /api/monitoring/performance:
+    get:
+      tags:
+        - Monitoring
+      summary: Check system performance
+      description: Returns performance metrics focusing on response times and SLA compliance
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Performance metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalRequests:
+                    type: integer
+                    example: 100
+                  slowRequests:
+                    type: integer
+                    example: 2
+                  performanceMeetsSLA:
+                    type: boolean
+                    example: true
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Admin access required
+
+  /api/admin/backup/create:
+    post:
+      tags:
+        - Backup Management
+      summary: Create new backup
+      description: Triggers creation of a new database backup
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Backup created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Backup created successfully"
+                  path:
+                    type: string
+                    example: "/backups/backup-2024-02-25.tar.gz"
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Admin access required
+        500:
+          description: Backup creation failed
+
+  /api/admin/backup/list:
+    get:
+      tags:
+        - Backup Management
+      summary: List available backups
+      description: Returns list of all available backups with metadata
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: List of backups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    filename:
+                      type: string
+                      example: "backup-2024-02-25.tar.gz"
+                    size:
+                      type: integer
+                      example: 1048576
+                    created:
+                      type: string
+                      format: date-time
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Admin access required
+
+  /api/admin/backup/restore/{filename}:
+    post:
+      tags:
+        - Backup Management
+      summary: Restore from backup
+      description: Restores database from specified backup file
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: filename
+          required: true
+          schema:
+            type: string
+          description: Name of backup file to restore from
+      responses:
+        200:
+          description: Backup restored successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Backup restored successfully"
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Admin access required
+        500:
+          description: Backup restoration failed
+
+  /api/admin/backup/{filename}:
+    delete:
+      tags:
+        - Backup Management
+      summary: Delete backup
+      description: Deletes specified backup file
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: filename
+          required: true
+          schema:
+            type: string
+          description: Name of backup file to delete
+      responses:
+        200:
+          description: Backup deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Backup deleted successfully"
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Admin access required
+        500:
+          description: Failed to delete backup
+
+tags:
+  - name: Monitoring
+    description: System monitoring and performance tracking endpoints
+  - name: Backup Management
+    description: Database backup and restore management endpoints

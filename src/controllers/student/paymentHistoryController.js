@@ -20,9 +20,39 @@ exports.getPaymentHistory = async (req, res) => {
 
         // Calculate balances
         const currentDate = new Date();
-        const currentDue = currentBooking ? currentBooking.monthlyRent : 0;
+        const currentMonth = currentDate.getMonth();
+        const currentYear = currentDate.getFullYear();
+
+        // Get confirmed payments for current month
+        const currentMonthPayments = payments.filter(payment => {
+            const paymentDate = new Date(payment.date);
+            return payment.status === 'Confirmed' && 
+                   paymentDate.getMonth() === currentMonth &&
+                   paymentDate.getFullYear() === currentYear;
+        });
+
+        // Calculate current month's total confirmed payments
+        const currentMonthPaid = currentMonthPayments.reduce((sum, payment) => sum + payment.totalAmount, 0);
+
+        // Current due is the difference between monthly rent and current month's payments
+        const currentDue = Math.max(0, (currentBooking?.monthlyRent || 0) - currentMonthPaid);
+
+        // Calculate past due (unpaid amounts from previous months, excluding overdue)
+        const threeMonthsAgo = new Date(currentDate.setMonth(currentDate.getMonth() - 3));
         const pastDue = payments.reduce((acc, payment) => {
-            if (payment.status === 'Pending' && new Date(payment.date) < currentDate) {
+            const paymentDate = new Date(payment.date);
+            if (paymentDate > threeMonthsAgo && 
+                paymentDate < new Date(currentYear, currentMonth, 1) && 
+                payment.status !== 'Confirmed') {
+                return acc + payment.totalAmount;
+            }
+            return acc;
+        }, 0);
+
+        // Calculate past overdue (unpaid amounts older than 3 months)
+        const pastOverDue = payments.reduce((acc, payment) => {
+            const paymentDate = new Date(payment.date);
+            if (paymentDate <= threeMonthsAgo && payment.status !== 'Confirmed') {
                 return acc + payment.totalAmount;
             }
             return acc;
@@ -37,7 +67,7 @@ exports.getPaymentHistory = async (req, res) => {
             institution: student.institution || "University of Zimbabwe",
             currentDue: currentDue.toFixed(2),
             pastDue: pastDue.toFixed(2),
-            pastOverDue: "0.00"
+            pastOverDue: pastOverDue.toFixed(2)
         };
 
         // Format fee structure
@@ -74,7 +104,7 @@ exports.getPaymentHistory = async (req, res) => {
                     year: '2-digit' 
                 }),
                 amount: payment.totalAmount.toFixed(2),
-                type: payment.payments.length > 1 ? 'Initial' : 'Rent',
+                type: payment.rentAmount > 0 ? 'Rent' : (payment.deposit > 0 ? 'Initial' : 'Admin'),
                 ref: payment.paymentId,
                 status: payment.status === 'Confirmed' ? 'Verified' : payment.status,
                 month: date.toLocaleString('en-US', { month: 'long' }),
@@ -89,27 +119,25 @@ exports.getPaymentHistory = async (req, res) => {
             .reduce((sum, p) => sum + p.totalAmount, 0);
 
         const currentPeriod = {
-            totalDue: (currentBooking?.monthlyRent * 6 || 1200).toFixed(2),
-            amountPaid: totalPaid.toFixed(2),
-            balance: ((currentBooking?.monthlyRent * 6 || 1200) - totalPaid).toFixed(2),
-            startDate: new Date().toLocaleDateString('en-US', {
+            totalDue: (currentBooking?.monthlyRent || 0).toFixed(2),
+            amountPaid: currentMonthPaid.toFixed(2),
+            balance: currentDue.toFixed(2),
+            startDate: new Date(currentYear, currentMonth, 1).toLocaleDateString('en-US', {
                 day: '2-digit',
                 month: 'short',
                 year: 'numeric'
             }),
-            endDate: new Date(new Date().setMonth(new Date().getMonth() + 1))
-                .toLocaleDateString('en-US', {
-                    day: '2-digit',
-                    month: 'short',
-                    year: 'numeric'
-                }),
+            endDate: new Date(currentYear, currentMonth + 1, 0).toLocaleDateString('en-US', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+            }),
             lastPayment: payments[0]?.totalAmount.toFixed(2) || "0.00",
-            nextDue: new Date(new Date().setMonth(new Date().getMonth() + 1))
-                .toLocaleDateString('en-US', {
-                    day: '2-digit',
-                    month: 'short',
-                    year: 'numeric'
-                })
+            nextDue: new Date(currentYear, currentMonth + 1, 1).toLocaleDateString('en-US', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+            })
         };
 
         res.json({

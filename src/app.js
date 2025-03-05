@@ -31,6 +31,7 @@ const adminStudentRoutes = require('./routes/admin/studentRoutes');
 const adminApplicationRoutes = require('./routes/admin/applicationRoutes');
 const adminPaymentRoutes = require('./routes/admin/paymentRoutes');
 const adminProfileRoutes = require('./routes/admin/adminProfileRoutes');
+const adminMessageRoutes = require('./routes/admin/messageRoutes');
 
 // Student routes
 const studentBookingRoutes = require('./routes/student/bookingRoutes');
@@ -98,6 +99,12 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOp
 app.use('/api/applications', publicApplicationRoutes);
 app.use('/api/residences', publicResidenceRoutes);
 
+// Health check route for booking details
+app.get('/api/student/bookingdetails/health', (req, res) => {
+    console.log('Health check requested for booking details service');
+    res.json({ status: 'ok', message: 'Booking details service is running' });
+});
+
 // Auth routes (public)
 app.use('/api/auth', authRoutes);
 
@@ -110,6 +117,7 @@ app.use('/api/admin/students', adminStudentRoutes);
 app.use('/api/admin/applications', adminApplicationRoutes);
 app.use('/api/admin/payments', adminPaymentRoutes);
 app.use('/api/admin/profile', adminProfileRoutes);
+app.use('/api/admin/messages', adminMessageRoutes);
 
 // Student routes
 app.use('/api/student', studentRoutes);
