@@ -84,6 +84,10 @@ const applicationSchema = new mongoose.Schema({
     actionBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
+    },
+    residence: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Residence'
     }
 }, {
     timestamps: true

@@ -3,31 +3,64 @@ const Residence = require('../../models/Residence');
 const Payment = require('../../models/Payment');
 const Maintenance = require('../../models/Maintenance');
 const Message = require('../../models/Message');
+const Application = require('../../models/Application');
 
 // Get student dashboard data
 exports.getDashboardData = async (req, res) => {
     try {
-        // Get student profile
+        // Get student profile and application
         const student = await User.findById(req.user._id);
-        
-        if (student.currentRoom && student.roomApprovalDate) {
-            // Calculate validity period (4 months from approval date)
-            const validUntil = new Date(student.roomApprovalDate);
-            validUntil.setMonth(student.roomApprovalDate.getMonth() + 4);
-            
-            if (!student.roomValidUntil || student.roomValidUntil.getTime() !== validUntil.getTime()) {
-                student.roomValidUntil = validUntil;
-                await student.save();
+        const application = await Application.findOne({ 
+            email: student.email,
+            status: { $in: ['approved', 'pending'] }
+        }).sort({ createdAt: -1 });
+
+        console.log('Student data from DB:', {
+            id: student._id,
+            email: student.email,
+            application: application
+        });
+
+        // Get payment status and details
+        let paymentInfo = {
+            amount: 0,
+            status: 'none',
+            dueDate: null
+        };
+
+        if (application) {
+            if (application.paymentStatus === 'paid') {
+                // Calculate if 30 days have passed since last payment
+                const lastPaymentDate = new Date(application.updatedAt);
+                const thirtyDaysFromPayment = new Date(lastPaymentDate.getTime() + (30 * 24 * 60 * 60 * 1000));
+                const today = new Date();
+
+                if (today > thirtyDaysFromPayment) {
+                    // If 30 days have passed, show next payment
+                    paymentInfo = {
+                        amount: application.roomPrice || 0,
+                        status: 'unpaid',
+                        dueDate: new Date(today.getTime() + (7 * 24 * 60 * 60 * 1000)), // Due in 7 days
+                        lastPaymentDate: lastPaymentDate
+                    };
+                } else {
+                    // Still within 30 days of payment
+                    paymentInfo = {
+                        amount: 0,
+                        status: 'paid',
+                        dueDate: null,
+                        paidDate: lastPaymentDate,
+                        nextPaymentDate: thirtyDaysFromPayment
+                    };
+                }
+            } else {
+                paymentInfo = {
+                    amount: application.roomPrice || 0,
+                    status: 'unpaid',
+                    dueDate: new Date(application.createdAt.getTime() + (7 * 24 * 60 * 60 * 1000)) // 7 days from application
+                };
             }
         }
-
-        // Get next payment
-        const nextPayment = await Payment.findOne({
-            student: req.user._id,
-            status: 'Pending'
-        })
-        .sort({ date: 1 })
-        .lean();
 
         // Get active maintenance requests
         const activeMaintenanceCount = await Maintenance.countDocuments({
@@ -52,20 +85,18 @@ exports.getDashboardData = async (req, res) => {
         const dashboardData = {
             profile: {
                 name: `${student.firstName} ${student.lastName}`,
-                id: student.studentId,
+                id: student.studentId || application?.applicationCode,
+                email: student.email,
                 program: student.program,
                 year: student.year,
                 image: student.profileImage
             },
             cards: {
-                payment: {
-                    amount: nextPayment ? nextPayment.totalAmount : 0,
-                    dueDate: nextPayment ? nextPayment.date : null
-                },
+                payment: paymentInfo,
                 room: {
-                    status: student.currentRoom ? 'Active' : 'None',
-                    validUntil: student.roomValidUntil,
-                    approvalDate: student.roomApprovalDate
+                    status: application ? (application.allocatedRoom ? 'Allocated' : 'Pending') : 'None',
+                    roomNumber: application?.allocatedRoom || application?.preferredRoom || 'None',
+                    applicationStatus: application?.status || 'none'
                 },
                 maintenance: {
                     activeCount: activeMaintenanceCount,
