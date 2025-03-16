@@ -1,5 +1,6 @@
 const Application = require('../../models/Application');
 const { sendEmail } = require('../../utils/email');
+const whatsappService = require('../../services/whatsappService');
 
 // Submit new application
 exports.submitApplication = async (req, res) => {
@@ -49,6 +50,12 @@ exports.submitApplication = async (req, res) => {
             subject: 'Application Received - Alamait Student Accommodation',
             text: emailContent
         });
+
+        // Send WhatsApp confirmation
+        await whatsappService.sendMessage(
+            phone,
+            `Dear ${firstName}, your application for Alamait Student Accommodation has been received and is being processed. We will notify you once your application has been reviewed. Your preferred room is ${preferredRoom}.`
+        );
 
         res.status(201).json({
             message: 'Application submitted successfully',
