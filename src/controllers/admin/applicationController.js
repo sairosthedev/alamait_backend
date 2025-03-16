@@ -24,10 +24,30 @@ exports.getApplications = async (req, res) => {
         const roomStatusMap = {};
         residences.forEach(residence => {
             residence.rooms.forEach(room => {
+                // Ensure room status is consistent with occupancy
+                let roomStatus = room.status;
+                
+                // If currentOccupancy is 0, room should be available
+                if (room.currentOccupancy === 0 || !room.currentOccupancy) {
+                    roomStatus = 'available';
+                }
+                // If currentOccupancy equals capacity, room should be occupied
+                else if (room.currentOccupancy >= room.capacity) {
+                    roomStatus = 'occupied';
+                }
+                // If currentOccupancy is between 0 and capacity, room should be reserved
+                else if (room.currentOccupancy > 0) {
+                    roomStatus = 'reserved';
+                }
+                
+                const capacity = room.capacity || (room.type === 'single' ? 1 : room.type === 'double' ? 2 : room.type === 'studio' ? 1 : 4);
+                const currentOccupancy = room.currentOccupancy || 0;
+                
                 roomStatusMap[room.roomNumber] = {
-                    capacity: room.type === 'single' ? 1 : room.type === 'double' ? 2 : room.type === 'studio' ? 1 : 2,
+                    capacity: capacity,
+                    currentOccupancy: currentOccupancy,
                     price: room.price,
-                    status: room.status,
+                    status: roomStatus,
                     residenceName: residence.name
                 };
             });
@@ -50,6 +70,7 @@ exports.getApplications = async (req, res) => {
             reason: app.reason,
             allocatedRoom: app.allocatedRoom,
             waitlistedRoom: app.waitlistedRoom,
+            roomOccupancy: app.roomOccupancy || { current: 0, capacity: 0 },
             applicationCode: app.applicationCode
         }));
 
@@ -57,7 +78,8 @@ exports.getApplications = async (req, res) => {
             applications: transformedApplications,
             rooms: Object.entries(roomStatusMap).map(([roomNumber, details]) => ({
                 name: roomNumber,
-                ...details
+                ...details,
+                occupancyDisplay: `${details.currentOccupancy}/${details.capacity}`
             }))
         });
     } catch (error) {
@@ -75,8 +97,8 @@ exports.updateApplicationStatus = async (req, res) => {
             return res.status(400).json({ error: 'Action is required' });
         }
 
-        if (action === 'approve' && !roomNumber) {
-            return res.status(400).json({ error: 'Room number is required for approval' });
+        if ((action === 'approve' || action === 'waitlist') && !roomNumber) {
+            return res.status(400).json({ error: 'Room number is required for approval or waitlisting' });
         }
 
         const application = await Application.findById(req.params.applicationId);
@@ -87,8 +109,9 @@ exports.updateApplicationStatus = async (req, res) => {
         // Update application based on action
         switch (action) {
             case 'approve':
-                application.status = 'approved';
-                application.allocatedRoom = roomNumber;
+                // First, put the student on the waiting list
+                application.status = 'waitlisted';
+                application.waitlistedRoom = roomNumber;
                 application.paymentStatus = 'unpaid';
                 const approvalDate = new Date();
 
@@ -100,16 +123,24 @@ exports.updateApplicationStatus = async (req, res) => {
                 }
 
                 try {
-                    // Update room status to reserved
-                    const residence = await Residence.findOneAndUpdate(
-                        { 'rooms.roomNumber': roomNumber },
-                        { $set: { 'rooms.$.status': 'reserved' } },
-                        { new: true }
-                    );
-
+                    // Find the residence with the room
+                    const residence = await Residence.findOne({ 'rooms.roomNumber': roomNumber });
+                    
                     if (!residence) {
                         throw new Error('Room not found');
                     }
+
+                    // Get the room details
+                    const room = residence.rooms.find(r => r.roomNumber === roomNumber);
+                    if (!room) {
+                        throw new Error('Room not found');
+                    }
+
+                    // Store room capacity in the application
+                    application.roomOccupancy = {
+                        current: 0, // Will be updated when payment is made
+                        capacity: room.capacity || (room.type === 'single' ? 1 : room.type === 'double' ? 2 : room.type === 'studio' ? 1 : 4)
+                    };
 
                     // Calculate validity period (4 months from approval date)
                     const validUntil = new Date(approvalDate);
@@ -120,7 +151,7 @@ exports.updateApplicationStatus = async (req, res) => {
                         application.student,
                         {
                             $set: {
-                                currentRoom: roomNumber,
+                                waitlistedRoom: roomNumber,
                                 roomValidUntil: validUntil,
                                 roomApprovalDate: approvalDate
                             }
@@ -138,7 +169,7 @@ exports.updateApplicationStatus = async (req, res) => {
 
                             Application Details:
                             - Application Code: ${application.applicationCode}
-                            - Allocated Room: ${roomNumber}
+                            - Waitlisted for Room: ${roomNumber}
                             - Approval Date: ${approvalDate.toLocaleDateString()}
                             - Valid Until: ${validUntil.toLocaleDateString()}
 
@@ -147,7 +178,7 @@ exports.updateApplicationStatus = async (req, res) => {
                             Next Steps:
                             1. Register on our platform using your application code
                             2. Complete your profile
-                            3. Make the required payments
+                            3. Make the required payments to secure your room
                             4. Submit any additional documents
 
                             If you have any questions, please don't hesitate to contact us.
@@ -159,7 +190,7 @@ exports.updateApplicationStatus = async (req, res) => {
 
                     await application.save();
                     res.json({ 
-                        message: 'Application approved successfully',
+                        message: 'Application approved and waitlisted successfully',
                         application 
                     });
                 } catch (error) {
@@ -194,6 +225,18 @@ exports.updateApplicationStatus = async (req, res) => {
             case 'waitlist':
                 application.status = 'waitlisted';
                 application.waitlistedRoom = roomNumber;
+
+                // Find the residence with the room to get capacity
+                const residence = await Residence.findOne({ 'rooms.roomNumber': roomNumber });
+                if (residence) {
+                    const room = residence.rooms.find(r => r.roomNumber === roomNumber);
+                    if (room) {
+                        application.roomOccupancy = {
+                            current: 0,
+                            capacity: room.capacity || (room.type === 'single' ? 1 : room.type === 'double' ? 2 : room.type === 'studio' ? 1 : 4)
+                        };
+                    }
+                }
 
                 // Send waitlist email
                 await sendEmail({
@@ -236,27 +279,103 @@ exports.updatePaymentStatus = async (req, res) => {
             return res.status(404).json({ error: 'Application not found' });
         }
 
-        if (application.status !== 'approved') {
-            return res.status(400).json({ error: 'Can only update payment for approved applications' });
+        if (application.status !== 'waitlisted') {
+            return res.status(400).json({ error: 'Can only update payment for waitlisted applications' });
         }
 
         if (application.paymentStatus === 'paid') {
             return res.status(400).json({ error: 'Payment already marked as paid' });
         }
 
-        // Update room status from reserved to occupied
-        await Residence.findOneAndUpdate(
-            { 'rooms.roomNumber': application.allocatedRoom },
-            { $set: { 'rooms.$.status': 'occupied' } }
+        // Get the room from waitlisted room
+        const roomNumber = application.waitlistedRoom;
+        if (!roomNumber) {
+            return res.status(400).json({ error: 'No waitlisted room found for this application' });
+        }
+
+        // Find the residence with the room
+        const residence = await Residence.findOne({ 'rooms.roomNumber': roomNumber });
+        if (!residence) {
+            return res.status(404).json({ error: 'Room not found' });
+        }
+
+        // Get the room
+        const roomIndex = residence.rooms.findIndex(r => r.roomNumber === roomNumber);
+        if (roomIndex === -1) {
+            return res.status(404).json({ error: 'Room not found' });
+        }
+
+        const room = residence.rooms[roomIndex];
+        
+        // Check if room has space
+        if (room.currentOccupancy >= room.capacity) {
+            return res.status(400).json({ error: 'Room is at full capacity' });
+        }
+
+        // Increment room occupancy
+        room.currentOccupancy += 1;
+        
+        // Update room status based on occupancy
+        if (room.currentOccupancy >= room.capacity) {
+            room.status = 'occupied';
+        } else if (room.currentOccupancy > 0) {
+            room.status = 'reserved';
+        } else {
+            room.status = 'available';
+        }
+
+        // Save the residence with updated room occupancy
+        await residence.save();
+
+        // Update application status and payment status
+        application.status = 'approved';
+        application.paymentStatus = 'paid';
+        application.allocatedRoom = roomNumber;
+        
+        // Update room occupancy in application
+        application.roomOccupancy = {
+            current: room.currentOccupancy,
+            capacity: room.capacity
+        };
+
+        // Update user's current room
+        await User.findByIdAndUpdate(
+            application.student,
+            {
+                $set: {
+                    currentRoom: roomNumber,
+                    waitlistedRoom: null
+                }
+            }
         );
 
-        // Update application payment status
-        application.paymentStatus = 'paid';
         await application.save();
 
-        // TODO: Send confirmation to student
+        // Send confirmation email to student
+        await sendEmail({
+            to: application.email,
+            subject: 'Room Allocation Confirmed - Alamait Student Accommodation',
+            text: `
+                Dear ${application.firstName} ${application.lastName},
 
-        res.json(application);
+                We are pleased to confirm that your payment has been received and your room has been allocated.
+
+                Room Details:
+                - Room Number: ${roomNumber}
+                - Current Occupancy: ${room.currentOccupancy}/${room.capacity}
+                
+                Your room is now ready for you to move in. Please contact our office to arrange a suitable time.
+
+                Best regards,
+                Alamait Student Accommodation Team
+            `
+        });
+
+        res.json({
+            message: 'Payment marked as paid and room allocated successfully',
+            application,
+            roomOccupancy: `${room.currentOccupancy}/${room.capacity}`
+        });
     } catch (error) {
         console.error('Error in updatePaymentStatus:', error);
         res.status(500).json({ error: 'Server error' });
@@ -312,6 +431,71 @@ exports.updateRoomValidity = async (req, res) => {
         });
     } catch (error) {
         console.error('Error updating room validity:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Sync room occupancy with allocations
+exports.syncRoomOccupancy = async (req, res) => {
+    try {
+        // Get all approved applications with allocated rooms
+        const allocatedApplications = await Application.find({
+            status: 'approved',
+            allocatedRoom: { $exists: true, $ne: null }
+        });
+
+        // Get all residences
+        const residences = await Residence.find({});
+        
+        // Create a map to track room occupancy
+        const roomOccupancyMap = {};
+        
+        // Count allocations for each room
+        allocatedApplications.forEach(app => {
+            if (!roomOccupancyMap[app.allocatedRoom]) {
+                roomOccupancyMap[app.allocatedRoom] = 0;
+            }
+            roomOccupancyMap[app.allocatedRoom] += 1;
+        });
+        
+        // Update room occupancy in residences
+        let updatedRooms = 0;
+        
+        for (const residence of residences) {
+            let residenceUpdated = false;
+            
+            residence.rooms.forEach(room => {
+                const allocatedCount = roomOccupancyMap[room.roomNumber] || 0;
+                
+                // If the current occupancy doesn't match the allocated count, update it
+                if (room.currentOccupancy !== allocatedCount) {
+                    room.currentOccupancy = allocatedCount;
+                    
+                    // Update room status based on occupancy
+                    if (allocatedCount === 0) {
+                        room.status = 'available';
+                    } else if (allocatedCount >= room.capacity) {
+                        room.status = 'occupied';
+                    } else {
+                        room.status = 'reserved';
+                    }
+                    
+                    updatedRooms++;
+                    residenceUpdated = true;
+                }
+            });
+            
+            // Save the residence if any rooms were updated
+            if (residenceUpdated) {
+                await residence.save();
+            }
+        }
+        
+        res.json({
+            message: `Room occupancy synced successfully. Updated ${updatedRooms} rooms.`
+        });
+    } catch (error) {
+        console.error('Error in syncRoomOccupancy:', error);
         res.status(500).json({ error: 'Server error' });
     }
 }; 

@@ -72,7 +72,7 @@ const saveBelvedereProperty = async () => {
                     roomNumber: "B1",
                     type: "double",
                     price: 150,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Shared bathroom",
                         "Twin beds",

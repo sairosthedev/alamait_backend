@@ -48,7 +48,7 @@ const saveStKildaProperty = async () => {
                     roomNumber: "C1",
                     type: "double",
                     price: 190,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Shared bathroom",
                         "Common study area",
@@ -90,7 +90,7 @@ const saveStKildaProperty = async () => {
                     roomNumber: "M2",
                     type: "double",
                     price: 170,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Shared bathroom",
                         "Common study area",
@@ -118,7 +118,7 @@ const saveStKildaProperty = async () => {
                     roomNumber: "M4",
                     type: "double",
                     price: 180,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Shared bathroom",
                         "Walk in closet",
@@ -132,7 +132,7 @@ const saveStKildaProperty = async () => {
                     roomNumber: "M5",
                     type: "double",
                     price: 180,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Shared bathroom",
                         "Common study area",
@@ -146,7 +146,7 @@ const saveStKildaProperty = async () => {
                     roomNumber: "M6",
                     type: "double",
                     price: 180,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Shared bathroom",
                         "Walk in closet",
@@ -160,7 +160,7 @@ const saveStKildaProperty = async () => {
                     roomNumber: "M7",
                     type: "double",
                     price: 180,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Shared bathroom",
                         "Built in wardrobe",
@@ -174,7 +174,7 @@ const saveStKildaProperty = async () => {
                     roomNumber: "M8",
                     type: "apartment",
                     price: 160,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Shared bathroom",
                         "Common study area",
@@ -189,7 +189,7 @@ const saveStKildaProperty = async () => {
                     roomNumber: "Bus1",
                     type: "apartment",
                     price: 160,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Shared bathroom",
                         "Common study area",
@@ -235,7 +235,7 @@ const saveStKildaProperty = async () => {
                     roomNumber: "Extension 2",
                     type: "single",
                     price: 160,
-                    status: "occupied",
+                    status: "available",
                     features: [
                         "Corner room",
                         "Extra storage",

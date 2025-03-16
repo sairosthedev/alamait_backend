@@ -47,6 +47,23 @@ const residenceSchema = new mongoose.Schema({
             enum: ['available', 'occupied', 'maintenance', 'reserved'],
             default: 'available'
         },
+        currentOccupancy: {
+            type: Number,
+            default: 0
+        },
+        capacity: {
+            type: Number,
+            default: function() {
+                // Set default capacity based on room type
+                switch(this.type) {
+                    case 'single': return 1;
+                    case 'double': return 2;
+                    case 'studio': return 1;
+                    case 'apartment': return 4;
+                    default: return 1;
+                }
+            }
+        },
         features: [String],
         amenities: [String],
         floor: Number,
@@ -113,6 +130,49 @@ residenceSchema.methods.updateRoomStatus = function(roomNumber, status) {
     }
     return false;
 };
+
+// Method to increment room occupancy
+residenceSchema.methods.incrementRoomOccupancy = function(roomNumber) {
+    const room = this.rooms.find(r => r.roomNumber === roomNumber);
+    if (room && room.currentOccupancy < room.capacity) {
+        room.currentOccupancy += 1;
+        // If room is now at capacity, update status
+        if (room.currentOccupancy >= room.capacity) {
+            room.status = 'occupied';
+        }
+        return true;
+    }
+    return false;
+};
+
+// Method to decrement room occupancy
+residenceSchema.methods.decrementRoomOccupancy = function(roomNumber) {
+    const room = this.rooms.find(r => r.roomNumber === roomNumber);
+    if (room && room.currentOccupancy > 0) {
+        room.currentOccupancy -= 1;
+        // If room was at capacity but now has space, update status
+        if (room.currentOccupancy < room.capacity && room.status === 'occupied') {
+            room.status = 'available';
+        }
+        return true;
+    }
+    return false;
+};
+
+// Pre-save hook to ensure room status is consistent with occupancy
+residenceSchema.pre('save', function(next) {
+    // Update room status based on occupancy for all rooms
+    this.rooms.forEach(room => {
+        if (room.currentOccupancy === 0) {
+            room.status = 'available';
+        } else if (room.currentOccupancy >= room.capacity) {
+            room.status = 'occupied';
+        } else if (room.currentOccupancy > 0 && room.currentOccupancy < room.capacity) {
+            room.status = 'reserved';
+        }
+    });
+    next();
+});
 
 const Residence = mongoose.model('Residence', residenceSchema);
 

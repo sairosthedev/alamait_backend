@@ -75,6 +75,16 @@ const applicationSchema = new mongoose.Schema({
     waitlistedRoom: {
         type: String
     },
+    roomOccupancy: {
+        current: {
+            type: Number,
+            default: 0
+        },
+        capacity: {
+            type: Number,
+            default: 0
+        }
+    },
     adminComment: {
         type: String
     },

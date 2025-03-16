@@ -7,7 +7,8 @@ const {
     updateApplicationStatus,
     updatePaymentStatus,
     deleteApplication,
-    updateRoomValidity
+    updateRoomValidity,
+    syncRoomOccupancy
 } = require('../../controllers/admin/applicationController');
 
 // All routes require admin role
@@ -39,5 +40,8 @@ router.delete('/:applicationId', deleteApplication);
 
 // Update room validity
 router.put('/user/:userId/room-validity', updateRoomValidity);
+
+// Sync room occupancy with allocations
+router.post('/sync-room-occupancy', syncRoomOccupancy);
 
 module.exports = router; 
