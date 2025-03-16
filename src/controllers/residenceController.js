@@ -13,6 +13,49 @@ exports.getStKildaResidence = async (req, res) => {
             });
         }
 
+        // Ensure room status is consistent with occupancy
+        let hasUpdates = false;
+        residence.rooms.forEach(room => {
+            // Get capacity based on room type if not set
+            const capacity = room.capacity || (
+                room.type === 'single' ? 1 : 
+                room.type === 'double' ? 2 : 
+                room.type === 'studio' ? 1 : 
+                room.type === 'triple' ? 3 : 
+                room.type === 'quad' ? 4 : 4
+            );
+            
+            // Ensure currentOccupancy is a number
+            let currentOccupancy = room.currentOccupancy;
+            if (currentOccupancy === undefined || currentOccupancy === null) {
+                currentOccupancy = 0;
+                room.currentOccupancy = 0;
+                hasUpdates = true;
+            }
+            
+            // Update room status based on occupancy
+            let newStatus = room.status;
+            if (currentOccupancy === 0) {
+                newStatus = 'available';
+            } else if (currentOccupancy >= capacity) {
+                newStatus = 'occupied';
+            } else if (currentOccupancy > 0) {
+                newStatus = 'reserved';
+            }
+            
+            // Only update if status has changed
+            if (room.status !== newStatus) {
+                room.status = newStatus;
+                hasUpdates = true;
+            }
+        });
+
+        // Save changes if any updates were made
+        if (hasUpdates) {
+            await residence.save();
+            console.log('Updated room statuses and occupancy for St Kilda residence');
+        }
+
         res.status(200).json({
             success: true,
             data: residence
@@ -36,6 +79,49 @@ exports.getBelvedereResidence = async (req, res) => {
                 success: false,
                 message: 'Belvedere residence not found'
             });
+        }
+
+        // Ensure room status is consistent with occupancy
+        let hasUpdates = false;
+        residence.rooms.forEach(room => {
+            // Get capacity based on room type if not set
+            const capacity = room.capacity || (
+                room.type === 'single' ? 1 : 
+                room.type === 'double' ? 2 : 
+                room.type === 'studio' ? 1 : 
+                room.type === 'triple' ? 3 : 
+                room.type === 'quad' ? 4 : 4
+            );
+            
+            // Ensure currentOccupancy is a number
+            let currentOccupancy = room.currentOccupancy;
+            if (currentOccupancy === undefined || currentOccupancy === null) {
+                currentOccupancy = 0;
+                room.currentOccupancy = 0;
+                hasUpdates = true;
+            }
+            
+            // Update room status based on occupancy
+            let newStatus = room.status;
+            if (currentOccupancy === 0) {
+                newStatus = 'available';
+            } else if (currentOccupancy >= capacity) {
+                newStatus = 'occupied';
+            } else if (currentOccupancy > 0) {
+                newStatus = 'reserved';
+            }
+            
+            // Only update if status has changed
+            if (room.status !== newStatus) {
+                room.status = newStatus;
+                hasUpdates = true;
+            }
+        });
+
+        // Save changes if any updates were made
+        if (hasUpdates) {
+            await residence.save();
+            console.log('Updated room statuses and occupancy for Belvedere residence');
         }
 
         res.status(200).json({

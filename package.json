@@ -9,7 +9,17 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "create-admin": "node scripts/createAdmin.js",
     "save-stkilda": "node scripts/saveStKildaProperty.js",
-    "save-belvedere": "node scripts/saveBelvedereProperty.js"
+    "save-belvedere": "node scripts/saveBelvedereProperty.js",
+    "fix-occupancy": "node scripts/fixRoomOccupancy.js",
+    "update-room": "node scripts/updateRoomStatus.js",
+    "check-app-code": "node scripts/checkApplicationCode.js",
+    "fix-app-status": "node scripts/fixApplicationStatus.js",
+    "list-app-codes": "node scripts/listApplicationCodes.js",
+    "force-app-status": "node scripts/forceUpdateApplicationStatus.js",
+    "clear-app-code-from-user": "node scripts/clearApplicationCodeFromUser.js",
+    "update-all-waitlisted": "node scripts/updateAllWaitlistedApplications.js",
+    "update-room-c2": "node scripts/updateRoomC2Status.js",
+    "update-specific-room": "node scripts/updateSpecificRoomStatus.js"
   },
   "keywords": [],
   "author": "",

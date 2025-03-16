@@ -22,32 +22,42 @@ exports.getApplications = async (req, res) => {
         
         // Create a map of room statuses
         const roomStatusMap = {};
+        
         residences.forEach(residence => {
             residence.rooms.forEach(room => {
-                // Ensure room status is consistent with occupancy
-                let roomStatus = room.status;
+                // Get capacity based on room type
+                const capacity = room.capacity || (
+                    room.type === 'single' ? 1 : 
+                    room.type === 'double' ? 2 : 
+                    room.type === 'studio' ? 1 : 
+                    room.type === 'triple' ? 3 : 
+                    room.type === 'quad' ? 4 : 4
+                );
                 
-                // If currentOccupancy is 0, room should be available
-                if (room.currentOccupancy === 0 || !room.currentOccupancy) {
-                    roomStatus = 'available';
-                }
-                // If currentOccupancy equals capacity, room should be occupied
-                else if (room.currentOccupancy >= room.capacity) {
-                    roomStatus = 'occupied';
-                }
-                // If currentOccupancy is between 0 and capacity, room should be reserved
-                else if (room.currentOccupancy > 0) {
-                    roomStatus = 'reserved';
-                }
+                // Set occupancy based on data
+                let currentOccupancy = room.currentOccupancy || 0;
                 
-                const capacity = room.capacity || (room.type === 'single' ? 1 : room.type === 'double' ? 2 : room.type === 'studio' ? 1 : 4);
-                const currentOccupancy = room.currentOccupancy || 0;
+                // Determine the correct status based on occupancy
+                let status = room.status?.toLowerCase() || 'unavailable';
+                
+                // If occupancy is 0, room should be available
+                if (currentOccupancy === 0) {
+                    status = 'available';
+                } 
+                // If occupancy equals capacity, room should be occupied
+                else if (currentOccupancy >= capacity) {
+                    status = 'occupied';
+                }
+                // If occupancy is between 0 and capacity, room should be reserved
+                else if (currentOccupancy > 0) {
+                    status = 'reserved';
+                }
                 
                 roomStatusMap[room.roomNumber] = {
                     capacity: capacity,
                     currentOccupancy: currentOccupancy,
                     price: room.price,
-                    status: roomStatus,
+                    status: status,
                     residenceName: residence.name
                 };
             });
@@ -109,9 +119,9 @@ exports.updateApplicationStatus = async (req, res) => {
         // Update application based on action
         switch (action) {
             case 'approve':
-                // First, put the student on the waiting list
-                application.status = 'waitlisted';
-                application.waitlistedRoom = roomNumber;
+                // Set the application status to approved directly
+                application.status = 'approved';
+                application.allocatedRoom = roomNumber; // Set allocated room directly
                 application.paymentStatus = 'unpaid';
                 const approvalDate = new Date();
 
@@ -138,7 +148,7 @@ exports.updateApplicationStatus = async (req, res) => {
 
                     // Store room capacity in the application
                     application.roomOccupancy = {
-                        current: 0, // Will be updated when payment is made
+                        current: room.currentOccupancy,
                         capacity: room.capacity || (room.type === 'single' ? 1 : room.type === 'double' ? 2 : room.type === 'studio' ? 1 : 4)
                     };
 
@@ -151,7 +161,7 @@ exports.updateApplicationStatus = async (req, res) => {
                         application.student,
                         {
                             $set: {
-                                waitlistedRoom: roomNumber,
+                                currentRoom: roomNumber, // Set current room directly
                                 roomValidUntil: validUntil,
                                 roomApprovalDate: approvalDate
                             }
@@ -169,7 +179,7 @@ exports.updateApplicationStatus = async (req, res) => {
 
                             Application Details:
                             - Application Code: ${application.applicationCode}
-                            - Waitlisted for Room: ${roomNumber}
+                            - Allocated Room: ${roomNumber}
                             - Approval Date: ${approvalDate.toLocaleDateString()}
                             - Valid Until: ${validUntil.toLocaleDateString()}
 
@@ -189,9 +199,20 @@ exports.updateApplicationStatus = async (req, res) => {
                     });
 
                     await application.save();
+                    
+                    // Prepare room information to return to the frontend
+                    const roomInfo = {
+                        name: roomNumber,
+                        status: room.status,
+                        currentOccupancy: room.currentOccupancy,
+                        capacity: room.capacity,
+                        occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+                    };
+                    
                     res.json({ 
-                        message: 'Application approved and waitlisted successfully',
-                        application 
+                        message: 'Application approved successfully',
+                        application,
+                        room: roomInfo
                     });
                 } catch (error) {
                     console.error('Error in approval process:', error);
@@ -220,6 +241,12 @@ exports.updateApplicationStatus = async (req, res) => {
                         Alamait Student Accommodation Team
                     `
                 });
+                
+                await application.save();
+                res.json({ 
+                    message: 'Application rejected successfully',
+                    application
+                });
                 break;
 
             case 'waitlist':
@@ -228,13 +255,36 @@ exports.updateApplicationStatus = async (req, res) => {
 
                 // Find the residence with the room to get capacity
                 const residence = await Residence.findOne({ 'rooms.roomNumber': roomNumber });
+                let roomInfo = null;
+                
                 if (residence) {
                     const room = residence.rooms.find(r => r.roomNumber === roomNumber);
                     if (room) {
                         application.roomOccupancy = {
-                            current: 0,
+                            current: room.currentOccupancy,
                             capacity: room.capacity || (room.type === 'single' ? 1 : room.type === 'double' ? 2 : room.type === 'studio' ? 1 : 4)
                         };
+                        
+                        // Prepare room information to return to the frontend
+                        roomInfo = {
+                            name: roomNumber,
+                            status: room.status,
+                            currentOccupancy: room.currentOccupancy,
+                            capacity: room.capacity,
+                            occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+                        };
+                        
+                        // Update user's waitlisted room
+                        if (application.student) {
+                            await User.findByIdAndUpdate(
+                                application.student,
+                                {
+                                    $set: {
+                                        waitlistedRoom: roomNumber
+                                    }
+                                }
+                            );
+                        }
                     }
                 }
 
@@ -253,14 +303,18 @@ exports.updateApplicationStatus = async (req, res) => {
                         Alamait Student Accommodation Team
                     `
                 });
+                
+                await application.save();
+                res.json({ 
+                    message: 'Application waitlisted successfully',
+                    application,
+                    room: roomInfo
+                });
                 break;
 
             default:
                 return res.status(400).json({ error: 'Invalid action' });
         }
-
-        await application.save();
-        res.json(application);
     } catch (error) {
         console.error('Error in updateApplicationStatus:', error);
         res.status(500).json({ error: 'Server error' });
@@ -371,10 +425,19 @@ exports.updatePaymentStatus = async (req, res) => {
             `
         });
 
+        // Return updated room information along with the application
+        const updatedRoom = {
+            name: roomNumber,
+            status: room.status,
+            currentOccupancy: room.currentOccupancy,
+            capacity: room.capacity,
+            occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+        };
+
         res.json({
             message: 'Payment marked as paid and room allocated successfully',
             application,
-            roomOccupancy: `${room.currentOccupancy}/${room.capacity}`
+            room: updatedRoom
         });
     } catch (error) {
         console.error('Error in updatePaymentStatus:', error);
