@@ -35,7 +35,7 @@ const residenceSchema = new mongoose.Schema({
         },
         type: {
             type: String,
-            enum: ['single', 'double', 'studio', 'apartment'],
+            enum: ['single', 'double', 'studio', 'apartment', 'triple', 'quad'],
             required: true
         },
         price: {
@@ -60,6 +60,8 @@ const residenceSchema = new mongoose.Schema({
                     case 'double': return 2;
                     case 'studio': return 1;
                     case 'apartment': return 4;
+                    case 'triple': return 3;
+                    case 'quad': return 4;
                     default: return 1;
                 }
             }
