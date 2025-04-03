@@ -14,12 +14,12 @@ exports.register = async (req, res) => {
 
     try {
         const { email, password, firstName, lastName, phone, applicationCode } = req.body;
-        console.log('Registration attempt for email:', email);
+        ('Registration attempt for email:', email);
 
         // Check if user exists
         let user = await User.findOne({ email });
         if (user) {
-            console.log('User already exists:', email);
+            ('User already exists:', email);
             return res.status(400).json({ error: 'User already exists' });
         }
 
@@ -37,12 +37,12 @@ exports.register = async (req, res) => {
         // Hash password before saving
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(password, salt);
-        console.log('Setting hashed password for user:', email);
+        ('Setting hashed password for user:', email);
 
         await user.save();
-        console.log('User saved successfully:', email);
-        console.log('Saved user role:', user.role);
-        console.log('Password after save:', user.password.substring(0, 10) + '...');
+        ('User saved successfully:', email);
+        ('Saved user role:', user.role);
+        ('Password after save:', user.password.substring(0, 10) + '...');
 
         // Send verification email
         // try {
@@ -88,22 +88,22 @@ exports.login = async (req, res) => {
 
     try {
         const { email, password } = req.body;
-        console.log('Login attempt for email:', email);
+        ('Login attempt for email:', email);
 
         // Check if user exists
         const user = await User.findOne({ email });
         if (!user) {
-            console.log('User not found with email:', email);
+            ('User not found with email:', email);
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-        console.log('User found:', user.email, 'Role:', user.role);
+        ('User found:', user.email, 'Role:', user.role);
 
         // Verify password using the model's method
         const isMatch = await user.comparePassword(password);
-        console.log('Password match result:', isMatch);
+        ('Password match result:', isMatch);
         
         if (!isMatch) {
-            console.log('Password verification failed for user:', email);
+            ('Password verification failed for user:', email);
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
@@ -250,7 +250,7 @@ exports.adminResetPassword = async (req, res) => {
         user.password = await bcrypt.hash(newPassword, salt);
         
         await user.save();
-        console.log('Password reset successfully for user:', email);
+        ('Password reset successfully for user:', email);
 
         res.json({ message: 'Password reset successful' });
     } catch (error) {

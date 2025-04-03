@@ -53,7 +53,7 @@ exports.getStKildaResidence = async (req, res) => {
         // Save changes if any updates were made
         if (hasUpdates) {
             await residence.save();
-            console.log('Updated room statuses and occupancy for St Kilda residence');
+            ('Updated room statuses and occupancy for St Kilda residence');
         }
 
         res.status(200).json({
@@ -121,7 +121,7 @@ exports.getBelvedereResidence = async (req, res) => {
         // Save changes if any updates were made
         if (hasUpdates) {
             await residence.save();
-            console.log('Updated room statuses and occupancy for Belvedere residence');
+            ('Updated room statuses and occupancy for Belvedere residence');
         }
 
         res.status(200).json({

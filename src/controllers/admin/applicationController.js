@@ -58,13 +58,27 @@ exports.getApplications = async (req, res) => {
                     currentOccupancy: currentOccupancy,
                     price: room.price,
                     status: status,
-                    residenceName: residence.name
+                    residenceName: residence.name,
+                    type: room.type
                 };
             });
         });
 
         // Transform applications to match frontend format
-        const transformedApplications = applications.map(app => ({
+        const transformedApplications = applications.map(app => {
+            // Get room details for current and requested rooms
+            const currentRoomDetails = app.currentRoom ? roomStatusMap[app.currentRoom] : null;
+            const requestedRoomDetails = app.requestedRoom ? roomStatusMap[app.requestedRoom] : null;
+            const allocatedRoomDetails = app.allocatedRoom ? roomStatusMap[app.allocatedRoom] : null;
+            const waitlistedRoomDetails = app.waitlistedRoom ? roomStatusMap[app.waitlistedRoom] : null;
+            
+            // Calculate price difference for upgrades
+            let priceDifference = null;
+            if (app.requestType === 'upgrade' && currentRoomDetails && requestedRoomDetails) {
+                priceDifference = requestedRoomDetails.price - currentRoomDetails.price;
+            }
+            
+            return {
             id: app._id,
             studentName: `${app.firstName} ${app.lastName}`,
             email: app.email,
@@ -76,13 +90,19 @@ exports.getApplications = async (req, res) => {
             preferredRoom: app.preferredRoom,
             alternateRooms: app.alternateRooms || [],
             currentRoom: app.currentRoom,
+                currentRoomDetails: currentRoomDetails,
             requestedRoom: app.requestedRoom,
+                requestedRoomDetails: requestedRoomDetails,
             reason: app.reason,
             allocatedRoom: app.allocatedRoom,
+                allocatedRoomDetails: allocatedRoomDetails,
             waitlistedRoom: app.waitlistedRoom,
+                waitlistedRoomDetails: waitlistedRoomDetails,
             roomOccupancy: app.roomOccupancy || { current: 0, capacity: 0 },
-            applicationCode: app.applicationCode
-        }));
+                applicationCode: app.applicationCode,
+                priceDifference: priceDifference
+            };
+        });
 
         res.json({
             applications: transformedApplications,
@@ -156,12 +176,103 @@ exports.updateApplicationStatus = async (req, res) => {
                     const validUntil = new Date(approvalDate);
                     validUntil.setMonth(approvalDate.getMonth() + 4);
 
+                    // Handle room upgrade logic
+                    if (application.requestType === 'upgrade') {
+                        // Get the student's current room information
+                        const student = await User.findById(application.student);
+                        if (!student) {
+                            throw new Error('Student not found');
+                        }
+
+                        const currentRoomNumber = student.currentRoom;
+                        
+                        // If student has a current room, update its occupancy
+                        if (currentRoomNumber) {
+                            // Find the residence with the current room
+                            const currentResidence = await Residence.findOne({ 'rooms.roomNumber': currentRoomNumber });
+                            if (currentResidence) {
+                                const currentRoom = currentResidence.rooms.find(r => r.roomNumber === currentRoomNumber);
+                                if (currentRoom) {
+                                    // Decrease occupancy of the current room
+                                    currentRoom.currentOccupancy = Math.max(0, currentRoom.currentOccupancy - 1);
+                                    
+                                    // Update room status based on occupancy
+                                    if (currentRoom.currentOccupancy === 0) {
+                                        currentRoom.status = 'available';
+                                    } else if (currentRoom.currentOccupancy < currentRoom.capacity) {
+                                        currentRoom.status = 'reserved';
+                                    }
+                                    
+                                    await currentResidence.save();
+                                }
+                            }
+                        }
+                        
+                        // Increment occupancy of the new room
+                        room.currentOccupancy += 1;
+                        
+                        // Update room status based on occupancy
+                        if (room.currentOccupancy >= room.capacity) {
+                            room.status = 'occupied';
+                        } else if (room.currentOccupancy > 0) {
+                            room.status = 'reserved';
+                        }
+                        
+                        await residence.save();
+
                     // Update student's current room and validity
                     await User.findByIdAndUpdate(
                         application.student,
                         {
                             $set: {
-                                currentRoom: roomNumber, // Set current room directly
+                                    currentRoom: roomNumber,
+                                    roomValidUntil: validUntil,
+                                    roomApprovalDate: approvalDate
+                                }
+                            }
+                        );
+                        
+                        // Send upgrade approval email
+                        await sendEmail({
+                            to: application.email,
+                            subject: 'Room Upgrade Approved - Alamait Student Accommodation',
+                            text: `
+                                Dear ${application.firstName} ${application.lastName},
+
+                                We are pleased to inform you that your room upgrade request has been approved.
+
+                                Upgrade Details:
+                                - Previous Room: ${currentRoomNumber || 'None'}
+                                - New Room: ${roomNumber}
+                                - Approval Date: ${approvalDate.toLocaleDateString()}
+                                - Valid Until: ${validUntil.toLocaleDateString()}
+
+                                Your room upgrade will be effective immediately. Please contact our office to arrange the move.
+
+                                Best regards,
+                                Alamait Student Accommodation Team
+                            `
+                        });
+                    } else {
+                        // Handle regular room approval (non-upgrade)
+                        // Increment room occupancy
+                        room.currentOccupancy += 1;
+                        
+                        // Update room status based on occupancy
+                        if (room.currentOccupancy >= room.capacity) {
+                            room.status = 'occupied';
+                        } else if (room.currentOccupancy > 0) {
+                            room.status = 'reserved';
+                        }
+                        
+                        await residence.save();
+                        
+                        // Update student's current room and validity
+                        await User.findByIdAndUpdate(
+                            application.student,
+                            {
+                                $set: {
+                                    currentRoom: roomNumber,
                                 roomValidUntil: validUntil,
                                 roomApprovalDate: approvalDate
                             }
@@ -197,6 +308,7 @@ exports.updateApplicationStatus = async (req, res) => {
                             Alamait Student Accommodation Team
                         `
                     });
+                    }
 
                     await application.save();
                     
@@ -366,6 +478,39 @@ exports.updatePaymentStatus = async (req, res) => {
             return res.status(400).json({ error: 'Room is at full capacity' });
         }
 
+        // Handle room upgrade logic
+        if (application.requestType === 'upgrade') {
+            // Get the student's current room information
+            const student = await User.findById(application.student);
+            if (!student) {
+                return res.status(404).json({ error: 'Student not found' });
+            }
+
+            const currentRoomNumber = student.currentRoom;
+            
+            // If student has a current room, update its occupancy
+            if (currentRoomNumber) {
+                // Find the residence with the current room
+                const currentResidence = await Residence.findOne({ 'rooms.roomNumber': currentRoomNumber });
+                if (currentResidence) {
+                    const currentRoom = currentResidence.rooms.find(r => r.roomNumber === currentRoomNumber);
+                    if (currentRoom) {
+                        // Decrease occupancy of the current room
+                        currentRoom.currentOccupancy = Math.max(0, currentRoom.currentOccupancy - 1);
+                        
+                        // Update room status based on occupancy
+                        if (currentRoom.currentOccupancy === 0) {
+                            currentRoom.status = 'available';
+                        } else if (currentRoom.currentOccupancy < currentRoom.capacity) {
+                            currentRoom.status = 'reserved';
+                        }
+                        
+                        await currentResidence.save();
+                    }
+                }
+            }
+        }
+
         // Increment room occupancy
         room.currentOccupancy += 1;
         
@@ -374,8 +519,6 @@ exports.updatePaymentStatus = async (req, res) => {
             room.status = 'occupied';
         } else if (room.currentOccupancy > 0) {
             room.status = 'reserved';
-        } else {
-            room.status = 'available';
         }
 
         // Save the residence with updated room occupancy
@@ -392,13 +535,20 @@ exports.updatePaymentStatus = async (req, res) => {
             capacity: room.capacity
         };
 
+        // Calculate validity period (4 months from now)
+        const approvalDate = new Date();
+        const validUntil = new Date(approvalDate);
+        validUntil.setMonth(approvalDate.getMonth() + 4);
+
         // Update user's current room
         await User.findByIdAndUpdate(
             application.student,
             {
                 $set: {
                     currentRoom: roomNumber,
-                    waitlistedRoom: null
+                    waitlistedRoom: null,
+                    roomValidUntil: validUntil,
+                    roomApprovalDate: approvalDate
                 }
             }
         );
@@ -406,10 +556,29 @@ exports.updatePaymentStatus = async (req, res) => {
         await application.save();
 
         // Send confirmation email to student
-        await sendEmail({
-            to: application.email,
-            subject: 'Room Allocation Confirmed - Alamait Student Accommodation',
-            text: `
+        const emailSubject = application.requestType === 'upgrade' 
+            ? 'Room Upgrade Payment Confirmed - Alamait Student Accommodation'
+            : 'Room Allocation Confirmed - Alamait Student Accommodation';
+            
+        const emailText = application.requestType === 'upgrade'
+            ? `
+                Dear ${application.firstName} ${application.lastName},
+
+                We are pleased to confirm that your payment for the room upgrade has been received.
+
+                Upgrade Details:
+                - Previous Room: ${application.currentRoom || 'None'}
+                - New Room: ${roomNumber}
+                - Current Occupancy: ${room.currentOccupancy}/${room.capacity}
+                - Approval Date: ${approvalDate.toLocaleDateString()}
+                - Valid Until: ${validUntil.toLocaleDateString()}
+                
+                Your room upgrade will be effective immediately. Please contact our office to arrange the move.
+
+                Best regards,
+                Alamait Student Accommodation Team
+            `
+            : `
                 Dear ${application.firstName} ${application.lastName},
 
                 We are pleased to confirm that your payment has been received and your room has been allocated.
@@ -422,7 +591,12 @@ exports.updatePaymentStatus = async (req, res) => {
 
                 Best regards,
                 Alamait Student Accommodation Team
-            `
+            `;
+
+        await sendEmail({
+            to: application.email,
+            subject: emailSubject,
+            text: emailText
         });
 
         // Return updated room information along with the application

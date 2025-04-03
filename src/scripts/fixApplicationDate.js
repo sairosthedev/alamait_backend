@@ -18,7 +18,7 @@ async function connectToDatabase() {
       useNewUrlParser: true,
       useUnifiedTopology: true
     });
-    console.log('Connected to MongoDB');
+    ('Connected to MongoDB');
   } catch (error) {
     console.error('MongoDB connection error:', error);
     process.exit(1);
@@ -35,7 +35,7 @@ async function fixApplicationDate() {
       return;
     }
     
-    console.log('Found application:', {
+    ('Found application:', {
       id: application._id,
       email: application.email,
       status: application.status,
@@ -49,13 +49,13 @@ async function fixApplicationDate() {
     );
     
     if (result.modifiedCount === 1) {
-      console.log('Successfully updated application date');
+      ('Successfully updated application date');
       
       // Verify the update
       const updatedApplication = await Application.findOne({ applicationCode: APPLICATION_CODE });
-      console.log('Updated application date:', updatedApplication.applicationDate);
+      ('Updated application date:', updatedApplication.applicationDate);
     } else {
-      console.log('No changes made to the application');
+      ('No changes made to the application');
     }
   } catch (error) {
     console.error('Error fixing application date:', error);
@@ -67,12 +67,12 @@ async function main() {
   
   try {
     await fixApplicationDate();
-    console.log('Script completed successfully');
+    ('Script completed successfully');
   } catch (error) {
     console.error('Script failed:', error);
   } finally {
     mongoose.connection.close();
-    console.log('MongoDB connection closed');
+    ('MongoDB connection closed');
   }
 }
 

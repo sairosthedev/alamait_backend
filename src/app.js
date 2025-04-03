@@ -101,7 +101,7 @@ app.use('/api/residences', publicResidenceRoutes);
 
 // Health check route for booking details
 app.get('/api/student/bookingdetails/health', (req, res) => {
-    console.log('Health check requested for booking details service');
+    ('Health check requested for booking details service');
     res.json({ status: 'ok', message: 'Booking details service is running' });
 });
 

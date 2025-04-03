@@ -18,7 +18,7 @@ async function connectToDatabase() {
       useNewUrlParser: true,
       useUnifiedTopology: true
     });
-    console.log('Connected to MongoDB');
+    ('Connected to MongoDB');
   } catch (error) {
     console.error('MongoDB connection error:', error);
     process.exit(1);
@@ -35,7 +35,7 @@ async function approveApplication() {
       return;
     }
     
-    console.log('Found application:', {
+    ('Found application:', {
       id: application._id,
       email: application.email,
       status: application.status,
@@ -43,7 +43,7 @@ async function approveApplication() {
     });
     
     if (application.status === 'approved') {
-      console.log('Application is already approved');
+      ('Application is already approved');
       return;
     }
     
@@ -64,17 +64,17 @@ async function approveApplication() {
     );
     
     if (result.modifiedCount === 1) {
-      console.log('Successfully approved application');
+      ('Successfully approved application');
       
       // Verify the update
       const updatedApplication = await Application.findOne({ applicationCode: APPLICATION_CODE });
-      console.log('Updated application:', {
+      ('Updated application:', {
         status: updatedApplication.status,
         applicationDate: updatedApplication.applicationDate,
         allocatedRoom: updatedApplication.allocatedRoom
       });
     } else {
-      console.log('No changes made to the application');
+      ('No changes made to the application');
     }
   } catch (error) {
     console.error('Error approving application:', error);
@@ -86,12 +86,12 @@ async function main() {
   
   try {
     await approveApplication();
-    console.log('Script completed successfully');
+    ('Script completed successfully');
   } catch (error) {
     console.error('Script failed:', error);
   } finally {
     mongoose.connection.close();
-    console.log('MongoDB connection closed');
+    ('MongoDB connection closed');
   }
 }
 

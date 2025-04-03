@@ -90,7 +90,7 @@ const sendNotification = async (type, data, recipient) => {
         };
 
         const info = await transporter.sendMail(mailOptions);
-        console.log('Email sent:', info.messageId);
+        ('Email sent:', info.messageId);
         return info;
     } catch (error) {
         console.error(`Failed to send ${type} notification:`, error);

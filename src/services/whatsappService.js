@@ -2,13 +2,13 @@ const axios = require('axios');
 
 class WhatsAppService {
     constructor() {
-        console.log('WhatsApp service initialized in mock mode');
+        ('WhatsApp service initialized in mock mode');
     }
 
     async sendMessage(to, message) {
         try {
             // Just log the message for now
-            console.log('Mock WhatsApp message:', {
+            ('Mock WhatsApp message:', {
                 to: this.formatPhoneNumber(to),
                 message: message
             });

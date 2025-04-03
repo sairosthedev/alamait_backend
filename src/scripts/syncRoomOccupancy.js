@@ -12,7 +12,7 @@ const Residence = require('../models/Residence');
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('MongoDB connected'))
+  .then(() => ('MongoDB connected'))
   .catch(err => {
     console.error('MongoDB connection error:', err);
     process.exit(1);
@@ -20,7 +20,7 @@ mongoose.connect(process.env.MONGODB_URI)
 
 async function syncRoomOccupancy() {
   try {
-    console.log('Starting room occupancy sync...');
+    ('Starting room occupancy sync...');
     
     // Get all approved applications with allocated rooms
     const allocatedApplications = await Application.find({
@@ -28,11 +28,11 @@ async function syncRoomOccupancy() {
       allocatedRoom: { $exists: true, $ne: null }
     });
     
-    console.log(`Found ${allocatedApplications.length} allocated applications`);
+    (`Found ${allocatedApplications.length} allocated applications`);
     
     // Get all residences
     const residences = await Residence.find({});
-    console.log(`Found ${residences.length} residences`);
+    (`Found ${residences.length} residences`);
     
     // Create a map to track room occupancy
     const roomOccupancyMap = {};
@@ -45,7 +45,7 @@ async function syncRoomOccupancy() {
       roomOccupancyMap[app.allocatedRoom] += 1;
     });
     
-    console.log(`Room occupancy map created for ${Object.keys(roomOccupancyMap).length} rooms`);
+    (`Room occupancy map created for ${Object.keys(roomOccupancyMap).length} rooms`);
     
     // Update room occupancy in residences
     let updatedRooms = 0;
@@ -58,7 +58,7 @@ async function syncRoomOccupancy() {
         
         // If the current occupancy doesn't match the allocated count, update it
         if (room.currentOccupancy !== allocatedCount) {
-          console.log(`Updating room ${room.roomNumber}: ${room.currentOccupancy} -> ${allocatedCount}`);
+          (`Updating room ${room.roomNumber}: ${room.currentOccupancy} -> ${allocatedCount}`);
           
           room.currentOccupancy = allocatedCount;
           
@@ -79,17 +79,17 @@ async function syncRoomOccupancy() {
       // Save the residence if any rooms were updated
       if (residenceUpdated) {
         await residence.save();
-        console.log(`Updated rooms in residence: ${residence.name}`);
+        (`Updated rooms in residence: ${residence.name}`);
       }
     }
     
-    console.log(`Room occupancy sync completed. Updated ${updatedRooms} rooms.`);
+    (`Room occupancy sync completed. Updated ${updatedRooms} rooms.`);
   } catch (error) {
     console.error('Error syncing room occupancy:', error);
   } finally {
     // Close MongoDB connection
     mongoose.connection.close();
-    console.log('MongoDB connection closed');
+    ('MongoDB connection closed');
   }
 }
 

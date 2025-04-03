@@ -15,7 +15,7 @@ exports.getDashboardData = async (req, res) => {
             status: { $in: ['approved', 'pending'] }
         }).sort({ createdAt: -1 });
 
-        console.log('Student data from DB:', {
+        ('Student data from DB:', {
             id: student._id,
             email: student.email,
             application: application

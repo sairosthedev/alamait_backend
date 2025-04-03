@@ -33,7 +33,7 @@ class BackupService {
             // Remove uncompressed backup
             fs.rmSync(backupPath, { recursive: true });
 
-            console.log(`Backup created successfully: ${backupPath}.tar.gz`);
+            (`Backup created successfully: ${backupPath}.tar.gz`);
             return `${backupPath}.tar.gz`;
         } catch (error) {
             console.error('Backup creation failed:', error);
@@ -56,7 +56,7 @@ class BackupService {
             // Clean up
             fs.rmSync(tempDir, { recursive: true });
 
-            console.log('Backup restored successfully');
+            ('Backup restored successfully');
             return true;
         } catch (error) {
             console.error('Backup restoration failed:', error);
@@ -76,7 +76,7 @@ class BackupService {
 
                 if (daysOld > retentionDays) {
                     fs.unlinkSync(filePath);
-                    console.log(`Deleted old backup: ${file}`);
+                    (`Deleted old backup: ${file}`);
                 }
             }
         } catch (error) {

@@ -74,18 +74,18 @@ const deleteStudent = async (req, res) => {
 // @access  Private (Student only)
 const getProfile = async (req, res) => {
     try {
-        console.log('Fetching profile for user:', req.user._id);
+        ('Fetching profile for user:', req.user._id);
         
         const student = await User.findById(req.user._id)
             .select('-password')
             .lean();
 
         if (!student) {
-            console.log('Student not found');
+            ('Student not found');
             return res.status(404).json({ error: 'Student not found' });
         }
 
-        console.log('Found student:', {
+        ('Found student:', {
             id: student._id,
             email: student.email,
             currentRoom: student.currentRoom,
@@ -102,7 +102,7 @@ const getProfile = async (req, res) => {
         .populate('room', 'roomNumber type features floor')
         .lean();
 
-        console.log('Current booking found:', currentBooking);
+        ('Current booking found:', currentBooking);
 
         // Check for approved application
         const approvedApplication = await Application.findOne({
@@ -112,13 +112,13 @@ const getProfile = async (req, res) => {
         .sort({ updatedAt: -1 })
         .lean();
 
-        console.log('Approved application found:', approvedApplication);
+        ('Approved application found:', approvedApplication);
 
         // If there's an approved application, get its residence details
         let applicationResidence = null;
         if (approvedApplication && approvedApplication.residence) {
             applicationResidence = await Residence.findById(approvedApplication.residence).lean();
-            console.log('Application residence found:', applicationResidence);
+            ('Application residence found:', applicationResidence);
         }
 
         // Get residence details if we have a room number
@@ -137,7 +137,7 @@ const getProfile = async (req, res) => {
             }
         }
 
-        console.log('Residence details found:', residenceDetails);
+        ('Residence details found:', residenceDetails);
 
         // Format response to match frontend requirements
         const formattedProfile = {
@@ -178,7 +178,7 @@ const getProfile = async (req, res) => {
             } : null
         };
 
-        console.log('Sending formatted profile:', formattedProfile);
+        ('Sending formatted profile:', formattedProfile);
         res.json(formattedProfile);
     } catch (error) {
         console.error('Error in getProfile:', error);

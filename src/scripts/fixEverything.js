@@ -8,19 +8,19 @@ require('dotenv').config();
 async function fixEverything(studentId) {
     try {
         await mongoose.connect(process.env.MONGODB_URI);
-        console.log('Connected to MongoDB');
+        ('Connected to MongoDB');
 
         // Get user and application
         const user = await User.findById(studentId);
         const application = await Application.findOne({ email: user.email, status: 'approved' });
 
         if (!user || !application) {
-            console.log('User or application not found');
+            ('User or application not found');
             return;
         }
 
-        console.log('\nBefore Update:');
-        console.log('User:', {
+        ('\nBefore Update:');
+        ('User:', {
             id: user._id,
             name: `${user.firstName} ${user.lastName}`,
             email: user.email,
@@ -29,7 +29,7 @@ async function fixEverything(studentId) {
             roomValidUntil: user.roomValidUntil,
             roomApprovalDate: user.roomApprovalDate
         });
-        console.log('Application:', {
+        ('Application:', {
             id: application._id,
             status: application.status,
             applicationCode: application.applicationCode,
@@ -81,8 +81,8 @@ async function fixEverything(studentId) {
         const residence = await Residence.findOne({ 'rooms.roomNumber': application.allocatedRoom });
         const room = residence?.rooms?.find(r => r.roomNumber === application.allocatedRoom);
 
-        console.log('\nAfter Update:');
-        console.log('User:', {
+        ('\nAfter Update:');
+        ('User:', {
             id: updatedUser._id,
             name: `${updatedUser.firstName} ${updatedUser.lastName}`,
             email: updatedUser.email,
@@ -91,7 +91,7 @@ async function fixEverything(studentId) {
             roomValidUntil: updatedUser.roomValidUntil,
             roomApprovalDate: updatedUser.roomApprovalDate
         });
-        console.log('Application:', {
+        ('Application:', {
             id: updatedApplication._id,
             status: updatedApplication.status,
             applicationCode: updatedApplication.applicationCode,
@@ -99,14 +99,14 @@ async function fixEverything(studentId) {
             student: updatedApplication.student,
             approvedAt: updatedApplication.approvedAt
         });
-        console.log('Room:', room ? {
+        ('Room:', room ? {
             roomNumber: room.roomNumber,
             status: room.status,
             currentOccupant: room.currentOccupant
         } : 'Room not found');
 
         mongoose.disconnect();
-        console.log('\nAll updates completed successfully');
+        ('\nAll updates completed successfully');
     } catch (error) {
         console.error('Error:', error);
         mongoose.disconnect();
