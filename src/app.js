@@ -32,6 +32,7 @@ const adminApplicationRoutes = require('./routes/admin/applicationRoutes');
 const adminPaymentRoutes = require('./routes/admin/paymentRoutes');
 const adminProfileRoutes = require('./routes/admin/adminProfileRoutes');
 const adminMessageRoutes = require('./routes/admin/messageRoutes');
+const adminEventRoutes = require('./routes/admin/eventRoutes');
 
 // Student routes
 const studentBookingRoutes = require('./routes/student/bookingRoutes');
@@ -118,6 +119,7 @@ app.use('/api/admin/applications', adminApplicationRoutes);
 app.use('/api/admin/payments', adminPaymentRoutes);
 app.use('/api/admin/profile', adminProfileRoutes);
 app.use('/api/admin/messages', adminMessageRoutes);
+app.use('/api/admin/events', adminEventRoutes);
 
 // Student routes
 app.use('/api/student', studentRoutes);

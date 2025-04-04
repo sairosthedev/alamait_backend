@@ -13,66 +13,59 @@ const auth = async (req, res, next) => {
         
         if (!token) {
             console.error('Auth middleware - No token provided');
-            return res.status(401).json({ 
-                success: false,
-                message: 'No authentication token provided' 
-            });
+            return res.status(401).json({ error: 'Please authenticate' });
         }
 
-        try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            ('Auth middleware - Token decoded:', {
-                decoded,
-                userId: decoded.user?.id || decoded.user?._id,
-                email: decoded.user?.email
-            });
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        ('Auth middleware - Token decoded:', {
+            decoded,
+            userId: decoded.user?.id || decoded.user?._id,
+            email: decoded.user?.email
+        });
 
-            const userId = decoded.user?.id || decoded.user?._id;
-            if (!userId) {
-                console.error('Auth middleware - Invalid token payload:', decoded);
-                return res.status(401).json({ 
-                    success: false,
-                    message: 'Invalid token payload' 
-                });
-            }
-
-            const user = await User.findOne({ _id: userId });
-            ('Auth middleware - User found:', {
-                found: !!user,
-                userId,
-                userEmail: user?.email
-            });
-
-            if (!user) {
-                console.error('Auth middleware - User not found for ID:', userId);
-                return res.status(401).json({ 
-                    success: false,
-                    message: 'User not found' 
-                });
-            }
-
-            req.token = token;
-            req.user = user;
-            next();
-        } catch (jwtError) {
-            console.error('Auth middleware - JWT verification failed:', {
-                error: jwtError.message,
-                stack: jwtError.stack
-            });
-            return res.status(401).json({ 
-                success: false,
-                message: 'Invalid token' 
-            });
+        const userId = decoded.user?.id || decoded.user?._id;
+        if (!userId) {
+            console.error('Auth middleware - Invalid token payload:', decoded);
+            return res.status(401).json({ error: 'Please authenticate' });
         }
+
+        const user = await User.findOne({ _id: userId });
+        ('Auth middleware - User found:', {
+            found: !!user,
+            userId,
+            userEmail: user?.email
+        });
+
+        if (!user) {
+            console.error('Auth middleware - User not found for ID:', userId);
+            return res.status(401).json({ error: 'Please authenticate' });
+        }
+
+        req.token = token;
+        req.user = user;
+        next();
     } catch (error) {
         console.error('Auth middleware - Error:', {
             error: error.message,
             stack: error.stack
         });
-        return res.status(500).json({ 
-            success: false,
-            message: 'Server error during authentication' 
+        return res.status(401).json({ error: 'Please authenticate' });
+    }
+};
+
+const isAdmin = async (req, res, next) => {
+    try {
+        if (!req.user || req.user.role !== 'admin') {
+            console.error('Role check middleware - Invalid role:', req.user.role);
+            return res.status(403).json({ error: 'Access denied. Admin only.' });
+        }
+        next();
+    } catch (error) {
+        console.error('Role check middleware - Error:', {
+            error: error.message,
+            stack: error.stack
         });
+        return res.status(403).json({ error: 'Access denied' });
     }
 };
 
@@ -202,6 +195,7 @@ const verifyApplicationCode = async (req, res, next) => {
 
 module.exports = {
     auth,
+    isAdmin,
     checkRole,
     verifyApplicationCode
 }; 

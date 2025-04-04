@@ -15,8 +15,8 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['student', 'admin', 'property_manager'],
-    required: true
+    enum: ['admin', 'student'],
+    default: 'student'
   },
   firstName: {
     type: String,
@@ -64,9 +64,26 @@ const userSchema = new mongoose.Schema({
   },
   lastLogin: {
     type: Date
+  },
+  residence: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Residence'
   }
 }, {
   timestamps: true
+});
+
+// Hash password before saving
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Method to compare password

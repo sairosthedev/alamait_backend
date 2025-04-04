@@ -4,46 +4,50 @@ const { validationResult } = require('express-validator');
 // Get all events
 exports.getEvents = async (req, res) => {
     try {
-        const { filter = 'all' } = req.query;
-        const currentDate = new Date();
-
-        // Base query to get events
-        const query = {
-            $or: [
-                { visibility: 'all' },
-                { participants: req.user._id }
-            ]
-        };
-
-        // Get upcoming and past events based on filter
-        const upcomingEvents = filter !== 'past' ? await Event.find({
-            ...query,
-            date: { $gte: currentDate }
-        }).sort({ date: 1 }) : [];
-
-        const pastEvents = filter !== 'upcoming' ? await Event.find({
-            ...query,
-            date: { $lt: currentDate }
-        }).sort({ date: -1 }) : [];
+        console.log('Starting getEvents...');
+        
+        // First, get ALL events without any filters
+        const allEvents = await Event.find({});
+        console.log('Total events in database:', allEvents.length);
+        console.log('All events:', JSON.stringify(allEvents, null, 2));
 
         // Transform events to match frontend format
-        const formatEvent = (event) => ({
-            id: event._id,
-            title: event.title,
-            date: event.date.toISOString().split('T')[0],
-            time: `${event.startTime} - ${event.endTime}`,
-            location: event.location,
-            category: event.category,
-            status: event.participants.includes(req.user._id) ? 'Registered' : 
-                   event.required ? 'Required' : 'Open',
-            description: event.description
-        });
+        const formatEvent = (event) => {
+            // Format time display
+            let timeDisplay = '';
+            if (event.startTime && event.endTime) {
+                if (event.startTime === event.endTime) {
+                    timeDisplay = event.startTime;
+                } else {
+                    timeDisplay = `${event.startTime} - ${event.endTime}`;
+                }
+            } else if (event.startTime) {
+                timeDisplay = event.startTime;
+            } else if (event.endTime) {
+                timeDisplay = event.endTime;
+            }
 
-        const response = {
-            upcoming: upcomingEvents.map(formatEvent),
-            past: pastEvents.map(formatEvent)
+            return {
+                id: event._id,
+                title: event.title,
+                date: event.date.toISOString().split('T')[0],
+                time: timeDisplay,
+                location: event.location,
+                category: event.category,
+                status: event.participants.some(p => p.student.toString() === req.user._id.toString()) ? 'Registered' : 
+                       event.status === 'Required' ? 'Required' : 'Open',
+                description: event.description,
+                visibility: event.visibility
+            };
         };
 
+        // For now, return all events in both upcoming and past
+        const response = {
+            upcoming: allEvents.map(formatEvent),
+            past: []
+        };
+        
+        console.log('Formatted response:', JSON.stringify(response, null, 2));
         res.json(response);
     } catch (error) {
         console.error('Error in getEvents:', error);
@@ -56,7 +60,7 @@ exports.getAvailableEvents = async (req, res) => {
     try {
         const { category, date } = req.query;
         let query = {
-            status: 'upcoming',
+            visibility: 'all',
             date: { $gte: new Date() }
         };
 
@@ -120,17 +124,37 @@ exports.registerForEvent = async (req, res) => {
             return res.status(404).json({ error: 'Event not found' });
         }
 
-        if (event.date < new Date()) {
+        // Create date objects for comparison
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Set time to midnight
+        
+        const eventDate = new Date(event.date);
+        eventDate.setHours(0, 0, 0, 0); // Set time to midnight
+        
+        console.log('Today:', today);
+        console.log('Event date:', eventDate);
+        
+        if (eventDate < today) {
             return res.status(400).json({ error: 'Cannot register for past events' });
         }
 
-        if (event.participants.includes(req.user._id)) {
+        // Check if already registered
+        const isRegistered = event.participants.some(p => 
+            p.student.toString() === req.user._id.toString() && 
+            p.status === 'registered'
+        );
+
+        if (isRegistered) {
             return res.status(400).json({ error: 'Already registered for this event' });
         }
 
-        event.participants.push(req.user._id);
-        await event.save();
+        // Add participant
+        event.participants.push({
+            student: req.user._id,
+            status: 'registered'
+        });
 
+        await event.save();
         res.json({ message: 'Successfully registered for event' });
     } catch (error) {
         console.error('Error in registerForEvent:', error);

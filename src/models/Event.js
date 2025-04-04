@@ -9,11 +9,6 @@ const eventSchema = new mongoose.Schema({
         type: String,
         required: true
     },
-    residence: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Residence',
-        required: true
-    },
     date: {
         type: Date,
         required: true
@@ -32,47 +27,41 @@ const eventSchema = new mongoose.Schema({
     },
     category: {
         type: String,
-        enum: ['social', 'academic', 'sports', 'cultural', 'other'],
+        enum: ['Workshop', 'Social', 'Training', 'Safety'],
         required: true
     },
-    organizer: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
+    status: {
+        type: String,
+        enum: ['Open', 'Required'],
+        default: 'Open'
+    },
+    visibility: {
+        type: String,
+        enum: ['all', 'private'],
+        default: 'all'
     },
     capacity: {
         type: Number,
-        required: true
+        default: 50
     },
-    participants: [{
-        student: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User'
-        },
-        status: {
-            type: String,
-            enum: ['registered', 'attended', 'cancelled'],
-            default: 'registered'
-        },
-        registeredAt: {
-            type: Date,
-            default: Date.now
-        }
+    requirements: [{
+        type: String
     }],
-    status: {
-        type: String,
-        enum: ['upcoming', 'ongoing', 'completed', 'cancelled'],
-        default: 'upcoming'
+    resources: [{
+        type: String
+    }],
+    participants: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
+    residence: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Residence'
     },
     image: {
         url: String,
         caption: String
     },
-    requirements: [String],
-    resources: [{
-        name: String,
-        url: String
-    }],
     feedback: [{
         student: {
             type: mongoose.Schema.Types.ObjectId,
@@ -88,7 +77,15 @@ const eventSchema = new mongoose.Schema({
             type: Date,
             default: Date.now
         }
-    }]
+    }],
+    createdAt: {
+        type: Date,
+        default: Date.now
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
+    }
 }, {
     timestamps: true
 });
@@ -130,6 +127,12 @@ eventSchema.methods.getAverageRating = function() {
     const sum = this.feedback.reduce((acc, curr) => acc + curr.rating, 0);
     return sum / this.feedback.length;
 };
+
+// Update the updatedAt field before saving
+eventSchema.pre('save', function(next) {
+    this.updatedAt = Date.now();
+    next();
+});
 
 const Event = mongoose.model('Event', eventSchema);
 
