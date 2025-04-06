@@ -131,6 +131,7 @@ app.use('/api/student/dashboard', studentDashboardRoutes);
 app.use('/api/student/bookingdetails', bookingDetailsRoutes);
 app.use('/api/student/payments', paymentHistoryRoutes);
 
+
 // Property Manager routes
 app.use('/api/property-manager/residences', propertyManagerResidenceRoutes);
 app.use('/api/property-manager/maintenance', propertyManagerMaintenanceRoutes);
