@@ -5,6 +5,7 @@ const dotenv = require('dotenv');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const studentRoutes = require('./routes/student');
+const connectDB = require('./config/database');
 
 // Load environment variables
 dotenv.config();
@@ -19,12 +20,10 @@ app.use(cors({
 app.use(express.json());
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/alamait', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log('Connected to MongoDB'))
-.catch(err => console.error('MongoDB connection error:', err));
+connectDB().catch(err => {
+  console.error('Failed to connect to MongoDB:', err);
+  process.exit(1);
+});
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -33,8 +32,16 @@ app.use('/api/student', studentRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+  console.error('Error stack:', err.stack);
+  console.error('Error details:', {
+    message: err.message,
+    name: err.name,
+    code: err.code
+  });
+  res.status(500).json({ 
+    error: 'Something went wrong!',
+    details: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
 });
 
 const PORT = process.env.PORT || 5000;

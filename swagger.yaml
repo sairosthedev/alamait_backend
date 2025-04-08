@@ -8,9 +8,10 @@ info:
     email: macdonaldsairos24@gmail.com
 
 servers:
-  - url: http://localhost:5000/api
+  - url: 'https://alamait-backend.onrender.com/api'
+
     description: Development server
-  - url: https://alamait-backend.onrender.com/api
+  - url: 'https://alamait-backend.onrender.com/api'
     description: Production server
 
 components:

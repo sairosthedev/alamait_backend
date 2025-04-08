@@ -3,6 +3,24 @@ const router = express.Router();
 const { body } = require('express-validator');
 const { auth, checkRole } = require('../../middleware/auth');
 const messageController = require('../../controllers/admin/messageController');
+const Message = require('../../models/Message');
+const mongoose = require('mongoose');
+
+// Test endpoint to check database state
+router.get('/test', async (req, res) => {
+    try {
+        const count = await Message.countDocuments();
+        const collections = await mongoose.connection.db.listCollections().toArray();
+        res.json({
+            messageCount: count,
+            collections: collections.map(c => c.name),
+            connectionState: mongoose.connection.readyState
+        });
+    } catch (error) {
+        console.error('Test endpoint error:', error);
+        res.status(500).json({ error: 'Test failed', details: error.message });
+    }
+});
 
 // Validation middleware
 const messageValidation = [
