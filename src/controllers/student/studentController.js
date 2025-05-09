@@ -74,18 +74,19 @@ const deleteStudent = async (req, res) => {
 // @access  Private (Student only)
 const getProfile = async (req, res) => {
     try {
-        ('Fetching profile for user:', req.user._id);
+        console.log('Fetching profile for user:', req.user._id);
         
         const student = await User.findById(req.user._id)
             .select('-password')
+            .populate('residence', 'name')  // Populate the residence reference
             .lean();
 
         if (!student) {
-            ('Student not found');
+            console.log('Student not found');
             return res.status(404).json({ error: 'Student not found' });
         }
 
-        ('Found student:', {
+        console.log('Found student:', {
             id: student._id,
             email: student.email,
             currentRoom: student.currentRoom,
@@ -98,28 +99,22 @@ const getProfile = async (req, res) => {
             student: req.user._id,
             status: 'active'
         })
-        .populate('residence', 'name address')
+        .populate('residence', 'name')
         .populate('room', 'roomNumber type features floor')
         .lean();
 
-        ('Current booking found:', currentBooking);
+        console.log('Current booking found:', currentBooking);
 
         // Check for approved application
         const approvedApplication = await Application.findOne({
             email: student.email,
             status: 'approved'
         })
+        .populate('residence', 'name')  // Make sure to populate the residence reference
         .sort({ updatedAt: -1 })
         .lean();
 
-        ('Approved application found:', approvedApplication);
-
-        // If there's an approved application, get its residence details
-        let applicationResidence = null;
-        if (approvedApplication && approvedApplication.residence) {
-            applicationResidence = await Residence.findById(approvedApplication.residence).lean();
-            ('Application residence found:', applicationResidence);
-        }
+        console.log('Approved application found:', approvedApplication);
 
         // Get residence details if we have a room number
         let residenceDetails = null;
@@ -137,7 +132,21 @@ const getProfile = async (req, res) => {
             }
         }
 
-        ('Residence details found:', residenceDetails);
+        console.log('Residence details found:', residenceDetails);
+
+        // Determine the residence name from various sources
+        let residenceName = null;
+        if (currentBooking?.residence?.name) {
+            residenceName = currentBooking.residence.name;
+        } else if (approvedApplication?.residence?.name) {
+            residenceName = approvedApplication.residence.name;
+        } else if (residenceDetails?.name) {
+            residenceName = residenceDetails.name;
+        } else if (student.residence?.name) {
+            residenceName = student.residence.name;
+        }
+
+        console.log('Determined residence name:', residenceName);
 
         // Format response to match frontend requirements
         const formattedProfile = {
@@ -174,11 +183,11 @@ const getProfile = async (req, res) => {
                 approvalDate: approvedApplication.actionDate || new Date(),
                 roomNumber: approvedApplication.allocatedRoom || approvedApplication.preferredRoom,
                 roomType: 'Standard',
-                residence: applicationResidence ? applicationResidence.name : 'Assigned Residence'
+                residence: residenceName || 'Not Assigned'  // Use determined residence name or fallback
             } : null
         };
 
-        ('Sending formatted profile:', formattedProfile);
+        console.log('Sending formatted profile:', formattedProfile);
         res.json(formattedProfile);
     } catch (error) {
         console.error('Error in getProfile:', error);

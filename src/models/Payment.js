@@ -11,6 +11,19 @@ const paymentSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
+    residence: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Residence',
+        required: true
+    },
+    room: {
+        type: String,
+        default: 'Not Assigned'
+    },
+    roomType: {
+        type: String,
+        default: ''
+    },
     rentAmount: {
         type: Number,
         default: 0
@@ -33,15 +46,26 @@ const paymentSchema = new mongoose.Schema({
     },
     method: {
         type: String,
-        enum: ['Bank Transfer', 'Cash', 'Online Payment'],
+        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'],
         required: true
     },
     status: {
         type: String,
-        enum: ['Pending', 'Confirmed', 'Failed'],
+        enum: ['Pending', 'Confirmed', 'Failed', 'Verified', 'Rejected'],
         default: 'Pending'
     },
     description: String,
+    proofOfPayment: {
+        fileUrl: String,
+        fileName: String,
+        uploadDate: Date,
+        verifiedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        verificationDate: Date,
+        verificationNotes: String
+    },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -58,6 +82,8 @@ const paymentSchema = new mongoose.Schema({
 // Add indexes for common queries
 paymentSchema.index({ paymentId: 1 });
 paymentSchema.index({ student: 1 });
+paymentSchema.index({ residence: 1 });
+paymentSchema.index({ room: 1 });
 paymentSchema.index({ status: 1 });
 paymentSchema.index({ date: -1 });
 

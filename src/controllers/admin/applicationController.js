@@ -225,34 +225,39 @@ exports.updateApplicationStatus = async (req, res) => {
                         application.student,
                         {
                             $set: {
-                                    currentRoom: roomNumber,
-                                    roomValidUntil: validUntil,
-                                    roomApprovalDate: approvalDate
-                                }
+                                currentRoom: roomNumber,
+                                roomValidUntil: validUntil,
+                                roomApprovalDate: approvalDate,
+                                residence: residence._id  // Set the residence reference
                             }
-                        );
-                        
-                        // Send upgrade approval email
-                        await sendEmail({
-                            to: application.email,
-                            subject: 'Room Upgrade Approved - Alamait Student Accommodation',
-                            text: `
-                                Dear ${application.firstName} ${application.lastName},
+                        }
+                    );
 
-                                We are pleased to inform you that your room upgrade request has been approved.
+                    // Update application with residence reference
+                    application.residence = residence._id;
+                    await application.save();
+                    
+                    // Send upgrade approval email
+                    await sendEmail({
+                        to: application.email,
+                        subject: 'Room Upgrade Approved - Alamait Student Accommodation',
+                        text: `
+                            Dear ${application.firstName} ${application.lastName},
 
-                                Upgrade Details:
-                                - Previous Room: ${currentRoomNumber || 'None'}
-                                - New Room: ${roomNumber}
-                                - Approval Date: ${approvalDate.toLocaleDateString()}
-                                - Valid Until: ${validUntil.toLocaleDateString()}
+                            We are pleased to inform you that your room upgrade request has been approved.
 
-                                Your room upgrade will be effective immediately. Please contact our office to arrange the move.
+                            Upgrade Details:
+                            - Previous Room: ${currentRoomNumber || 'None'}
+                            - New Room: ${roomNumber}
+                            - Approval Date: ${approvalDate.toLocaleDateString()}
+                            - Valid Until: ${validUntil.toLocaleDateString()}
 
-                                Best regards,
-                                Alamait Student Accommodation Team
-                            `
-                        });
+                            Your room upgrade will be effective immediately. Please contact our office to arrange the move.
+
+                            Best regards,
+                            Alamait Student Accommodation Team
+                        `
+                    });
                     } else {
                         // Handle regular room approval (non-upgrade)
                         // Increment room occupancy
@@ -469,18 +474,17 @@ exports.updatePaymentStatus = async (req, res) => {
 
         const room = residence.rooms[roomIndex];
         
-        // Check if room has space, considering the current application's status
-        const currentOccupancy = room.currentOccupancy || 0;
-        const isAlreadyCounted = application.status === 'approved' && application.allocatedRoom === roomNumber;
-        const effectiveOccupancy = isAlreadyCounted ? currentOccupancy : currentOccupancy + 1;
-        
-        if (effectiveOccupancy > room.capacity) {
-            return res.status(400).json({ error: 'Room is at full capacity' });
+        // Only check capacity for non-approved applications
+        if (application.status !== 'approved') {
+            const currentOccupancy = room.currentOccupancy || 0;
+            if (currentOccupancy >= room.capacity) {
+                return res.status(400).json({ error: 'Room is at full capacity' });
+            }
         }
 
-        // Update room occupancy only if not already counted
-        if (!isAlreadyCounted) {
-            room.currentOccupancy = currentOccupancy + 1;
+        // Update room occupancy if not already approved
+        if (application.status !== 'approved') {
+            room.currentOccupancy = (room.currentOccupancy || 0) + 1;
             room.occupants = [...(room.occupants || []), application.student._id];
         }
         
@@ -509,7 +513,7 @@ exports.updatePaymentStatus = async (req, res) => {
         const validUntil = new Date(approvalDate);
         validUntil.setMonth(approvalDate.getMonth() + 4);
 
-        // Update user's current room
+        // Update student's current room
         await User.findByIdAndUpdate(
             application.student,
             {

@@ -5,7 +5,9 @@ const { auth, checkRole } = require('../../middleware/auth');
 const {
     getPayments,
     createPayment,
-    updatePaymentStatus
+    updatePaymentStatus,
+    uploadProofOfPayment,
+    verifyProofOfPayment
 } = require('../../controllers/admin/paymentController');
 
 // Validation middleware
@@ -15,11 +17,16 @@ const createPaymentValidation = [
     check('payments.*.type').isIn(['rent', 'admin', 'deposit']),
     check('payments.*.amount').isNumeric(),
     check('date', 'Valid date is required').isISO8601(),
-    check('method').isIn(['Bank Transfer', 'Cash', 'Online Payment'])
+    check('method').isIn(['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'])
 ];
 
 const updateStatusValidation = [
-    check('status').isIn(['Pending', 'Confirmed', 'Failed'])
+    check('status').isIn(['Pending', 'Confirmed', 'Failed', 'Verified', 'Rejected'])
+];
+
+const verifyPopValidation = [
+    check('status').isIn(['Verified', 'Rejected']).notEmpty(),
+    check('notes').optional().isString()
 ];
 
 // All routes require admin role
@@ -30,5 +37,7 @@ router.use(checkRole('admin'));
 router.get('/', getPayments);
 router.post('/', createPaymentValidation, createPayment);
 router.put('/:paymentId/status', updateStatusValidation, updatePaymentStatus);
+router.post('/:paymentId/upload-pop', uploadProofOfPayment);
+router.put('/:paymentId/verify-pop', verifyPopValidation, verifyProofOfPayment);
 
 module.exports = router; 
