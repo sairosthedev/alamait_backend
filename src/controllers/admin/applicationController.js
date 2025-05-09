@@ -445,18 +445,14 @@ exports.updatePaymentStatus = async (req, res) => {
             return res.status(404).json({ error: 'Application not found' });
         }
 
-        if (application.status !== 'waitlisted') {
-            return res.status(400).json({ error: 'Can only update payment for waitlisted applications' });
-        }
-
         if (application.paymentStatus === 'paid') {
             return res.status(400).json({ error: 'Payment already marked as paid' });
         }
 
-        // Get the room from waitlisted room
-        const roomNumber = application.waitlistedRoom;
+        // Get the room from allocated room or waitlisted room
+        const roomNumber = application.allocatedRoom || application.waitlistedRoom;
         if (!roomNumber) {
-            return res.status(400).json({ error: 'No waitlisted room found for this application' });
+            return res.status(400).json({ error: 'No room found for this application' });
         }
 
         // Find the residence with the room
@@ -473,46 +469,20 @@ exports.updatePaymentStatus = async (req, res) => {
 
         const room = residence.rooms[roomIndex];
         
-        // Check if room has space
-        if (room.currentOccupancy >= room.capacity) {
+        // Check if room has space, considering the current application's status
+        const currentOccupancy = room.currentOccupancy || 0;
+        const isAlreadyCounted = application.status === 'approved' && application.allocatedRoom === roomNumber;
+        const effectiveOccupancy = isAlreadyCounted ? currentOccupancy : currentOccupancy + 1;
+        
+        if (effectiveOccupancy > room.capacity) {
             return res.status(400).json({ error: 'Room is at full capacity' });
         }
 
-        // Handle room upgrade logic
-        if (application.requestType === 'upgrade') {
-            // Get the student's current room information
-            const student = await User.findById(application.student);
-            if (!student) {
-                return res.status(404).json({ error: 'Student not found' });
-            }
-
-            const currentRoomNumber = student.currentRoom;
-            
-            // If student has a current room, update its occupancy
-            if (currentRoomNumber) {
-                // Find the residence with the current room
-                const currentResidence = await Residence.findOne({ 'rooms.roomNumber': currentRoomNumber });
-                if (currentResidence) {
-                    const currentRoom = currentResidence.rooms.find(r => r.roomNumber === currentRoomNumber);
-                    if (currentRoom) {
-                        // Decrease occupancy of the current room
-                        currentRoom.currentOccupancy = Math.max(0, currentRoom.currentOccupancy - 1);
-                        
-                        // Update room status based on occupancy
-                        if (currentRoom.currentOccupancy === 0) {
-                            currentRoom.status = 'available';
-                        } else if (currentRoom.currentOccupancy < currentRoom.capacity) {
-                            currentRoom.status = 'reserved';
-                        }
-                        
-                        await currentResidence.save();
-                    }
-                }
-            }
+        // Update room occupancy only if not already counted
+        if (!isAlreadyCounted) {
+            room.currentOccupancy = currentOccupancy + 1;
+            room.occupants = [...(room.occupants || []), application.student._id];
         }
-
-        // Increment room occupancy
-        room.currentOccupancy += 1;
         
         // Update room status based on occupancy
         if (room.currentOccupancy >= room.capacity) {
@@ -521,7 +491,6 @@ exports.updatePaymentStatus = async (req, res) => {
             room.status = 'reserved';
         }
 
-        // Save the residence with updated room occupancy
         await residence.save();
 
         // Update application status and payment status
