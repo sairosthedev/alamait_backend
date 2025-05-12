@@ -61,7 +61,7 @@ const corsOptions = {
     origin: function(origin, callback) {
         const allowedOrigins = process.env.NODE_ENV === 'production'
             ? ['https://alamait.vercel.app', 'https://alamait-admin.vercel.app']
-            : ['http://localhost:5173'];
+            : ['http://localhost:5173', 'http://localhost:3000'];
         
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
@@ -70,8 +70,10 @@ const corsOptions = {
         }
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    maxAge: 86400 // 24 hours
 };
 
 // Middleware
