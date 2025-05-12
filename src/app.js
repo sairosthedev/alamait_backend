@@ -4,6 +4,7 @@ const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
+const { initCronJobs } = require('./utils/cronJobs');
 
 // Load Swagger document
 const swaggerDocument = YAML.load(path.join(__dirname, '../swagger.yaml'));
@@ -52,11 +53,22 @@ const propertyManagerEventRoutes = require('./routes/property_manager/eventRoute
 
 const app = express();
 
+// Initialize cron jobs
+initCronJobs();
+
 // CORS configuration
 const corsOptions = {
-    origin: process.env.NODE_ENV === 'production' 
-        ? ['https://alamait.vercel.app', 'https://alamait-admin.vercel.app']
-        : 'http://localhost:5173',
+    origin: function(origin, callback) {
+        const allowedOrigins = process.env.NODE_ENV === 'production'
+            ? ['https://alamait.vercel.app', 'https://alamait-admin.vercel.app']
+            : ['http://localhost:5173'];
+        
+        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
