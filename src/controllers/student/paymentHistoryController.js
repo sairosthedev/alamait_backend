@@ -203,11 +203,11 @@ exports.getPaymentHistory = async (req, res) => {
             year: student.roomValidUntil ? new Date(student.roomValidUntil).getFullYear() : null,
             institution: "University of Zimbabwe",
             residence: roomInfo.location,
-            currentDue: currentMonthPaid.toFixed(2),
-            pastDue: pastDue.toFixed(2),
-            pastOverDue: pastOverDue.toFixed(2),
-            // Include application code if available
-            applicationCode: approvedApplication ? approvedApplication.applicationCode : null
+            currentDue: currentMonthPaid.toFixed(2) || '0.00',
+            pastDue: pastDue.toFixed(2) || '0.00',
+            pastOverDue: pastOverDue.toFixed(2) || '0.00',
+            applicationCode: approvedApplication ? approvedApplication.applicationCode : null,
+            totalDue: (currentMonthPaid + pastDue + pastOverDue).toFixed(2) || '0.00'
         };
 
         console.log('Sending student info:', {
@@ -215,7 +215,11 @@ exports.getPaymentHistory = async (req, res) => {
             roll: studentInfo.roll,
             room: studentInfo.course,
             residence: studentInfo.residence,
-            applicationCode: studentInfo.applicationCode
+            applicationCode: studentInfo.applicationCode,
+            currentDue: studentInfo.currentDue,
+            pastDue: studentInfo.pastDue,
+            pastOverDue: studentInfo.pastOverDue,
+            totalDue: studentInfo.totalDue
         });
 
         // Format payment history
@@ -228,12 +232,16 @@ exports.getPaymentHistory = async (req, res) => {
                     month: '2-digit', 
                     year: '2-digit' 
                 }),
-                amount: payment.totalAmount.toFixed(2),
+                amount: payment.totalAmount.toFixed(2) || '0.00',
                 type: payment.rentAmount > 0 ? 'Rent' : (payment.deposit > 0 ? 'Initial' : 'Admin'),
                 ref: payment.paymentId,
-                status: payment.status,
+                status: payment.status || 'Pending',
                 month: date.toLocaleString('en-US', { month: 'long' }),
-                paymentMethod: payment.method,
+                paymentMethod: payment.method || 'Bank Transfer',
+                rent: payment.rentAmount || 0,
+                admin: payment.adminFee || 0,
+                deposit: payment.deposit || 0,
+                startDate: date.toISOString().split('T')[0],
                 proofOfPayment: payment.proofOfPayment ? {
                     fileUrl: payment.proofOfPayment.fileUrl,
                     fileName: payment.proofOfPayment.fileName,
