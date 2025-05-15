@@ -407,4 +407,177 @@ exports.getMessageThread = async (req, res) => {
         console.error('Get message thread error:', error);
         res.status(500).json({ error: 'Error fetching message thread' });
     }
+};
+
+// Get user conversations
+exports.getConversations = async (req, res) => {
+    try {
+        // This endpoint will return all conversations (or threads) that the user is part of
+        // A conversation is essentially a group of messages between the same set of users
+        
+        // Find all messages where user is either author or recipient
+        const messages = await Message.find({
+            $or: [
+                { author: req.user._id },
+                { recipients: req.user._id }
+            ]
+        })
+        .sort({ createdAt: -1 })
+        .populate('author', 'firstName lastName role')
+        .populate('recipients', 'firstName lastName role')
+        .lean();
+        
+        // Group messages into conversations
+        // For simplicity, we'll treat each message with its replies as a separate conversation
+        const conversations = messages.map(msg => {
+            // Determine the other participant(s) name
+            let name;
+            if (msg.author._id.toString() === req.user._id.toString()) {
+                // If user is the author, use the first recipient's name
+                const recipient = msg.recipients.find(r => r._id.toString() !== req.user._id.toString());
+                name = recipient ? `${recipient.firstName} ${recipient.lastName}` : 'Unnamed';
+            } else {
+                // If user is recipient, use author's name
+                name = `${msg.author.firstName} ${msg.author.lastName}`;
+            }
+            
+            // Get last message (either main message or last reply)
+            const lastMessage = msg.replies.length > 0 ? 
+                msg.replies[msg.replies.length - 1] : 
+                { content: msg.content, timestamp: msg.createdAt };
+            
+            return {
+                _id: msg._id,
+                name,
+                subject: msg.title,
+                lastMessage: {
+                    content: lastMessage.content.substring(0, 50) + (lastMessage.content.length > 50 ? '...' : ''),
+                    timestamp: lastMessage.timestamp
+                },
+                participants: [...new Set([msg.author, ...msg.recipients].map(p => p._id.toString()))],
+                updatedAt: msg.updatedAt || msg.createdAt,
+                unreadCount: 0 // We'll implement this later
+            };
+        });
+        
+        // Sort by last updated
+        conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+        
+        res.json(conversations);
+    } catch (error) {
+        console.error('Error getting conversations:', error);
+        res.status(500).json({ error: 'Error retrieving conversations' });
+    }
+};
+
+// Get messages for a specific conversation
+exports.getConversationMessages = async (req, res) => {
+    try {
+        const { conversationId } = req.params;
+        
+        // Find the main message
+        const mainMessage = await Message.findById(conversationId)
+            .populate('author', 'firstName lastName role')
+            .populate('recipients', 'firstName lastName role')
+            .lean();
+            
+        if (!mainMessage) {
+            return res.status(404).json({ error: 'Conversation not found' });
+        }
+        
+        // Check if user is part of this conversation
+        const isParticipant = 
+            mainMessage.author._id.toString() === req.user._id.toString() ||
+            mainMessage.recipients.some(r => r._id.toString() === req.user._id.toString());
+            
+        if (!isParticipant) {
+            return res.status(403).json({ error: 'Not authorized to view this conversation' });
+        }
+        
+        // Format the conversation messages (main message + replies)
+        const messages = [
+            {
+                _id: mainMessage._id,
+                content: mainMessage.content,
+                author: mainMessage.author,
+                createdAt: mainMessage.createdAt
+            },
+            ...mainMessage.replies.map(reply => ({
+                _id: reply._id,
+                content: reply.content,
+                author: reply.author,
+                createdAt: reply.timestamp
+            }))
+        ];
+        
+        // Sort messages by date
+        messages.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        
+        res.json(messages);
+    } catch (error) {
+        console.error('Error getting conversation messages:', error);
+        res.status(500).json({ error: 'Error retrieving conversation messages' });
+    }
+};
+
+// Send message in a conversation
+exports.sendConversationMessage = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+        
+        const { conversationId } = req.params;
+        const { content } = req.body;
+        
+        // Find the conversation (message)
+        const message = await Message.findById(conversationId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Conversation not found' });
+        }
+        
+        // Check if user is part of this conversation
+        const isAuthor = message.author.toString() === req.user._id.toString();
+        const isRecipient = message.recipients.some(id => id.toString() === req.user._id.toString());
+        
+        if (!isAuthor && !isRecipient) {
+            return res.status(403).json({ error: 'Not authorized to participate in this conversation' });
+        }
+        
+        // Add reply to the conversation
+        const reply = {
+            author: req.user._id,
+            content: content.trim(),
+            timestamp: new Date()
+        };
+        
+        message.replies.push(reply);
+        await message.save();
+        
+        // Get populated reply
+        const populatedMessage = await Message.findById(message._id)
+            .populate('replies.author', 'firstName lastName role')
+            .lean();
+            
+        const latestReply = populatedMessage.replies[populatedMessage.replies.length - 1];
+        
+        const formattedReply = {
+            _id: latestReply._id,
+            content: latestReply.content,
+            author: {
+                _id: latestReply.author._id,
+                firstName: latestReply.author.firstName,
+                lastName: latestReply.author.lastName,
+                role: latestReply.author.role
+            },
+            createdAt: latestReply.timestamp
+        };
+        
+        res.status(201).json(formattedReply);
+    } catch (error) {
+        console.error('Error sending conversation message:', error);
+        res.status(500).json({ error: 'Error sending message' });
+    }
 }; 

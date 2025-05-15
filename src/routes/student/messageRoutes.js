@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const { auth, checkRole } = require('../../middleware/auth');
 const messageController = require('../../controllers/student/messageController');
+const { getAllUsersForMessaging } = require('../../controllers/student/studentController');
 
 // Validation middleware
 const messageValidation = [
@@ -34,5 +35,31 @@ router.post('/:messageId/reply',
     replyValidation,
     messageController.addReply
 );
+
+// New endpoints for conversation functionality
+// Get all conversations for the current user
+router.get('/conversations', 
+    auth, 
+    checkRole('student'), 
+    messageController.getConversations
+);
+
+// Get messages for a specific conversation
+router.get('/conversation/:conversationId', 
+    auth, 
+    checkRole('student'), 
+    messageController.getConversationMessages
+);
+
+// Send message in a conversation
+router.post('/conversation/:conversationId', 
+    auth, 
+    checkRole('student'),
+    [body('content').trim().notEmpty().withMessage('Message content is required')],
+    messageController.sendConversationMessage
+);
+
+// Add route for getting all students for messaging
+router.get('/users/students', auth, checkRole('student'), getAllUsersForMessaging);
 
 module.exports = router; 

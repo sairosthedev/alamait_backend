@@ -42,6 +42,12 @@ exports.getMessages = async (req, res) => {
         // Build base query
         let query = {};
 
+        // Add condition to exclude student-to-student messages
+        query.$or = [
+            { 'author.role': 'admin' },  // Messages from admin
+            { recipients: req.user._id }  // Messages to admin
+        ];
+
         // Apply type filter
         if (filter === 'sent') {
             query.author = req.user._id;

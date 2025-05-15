@@ -89,16 +89,26 @@ userSchema.pre('save', async function(next) {
 // Method to compare password
 userSchema.methods.comparePassword = async function(candidatePassword) {
   try {
-    ('Comparing passwords for user:', this.email);
-    ('Stored hashed password:', this.password);
-    ('Candidate password length:', candidatePassword.length);
+    console.log('Comparing passwords for user:', this.email);
+    console.log('Stored hash length:', this.password.length);
+    console.log('Candidate password length:', candidatePassword.length);
+    
+    // Ensure both passwords exist
+    if (!this.password || !candidatePassword) {
+      console.error('Missing password data:', {
+        hasStoredPassword: !!this.password,
+        hasProvidedPassword: !!candidatePassword
+      });
+      return false;
+    }
     
     const isMatch = await bcrypt.compare(candidatePassword, this.password);
-    ('Password comparison result:', isMatch);
+    console.log('Password comparison result:', isMatch);
     return isMatch;
   } catch (error) {
     console.error('Error comparing passwords:', error);
-    throw new Error('Error comparing passwords');
+    // Don't throw, return false for a failed match
+    return false;
   }
 };
 

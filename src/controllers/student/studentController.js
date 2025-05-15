@@ -321,6 +321,27 @@ const getCurrentResidence = async (req, res) => {
     }
 };
 
+// @route   GET /api/student/users/students
+// @desc    Get all students for the student-to-student messaging
+// @access  Private (Student only)
+const getAllUsersForMessaging = async (req, res) => {
+  try {
+    // Find all users with student role
+    const students = await User.find({ 
+      role: 'student', 
+      _id: { $ne: req.user._id } // Exclude current user
+    })
+    .select('_id firstName lastName currentRoom')
+    .lean();
+    
+    // Return formatted list of students
+    res.json(students);
+  } catch (error) {
+    console.error('Error fetching students for messaging:', error);
+    res.status(500).json({ error: 'Failed to fetch students list' });
+  }
+};
+
 module.exports = {
     getAllStudents,
     getStudentById,
@@ -330,5 +351,6 @@ module.exports = {
     getProfile,
     updateProfile,
     changePassword,
-    getCurrentResidence
+    getCurrentResidence,
+    getAllUsersForMessaging
 }; 

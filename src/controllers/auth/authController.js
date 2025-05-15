@@ -29,15 +29,11 @@ exports.register = async (req, res) => {
             firstName,
             lastName,
             phone,
+            password, // The pre-save hook will hash this
             applicationCode,
             role: 'student', // Default role for registration
             isVerified: true  // Set to true since we're not doing email verification
         });
-
-        // Hash password before saving
-        const salt = await bcrypt.genSalt(10);
-        user.password = await bcrypt.hash(password, salt);
-        ('Setting hashed password for user:', email);
 
         await user.save();
         ('User saved successfully:', email);
@@ -88,23 +84,30 @@ exports.login = async (req, res) => {
 
     try {
         const { email, password } = req.body;
-        ('Login attempt for email:', email);
+        console.log('Login attempt for email:', email);
+        console.log('Password provided (length):', password.length);
 
-        // Check if user exists
-        const user = await User.findOne({ email });
+        // Check if user exists - always lowercase email for consistency
+        const user = await User.findOne({ email: email.toLowerCase() });
         if (!user) {
-            ('User not found with email:', email);
+            console.log('User not found with email:', email);
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-        ('User found:', user.email, 'Role:', user.role);
+        console.log('User found:', user.email, 'Role:', user.role);
+        console.log('Stored password hash:', user.password);
 
         // Verify password using the model's method
-        const isMatch = await user.comparePassword(password);
-        ('Password match result:', isMatch);
-        
-        if (!isMatch) {
-            ('Password verification failed for user:', email);
-            return res.status(401).json({ error: 'Invalid credentials' });
+        try {
+            const isMatch = await user.comparePassword(password);
+            console.log('Password match result:', isMatch);
+            
+            if (!isMatch) {
+                console.log('Password verification failed for user:', email);
+                return res.status(401).json({ error: 'Invalid credentials' });
+            }
+        } catch (passwordError) {
+            console.error('Error during password comparison:', passwordError);
+            return res.status(500).json({ error: 'Error verifying credentials' });
         }
 
         // Generate JWT

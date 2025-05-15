@@ -8,7 +8,8 @@ const {
     getProfile,
     updateProfile,
     changePassword,
-    getCurrentResidence
+    getCurrentResidence,
+    getAllUsersForMessaging
 } = require('../../controllers/student/studentController');
 
 // Validation middleware
@@ -38,5 +39,8 @@ router.put('/profile', profileUpdateValidation, updateProfile);
 router.put('/profile/change-password', passwordValidation, changePassword);
 
 router.get('/current-residence', getCurrentResidence);
+
+// Add route for getting all students for messaging
+router.get('/users/students', getAllUsersForMessaging);
 
 module.exports = router; 

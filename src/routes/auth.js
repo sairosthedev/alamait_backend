@@ -11,6 +11,7 @@ const {
 } = require('../controllers/auth/authController');
 const { verifyApplicationCode } = require('../middleware/auth');
 const Application = require('../models/Application');
+const User = require('../models/User');
 
 // Validation middleware
 const registerValidation = [
@@ -172,6 +173,32 @@ router.get('/fix-specific-code', async (req, res) => {
     } catch (error) {
         console.error('Error fixing specific application code:', error);
         res.status(500).json({ error: 'Server error', details: error.message });
+    }
+});
+
+// Reset password by email (FOR TESTING ONLY)
+router.post('/reset-password-by-email', [
+    check('email', 'Please include a valid email').isEmail(),
+    check('newPassword', 'Password must be at least 6 characters').isLength({ min: 6 })
+], async (req, res) => {
+    try {
+        const { email, newPassword } = req.body;
+        
+        const user = await User.findOne({ email });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Reset the password directly
+        user.password = newPassword; // Pre-save hook will hash it
+        await user.save();
+        
+        console.log('Password reset successfully for:', email);
+        
+        res.json({ message: 'Password reset successful' });
+    } catch (error) {
+        console.error('Error resetting password:', error);
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
