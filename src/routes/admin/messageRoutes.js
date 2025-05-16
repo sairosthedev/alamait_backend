@@ -60,4 +60,18 @@ router.patch('/:messageId/pin',
     messageController.togglePinMessage
 );
 
+// Delete message
+router.delete('/:messageId',
+    auth,
+    checkRole('admin'),
+    messageController.deleteMessage
+);
+
+// Delete reply from message
+router.delete('/:messageId/replies/:replyId',
+    auth,
+    checkRole('admin'),
+    messageController.deleteReply
+);
+
 module.exports = router; 

@@ -294,4 +294,70 @@ exports.togglePinMessage = async (req, res) => {
         console.error('Error in togglePinMessage:', error);
         res.status(500).json({ error: 'Error updating message pin status' });
     }
+};
+
+// Delete message
+exports.deleteMessage = async (req, res) => {
+    try {
+        const message = await Message.findById(req.params.messageId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Check if user is authorized to delete the message
+        const isAuthor = message.author.toString() === req.user._id.toString();
+        const isAdmin = req.user.role === 'admin';
+        
+        if (!isAuthor && !isAdmin) {
+            return res.status(403).json({ error: 'Not authorized to delete this message' });
+        }
+
+        // Delete the message and all its replies
+        await message.deleteOne();
+        
+        res.json({ message: 'Message deleted successfully' });
+    } catch (error) {
+        console.error('Error in deleteMessage:', error);
+        res.status(500).json({ error: 'Error deleting message' });
+    }
+};
+
+// Delete reply from message
+exports.deleteReply = async (req, res) => {
+    try {
+        const { messageId, replyId } = req.params;
+        
+        const message = await Message.findById(messageId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Find the reply in the message's replies array
+        const replyIndex = message.replies.findIndex(
+            reply => reply._id.toString() === replyId
+        );
+
+        if (replyIndex === -1) {
+            return res.status(404).json({ error: 'Reply not found' });
+        }
+
+        // Check if user is authorized to delete the reply
+        const isReplyAuthor = message.replies[replyIndex].author.toString() === req.user._id.toString();
+        const isAdmin = req.user.role === 'admin';
+        
+        if (!isReplyAuthor && !isAdmin) {
+            return res.status(403).json({ error: 'Not authorized to delete this reply' });
+        }
+
+        // Remove the reply from the array
+        message.replies.splice(replyIndex, 1);
+        await message.save();
+        
+        res.json({ message: 'Reply deleted successfully' });
+    } catch (error) {
+        console.error('Error in deleteReply:', error);
+        res.status(500).json({ error: 'Error deleting reply' });
+    }
 }; 
