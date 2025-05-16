@@ -62,4 +62,46 @@ router.post('/conversation/:conversationId',
 // Add route for getting all students for messaging
 router.get('/users/students', auth, checkRole('student'), getAllUsersForMessaging);
 
+// Delete a specific message
+router.delete('/:messageId',
+    auth,
+    checkRole('student'),
+    messageController.deleteMessage
+);
+
+// Pin/unpin a specific message
+router.patch('/:messageId/pin',
+    auth,
+    checkRole('student'),
+    messageController.toggleMessagePin
+);
+
+// Delete a conversation
+router.delete('/conversation/:conversationId',
+    auth,
+    checkRole('student'),
+    messageController.deleteConversation
+);
+
+// Pin/unpin a conversation
+router.patch('/conversation/:conversationId/pin',
+    auth,
+    checkRole('student'),
+    messageController.toggleConversationPin
+);
+
+// Get unread message stats
+router.get('/unread', 
+    auth, 
+    checkRole('student'), 
+    messageController.getMessageStats
+);
+
+// Mark message as viewed
+router.patch('/:messageId/view',
+    auth,
+    checkRole('student'),
+    messageController.markMessageAsViewed
+);
+
 module.exports = router; 

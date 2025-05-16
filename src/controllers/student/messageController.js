@@ -353,21 +353,24 @@ exports.updateMessageStatus = async (req, res) => {
 // Delete message
 exports.deleteMessage = async (req, res) => {
     try {
-        const message = await Message.findById(req.params.id);
+        const message = await Message.findById(req.params.messageId);
+        
         if (!message) {
             return res.status(404).json({ error: 'Message not found' });
         }
 
         // Check if user is authorized to delete the message
-        if (message.sender.toString() !== req.user._id.toString() && 
-            message.recipient.toString() !== req.user._id.toString()) {
+        const isAuthor = message.author.toString() === req.user._id.toString();
+        const isRecipient = message.recipients.some(id => id.toString() === req.user._id.toString());
+        
+        if (!isAuthor && !isRecipient) {
             return res.status(403).json({ error: 'Not authorized to delete this message' });
         }
 
         await message.deleteOne();
         res.json({ message: 'Message deleted successfully' });
     } catch (error) {
-        console.error('Delete message error:', error);
+        console.error('Error in deleteMessage:', error);
         res.status(500).json({ error: 'Error deleting message' });
     }
 };
@@ -579,5 +582,185 @@ exports.sendConversationMessage = async (req, res) => {
     } catch (error) {
         console.error('Error sending conversation message:', error);
         res.status(500).json({ error: 'Error sending message' });
+    }
+};
+
+// Toggle message pin status
+exports.toggleMessagePin = async (req, res) => {
+    try {
+        const message = await Message.findById(req.params.messageId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Check if user is authorized to pin/unpin the message
+        const isAuthor = message.author.toString() === req.user._id.toString();
+        const isRecipient = message.recipients.some(id => id.toString() === req.user._id.toString());
+        
+        if (!isAuthor && !isRecipient) {
+            return res.status(403).json({ error: 'Not authorized to modify this message' });
+        }
+
+        message.pinned = !message.pinned;
+        await message.save();
+
+        res.json({ 
+            message: message.pinned ? 'Message pinned successfully' : 'Message unpinned successfully',
+            pinned: message.pinned 
+        });
+    } catch (error) {
+        console.error('Error in toggleMessagePin:', error);
+        res.status(500).json({ error: 'Error updating message pin status' });
+    }
+};
+
+// Delete a conversation
+exports.deleteConversation = async (req, res) => {
+    try {
+        const message = await Message.findById(req.params.conversationId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Conversation not found' });
+        }
+
+        // Check if user is authorized to delete the conversation
+        const isAuthor = message.author.toString() === req.user._id.toString();
+        const isRecipient = message.recipients.some(id => id.toString() === req.user._id.toString());
+        
+        if (!isAuthor && !isRecipient) {
+            return res.status(403).json({ error: 'Not authorized to delete this conversation' });
+        }
+
+        // Delete the main message and all its replies
+        await message.deleteOne();
+        
+        res.json({ message: 'Conversation deleted successfully' });
+    } catch (error) {
+        console.error('Error in deleteConversation:', error);
+        res.status(500).json({ error: 'Error deleting conversation' });
+    }
+};
+
+// Toggle conversation pin status
+exports.toggleConversationPin = async (req, res) => {
+    try {
+        const message = await Message.findById(req.params.conversationId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Conversation not found' });
+        }
+
+        // Check if user is authorized to pin/unpin the conversation
+        const isAuthor = message.author.toString() === req.user._id.toString();
+        const isRecipient = message.recipients.some(id => id.toString() === req.user._id.toString());
+        
+        if (!isAuthor && !isRecipient) {
+            return res.status(403).json({ error: 'Not authorized to modify this conversation' });
+        }
+
+        message.pinned = !message.pinned;
+        await message.save();
+
+        res.json({ 
+            message: message.pinned ? 'Conversation pinned successfully' : 'Conversation unpinned successfully',
+            pinned: message.pinned 
+        });
+    } catch (error) {
+        console.error('Error in toggleConversationPin:', error);
+        res.status(500).json({ error: 'Error updating conversation pin status' });
+    }
+};
+
+// Mark message as viewed
+exports.markMessageAsViewed = async (req, res) => {
+    try {
+        const message = await Message.findById(req.params.messageId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Check if user is authorized to view the message
+        const isAuthor = message.author.toString() === req.user._id.toString();
+        const isRecipient = message.recipients.some(id => id.toString() === req.user._id.toString());
+        
+        if (!isAuthor && !isRecipient) {
+            return res.status(403).json({ error: 'Not authorized to view this message' });
+        }
+
+        // Add user to readBy if not already there
+        const alreadyRead = message.readBy.some(read => read.user.toString() === req.user._id.toString());
+        if (!alreadyRead) {
+            message.readBy.push({
+                user: req.user._id,
+                readAt: new Date()
+            });
+            await message.save();
+        }
+
+        res.json({ message: 'Message marked as viewed' });
+    } catch (error) {
+        console.error('Error in markMessageAsViewed:', error);
+        res.status(500).json({ error: 'Error marking message as viewed' });
+    }
+};
+
+// Get message stats including unread count
+exports.getMessageStats = async (req, res) => {
+    try {
+        // Count unread messages where user is a recipient
+        const unreadCount = await Message.countDocuments({
+            recipients: req.user._id,
+            'readBy.user': { $ne: req.user._id }
+        });
+
+        // Count total messages where user is either author or recipient
+        const totalCount = await Message.countDocuments({
+            $or: [
+                { author: req.user._id },
+                { recipients: req.user._id }
+            ]
+        });
+
+        // Count pinned messages
+        const pinnedCount = await Message.countDocuments({
+            $or: [
+                { author: req.user._id },
+                { recipients: req.user._id }
+            ],
+            pinned: true
+        });
+
+        // Get recent unread messages (last 5)
+        const recentUnreadMessages = await Message.find({
+            recipients: req.user._id,
+            'readBy.user': { $ne: req.user._id }
+        })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .populate('author', 'firstName lastName role')
+        .lean();
+
+        // Format recent unread messages
+        const formattedUnreadMessages = recentUnreadMessages.map(message => ({
+            id: message._id,
+            title: message.title,
+            content: message.content.substring(0, 100) + (message.content.length > 100 ? '...' : ''),
+            author: `${message.author.firstName} ${message.author.lastName}`,
+            role: message.author.role,
+            timestamp: message.createdAt,
+            avatar: message.author.role === 'admin' ? '🏛️' : '👨‍🎓'
+        }));
+
+        res.json({
+            unreadCount,
+            totalCount,
+            pinnedCount,
+            recentUnreadMessages: formattedUnreadMessages
+        });
+    } catch (error) {
+        console.error('Error in getMessageStats:', error);
+        res.status(500).json({ error: 'Error fetching message stats' });
     }
 }; 
