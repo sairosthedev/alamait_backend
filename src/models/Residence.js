@@ -25,7 +25,15 @@ const residenceSchema = new mongoose.Schema({
         },
         coordinates: {
             type: [Number],
-            required: true
+            required: true,
+            validate: {
+                validator: function(v) {
+                    return v.length === 2 && 
+                           v[0] >= -180 && v[0] <= 180 && 
+                           v[1] >= -90 && v[1] <= 90;
+                },
+                message: 'Coordinates must be valid [longitude, latitude] values'
+            }
         }
     },
     rooms: [{
@@ -40,7 +48,8 @@ const residenceSchema = new mongoose.Schema({
         },
         price: {
             type: Number,
-            required: true
+            required: true,
+            min: 0
         },
         status: {
             type: String,
@@ -49,44 +58,80 @@ const residenceSchema = new mongoose.Schema({
         },
         currentOccupancy: {
             type: Number,
-            default: 0
+            default: 0,
+            min: 0
         },
         capacity: {
             type: Number,
-            default: function() {
-                // Set default capacity based on room type
-                switch(this.type) {
-                    case 'single': return 1;
-                    case 'double': return 2;
-                    case 'studio': return 1;
-                    case 'apartment': return 4;
-                    case 'triple': return 3;
-                    case 'quad': return 4;
-                    default: return 1;
-                }
-            }
+            required: true,
+            min: 1
         },
         features: [String],
         amenities: [String],
-        floor: Number,
-        area: Number, // in square meters/feet
-        images: [String] // Add the images field as an array of strings
+        floor: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        area: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        images: [String],
+        occupants: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        }],
+        maintenance: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Maintenance'
+        }],
+        lastCleaned: Date,
+        nextMaintenance: Date,
+        averageOccupancy: {
+            type: Number,
+            default: 0,
+            min: 0
+        },
+        maintenanceRequests: {
+            type: Number,
+            default: 0,
+            min: 0
+        },
+        cleaningFrequency: {
+            type: String,
+            enum: ['daily', 'weekly', 'biweekly', 'monthly'],
+            default: 'weekly'
+        }
     }],
     amenities: [{
-        name: String,
+        name: {
+            type: String,
+            required: true
+        },
         description: String,
         icon: String
     }],
     images: [{
-        url: String,
+        url: {
+            type: String,
+            required: true
+        },
         caption: String
     }],
     rules: [{
-        title: String,
+        title: {
+            type: String,
+            required: true
+        },
         description: String
     }],
     features: [{
-        name: String,
+        name: {
+            type: String,
+            required: true
+        },
         description: String,
         icon: String
     }],
@@ -101,7 +146,11 @@ const residenceSchema = new mongoose.Schema({
         default: 'active'
     },
     contactInfo: {
-        email: String,
+        email: {
+            type: String,
+            trim: true,
+            lowercase: true
+        },
         phone: String,
         website: String
     }
@@ -112,69 +161,46 @@ const residenceSchema = new mongoose.Schema({
 // Index for location-based queries
 residenceSchema.index({ location: '2dsphere' });
 
-// Method to check room availability
-residenceSchema.methods.isRoomAvailable = function(roomNumber) {
-    const room = this.rooms.find(r => r.roomNumber === roomNumber);
-    return room && room.status === 'available';
-};
+// Index for common queries
+residenceSchema.index({ name: 1 });
+residenceSchema.index({ status: 1 });
+residenceSchema.index({ 'rooms.status': 1 });
+residenceSchema.index({ 'rooms.type': 1 });
 
-// Method to get available rooms
-residenceSchema.methods.getAvailableRooms = function() {
-    return this.rooms.filter(room => room.status === 'available');
-};
+// Virtual for total rooms
+residenceSchema.virtual('totalRooms').get(function() {
+    return this.rooms.length;
+});
 
-// Method to update room status
-residenceSchema.methods.updateRoomStatus = function(roomNumber, status) {
+// Virtual for available rooms
+residenceSchema.virtual('availableRooms').get(function() {
+    return this.rooms.filter(room => room.status === 'available').length;
+});
+
+// Virtual for occupied rooms
+residenceSchema.virtual('occupiedRooms').get(function() {
+    return this.rooms.filter(room => room.status === 'occupied').length;
+});
+
+// Method to update room occupancy
+residenceSchema.methods.updateRoomOccupancy = async function(roomNumber, occupancy) {
     const room = this.rooms.find(r => r.roomNumber === roomNumber);
     if (room) {
-        room.status = status;
-        return true;
+        room.currentOccupancy = occupancy;
+        room.status = occupancy >= room.capacity ? 'occupied' : 'available';
+        await this.save();
     }
-    return false;
 };
 
-// Method to increment room occupancy
-residenceSchema.methods.incrementRoomOccupancy = function(roomNumber) {
+// Method to add maintenance request
+residenceSchema.methods.addMaintenanceRequest = async function(roomNumber, maintenanceId) {
     const room = this.rooms.find(r => r.roomNumber === roomNumber);
-    if (room && room.currentOccupancy < room.capacity) {
-        room.currentOccupancy += 1;
-        // If room is now at capacity, update status
-        if (room.currentOccupancy >= room.capacity) {
-            room.status = 'occupied';
-        }
-        return true;
+    if (room) {
+        room.maintenance.push(maintenanceId);
+        room.maintenanceRequests += 1;
+        await this.save();
     }
-    return false;
 };
-
-// Method to decrement room occupancy
-residenceSchema.methods.decrementRoomOccupancy = function(roomNumber) {
-    const room = this.rooms.find(r => r.roomNumber === roomNumber);
-    if (room && room.currentOccupancy > 0) {
-        room.currentOccupancy -= 1;
-        // If room was at capacity but now has space, update status
-        if (room.currentOccupancy < room.capacity && room.status === 'occupied') {
-            room.status = 'available';
-        }
-        return true;
-    }
-    return false;
-};
-
-// Pre-save hook to ensure room status is consistent with occupancy
-residenceSchema.pre('save', function(next) {
-    // Update room status based on occupancy for all rooms
-    this.rooms.forEach(room => {
-        if (room.currentOccupancy === 0) {
-            room.status = 'available';
-        } else if (room.currentOccupancy >= room.capacity) {
-            room.status = 'occupied';
-        } else if (room.currentOccupancy > 0 && room.currentOccupancy < room.capacity) {
-            room.status = 'reserved';
-        }
-    });
-    next();
-});
 
 const Residence = mongoose.model('Residence', residenceSchema);
 

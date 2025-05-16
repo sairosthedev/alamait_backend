@@ -4,7 +4,7 @@ const Application = require('../models/Application');
 
 const auth = async (req, res, next) => {
     try {
-        ('Auth middleware - Headers:', {
+        console.log('Auth middleware - Headers:', {
             ...req.headers,
             authorization: req.headers.authorization ? '[REDACTED]' : undefined
         });
@@ -17,7 +17,7 @@ const auth = async (req, res, next) => {
         }
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        ('Auth middleware - Token decoded:', {
+        console.log('Auth middleware - Token decoded:', {
             decoded,
             userId: decoded.user?.id || decoded.user?._id,
             email: decoded.user?.email
@@ -30,10 +30,11 @@ const auth = async (req, res, next) => {
         }
 
         const user = await User.findOne({ _id: userId });
-        ('Auth middleware - User found:', {
+        console.log('Auth middleware - User found:', {
             found: !!user,
             userId,
-            userEmail: user?.email
+            userEmail: user?.email,
+            userRole: user?.role
         });
 
         if (!user) {

@@ -35,7 +35,7 @@ const userSchema = new mongoose.Schema({
   },
   applicationCode: {
     type: String,
-    sparse: true // Allows null values while maintaining uniqueness
+    sparse: true
   },
   isVerified: {
     type: Boolean,
@@ -50,6 +50,10 @@ const userSchema = new mongoose.Schema({
     default: null
   },
   roomValidUntil: {
+    type: Date,
+    default: null
+  },
+  roomApprovalDate: {
     type: Date,
     default: null
   },
@@ -68,9 +72,72 @@ const userSchema = new mongoose.Schema({
   residence: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Residence'
+  },
+  currentBooking: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Booking'
+  },
+  maintenanceRequests: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Maintenance'
+  }],
+  paymentHistory: [{
+    date: Date,
+    amount: Number,
+    type: String,
+    status: String,
+    reference: String
+  }],
+  lastPayment: {
+    date: Date,
+    amount: Number,
+    status: String
+  },
+  documents: [{
+    type: String,
+    name: String,
+    uploadedAt: Date
+  }],
+  preferences: {
+    notifications: {
+      email: {
+        type: Boolean,
+        default: true
+      },
+      sms: {
+        type: Boolean,
+        default: true
+      }
+    },
+    language: {
+      type: String,
+      default: 'en'
+    }
+  },
+  status: {
+    type: String,
+    enum: ['active', 'inactive', 'suspended'],
+    default: 'active'
   }
 }, {
   timestamps: true
+});
+
+// Indexes for common queries
+userSchema.index({ email: 1 });
+userSchema.index({ role: 1 });
+userSchema.index({ status: 1 });
+userSchema.index({ residence: 1 });
+userSchema.index({ currentRoom: 1 });
+
+// Virtual for full name
+userSchema.virtual('fullName').get(function() {
+  return `${this.firstName} ${this.lastName}`;
+});
+
+// Virtual for active maintenance requests
+userSchema.virtual('activeMaintenanceRequests').get(function() {
+  return this.maintenanceRequests.filter(req => req.status !== 'completed').length;
 });
 
 // Hash password before saving
@@ -89,27 +156,33 @@ userSchema.pre('save', async function(next) {
 // Method to compare password
 userSchema.methods.comparePassword = async function(candidatePassword) {
   try {
-    console.log('Comparing passwords for user:', this.email);
-    console.log('Stored hash length:', this.password.length);
-    console.log('Candidate password length:', candidatePassword.length);
-    
-    // Ensure both passwords exist
-    if (!this.password || !candidatePassword) {
-      console.error('Missing password data:', {
-        hasStoredPassword: !!this.password,
-        hasProvidedPassword: !!candidatePassword
-      });
-      return false;
-    }
-    
-    const isMatch = await bcrypt.compare(candidatePassword, this.password);
-    console.log('Password comparison result:', isMatch);
-    return isMatch;
+    return await bcrypt.compare(candidatePassword, this.password);
   } catch (error) {
-    console.error('Error comparing passwords:', error);
-    // Don't throw, return false for a failed match
-    return false;
+    throw error;
   }
+};
+
+// Method to update last login
+userSchema.methods.updateLastLogin = async function() {
+  this.lastLogin = new Date();
+  await this.save();
+};
+
+// Method to add maintenance request
+userSchema.methods.addMaintenanceRequest = async function(maintenanceId) {
+  this.maintenanceRequests.push(maintenanceId);
+  await this.save();
+};
+
+// Method to add payment record
+userSchema.methods.addPayment = async function(payment) {
+  this.paymentHistory.push(payment);
+  this.lastPayment = {
+    date: payment.date,
+    amount: payment.amount,
+    status: payment.status
+  };
+  await this.save();
 };
 
 // Method to get public profile (excludes sensitive information)

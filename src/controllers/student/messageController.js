@@ -5,6 +5,12 @@ const { validationResult } = require('express-validator');
 // Get messages for student
 exports.getMessages = async (req, res) => {
     try {
+        console.log('Getting messages for user:', {
+            userId: req.user._id,
+            role: req.user.role,
+            email: req.user.email
+        });
+
         const { filter = 'all', search, page = 1, limit = 10 } = req.query;
         const skip = (page - 1) * limit;
 
@@ -25,14 +31,21 @@ exports.getMessages = async (req, res) => {
 
         // Apply search filter if provided
         if (search) {
-            query.$or = [
-                { title: { $regex: search, $options: 'i' } },
-                { content: { $regex: search, $options: 'i' } }
+            query.$and = [
+                {
+                    $or: [
+                        { title: { $regex: search, $options: 'i' } },
+                        { content: { $regex: search, $options: 'i' } }
+                    ]
+                }
             ];
         }
 
+        console.log('Final query:', JSON.stringify(query, null, 2));
+
         // Get total count for pagination
         const total = await Message.countDocuments(query);
+        console.log('Total messages found:', total);
 
         // Fetch messages with pagination
         const messages = await Message.find(query)
@@ -40,32 +53,60 @@ exports.getMessages = async (req, res) => {
             .skip(skip)
             .limit(parseInt(limit))
             .populate('author', 'firstName lastName role')
+            .populate('recipients', 'firstName lastName role')
             .populate('replies.author', 'firstName lastName role')
             .lean();
 
+        console.log('Messages retrieved:', messages.length);
+
         // Format messages
-        const formattedMessages = messages.map(message => ({
-            id: message._id,
-            author: `${message.author.firstName} ${message.author.lastName}`,
-            role: message.author.role,
-            title: message.title,
-            content: message.content,
-            timestamp: message.createdAt,
-            pinned: message.pinned,
-            avatar: message.author.role === 'admin' ? '🏛️' : '👨‍🎓',
-            replies: message.replies.map(reply => ({
-                id: reply._id,
-                author: `${reply.author.firstName} ${reply.author.lastName}`,
-                role: reply.author.role,
-                content: reply.content,
-                timestamp: reply.timestamp,
-                avatar: reply.author.role === 'admin' ? '🏛️' : '👨‍🎓'
-            }))
-        }));
+        const formattedMessages = messages.map(message => {
+            // Get recipient names
+            const recipientNames = message.recipients?.map(r => ({
+                id: r._id,
+                name: `${r.firstName} ${r.lastName}`,
+                role: r.role
+            })) || [];
+
+            // Get the first recipient's name for display
+            const firstRecipient = recipientNames[0]?.name || 'No recipient';
+
+            return {
+                id: message._id,
+                author: message.author ? `${message.author.firstName} ${message.author.lastName}` : 'Unknown',
+                role: message.author?.role || 'unknown',
+                title: message.title,
+                content: message.content,
+                timestamp: message.createdAt,
+                createdAt: message.createdAt,
+                time: message.createdAt ? new Date(message.createdAt).toLocaleString() : 'Date not available',
+                pinned: message.pinned,
+                avatar: message.author?.role === 'admin' ? '🏛️' : '👨‍🎓',
+                recipients: recipientNames,
+                recipientName: firstRecipient,
+                preview: message.content.substring(0, 100) + (message.content.length > 100 ? '...' : ''),
+                replies: message.replies?.map(reply => ({
+                    id: reply._id,
+                    author: reply.author ? `${reply.author.firstName} ${reply.author.lastName}` : 'Unknown',
+                    role: reply.author?.role || 'unknown',
+                    content: reply.content,
+                    timestamp: reply.timestamp,
+                    createdAt: reply.timestamp,
+                    time: reply.timestamp ? new Date(reply.timestamp).toLocaleString() : 'Date not available',
+                    avatar: reply.author?.role === 'admin' ? '🏛️' : '👨‍🎓'
+                })) || []
+            };
+        });
 
         // Group messages by type
         const announcements = formattedMessages.filter(m => m.role === 'admin');
         const discussions = formattedMessages.filter(m => m.role === 'student');
+
+        console.log('Formatted messages:', {
+            total: formattedMessages.length,
+            announcements: announcements.length,
+            discussions: discussions.length
+        });
 
         res.json({
             announcements,
@@ -76,7 +117,10 @@ exports.getMessages = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in getMessages:', error);
-        res.status(500).json({ error: 'Error retrieving messages' });
+        res.status(500).json({ 
+            error: 'Error retrieving messages',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 };
 
@@ -415,9 +459,6 @@ exports.getMessageThread = async (req, res) => {
 // Get user conversations
 exports.getConversations = async (req, res) => {
     try {
-        // This endpoint will return all conversations (or threads) that the user is part of
-        // A conversation is essentially a group of messages between the same set of users
-        
         // Find all messages where user is either author or recipient
         const messages = await Message.find({
             $or: [
@@ -431,7 +472,6 @@ exports.getConversations = async (req, res) => {
         .lean();
         
         // Group messages into conversations
-        // For simplicity, we'll treat each message with its replies as a separate conversation
         const conversations = messages.map(msg => {
             // Determine the other participant(s) name
             let name;
@@ -448,25 +488,64 @@ exports.getConversations = async (req, res) => {
             const lastMessage = msg.replies.length > 0 ? 
                 msg.replies[msg.replies.length - 1] : 
                 { content: msg.content, timestamp: msg.createdAt };
+
+            // Calculate unread count
+            let unreadCount = 0;
+            
+            // Count unread replies
+            if (msg.replies.length > 0) {
+                unreadCount = msg.replies.filter(reply => 
+                    !msg.readBy.some(read => 
+                        read.user.toString() === req.user._id.toString() && 
+                        new Date(read.readAt) > new Date(reply.timestamp)
+                    )
+                ).length;
+            }
+            
+            // Count main message as unread if user is recipient and hasn't read it
+            if (msg.author._id.toString() !== req.user._id.toString() && 
+                !msg.readBy.some(read => read.user.toString() === req.user._id.toString())) {
+                unreadCount++;
+            }
             
             return {
                 _id: msg._id,
+                id: msg._id,
                 name,
+                author: `${msg.author.firstName} ${msg.author.lastName}`,
+                role: msg.author.role,
                 subject: msg.title,
+                content: msg.content,
+                preview: msg.content.substring(0, 100) + (msg.content.length > 100 ? '...' : ''),
                 lastMessage: {
                     content: lastMessage.content.substring(0, 50) + (lastMessage.content.length > 50 ? '...' : ''),
                     timestamp: lastMessage.timestamp
                 },
                 participants: [...new Set([msg.author, ...msg.recipients].map(p => p._id.toString()))],
+                recipients: msg.recipients.map(r => ({
+                    id: r._id,
+                    name: `${r.firstName} ${r.lastName}`,
+                    role: r.role
+                })),
                 updatedAt: msg.updatedAt || msg.createdAt,
-                unreadCount: 0 // We'll implement this later
+                createdAt: msg.createdAt,
+                time: msg.createdAt ? new Date(msg.createdAt).toLocaleString() : 'Date not available',
+                unreadCount,
+                pinned: msg.pinned || false
             };
         });
         
         // Sort by last updated
         conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
         
-        res.json(conversations);
+        // Calculate total unread conversations
+        const totalUnreadConversations = conversations.filter(conv => conv.unreadCount > 0).length;
+        
+        res.json({
+            conversations,
+            totalUnreadConversations,
+            totalConversations: conversations.length
+        });
     } catch (error) {
         console.error('Error getting conversations:', error);
         res.status(500).json({ error: 'Error retrieving conversations' });
@@ -762,5 +841,51 @@ exports.getMessageStats = async (req, res) => {
     } catch (error) {
         console.error('Error in getMessageStats:', error);
         res.status(500).json({ error: 'Error fetching message stats' });
+    }
+};
+
+// Mark conversation as read
+exports.markConversationAsRead = async (req, res) => {
+    try {
+        const { conversationId } = req.params;
+        
+        // Find the conversation
+        const message = await Message.findById(conversationId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Conversation not found' });
+        }
+        
+        // Check if user is part of this conversation
+        const isParticipant = 
+            message.author.toString() === req.user._id.toString() ||
+            message.recipients.some(id => id.toString() === req.user._id.toString());
+            
+        if (!isParticipant) {
+            return res.status(403).json({ error: 'Not authorized to access this conversation' });
+        }
+        
+        // Add or update readBy entry for the current user
+        const readByIndex = message.readBy.findIndex(
+            read => read.user.toString() === req.user._id.toString()
+        );
+        
+        if (readByIndex === -1) {
+            // Add new read entry
+            message.readBy.push({
+                user: req.user._id,
+                readAt: new Date()
+            });
+        } else {
+            // Update existing read entry
+            message.readBy[readByIndex].readAt = new Date();
+        }
+        
+        await message.save();
+        
+        res.json({ message: 'Conversation marked as read' });
+    } catch (error) {
+        console.error('Error marking conversation as read:', error);
+        res.status(500).json({ error: 'Error marking conversation as read' });
     }
 }; 

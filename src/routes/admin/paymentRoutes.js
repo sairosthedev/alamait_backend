@@ -9,6 +9,7 @@ const {
     uploadProofOfPayment,
     verifyProofOfPayment
 } = require('../../controllers/admin/paymentController');
+const Payment = require('../../models/Payment');
 
 // Validation middleware
 const createPaymentValidation = [
@@ -32,6 +33,29 @@ const verifyPopValidation = [
 // All routes require admin role
 router.use(auth);
 router.use(checkRole('admin'));
+
+// Get total income from payments
+router.get('/total-income', async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+        const query = { status: 'Confirmed' };
+        
+        if (startDate && endDate) {
+            query.date = {
+                $gte: new Date(startDate),
+                $lte: new Date(endDate)
+            };
+        }
+
+        const payments = await Payment.find(query);
+        const totalIncome = payments.reduce((sum, payment) => sum + payment.totalAmount, 0);
+
+        res.json({ totalIncome });
+    } catch (error) {
+        console.error('Error fetching total income:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
 
 // Routes
 router.get('/', getPayments);

@@ -11,7 +11,9 @@ const {
     getOccupancyStats,
     getTransactions,
     exportTransactions,
-    generateDashboardReport
+    generateDashboardReport,
+    getRoomsWithOccupancy,
+    getStudentsWithLocation
 } = require('../../controllers/admin/dashboardController');
 
 const {
@@ -68,6 +70,10 @@ router.get('/dashboard/occupancy', getOccupancyStats);
 router.get('/dashboard/transactions', getTransactions);
 router.post('/dashboard/export-transactions', exportTransactions);
 router.post('/dashboard/generate-report', generateDashboardReport);
+
+// New routes for rooms and students
+router.get('/rooms', getRoomsWithOccupancy);
+router.get('/students', getStudentsWithLocation);
 
 // Maintenance routes
 router.get('/maintenance', getAllMaintenanceRequests);

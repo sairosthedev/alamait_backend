@@ -42,14 +42,8 @@ exports.getMaintenanceRequests = async (req, res) => {
             })) : []
         }));
 
-        // Group requests by status
-        const active = formattedRequests.filter(r => 
-            ['pending', 'assigned', 'in-progress', 'on-hold'].includes(r.status));
-        const completed = formattedRequests.filter(r => r.status === 'completed');
-
         res.json({
-            active,
-            completed,
+            requests: formattedRequests,
             currentPage: parseInt(page),
             totalPages: Math.ceil(total / limit),
             total
