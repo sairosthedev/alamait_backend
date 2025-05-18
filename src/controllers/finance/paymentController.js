@@ -27,7 +27,25 @@ exports.getStudentPayments = async (req, res) => {
         }
         
         if (residence) {
-            query.residence = residence;
+            // Find residence by name first
+            try {
+                const residenceObj = await Residence.findOne({ 
+                    name: { $regex: new RegExp(residence, 'i') } 
+                });
+                
+                if (residenceObj) {
+                    // If found, filter by residence ID
+                    query.residence = residenceObj._id;
+                } else {
+                    // If not found, try to filter by residence ID directly
+                    // This allows flexibility in case the ID is passed directly
+                    query.residence = residence;
+                }
+            } catch (error) {
+                console.error('Error finding residence by name:', error);
+                // In case of error, try to use the provided value directly
+                query.residence = residence;
+            }
         }
         
         if (student) {
