@@ -151,9 +151,22 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOp
 // Public routes
 app.use('/api/applications', publicApplicationRoutes);
 app.use('/api/residences', publicResidenceRoutes);
-app.use('/api/maintenance/staff', maintenanceStaffRoutes);
-app.use('/api/maintenance/categories', maintenanceCategoryRoutes);
-app.use('/api/maintenance', maintenanceRoutes);
+
+// Maintenance routes with debugging
+app.use('/api/maintenance', (req, res, next) => {
+    console.log('Maintenance route hit:', req.method, req.path);
+    next();
+}, maintenanceRoutes);
+
+app.use('/api/maintenance/categories', (req, res, next) => {
+    console.log('Maintenance categories route hit:', req.method, req.path);
+    next();
+}, maintenanceCategoryRoutes);
+
+app.use('/api/maintenance/staff', (req, res, next) => {
+    console.log('Maintenance staff route hit:', req.method, req.path);
+    next();
+}, maintenanceStaffRoutes);
 
 // Health check route for booking details
 app.get('/api/student/bookingdetails/health', (req, res) => {
