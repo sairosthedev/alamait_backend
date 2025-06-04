@@ -194,9 +194,37 @@ const verifyApplicationCode = async (req, res, next) => {
     }
 };
 
+const financeAccess = async (req, res, next) => {
+    try {
+        const financeRoles = ['admin', 'finance_admin', 'finance_user'];
+        
+        if (!req.user) {
+            console.error('Finance middleware - No user found');
+            return res.status(401).json({ error: 'Please authenticate' });
+        }
+        
+        if (!financeRoles.includes(req.user.role)) {
+            console.error('Finance middleware - User does not have finance access:', req.user.role);
+            return res.status(403).json({ 
+                success: false,
+                message: 'Access denied. You do not have permission to access finance features.' 
+            });
+        }
+        
+        next();
+    } catch (error) {
+        console.error('Finance middleware - Error:', {
+            error: error.message,
+            stack: error.stack
+        });
+        return res.status(403).json({ error: 'Access denied' });
+    }
+};
+
 module.exports = {
     auth,
     isAdmin,
     checkRole,
-    verifyApplicationCode
+    verifyApplicationCode,
+    financeAccess
 }; 

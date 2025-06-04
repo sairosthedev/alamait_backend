@@ -53,6 +53,13 @@ const propertyManagerResidenceRoutes = require('./routes/property_manager/reside
 const propertyManagerMaintenanceRoutes = require('./routes/property_manager/maintenanceRoutes');
 const propertyManagerEventRoutes = require('./routes/property_manager/eventRoutes');
 
+// Finance routes
+const financeExpenseRoutes = require('./routes/finance/expenseRoutes');
+const financeBalanceSheetRoutes = require('./routes/finance/balanceSheetRoutes');
+const financeIncomeStatementRoutes = require('./routes/finance/incomeStatementRoutes');
+const financeDashboardRoutes = require('./routes/finance/dashboardRoutes');
+const financePaymentRoutes = require('./routes/finance/paymentRoutes');
+
 const app = express();
 
 // Initialize cron jobs
@@ -184,6 +191,13 @@ app.use('/api/student/payments', paymentHistoryRoutes);
 app.use('/api/property-manager/residences', propertyManagerResidenceRoutes);
 app.use('/api/property-manager/maintenance', propertyManagerMaintenanceRoutes);
 app.use('/api/property-manager/events', propertyManagerEventRoutes);
+
+// Finance routes
+app.use('/api/finance/expenses', financeExpenseRoutes);
+app.use('/api/finance/balance-sheets', financeBalanceSheetRoutes);
+app.use('/api/finance/income-statements', financeIncomeStatementRoutes);
+app.use('/api/finance/dashboard', financeDashboardRoutes);
+app.use('/api/finance/payments', financePaymentRoutes);
 
 // 404 handler
 app.use((req, res) => {

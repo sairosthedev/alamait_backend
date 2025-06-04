@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const mongoosePaginate = require('mongoose-paginate-v2');
 
 const paymentSchema = new mongoose.Schema({
     paymentId: {
@@ -51,7 +52,7 @@ const paymentSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['Pending', 'Confirmed', 'Failed', 'Verified', 'Rejected'],
+        enum: ['Pending', 'Confirmed', 'Failed', 'Verified', 'Rejected', 'Clarification Requested'],
         default: 'Pending'
     },
     description: String,
@@ -74,7 +75,30 @@ const paymentSchema = new mongoose.Schema({
     updatedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
-    }
+    },
+    clarificationRequests: [{
+        message: {
+            type: String,
+            required: true
+        },
+        requestedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        requestDate: {
+            type: Date,
+            default: Date.now
+        },
+        response: {
+            message: String,
+            respondedBy: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            responseDate: Date
+        }
+    }]
 }, {
     timestamps: true
 });
@@ -86,5 +110,8 @@ paymentSchema.index({ residence: 1 });
 paymentSchema.index({ room: 1 });
 paymentSchema.index({ status: 1 });
 paymentSchema.index({ date: -1 });
+
+// Add pagination plugin
+paymentSchema.plugin(mongoosePaginate);
 
 module.exports = mongoose.model('Payment', paymentSchema); 
