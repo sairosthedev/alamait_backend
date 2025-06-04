@@ -40,10 +40,48 @@ const {
 
 // Validation middleware
 const maintenanceUpdateValidation = [
-    check('status').isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed']),
-    check('assignedTo').optional().isMongoId(),
-    check('comment').optional().trim().notEmpty(),
-    check('estimatedCompletion').optional().isISO8601()
+    check('status')
+        .optional()
+        .isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed'])
+        .withMessage('Invalid status'),
+    check('assignedTo')
+        .optional()
+        .isMongoId()
+        .withMessage('Invalid assigned user ID'),
+    check('estimatedCompletion')
+        .optional()
+        .isISO8601()
+        .withMessage('Invalid date format'),
+    check('priority')
+        .optional()
+        .isIn(['Low', 'Medium', 'High'])
+        .withMessage('Invalid priority level'),
+    check('category')
+        .optional()
+        .isIn(['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other'])
+        .withMessage('Invalid category'),
+    check('description')
+        .optional()
+        .trim()
+        .isLength({ min: 10, max: 1000 })
+        .withMessage('Description must be between 10 and 1000 characters'),
+    check('comment')
+        .optional()
+        .trim()
+        .notEmpty()
+        .withMessage('Comment cannot be empty'),
+    check('estimatedCost')
+        .optional()
+        .isFloat({ min: 0 })
+        .withMessage('Estimated cost must be a positive number'),
+    check('actualCost')
+        .optional()
+        .isFloat({ min: 0 })
+        .withMessage('Actual cost must be a positive number'),
+    check('scheduledDate')
+        .optional()
+        .isISO8601()
+        .withMessage('Invalid scheduled date format')
 ];
 
 const applicationStatusValidation = [

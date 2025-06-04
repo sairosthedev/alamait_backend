@@ -22,6 +22,9 @@ if (process.env.NODE_ENV === 'production') {
 const authRoutes = require('./routes/auth');
 const publicApplicationRoutes = require('./routes/public/applicationRoutes');
 const publicResidenceRoutes = require('./routes/public/residenceRoutes');
+const maintenanceRoutes = require('./routes/maintenanceRoutes');
+const maintenanceStaffRoutes = require('./routes/maintenanceStaffRoutes');
+const maintenanceCategoryRoutes = require('./routes/maintenanceCategoryRoutes');
 
 // Admin routes
 const adminUserRoutes = require('./routes/admin/userRoutes');
@@ -44,7 +47,6 @@ const studentRoutes = require('./routes/student/studentRoutes');
 const studentDashboardRoutes = require('./routes/student/dashboardRoutes');
 const bookingDetailsRoutes = require('./routes/student/bookingDetailsRoutes');
 const paymentHistoryRoutes = require('./routes/student/paymentHistoryRoutes');
-const maintenanceRoutes = require('./routes/student/maintenanceRoutes');
 
 // Property Manager routes
 const propertyManagerResidenceRoutes = require('./routes/property_manager/residenceRoutes');
@@ -95,6 +97,12 @@ app.use((req, res, next) => {
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        return res.status(204).end();
+    }
+    
     next();
 });
 
@@ -136,6 +144,9 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOp
 // Public routes
 app.use('/api/applications', publicApplicationRoutes);
 app.use('/api/residences', publicResidenceRoutes);
+app.use('/api/maintenance/staff', maintenanceStaffRoutes);
+app.use('/api/maintenance/categories', maintenanceCategoryRoutes);
+app.use('/api/maintenance', maintenanceRoutes);
 
 // Health check route for booking details
 app.get('/api/student/bookingdetails/health', (req, res) => {

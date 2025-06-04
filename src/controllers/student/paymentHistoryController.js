@@ -128,36 +128,24 @@ exports.getPaymentHistory = async (req, res) => {
         };
 
         // First check for approved application
-        if (approvedApplication && approvedApplication.allocatedRoom) {
-            // If we have an approved application with residence, use that
-            if (approvedApplication.residence?.name) {
+        if (approvedApplication) {
+            // If we have an approved application with allocated room and residence
+            if (approvedApplication.allocatedRoom && approvedApplication.residence) {
                 roomInfo = {
                     number: approvedApplication.allocatedRoom,
                     type: approvedApplication.roomType || '',
                     location: approvedApplication.residence.name
                 };
-                console.log('Using room info from approved application with residence:', roomInfo);
+                console.log('Using room info from approved application:', roomInfo);
             }
-            // If no residence in application, try to find it from the room number
-            else {
-                try {
-                    const residence = await Residence.findOne({
-                        'rooms.roomNumber': approvedApplication.allocatedRoom
-                    });
-                    roomInfo = {
-                        number: approvedApplication.allocatedRoom,
-                        type: approvedApplication.roomType || '',
-                        location: residence ? residence.name : 'Not Assigned'
-                    };
-                    console.log('Using room info from residence lookup:', roomInfo);
-                } catch (err) {
-                    console.error('Error finding residence by room:', err);
-                    roomInfo = {
-                        number: approvedApplication.allocatedRoom,
-                        type: approvedApplication.roomType || '',
-                        location: 'Not Assigned'
-                    };
-                }
+            // If we have residence but no allocated room yet
+            else if (approvedApplication.residence) {
+                roomInfo = {
+                    number: 'Not Assigned',
+                    type: approvedApplication.roomType || '',
+                    location: approvedApplication.residence.name
+                };
+                console.log('Using residence from approved application (no room allocated yet):', roomInfo);
             }
         }
         // Then check for active booking if no approved application

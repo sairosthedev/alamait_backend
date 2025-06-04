@@ -1,6 +1,7 @@
 const { validationResult } = require('express-validator');
 const Maintenance = require('../../models/Maintenance');
 const User = require('../../models/User');
+const mongoose = require('mongoose');
 
 // Get maintenance dashboard stats
 exports.getMaintenanceStats = async (req, res) => {
@@ -60,6 +61,9 @@ exports.getAllMaintenanceRequests = async (req, res) => {
 
         const skip = (page - 1) * limit;
 
+        console.log('Fetching maintenance requests with query:', query);
+
+        // First, get all maintenance requests
         const [requests, total] = await Promise.all([
             Maintenance.find(query)
                 .sort({ requestDate: -1 })
@@ -67,30 +71,81 @@ exports.getAllMaintenanceRequests = async (req, res) => {
                 .limit(parseInt(limit))
                 .populate('student', 'firstName lastName')
                 .populate('residence', 'name')
-                .populate('assignedTo', 'firstName lastName')
-                .populate('updates.author', 'firstName lastName'),
+                .populate('updates.author', 'firstName lastName')
+                .lean(),
             Maintenance.countDocuments(query)
         ]);
 
+        console.log('Found requests:', requests.length);
+
+        // Get all unique staff IDs from the requests
+        const staffIds = [...new Set(requests
+            .filter(req => req.assignedTo)
+            .map(req => req.assignedTo)
+        )];
+
+        console.log('Staff IDs to fetch:', staffIds);
+
+        // Fetch all staff members in one query
+        const staffMembers = await User.find({
+            _id: { $in: staffIds },
+            role: 'maintenance_staff'
+        }).select('firstName lastName role').lean();
+
+        console.log('Fetched staff members:', staffMembers);
+
+        // Create a map of staff members by ID for quick lookup
+        const staffMap = staffMembers.reduce((map, staff) => {
+            map[staff._id.toString()] = {
+                _id: staff._id,
+                name: staff.firstName,
+                surname: staff.lastName,
+                role: staff.role
+            };
+            return map;
+        }, {});
+
+        console.log('Staff map created:', staffMap);
+
         // Transform requests to match frontend format
-        const transformedRequests = requests.map(request => ({
-            id: request._id,
-            title: request.title,
-            description: request.description,
-            location: request.location,
-            category: request.category,
-            status: request.status,
-            priority: request.priority,
-            requestedBy: `${request.student.firstName} ${request.student.lastName}`,
-            requestDate: request.requestDate.toISOString(),
-            expectedCompletion: request.estimatedCompletion,
-            assignedTo: request.assignedTo?._id,
-            updates: request.updates.map(update => ({
-                date: update.date.toISOString(),
-                message: update.message,
-                author: update.author ? `${update.author.firstName} ${update.author.lastName}` : 'System'
-            }))
-        }));
+        const transformedRequests = requests.map(request => {
+            // Get staff details from the map using the assignedTo ID
+            const assignedTo = request.assignedTo ? staffMap[request.assignedTo.toString()] : null;
+
+            console.log('Processing request:', {
+                requestId: request._id,
+                assignedToId: request.assignedTo,
+                assignedToDetails: assignedTo
+            });
+
+            return {
+                _id: request._id,
+                id: request.id,
+                room: request.room,
+                issue: request.issue,
+                description: request.description,
+                requestedBy: request.requestedBy,
+                status: request.status,
+                dateAssigned: request.dateAssigned,
+                expectedCompletion: request.expectedCompletion,
+                amount: request.amount,
+                laborCost: request.laborCost,
+                priority: request.priority,
+                studentResponse: request.studentResponse,
+                financeStatus: request.financeStatus,
+                financeNotes: request.financeNotes,
+                adminNotes: request.adminNotes,
+                requestHistory: request.requestHistory,
+                assignedTo: assignedTo,
+                updatedAt: request.updatedAt
+            };
+        });
+
+        // Log the final transformed data
+        console.log('Sample transformed request:', {
+            _id: transformedRequests[0]?._id,
+            assignedTo: transformedRequests[0]?.assignedTo
+        });
 
         res.json({
             requests: transformedRequests,
@@ -100,6 +155,7 @@ exports.getAllMaintenanceRequests = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in getAllMaintenanceRequests:', error);
+        console.error('Error stack:', error.stack);
         res.status(500).json({ error: 'Server error' });
     }
 };
@@ -113,43 +169,205 @@ exports.createMaintenanceRequest = async (req, res) => {
 
     try {
         const {
-            title,
+            id,
+            room,
+            issue,
             description,
-            location,
-            category,
+            requestedBy,
+            status,
+            dateAssigned,
+            expectedCompletion,
+            amount,
+            laborCost,
             priority,
-            residenceId,
-            roomNumber,
-            images
+            studentResponse,
+            financeStatus,
+            financeNotes,
+            adminNotes,
+            requestHistory,
+            assignedTo
         } = req.body;
 
-        const request = new Maintenance({
-            title,
+        console.log('Received request data:', {
+            room,
+            issue,
             description,
-            location,
-            category,
-            priority,
-            residence: residenceId,
-            roomNumber,
-            student: req.user._id,
-            images: images?.map(url => ({ url })) || [],
+            requestedBy,
+            dateAssigned,
+            expectedCompletion,
+            amount,
+            laborCost,
+            assignedTo
+        });
+
+        // Validate required fields
+        if (!issue || !description || !room) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields',
+                message: 'Issue, description, and room are required'
+            });
+        }
+
+        // Find the student by name
+        const student = await mongoose.model('User').findOne({
+            firstName: requestedBy.split(' ')[0],
+            lastName: requestedBy.split(' ')[1],
+            role: 'student',
+            'residence.roomNumber': room
+        });
+
+        if (!student) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid student',
+                message: 'The selected student is not assigned to the specified room'
+            });
+        }
+
+        // If assignedTo is provided, validate the staff member
+        let staffMember = null;
+        if (assignedTo) {
+            staffMember = await User.findById(assignedTo);
+            if (!staffMember || staffMember.role !== 'maintenance_staff') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid staff member',
+                    message: 'The assigned staff member is not valid'
+                });
+            }
+        }
+
+        // Create maintenance request data
+        const maintenanceData = {
+            issue,
+            description,
+            room,
+            student: student._id,
+            status: status?.toLowerCase() || 'pending',
+            priority: priority?.toLowerCase() || 'low',
+            category: 'other',
+            // Map financial fields
+            estimatedCost: amount ? parseFloat(amount) : 0,
+            actualCost: laborCost ? parseFloat(laborCost) : 0,
+            // Map date fields
+            requestDate: dateAssigned ? new Date(dateAssigned) : new Date(),
+            scheduledDate: dateAssigned ? new Date(dateAssigned) : undefined,
+            estimatedCompletion: expectedCompletion ? new Date(expectedCompletion) : undefined,
+            financeStatus: financeStatus?.toLowerCase() || 'pending',
+            financeNotes,
+            // Handle assignedTo with staff details
+            assignedTo: staffMember ? {
+                _id: staffMember._id,
+                name: staffMember.firstName,
+                surname: staffMember.lastName,
+                role: staffMember.role
+            } : undefined,
             updates: [{
-                message: 'Maintenance request created',
-                author: req.user._id
+                message: adminNotes || 'Maintenance request created',
+                author: req.user._id,
+                date: new Date()
+            }],
+            requestHistory: requestHistory?.map(history => ({
+                date: new Date(history.date),
+                action: history.action,
+                user: req.user._id,
+                changes: [history.action.toLowerCase().replace(/\s+/g, '-')]
+            })) || [{
+                date: new Date(),
+                action: 'Request created',
+                user: req.user._id,
+                changes: ['created']
             }]
+        };
+
+        console.log('Creating maintenance request with data:', {
+            ...maintenanceData,
+            estimatedCost: maintenanceData.estimatedCost,
+            actualCost: maintenanceData.actualCost,
+            requestDate: maintenanceData.requestDate,
+            scheduledDate: maintenanceData.scheduledDate,
+            estimatedCompletion: maintenanceData.estimatedCompletion,
+            assignedTo: maintenanceData.assignedTo
+        });
+
+        // Create the maintenance request
+        const request = new Maintenance(maintenanceData);
+
+        // Log the request object before saving
+        console.log('Maintenance request object before save:', {
+            room: request.room,
+            issue: request.issue,
+            description: request.description,
+            estimatedCost: request.estimatedCost,
+            actualCost: request.actualCost,
+            requestDate: request.requestDate,
+            scheduledDate: request.scheduledDate,
+            estimatedCompletion: request.estimatedCompletion,
+            assignedTo: request.assignedTo
         });
 
         await request.save();
 
+        // Populate the created request with student details and add additional fields
         const populatedRequest = await Maintenance.findById(request._id)
             .populate('student', 'firstName lastName')
-            .populate('residence', 'name')
             .populate('updates.author', 'firstName lastName');
 
-        res.status(201).json(populatedRequest);
+        // Format dates to ISO string
+        const formatDate = (date) => {
+            return date ? new Date(date).toISOString().split('T')[0] : null;
+        };
+
+        // Transform the response to include additional fields
+        const transformedRequest = {
+            ...populatedRequest.toObject(),
+            id: populatedRequest._id,
+            room: populatedRequest.room,
+            requestedBy: `${populatedRequest.student.firstName} ${populatedRequest.student.lastName}`,
+            studentId: populatedRequest.student._id,
+            studentName: `${populatedRequest.student.firstName} ${populatedRequest.student.lastName}`,
+            roomNumber: populatedRequest.room,
+            issue: populatedRequest.issue,
+            status: populatedRequest.status,
+            priority: populatedRequest.priority,
+            description: populatedRequest.description,
+            dateRequested: formatDate(populatedRequest.requestDate),
+            dateAssigned: formatDate(populatedRequest.scheduledDate),
+            expectedCompletion: formatDate(populatedRequest.estimatedCompletion),
+            amount: populatedRequest.estimatedCost,
+            laborCost: populatedRequest.actualCost,
+            financeStatus: populatedRequest.financeStatus,
+            financeNotes: populatedRequest.financeNotes,
+            adminNotes: populatedRequest.updates[0]?.message,
+            requestHistory: populatedRequest.requestHistory.map(history => ({
+                date: formatDate(history.date),
+                action: history.action,
+                user: history.user
+            })),
+            assignedTo: populatedRequest.assignedTo ? {
+                _id: populatedRequest.assignedTo._id,
+                name: populatedRequest.assignedTo.name,
+                surname: populatedRequest.assignedTo.surname
+            } : null
+        };
+
+        res.status(201).json({
+            success: true,
+            message: 'Maintenance request created successfully',
+            request: transformedRequest
+        });
     } catch (error) {
         console.error('Error in createMaintenanceRequest:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Error details:', {
+            message: error.message,
+            stack: error.stack
+        });
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error',
+            message: error.message 
+        });
     }
 };
 
@@ -157,54 +375,236 @@ exports.createMaintenanceRequest = async (req, res) => {
 exports.updateMaintenanceRequest = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+        console.log('Validation errors:', errors.array());
         return res.status(400).json({ errors: errors.array() });
     }
 
     try {
+        const requestId = req.params.requestId;
+        console.log('Received request ID:', requestId);
+
+        if (!mongoose.Types.ObjectId.isValid(requestId)) {
+            console.log('Invalid request ID format:', requestId);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid request ID format',
+                message: 'The provided request ID is not a valid MongoDB ObjectId'
+            });
+        }
+
+        const objectId = new mongoose.Types.ObjectId(requestId);
+        console.log('Converted to ObjectId:', objectId);
+
         const {
             status,
             assignedTo,
             estimatedCompletion,
-            comment
+            priority,
+            category,
+            description,
+            comment,
+            estimatedCost,
+            actualCost,
+            scheduledDate,
+            financeStatus
         } = req.body;
 
-        const request = await Maintenance.findById(req.params.requestId);
+        console.log('Raw request body:', req.body);
+        console.log('Parsed update data:', {
+            status,
+            assignedTo,
+            estimatedCompletion,
+            priority,
+            category,
+            description,
+            comment,
+            estimatedCost,
+            actualCost,
+            scheduledDate,
+            financeStatus
+        });
 
+        // Find the request and ensure it exists
+        const request = await Maintenance.findById(objectId);
         if (!request) {
-            return res.status(404).json({ error: 'Maintenance request not found' });
-        }
-
-        // Update fields if provided
-        if (status) {
-            request.status = status;
-            if (status === 'completed') {
-                request.completedDate = new Date();
-            }
-        }
-        if (assignedTo) request.assignedTo = assignedTo;
-        if (estimatedCompletion) request.estimatedCompletion = estimatedCompletion;
-        
-        // Add update if comment provided
-        if (comment) {
-            request.updates.push({
-                message: comment,
-                author: req.user._id,
-                date: new Date()
+            console.log('Maintenance request not found');
+            return res.status(404).json({
+                success: false,
+                error: 'Maintenance request not found',
+                message: 'No maintenance request found with the provided ID'
             });
         }
 
-        await request.save();
+        console.log('Found existing request:', {
+            _id: request._id,
+            status: request.status,
+            assignedTo: request.assignedTo
+        });
 
-        const updatedRequest = await Maintenance.findById(request._id)
-            .populate('student', 'firstName lastName')
-            .populate('residence', 'name')
-            .populate('assignedTo', 'firstName lastName')
-            .populate('updates.author', 'firstName lastName');
+        // Create updates object
+        const updates = {};
+        const changes = [];
 
-        res.json(updatedRequest);
+        if (status) {
+            updates.status = status;
+            changes.push('status');
+            if (status === 'completed') {
+                updates.completedDate = new Date();
+                changes.push('completedDate');
+            }
+        }
+
+        // Handle assignedTo update
+        if (assignedTo) {
+            console.log('Processing assignedTo:', assignedTo);
+            
+            // Validate assignedTo ID
+            if (!mongoose.Types.ObjectId.isValid(assignedTo)) {
+                console.log('Invalid assignedTo ID format:', assignedTo);
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid assignedTo ID',
+                    message: 'The provided assignedTo ID is not a valid MongoDB ObjectId'
+                });
+            }
+
+            // Verify staff member exists and has correct role
+            const staff = await User.findById(assignedTo);
+            if (!staff || staff.role !== 'maintenance_staff') {
+                console.log('Invalid staff member:', staff);
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid staff member',
+                    message: 'The provided staff ID does not belong to a maintenance staff member'
+                });
+            }
+
+            console.log('Valid staff member found:', {
+                _id: staff._id,
+                name: `${staff.firstName} ${staff.lastName}`,
+                role: staff.role
+            });
+            
+            // Update assignedTo field with both ID and staff details
+            updates.assignedTo = {
+                _id: staff._id,
+                name: staff.firstName,
+                surname: staff.lastName,
+                role: staff.role
+            };
+            changes.push('assignedTo');
+
+            // Update status to assigned if not already set
+            if (!status || status === 'pending') {
+                updates.status = 'assigned';
+                changes.push('status');
+            }
+        }
+
+        if (estimatedCompletion) {
+            updates.estimatedCompletion = new Date(estimatedCompletion);
+            changes.push('estimatedCompletion');
+        }
+        if (priority) {
+            updates.priority = priority;
+            changes.push('priority');
+        }
+        if (category) {
+            updates.category = category;
+            changes.push('category');
+        }
+        if (description) {
+            updates.description = description;
+            changes.push('description');
+        }
+        if (estimatedCost) {
+            updates.estimatedCost = parseFloat(estimatedCost);
+            changes.push('estimatedCost');
+        }
+        if (actualCost) {
+            updates.actualCost = parseFloat(actualCost);
+            changes.push('actualCost');
+        }
+        if (scheduledDate) {
+            updates.scheduledDate = new Date(scheduledDate);
+            changes.push('scheduledDate');
+        }
+        if (financeStatus) {
+            updates.financeStatus = financeStatus.toLowerCase();
+            changes.push('financeStatus');
+        }
+
+        console.log('Final updates object:', updates);
+        console.log('Changes to be tracked:', changes);
+
+        // Apply updates using findByIdAndUpdate for atomic operation
+        const updateOperation = {
+            $set: updates,
+            $push: {
+                updates: comment ? {
+                    message: comment,
+                    author: req.user._id,
+                    date: new Date()
+                } : undefined,
+                requestHistory: {
+                    date: new Date(),
+                    action: 'Request updated',
+                    user: req.user._id,
+                    changes: changes
+                }
+            }
+        };
+
+        console.log('MongoDB update operation:', JSON.stringify(updateOperation, null, 2));
+
+        const updatedRequest = await Maintenance.findByIdAndUpdate(
+            objectId,
+            updateOperation,
+            {
+                new: true,
+                runValidators: true
+            }
+        )
+        .populate('student', 'firstName lastName')
+        .populate('residence', 'name')
+        .populate('updates.author', 'firstName lastName');
+
+        if (!updatedRequest) {
+            console.log('Failed to update maintenance request');
+            return res.status(500).json({
+                success: false,
+                error: 'Update failed',
+                message: 'Failed to update maintenance request'
+            });
+        }
+
+        console.log('Maintenance request updated successfully:', {
+            _id: updatedRequest._id,
+            status: updatedRequest.status,
+            assignedTo: updatedRequest.assignedTo
+        });
+
+        // Verify the update in MongoDB
+        const verifyRequest = await Maintenance.findById(objectId);
+        console.log('Verification - Updated fields:', changes.map(field => ({
+            field,
+            oldValue: request[field],
+            newValue: verifyRequest[field]
+        })));
+
+        res.json({
+            success: true,
+            message: 'Maintenance request updated successfully',
+            request: updatedRequest
+        });
     } catch (error) {
         console.error('Error in updateMaintenanceRequest:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error',
+            message: error.message 
+        });
     }
 };
 
@@ -231,34 +631,113 @@ exports.getMaintenanceRequest = async (req, res) => {
 exports.assignMaintenanceRequest = async (req, res) => {
     try {
         const { staffId } = req.body;
+        const requestId = req.params.requestId;
 
-        if (!staffId) {
-            return res.status(400).json({ error: 'Staff ID is required' });
+        console.log('Assigning maintenance request:', requestId, 'to staff:', staffId);
+
+        // Validate request ID
+        if (!mongoose.Types.ObjectId.isValid(requestId)) {
+            console.log('Invalid request ID format:', requestId);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid request ID',
+                message: 'The provided request ID is not a valid MongoDB ObjectId'
+            });
         }
 
-        const request = await Maintenance.findById(req.params.requestId);
+        // Validate staff ID
+        if (!staffId || !mongoose.Types.ObjectId.isValid(staffId)) {
+            console.log('Invalid staff ID format:', staffId);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid staff ID',
+                message: 'The provided staff ID is not a valid MongoDB ObjectId'
+            });
+        }
+
+        // Find and validate the request
+        const request = await Maintenance.findById(requestId);
         if (!request) {
-            return res.status(404).json({ error: 'Maintenance request not found' });
+            console.log('Maintenance request not found:', requestId);
+            return res.status(404).json({
+                success: false,
+                error: 'Request not found',
+                message: 'No maintenance request found with the provided ID'
+            });
         }
 
+        // Find and validate the staff member
         const staff = await User.findById(staffId);
         if (!staff || staff.role !== 'maintenance_staff') {
-            return res.status(400).json({ error: 'Invalid maintenance staff ID' });
+            console.log('Invalid staff member:', staff);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid staff member',
+                message: 'The provided staff ID does not belong to a maintenance staff member'
+            });
         }
 
-        request.assignedTo = staffId;
-        request.status = 'assigned';
-        await request.save();
+        console.log('Valid staff member found:', staff._id);
 
-        const updatedRequest = await Maintenance.findById(request._id)
-            .populate('student', 'firstName lastName')
-            .populate('residence', 'name')
-            .populate('assignedTo', 'firstName lastName');
+        // Update the request with atomic operation
+        const updatedRequest = await Maintenance.findByIdAndUpdate(
+            requestId,
+            {
+                $set: {
+                    assignedTo: new mongoose.Types.ObjectId(staffId),
+                    status: 'assigned'
+                },
+                $push: {
+                    updates: {
+                        message: `Assigned to ${staff.firstName} ${staff.lastName}`,
+                        author: req.user._id,
+                        date: new Date()
+                    },
+                    requestHistory: {
+                        date: new Date(),
+                        action: 'Request assigned',
+                        user: req.user._id,
+                        changes: ['assignedTo', 'status']
+                    }
+                }
+            },
+            {
+                new: true,
+                runValidators: true
+            }
+        )
+        .populate('student', 'firstName lastName')
+        .populate('residence', 'name')
+        .populate('assignedTo', 'firstName lastName')
+        .populate('updates.author', 'firstName lastName');
 
-        res.json(updatedRequest);
+        if (!updatedRequest) {
+            console.log('Failed to update maintenance request');
+            return res.status(500).json({
+                success: false,
+                error: 'Update failed',
+                message: 'Failed to update maintenance request'
+            });
+        }
+
+        console.log('Successfully assigned request:', updatedRequest._id);
+
+        // Verify the update in MongoDB
+        const verifyRequest = await Maintenance.findById(requestId);
+        console.log('Verification - Assigned to:', verifyRequest.assignedTo);
+
+        res.json({
+            success: true,
+            message: 'Maintenance request assigned successfully',
+            request: updatedRequest
+        });
     } catch (error) {
         console.error('Error in assignMaintenanceRequest:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({
+            success: false,
+            error: 'Server error',
+            message: error.message
+        });
     }
 };
 
@@ -338,5 +817,66 @@ exports.removeMaintenanceStaff = async (req, res) => {
     } catch (error) {
         console.error('Error in removeMaintenanceStaff:', error);
         res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Get students for maintenance request
+exports.getStudentsForMaintenance = async (req, res) => {
+    try {
+        const { residenceId, roomNumber } = req.query;
+
+        if (!residenceId || !roomNumber) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing parameters',
+                message: 'Both residenceId and roomNumber are required'
+            });
+        }
+
+        const students = await mongoose.model('User').find({
+            role: 'student',
+            'residence.residenceId': residenceId,
+            'residence.roomNumber': roomNumber
+        }).select('firstName lastName email');
+
+        res.json({
+            success: true,
+            students
+        });
+    } catch (error) {
+        console.error('Error in getStudentsForMaintenance:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Server error',
+            message: error.message
+        });
+    }
+};
+
+// Get residences for maintenance request
+exports.getResidencesForMaintenance = async (req, res) => {
+    try {
+        const residences = await mongoose.model('Residence').find()
+            .select('name rooms')
+            .lean();
+
+        // Transform the data to include room numbers
+        const transformedResidences = residences.map(residence => ({
+            _id: residence._id,
+            name: residence.name,
+            rooms: residence.rooms.map(room => room.roomNumber)
+        }));
+
+        res.json({
+            success: true,
+            residences: transformedResidences
+        });
+    } catch (error) {
+        console.error('Error in getResidencesForMaintenance:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Server error',
+            message: error.message
+        });
     }
 }; 
