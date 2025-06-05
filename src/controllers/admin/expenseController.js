@@ -1,6 +1,7 @@
 const Expense = require('../../models/finance/Expense');
 const mongoose = require('mongoose');
 const { generateUniqueId } = require('../../utils/idGenerator');
+const Residence = require('../../models/Residence');
 
 // Get expenses with filters
 const getExpenses = async (req, res) => {
@@ -90,15 +91,27 @@ const addExpense = async (req, res) => {
             });
         }
 
+        // Find residence by name
+        const residence = await Residence.findOne({ name: req.body.residence });
+        if (!residence) {
+            return res.status(400).json({
+                message: 'Invalid residence name',
+                field: 'residence'
+            });
+        }
+
+        // Capitalize first letter of category
+        const category = req.body.category.charAt(0).toUpperCase() + req.body.category.slice(1);
+
         // Generate unique expense ID
         const expenseId = await generateUniqueId('EXP');
 
         // Create new expense
         const expense = new Expense({
             expenseId,
-            residence: req.body.residence,
-            category: req.body.category,
-            amount: req.body.amount,
+            residence: residence._id,
+            category,
+            amount: parseFloat(req.body.amount),
             description: req.body.description,
             expenseDate: req.body.date,
             paymentStatus: req.body.paymentStatus || 'Pending',
