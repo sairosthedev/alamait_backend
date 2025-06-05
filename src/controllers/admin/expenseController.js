@@ -14,7 +14,7 @@ const getExpenses = async (req, res) => {
         const query = {};
 
         if (date) {
-            query.date = date; // Exact date match
+            query.expenseDate = date; // Use expenseDate instead of date
         }
 
         if (category) {
@@ -29,19 +29,27 @@ const getExpenses = async (req, res) => {
             query.amount = amount; // Exact amount match
         }
 
-        if (residence) {
-            query.residence = residence; // Match residence status
+        // Only add residence to query if it's not "all"
+        if (residence && residence !== 'all') {
+            try {
+                query.residence = new mongoose.Types.ObjectId(residence);
+            } catch (error) {
+                return res.status(400).json({
+                    message: 'Invalid residence ID format',
+                    field: 'residence'
+                });
+            }
         }
 
         // Handle weekly or monthly filtering
         if (period === 'weekly') {
             const oneWeekAgo = new Date();
             oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-            query.date = { $gte: oneWeekAgo }; // Expenses from the last 7 days
+            query.expenseDate = { $gte: oneWeekAgo }; // Expenses from the last 7 days
         } else if (period === 'monthly') {
             const oneMonthAgo = new Date();
             oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-            query.date = { $gte: oneMonthAgo }; // Expenses from the last 30 days
+            query.expenseDate = { $gte: oneMonthAgo }; // Expenses from the last 30 days
         }
 
         // Add pagination
