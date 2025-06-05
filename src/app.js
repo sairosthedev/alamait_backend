@@ -181,7 +181,7 @@ app.use('/api/admin/payments', adminPaymentRoutes);
 app.use('/api/admin/profile', adminProfileRoutes);
 app.use('/api/admin/messages', adminMessageRoutes);
 app.use('/api/admin/events', adminEventRoutes);
-app.use('/admin', adminExpenseRoutes);
+app.use('/api/admin/expenses', adminExpenseRoutes);
 
 // Student routes
 app.use('/api/student', studentRoutes);
