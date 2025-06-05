@@ -91,11 +91,11 @@ const addExpense = async (req, res) => {
             });
         }
 
-        // Find residence by name
-        const residence = await Residence.findOne({ name: req.body.residence });
+        // Find residence by ID
+        const residence = await Residence.findById(req.body.residence);
         if (!residence) {
             return res.status(400).json({
-                message: 'Invalid residence name',
+                message: 'Invalid residence ID',
                 field: 'residence'
             });
         }
@@ -137,6 +137,7 @@ const addExpense = async (req, res) => {
         res.status(400).json({ message: error.message });
     }
 };
+
 //
 // Send expenses to finance
 const sendToFinance = async (req, res) => {
