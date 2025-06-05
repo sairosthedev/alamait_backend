@@ -118,9 +118,9 @@ router.get('/maintenance', getAllMaintenanceRequests);
 router.get('/maintenance/:requestId', getMaintenanceRequest);
 router.put('/maintenance/:requestId', maintenanceUpdateValidation, updateMaintenanceRequest);
 router.post('/maintenance/:requestId/assign', assignMaintenanceRequest);
-router.get('/maintenance/staff', getMaintenanceStaff);
-router.post('/maintenance/staff', addMaintenanceStaff);
-router.delete('/maintenance/staff/:staffId', removeMaintenanceStaff);
+router.get('/maintenance/maintenance_staff', getMaintenanceStaff);
+router.post('/maintenance/maintenance_staff', addMaintenanceStaff);
+router.delete('/maintenance/maintenance_staff/:staffId', removeMaintenanceStaff);
 
 // Application routes
 router.get('/applications', getApplications);

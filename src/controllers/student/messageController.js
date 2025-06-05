@@ -888,4 +888,25 @@ exports.markConversationAsRead = async (req, res) => {
         console.error('Error marking conversation as read:', error);
         res.status(500).json({ error: 'Error marking conversation as read' });
     }
+};
+
+// Get unread messages count
+exports.getUnreadMessages = async (req, res) => {
+    try {
+        const unreadCount = await Message.countDocuments({
+            recipients: req.user._id,
+            readBy: { 
+                $not: { 
+                    $elemMatch: { 
+                        user: req.user._id 
+                    } 
+                } 
+            }
+        });
+
+        res.json({ unreadCount });
+    } catch (error) {
+        console.error('Error in getUnreadMessages:', error);
+        res.status(500).json({ error: 'Error getting unread messages count' });
+    }
 }; 

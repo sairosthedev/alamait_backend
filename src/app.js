@@ -37,6 +37,7 @@ const adminPaymentRoutes = require('./routes/admin/paymentRoutes');
 const adminProfileRoutes = require('./routes/admin/adminProfileRoutes');
 const adminMessageRoutes = require('./routes/admin/messageRoutes');
 const adminEventRoutes = require('./routes/admin/eventRoutes');
+const adminExpenseRoutes = require('./routes/admin/expenseRoutes');
 
 // Student routes
 const studentBookingRoutes = require('./routes/student/bookingRoutes');
@@ -66,53 +67,43 @@ const app = express();
 initCronJobs();
 
 // CORS configuration
-const corsOptions = {
-    origin: function(origin, callback) {
-        const allowedOrigins = process.env.NODE_ENV === 'production'
-            ? ['https://alamait.vercel.app', 'https://alamait-admin.vercel.app']
-            : ['http://localhost:5173', 'http://localhost:3000'];
-        
-        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-    exposedHeaders: ['Content-Range', 'X-Content-Range'],
-    maxAge: 86400, // 24 hours
-    preflightContinue: false,
-    optionsSuccessStatus: 204
-};
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://alamait-frontend.vercel.app',
+  'https://alamait.vercel.app'
+];
 
-// Middleware
-app.use(cors(corsOptions));
+// Enable CORS for all routes
+app.use(cors({
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'X-CSRF-Token'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400 // 24 hours
+}));
 
-// Add additional headers middleware
+// Handle preflight requests
+app.options('*', cors());
+
+// Log all incoming requests
 app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    const allowedOrigins = process.env.NODE_ENV === 'production'
-        ? ['https://alamait.vercel.app', 'https://alamait-admin.vercel.app']
-        : ['http://localhost:5173', 'http://localhost:3000'];
-    
-    if (allowedOrigins.includes(origin)) {
-        res.header('Access-Control-Allow-Origin', origin);
-    }
-    
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
-    
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        return res.status(204).end();
-    }
-    
-    next();
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  console.log('Headers:', req.headers);
+  next();
 });
 
+// Parse JSON bodies
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -153,20 +144,22 @@ app.use('/api/applications', publicApplicationRoutes);
 app.use('/api/residences', publicResidenceRoutes);
 
 // Maintenance routes with debugging
-app.use('/api/maintenance', (req, res, next) => {
-    console.log('Maintenance route hit:', req.method, req.path);
+// Define specific routes first
+app.use('/api/maintenance/staff', (req, res, next) => {
+    console.log('Maintenance staff route hit:', req.method, req.path);
     next();
-}, maintenanceRoutes);
+}, maintenanceStaffRoutes);
 
 app.use('/api/maintenance/categories', (req, res, next) => {
     console.log('Maintenance categories route hit:', req.method, req.path);
     next();
 }, maintenanceCategoryRoutes);
 
-app.use('/api/maintenance/staff', (req, res, next) => {
-    console.log('Maintenance staff route hit:', req.method, req.path);
+// Then define the generic maintenance routes
+app.use('/api/maintenance', (req, res, next) => {
+    console.log('Maintenance route hit:', req.method, req.path);
     next();
-}, maintenanceStaffRoutes);
+}, maintenanceRoutes);
 
 // Health check route for booking details
 app.get('/api/student/bookingdetails/health', (req, res) => {
@@ -188,17 +181,17 @@ app.use('/api/admin/payments', adminPaymentRoutes);
 app.use('/api/admin/profile', adminProfileRoutes);
 app.use('/api/admin/messages', adminMessageRoutes);
 app.use('/api/admin/events', adminEventRoutes);
+app.use('/admin', adminExpenseRoutes);
 
 // Student routes
 app.use('/api/student', studentRoutes);
-app.use('/api/student/bookings', studentBookingRoutes);
+app.use('/api/student/dashboard', studentDashboardRoutes);
+app.use('/api/student/messages', studentMessageRoutes);
 app.use('/api/student/maintenance', studentMaintenanceRoutes);
 app.use('/api/student/events', studentEventRoutes);
-app.use('/api/student/messages', studentMessageRoutes);
-app.use('/api/student/dashboard', studentDashboardRoutes);
-app.use('/api/student/bookingdetails', bookingDetailsRoutes);
 app.use('/api/student/payments', paymentHistoryRoutes);
-
+app.use('/api/student/bookings', studentBookingRoutes);
+app.use('/api/student/bookingdetails', bookingDetailsRoutes);
 
 // Property Manager routes
 app.use('/api/property-manager/residences', propertyManagerResidenceRoutes);

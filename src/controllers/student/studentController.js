@@ -76,13 +76,18 @@ const getProfile = async (req, res) => {
     try {
         console.log('Fetching profile for user:', req.user._id);
         
+        if (!req.user || !req.user._id) {
+            console.error('No user found in request');
+            return res.status(401).json({ error: 'User not authenticated' });
+        }
+
         const student = await User.findById(req.user._id)
             .select('-password')
-            .populate('residence', 'name')  // Populate the residence reference
+            .populate('residence', 'name')
             .lean();
 
         if (!student) {
-            console.log('Student not found');
+            console.log('Student not found in database');
             return res.status(404).json({ error: 'Student not found' });
         }
 
@@ -110,7 +115,7 @@ const getProfile = async (req, res) => {
             email: student.email,
             status: 'approved'
         })
-        .populate('residence', 'name')  // Make sure to populate the residence reference
+        .populate('residence', 'name')
         .sort({ updatedAt: -1 })
         .lean();
 
@@ -183,7 +188,7 @@ const getProfile = async (req, res) => {
                 approvalDate: approvedApplication.actionDate || new Date(),
                 roomNumber: approvedApplication.allocatedRoom || approvedApplication.preferredRoom,
                 roomType: 'Standard',
-                residence: residenceName || 'Not Assigned'  // Use determined residence name or fallback
+                residence: residenceName || 'Not Assigned'
             } : null
         };
 
@@ -191,7 +196,10 @@ const getProfile = async (req, res) => {
         res.json(formattedProfile);
     } catch (error) {
         console.error('Error in getProfile:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ 
+            error: 'Server error',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Failed to fetch student profile'
+        });
     }
 };
 

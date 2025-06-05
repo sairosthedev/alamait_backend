@@ -8,14 +8,24 @@ const Application = require('../../models/Application');
 // Get student dashboard data
 exports.getDashboardData = async (req, res) => {
     try {
+        console.log('Getting dashboard data for user:', {
+            userId: req.user._id,
+            role: req.user.role,
+            email: req.user.email
+        });
+
         // Get student profile and application
         const student = await User.findById(req.user._id);
+        if (!student) {
+            return res.status(404).json({ error: 'Student not found' });
+        }
+
         const application = await Application.findOne({ 
             email: student.email,
             status: { $in: ['approved', 'pending'] }
         }).sort({ createdAt: -1 });
 
-        ('Student data from DB:', {
+        console.log('Student data from DB:', {
             id: student._id,
             email: student.email,
             application: application
@@ -70,15 +80,22 @@ exports.getDashboardData = async (req, res) => {
 
         // Get unread messages count
         const unreadMessagesCount = await Message.countDocuments({
-            recipient: req.user._id,
-            read: false
+            recipients: req.user._id,
+            readBy: { 
+                $not: { 
+                    $elemMatch: { 
+                        user: req.user._id 
+                    } 
+                } 
+            }
         });
 
         // Get latest message
         const latestMessage = await Message.findOne({
-            recipient: req.user._id
+            recipients: req.user._id
         })
         .sort({ createdAt: -1 })
+        .populate('author', 'firstName lastName role')
         .lean();
 
         // Format dashboard data
@@ -104,15 +121,34 @@ exports.getDashboardData = async (req, res) => {
                 },
                 messages: {
                     unreadCount: unreadMessagesCount,
-                    latestMessageTime: latestMessage ? latestMessage.createdAt : null
+                    latestMessage: latestMessage ? {
+                        id: latestMessage._id,
+                        title: latestMessage.title,
+                        content: latestMessage.content,
+                        author: latestMessage.author,
+                        createdAt: latestMessage.createdAt
+                    } : null
                 }
             }
         };
 
+        console.log('Sending dashboard data:', {
+            profile: dashboardData.profile,
+            cards: {
+                payment: dashboardData.cards.payment.status,
+                room: dashboardData.cards.room.status,
+                maintenance: dashboardData.cards.maintenance.activeCount,
+                messages: dashboardData.cards.messages.unreadCount
+            }
+        });
+
         res.json(dashboardData);
     } catch (error) {
         console.error('Error in getDashboardData:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ 
+            error: 'Server error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 };
 
