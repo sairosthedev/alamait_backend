@@ -1,5 +1,6 @@
 const Expense = require('../../models/finance/Expense');
 const mongoose = require('mongoose');
+const { generateUniqueId } = require('../../utils/idGenerator');
 
 // Get expenses with filters
 const getExpenses = async (req, res) => {
@@ -79,7 +80,7 @@ const addExpense = async (req, res) => {
         console.log('Adding new expense:', req.body);
 
         // Validate required fields
-        const requiredFields = ['expenseId', 'residence', 'category', 'amount', 'description', 'expenseDate'];
+        const requiredFields = ['residence', 'category', 'amount', 'description', 'date'];
         const missingFields = requiredFields.filter(field => !req.body[field]);
         
         if (missingFields.length > 0) {
@@ -89,14 +90,17 @@ const addExpense = async (req, res) => {
             });
         }
 
+        // Generate unique expense ID
+        const expenseId = await generateUniqueId('EXP');
+
         // Create new expense
         const expense = new Expense({
-            expenseId: req.body.expenseId,
+            expenseId,
             residence: req.body.residence,
             category: req.body.category,
             amount: req.body.amount,
             description: req.body.description,
-            expenseDate: req.body.expenseDate,
+            expenseDate: req.body.date,
             paymentStatus: req.body.paymentStatus || 'Pending',
             paymentMethod: req.body.paymentMethod,
             paidBy: req.body.paidBy,
