@@ -44,4 +44,10 @@ router.get('/summary/stats',
     expenseController.getExpenseSummary
 );
 
+// Approve expense (admin only)
+router.patch('/:id/approve', 
+    checkRole('admin'), 
+    expenseController.approveExpense
+);
+
 module.exports = router; 

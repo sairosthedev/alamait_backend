@@ -185,8 +185,53 @@ const sendToFinance = async (req, res) => {
     }
 };
 
+// Update expense status
+const updateExpenseStatus = async (req, res) => {
+    try {
+        const { expenseId } = req.params;
+        const { status } = req.body;
+
+        if (!status) {
+            return res.status(400).json({
+                message: 'Status is required'
+            });
+        }
+
+        // Validate status value
+        const validStatuses = ['Pending', 'Approved', 'Rejected', 'Sent to Finance'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({
+                message: 'Invalid status value',
+                validStatuses
+            });
+        }
+
+        const expense = await Expense.findById(expenseId);
+        if (!expense) {
+            return res.status(404).json({
+                message: 'Expense not found'
+            });
+        }
+
+        expense.paymentStatus = status;
+        expense.updatedBy = req.user._id;
+        await expense.save();
+
+        const updatedExpense = await Expense.findById(expenseId)
+            .populate('residence', 'name')
+            .populate('paidBy', 'firstName lastName')
+            .populate('createdBy', 'firstName lastName');
+
+        res.status(200).json(updatedExpense);
+    } catch (error) {
+        console.error('Error updating expense status:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = {
     getExpenses,
     addExpense,
-    sendToFinance
+    sendToFinance,
+    updateExpenseStatus
 };

@@ -341,4 +341,60 @@ exports.getExpenseSummary = async (req, res) => {
         console.error('Error generating expense summary:', error);
         res.status(500).json({ error: 'Failed to generate expense summary' });
     }
+};
+
+// Approve expense
+exports.approveExpense = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { notes } = req.body;
+
+        if (!validateMongoId(id)) {
+            return res.status(400).json({ error: 'Invalid expense ID format' });
+        }
+
+        // Find expense
+        const expense = await Expense.findById(id);
+        if (!expense) {
+            return res.status(404).json({ error: 'Expense not found' });
+        }
+
+        if (expense.paymentStatus === 'Paid') {
+            return res.status(400).json({ error: 'Expense is already paid' });
+        }
+
+        // Update expense status to Paid
+        const updatedExpense = await Expense.findByIdAndUpdate(
+            id,
+            { 
+                $set: { 
+                    paymentStatus: 'Paid',
+                    updatedBy: req.user._id,
+                    paidDate: new Date(),
+                    notes: notes || expense.notes
+                } 
+            },
+            { new: true, runValidators: true }
+        ).populate('residence', 'name')
+         .populate('createdBy', 'firstName lastName email')
+         .populate('updatedBy', 'firstName lastName email')
+         .populate('paidBy', 'firstName lastName email');
+
+        // Create audit log
+        await createAuditLog({
+            action: 'APPROVE',
+            resourceType: 'Expense',
+            resourceId: updatedExpense._id,
+            userId: req.user._id,
+            details: `Approved expense: ${updatedExpense.expenseId} - ${updatedExpense.category} - $${updatedExpense.amount}`
+        });
+
+        res.status(200).json({
+            message: 'Expense approved successfully',
+            expense: updatedExpense
+        });
+    } catch (error) {
+        console.error('Error approving expense:', error);
+        res.status(500).json({ error: 'Failed to approve expense' });
+    }
 }; 
