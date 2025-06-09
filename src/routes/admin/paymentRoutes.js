@@ -7,7 +7,8 @@ const {
     createPayment,
     updatePaymentStatus,
     uploadProofOfPayment,
-    verifyProofOfPayment
+    verifyProofOfPayment,
+    getPaymentTotals
 } = require('../../controllers/admin/paymentController');
 const Payment = require('../../models/Payment');
 
@@ -63,5 +64,8 @@ router.post('/', createPaymentValidation, createPayment);
 router.put('/:paymentId/status', updateStatusValidation, updatePaymentStatus);
 router.post('/:paymentId/upload-pop', uploadProofOfPayment);
 router.put('/:paymentId/verify-pop', verifyPopValidation, verifyProofOfPayment);
+
+// Route to get payment totals
+router.get('/total', getPaymentTotals);
 
 module.exports = router; 

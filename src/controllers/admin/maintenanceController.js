@@ -627,117 +627,59 @@ exports.getMaintenanceRequest = async (req, res) => {
     }
 };
 
-// Assign maintenance request
+// Assign maintenance request to staff
 exports.assignMaintenanceRequest = async (req, res) => {
     try {
-        const { staffId } = req.body;
-        const requestId = req.params.requestId;
-
-        console.log('Assigning maintenance request:', requestId, 'to staff:', staffId);
+        const { requestId } = req.params;
+        const { assignedTo, estimatedCompletion } = req.body;
 
         // Validate request ID
         if (!mongoose.Types.ObjectId.isValid(requestId)) {
-            console.log('Invalid request ID format:', requestId);
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid request ID',
-                message: 'The provided request ID is not a valid MongoDB ObjectId'
-            });
+            return res.status(400).json({ error: 'Invalid request ID' });
         }
 
         // Validate staff ID
-        if (!staffId || !mongoose.Types.ObjectId.isValid(staffId)) {
-            console.log('Invalid staff ID format:', staffId);
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid staff ID',
-                message: 'The provided staff ID is not a valid MongoDB ObjectId'
-            });
+        if (!mongoose.Types.ObjectId.isValid(assignedTo)) {
+            return res.status(400).json({ error: 'Invalid staff ID' });
         }
 
-        // Find and validate the request
-        const request = await Maintenance.findById(requestId);
-        if (!request) {
-            console.log('Maintenance request not found:', requestId);
-            return res.status(404).json({
-                success: false,
-                error: 'Request not found',
-                message: 'No maintenance request found with the provided ID'
-            });
+        // Check if staff exists and has maintenance role
+        const staff = await User.findOne({ _id: assignedTo, role: 'maintenance_staff' });
+        if (!staff) {
+            return res.status(404).json({ error: 'Maintenance staff not found' });
         }
 
-        // Find and validate the staff member
-        const staff = await User.findById(staffId);
-        if (!staff || staff.role !== 'maintenance_staff') {
-            console.log('Invalid staff member:', staff);
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid staff member',
-                message: 'The provided staff ID does not belong to a maintenance staff member'
-            });
+        // Find and update the maintenance request
+        const maintenanceRequest = await Maintenance.findById(requestId);
+        if (!maintenanceRequest) {
+            return res.status(404).json({ error: 'Maintenance request not found' });
         }
 
-        console.log('Valid staff member found:', staff._id);
-
-        // Update the request with atomic operation
-        const updatedRequest = await Maintenance.findByIdAndUpdate(
-            requestId,
-            {
-                $set: {
-                    assignedTo: new mongoose.Types.ObjectId(staffId),
-                    status: 'assigned'
-                },
-                $push: {
-                    updates: {
-                        message: `Assigned to ${staff.firstName} ${staff.lastName}`,
-                        author: req.user._id,
-                        date: new Date()
-                    },
-                    requestHistory: {
-                        date: new Date(),
-                        action: 'Request assigned',
-                        user: req.user._id,
-                        changes: ['assignedTo', 'status']
-                    }
-                }
-            },
-            {
-                new: true,
-                runValidators: true
-            }
-        )
-        .populate('student', 'firstName lastName')
-        .populate('residence', 'name')
-        .populate('assignedTo', 'firstName lastName')
-        .populate('updates.author', 'firstName lastName');
-
-        if (!updatedRequest) {
-            console.log('Failed to update maintenance request');
-            return res.status(500).json({
-                success: false,
-                error: 'Update failed',
-                message: 'Failed to update maintenance request'
-            });
+        // Update the request
+        maintenanceRequest.assignedTo = assignedTo;
+        maintenanceRequest.status = 'assigned';
+        maintenanceRequest.dateAssigned = new Date();
+        if (estimatedCompletion) {
+            maintenanceRequest.expectedCompletion = new Date(estimatedCompletion);
         }
 
-        console.log('Successfully assigned request:', updatedRequest._id);
+        // Add to request history
+        maintenanceRequest.requestHistory.push({
+            status: 'assigned',
+            date: new Date(),
+            note: `Assigned to ${staff.firstName} ${staff.lastName}`,
+            author: req.user._id
+        });
 
-        // Verify the update in MongoDB
-        const verifyRequest = await Maintenance.findById(requestId);
-        console.log('Verification - Assigned to:', verifyRequest.assignedTo);
+        await maintenanceRequest.save();
 
         res.json({
-            success: true,
             message: 'Maintenance request assigned successfully',
-            request: updatedRequest
+            request: maintenanceRequest
         });
     } catch (error) {
         console.error('Error in assignMaintenanceRequest:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Server error',
-            message: error.message
-        });
+        res.status(500).json({ error: 'Server error' });
     }
 };
 
@@ -757,34 +699,38 @@ exports.getMaintenanceStaff = async (req, res) => {
 
 // Add maintenance staff
 exports.addMaintenanceStaff = async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-    }
-
     try {
-        const { email, firstName, lastName, phone } = req.body;
+        const { firstName, lastName, email, phone, specialization } = req.body;
 
         // Check if user already exists
-        let staff = await User.findOne({ email });
-        if (staff) {
-            return res.status(400).json({ error: 'User already exists' });
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ error: 'User with this email already exists' });
         }
 
-        // Create new maintenance staff
-        staff = new User({
-            email,
+        // Create new maintenance staff user
+        const maintenanceStaff = new User({
             firstName,
             lastName,
+            email,
             phone,
-            role: 'maintenance_staff'
+            role: 'maintenance_staff',
+            specialization
         });
 
-        await staff.save();
+        await maintenanceStaff.save();
 
-        // Return staff without password
-        const newStaff = await User.findById(staff._id).select('-password');
-        res.status(201).json(newStaff);
+        res.status(201).json({
+            message: 'Maintenance staff added successfully',
+            staff: {
+                _id: maintenanceStaff._id,
+                firstName: maintenanceStaff.firstName,
+                lastName: maintenanceStaff.lastName,
+                email: maintenanceStaff.email,
+                phone: maintenanceStaff.phone,
+                specialization: maintenanceStaff.specialization
+            }
+        });
     } catch (error) {
         console.error('Error in addMaintenanceStaff:', error);
         res.status(500).json({ error: 'Server error' });

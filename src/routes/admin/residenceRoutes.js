@@ -26,7 +26,7 @@ const residenceValidation = [
 
 // Apply auth middleware to all routes
 router.use(auth);
-router.use(checkRole('admin'));
+router.use(checkRole('admin', 'finance_admin', 'finance_user'));
 
 // Routes
 router.post('/', residenceValidation, addResidence);

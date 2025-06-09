@@ -18,6 +18,18 @@ exports.getAllExpenses = async (req, res) => {
             sortOrder = 'desc' 
         } = req.query;
 
+        console.log('Expense Query Parameters:', {
+            residence,
+            category,
+            startDate,
+            endDate,
+            paymentStatus,
+            page,
+            limit,
+            sortBy,
+            sortOrder
+        });
+
         // Build filter object
         const filter = {};
         
@@ -38,6 +50,8 @@ exports.getAllExpenses = async (req, res) => {
             if (endDate) filter.expenseDate.$lte = new Date(endDate);
         }
 
+        console.log('Applied Filters:', filter);
+
         // Sorting
         const sortOptions = {};
         sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
@@ -57,6 +71,14 @@ exports.getAllExpenses = async (req, res) => {
         // Get total count for pagination
         const totalExpenses = await Expense.countDocuments(filter);
         const totalPages = Math.ceil(totalExpenses / parseInt(limit));
+
+        console.log('Query Results:', {
+            expensesFound: expenses.length,
+            totalExpenses,
+            totalPages,
+            currentPage: parseInt(page),
+            limit: parseInt(limit)
+        });
 
         res.status(200).json({
             expenses,
@@ -116,21 +138,53 @@ exports.createExpense = async (req, res) => {
         } = req.body;
 
         // Validate required fields
-        if (!residence || !category || !amount || !description || !expenseDate) {
+        const requiredFields = ['residence', 'category', 'amount', 'description', 'expenseDate'];
+        const missingFields = requiredFields.filter(field => !req.body[field]);
+        
+        if (missingFields.length > 0) {
             return res.status(400).json({
                 error: 'Missing required fields',
-                requiredFields: ['residence', 'category', 'amount', 'description', 'expenseDate']
+                missingFields,
+                message: `Please provide: ${missingFields.join(', ')}`
             });
         }
 
         // Validate residence ID
         if (!validateMongoId(residence)) {
-            return res.status(400).json({ error: 'Invalid residence ID format' });
+            return res.status(400).json({ 
+                error: 'Invalid residence ID format',
+                field: 'residence',
+                message: 'Please provide a valid residence ID'
+            });
+        }
+
+        // Validate category
+        const validCategories = ['Maintenance', 'Utilities', 'Taxes', 'Insurance', 'Salaries', 'Supplies', 'Other'];
+        if (!validCategories.includes(category)) {
+            return res.status(400).json({ 
+                error: 'Invalid category',
+                field: 'category',
+                message: `Category must be one of: ${validCategories.join(', ')}`
+            });
         }
 
         // Validate amount
         if (isNaN(amount) || amount <= 0) {
-            return res.status(400).json({ error: 'Amount must be a positive number' });
+            return res.status(400).json({ 
+                error: 'Invalid amount',
+                field: 'amount',
+                message: 'Amount must be a positive number'
+            });
+        }
+
+        // Validate expense date
+        const date = new Date(expenseDate);
+        if (isNaN(date.getTime())) {
+            return res.status(400).json({ 
+                error: 'Invalid date format',
+                field: 'expenseDate',
+                message: 'Please provide a valid date'
+            });
         }
 
         // Generate unique expense ID
@@ -143,16 +197,49 @@ exports.createExpense = async (req, res) => {
             category,
             amount,
             description,
-            expenseDate: new Date(expenseDate),
-            paymentStatus,
+            expenseDate: date,
+            paymentStatus: paymentStatus || 'Pending',
             createdBy: req.user._id
         });
 
         // Add optional fields if provided
-        if (paymentMethod) newExpense.paymentMethod = paymentMethod;
-        if (paidBy && validateMongoId(paidBy)) newExpense.paidBy = paidBy;
-        if (paidDate) newExpense.paidDate = new Date(paidDate);
-        if (receiptImage) newExpense.receiptImage = receiptImage;
+        if (paymentMethod) {
+            const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'];
+            if (!validPaymentMethods.includes(paymentMethod)) {
+                return res.status(400).json({ 
+                    error: 'Invalid payment method',
+                    field: 'paymentMethod',
+                    message: `Payment method must be one of: ${validPaymentMethods.join(', ')}`
+                });
+            }
+            newExpense.paymentMethod = paymentMethod;
+        }
+
+        if (paidBy && validateMongoId(paidBy)) {
+            newExpense.paidBy = paidBy;
+        } else if (paidBy) {
+            return res.status(400).json({ 
+                error: 'Invalid paid by ID',
+                field: 'paidBy',
+                message: 'Please provide a valid user ID'
+            });
+        }
+
+        if (paidDate) {
+            const paidDateObj = new Date(paidDate);
+            if (isNaN(paidDateObj.getTime())) {
+                return res.status(400).json({ 
+                    error: 'Invalid paid date format',
+                    field: 'paidDate',
+                    message: 'Please provide a valid date'
+                });
+            }
+            newExpense.paidDate = paidDateObj;
+        }
+
+        if (receiptImage) {
+            newExpense.receiptImage = receiptImage;
+        }
 
         // Save expense
         await newExpense.save();
@@ -172,7 +259,10 @@ exports.createExpense = async (req, res) => {
         });
     } catch (error) {
         console.error('Error creating expense:', error);
-        res.status(500).json({ error: 'Failed to create expense' });
+        res.status(500).json({ 
+            error: 'Failed to create expense',
+            message: error.message
+        });
     }
 };
 

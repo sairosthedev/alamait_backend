@@ -40,11 +40,30 @@ const balanceSheetSchema = new mongoose.Schema({
         },
         description: String
     }],
+    equity: [{
+        category: {
+            type: String,
+            required: true
+        },
+        name: {
+            type: String,
+            required: true
+        },
+        value: {
+            type: Number,
+            required: true
+        },
+        description: String
+    }],
     totalAssets: {
         type: Number,
         required: true
     },
     totalLiabilities: {
+        type: Number,
+        required: true
+    },
+    totalEquity: {
         type: Number,
         required: true
     },

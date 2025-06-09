@@ -258,9 +258,9 @@ exports.getTransactions = async (req, res) => {
 // Export transactions
 exports.exportTransactions = async (req, res) => {
     try {
-        const { startDate, endDate, type } = req.body;
+        const { startDate, endDate, format = 'csv' } = req.body;
         const query = {};
-
+        
         if (startDate && endDate) {
             query.createdAt = {
                 $gte: new Date(startDate),
@@ -268,25 +268,36 @@ exports.exportTransactions = async (req, res) => {
             };
         }
 
-        if (type && type !== 'all') {
-            query.type = type;
+        const transactions = await Payment.find(query)
+            .populate('student', 'firstName lastName email')
+            .populate('booking', 'residence room')
+            .sort({ createdAt: -1 });
+
+        if (format === 'csv') {
+            // Convert to CSV format
+            const csvData = transactions.map(t => ({
+                Date: t.createdAt.toISOString().split('T')[0],
+                Student: `${t.student.firstName} ${t.student.lastName}`,
+                Email: t.student.email,
+                Amount: t.amount,
+                Method: t.method,
+                Status: t.status,
+                Description: t.description || ''
+            }));
+
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', 'attachment; filename=transactions.csv');
+            
+            // Convert to CSV string
+            const csvString = [
+                Object.keys(csvData[0]).join(','),
+                ...csvData.map(row => Object.values(row).join(','))
+            ].join('\n');
+
+            return res.send(csvString);
         }
 
-        const transactions = await Booking.find(query)
-            .populate('student', 'firstName lastName')
-            .populate('residence', 'name');
-
-        // Format transactions for export
-        const formattedTransactions = transactions.map(t => ({
-            Date: t.createdAt.toISOString().split('T')[0],
-            Student: `${t.student.firstName} ${t.student.lastName}`,
-            Residence: t.residence.name,
-            Amount: t.totalAmount,
-            Status: t.status,
-            PaymentStatus: t.paymentStatus
-        }));
-
-        res.json(formattedTransactions);
+        res.json(transactions);
     } catch (error) {
         console.error('Error in exportTransactions:', error);
         res.status(500).json({ error: 'Server error' });
@@ -297,28 +308,52 @@ exports.exportTransactions = async (req, res) => {
 exports.generateDashboardReport = async (req, res) => {
     try {
         const { startDate, endDate } = req.body;
+        const query = {};
+        
+        if (startDate && endDate) {
+            query.createdAt = {
+                $gte: new Date(startDate),
+                $lte: new Date(endDate)
+            };
+        }
 
-        // Gather all necessary data
+        // Gather all relevant data
         const [
-            financialStats,
-            maintenanceStats,
-            occupancyStats
+            bookings,
+            maintenance,
+            payments,
+            students
         ] = await Promise.all([
-            // Reuse existing functions
-            this.getFinancialStats({ query: { startDate, endDate } }, { json: data => data }),
-            this.getMaintenanceStats({ query: { startDate, endDate } }, { json: data => data }),
-            this.getOccupancyStats({}, { json: data => data })
+            Booking.find(query).populate('student residence'),
+            Maintenance.find(query).populate('student assignedTo'),
+            Payment.find(query).populate('student booking'),
+            User.find({ role: 'student', ...query })
         ]);
 
+        // Calculate key metrics
+        const totalRevenue = payments.reduce((sum, p) => sum + p.amount, 0);
+        const occupancyRate = (bookings.length / (await Residence.countDocuments())) * 100;
+        const maintenanceCompletionRate = (maintenance.filter(m => m.status === 'completed').length / maintenance.length) * 100;
+
         const report = {
-            generatedAt: new Date(),
             period: {
-                startDate,
-                endDate
+                start: startDate,
+                end: endDate
             },
-            financial: financialStats,
-            maintenance: maintenanceStats,
-            occupancy: occupancyStats
+            summary: {
+                totalStudents: students.length,
+                totalBookings: bookings.length,
+                totalMaintenance: maintenance.length,
+                totalRevenue,
+                occupancyRate,
+                maintenanceCompletionRate
+            },
+            details: {
+                bookings,
+                maintenance,
+                payments,
+                students
+            }
         };
 
         res.json(report);

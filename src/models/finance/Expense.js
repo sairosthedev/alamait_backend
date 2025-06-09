@@ -33,6 +33,11 @@ const expenseSchema = new mongoose.Schema({
         enum: ['Pending', 'Paid', 'Overdue'],
         default: 'Pending'
     },
+    period: {
+        type: String,
+        enum: ['weekly', 'monthly'],
+        required: true
+    },
     paymentMethod: {
         type: String,
         enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'],
@@ -67,5 +72,6 @@ expenseSchema.index({ residence: 1 });
 expenseSchema.index({ category: 1 });
 expenseSchema.index({ paymentStatus: 1 });
 expenseSchema.index({ expenseDate: -1 });
+expenseSchema.index({ period: 1 });
 
 module.exports = mongoose.model('Expense', expenseSchema); 

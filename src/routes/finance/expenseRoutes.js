@@ -32,9 +32,9 @@ router.put('/:id',
     expenseController.updateExpense
 );
 
-// Delete expense (admin only)
+// Delete expense (admin and finance admin)
 router.delete('/:id', 
-    checkRole('admin'), 
+    checkRole('admin', 'finance_admin'), 
     expenseController.deleteExpense
 );
 

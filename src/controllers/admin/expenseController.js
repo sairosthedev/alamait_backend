@@ -2,6 +2,7 @@ const Expense = require('../../models/finance/Expense');
 const mongoose = require('mongoose');
 const { generateUniqueId } = require('../../utils/idGenerator');
 const Residence = require('../../models/Residence');
+const Maintenance = require('../../models/Maintenance');
 
 // Get expenses with filters
 const getExpenses = async (req, res) => {
@@ -14,19 +15,19 @@ const getExpenses = async (req, res) => {
         const query = {};
 
         if (date) {
-            query.expenseDate = date; // Use expenseDate instead of date
+            query.expenseDate = date;
         }
 
         if (category) {
-            query.category = { $regex: category, $options: 'i' }; // Case-insensitive match
+            query.category = { $regex: category, $options: 'i' };
         }
 
         if (description) {
-            query.description = { $regex: description, $options: 'i' }; // Case-insensitive match
+            query.description = { $regex: description, $options: 'i' };
         }
 
         if (amount) {
-            query.amount = amount; // Exact amount match
+            query.amount = amount;
         }
 
         // Only add residence to query if it's not "all"
@@ -45,11 +46,11 @@ const getExpenses = async (req, res) => {
         if (period === 'weekly') {
             const oneWeekAgo = new Date();
             oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-            query.expenseDate = { $gte: oneWeekAgo }; // Expenses from the last 7 days
+            query.expenseDate = { $gte: oneWeekAgo };
         } else if (period === 'monthly') {
             const oneMonthAgo = new Date();
             oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-            query.expenseDate = { $gte: oneMonthAgo }; // Expenses from the last 30 days
+            query.expenseDate = { $gte: oneMonthAgo };
         }
 
         // Add pagination
@@ -69,8 +70,14 @@ const getExpenses = async (req, res) => {
             .populate('paidBy', 'firstName lastName')
             .populate('createdBy', 'firstName lastName');
 
+        // Add source information for finance users
+        const expensesWithSource = expenses.map(expense => ({
+            ...expense.toObject(),
+            source: 'admin' // Add source information
+        }));
+
         res.status(200).json({
-            expenses,
+            expenses: expensesWithSource,
             pagination: {
                 total,
                 page,
@@ -86,63 +93,94 @@ const getExpenses = async (req, res) => {
 // Add new expense
 const addExpense = async (req, res) => {
     try {
-        console.log('Adding new expense:', req.body);
+        const {
+            residence,
+            category,
+            amount,
+            description,
+            expenseDate,
+            paymentStatus,
+            period,
+            paymentMethod,
+            paidDate,
+            type,
+            status
+        } = req.body;
 
         // Validate required fields
-        const requiredFields = ['residence', 'category', 'amount', 'description', 'date'];
-        const missingFields = requiredFields.filter(field => !req.body[field]);
-        
-        if (missingFields.length > 0) {
+        if (!residence || !category || !amount || !description || !expenseDate || !period) {
             return res.status(400).json({
                 message: 'Missing required fields',
-                fields: missingFields
+                required: ['residence', 'category', 'amount', 'description', 'expenseDate', 'period']
             });
         }
 
-        // Find residence by ID
-        const residence = await Residence.findById(req.body.residence);
-        if (!residence) {
+        // Validate period
+        if (!['weekly', 'monthly'].includes(period)) {
             return res.status(400).json({
-                message: 'Invalid residence ID',
-                field: 'residence'
+                message: 'Invalid period value',
+                allowed: ['weekly', 'monthly']
             });
         }
 
-        // Capitalize first letter of category
-        const category = req.body.category.charAt(0).toUpperCase() + req.body.category.slice(1);
+        // Validate category
+        const validCategories = ['Maintenance', 'Utilities', 'Taxes', 'Insurance', 'Salaries', 'Supplies', 'Other'];
+        const formattedCategory = category.charAt(0).toUpperCase() + category.slice(1).toLowerCase();
+        
+        if (!validCategories.includes(formattedCategory)) {
+            return res.status(400).json({
+                message: 'Invalid category value',
+                allowed: validCategories
+            });
+        }
+
+        // Validate payment method if status is Paid
+        if (paymentStatus === 'Paid') {
+            const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'];
+            if (!paymentMethod || !validPaymentMethods.includes(paymentMethod)) {
+                return res.status(400).json({
+                    message: 'Valid payment method is required when status is Paid',
+                    allowed: validPaymentMethods
+                });
+            }
+        }
 
         // Generate unique expense ID
-        const expenseId = await generateUniqueId('EXP');
+        const timestamp = Date.now();
+        const randomNum = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+        const expenseId = `EXP-${timestamp}-${randomNum}`;
 
         // Create new expense
         const expense = new Expense({
             expenseId,
-            residence: residence._id,
-            category,
-            amount: parseFloat(req.body.amount),
-            description: req.body.description,
-            expenseDate: req.body.date,
-            paymentStatus: req.body.paymentStatus || 'Pending',
-            paymentMethod: req.body.paymentMethod,
-            paidBy: req.body.paidBy,
-            paidDate: req.body.paidDate,
-            receiptImage: req.body.receiptImage,
-            createdBy: req.user._id // Assuming req.user is set by auth middleware
+            residence,
+            category: formattedCategory,
+            amount: parseFloat(amount),
+            description,
+            expenseDate: new Date(expenseDate),
+            paymentStatus: paymentStatus || 'Pending',
+            period,
+            paymentMethod: paymentStatus === 'Paid' ? paymentMethod : undefined,
+            paidDate: paymentStatus === 'Paid' ? new Date(paidDate) : undefined,
+            paidBy: paymentStatus === 'Paid' ? req.user._id : undefined,
+            createdBy: req.user._id
         });
 
-        const savedExpense = await expense.save();
-        console.log('Successfully saved expense:', savedExpense);
+        await expense.save();
 
-        // Populate the saved expense with related data
-        const populatedExpense = await Expense.findById(savedExpense._id)
+        // Return the created expense with populated fields
+        const populatedExpense = await Expense.findById(expense._id)
             .populate('residence', 'name')
-            .populate('paidBy', 'firstName lastName')
-            .populate('createdBy', 'firstName lastName');
+            .populate('createdBy', 'firstName lastName email')
+            .populate('paidBy', 'firstName lastName email');
 
-        res.status(201).json(populatedExpense);
+        res.status(201).json({
+            message: 'Expense added successfully',
+            expense: populatedExpense
+        });
     } catch (error) {
         console.error('Error adding expense:', error);
-        res.status(400).json({ message: error.message });
+        res.status(500).json({ message: error.message });
     }
 };
 
@@ -189,23 +227,25 @@ const sendToFinance = async (req, res) => {
 const updateExpenseStatus = async (req, res) => {
     try {
         const { expenseId } = req.params;
-        const { status } = req.body;
+        const { paymentStatus } = req.body;
 
-        if (!status) {
+        // Validate expense ID
+        if (!mongoose.Types.ObjectId.isValid(expenseId)) {
             return res.status(400).json({
-                message: 'Status is required'
+                message: 'Invalid expense ID format'
             });
         }
 
-        // Validate status value
-        const validStatuses = ['Pending', 'Approved', 'Rejected', 'Sent to Finance'];
-        if (!validStatuses.includes(status)) {
+        // Validate paymentStatus
+        const validStatuses = ['Pending', 'Paid', 'Overdue'];
+        if (!paymentStatus || !validStatuses.includes(paymentStatus)) {
             return res.status(400).json({
-                message: 'Invalid status value',
+                message: 'Valid payment status is required',
                 validStatuses
             });
         }
 
+        // Find the expense
         const expense = await Expense.findById(expenseId);
         if (!expense) {
             return res.status(404).json({
@@ -213,19 +253,197 @@ const updateExpenseStatus = async (req, res) => {
             });
         }
 
-        expense.paymentStatus = status;
+        // If status is being set to Paid, ensure paymentMethod is provided
+        if (paymentStatus === 'Paid' && !req.body.paymentMethod) {
+            return res.status(400).json({
+                message: 'Payment method is required when marking expense as paid',
+                validPaymentMethods: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks']
+            });
+        }
+
+        // Update the status
+        expense.paymentStatus = paymentStatus;
         expense.updatedBy = req.user._id;
+        expense.updatedAt = new Date();
+
+        // If marking as paid, add payment details
+        if (paymentStatus === 'Paid') {
+            expense.paymentMethod = req.body.paymentMethod;
+            expense.paidBy = req.user._id;
+            expense.paidDate = new Date();
+        }
+
+        // Add to status history
+        expense.statusHistory = expense.statusHistory || [];
+        expense.statusHistory.push({
+            status: paymentStatus,
+            date: new Date(),
+            updatedBy: req.user._id
+        });
+
         await expense.save();
 
+        // Return the updated expense with populated fields
         const updatedExpense = await Expense.findById(expenseId)
             .populate('residence', 'name')
             .populate('paidBy', 'firstName lastName')
             .populate('createdBy', 'firstName lastName');
 
-        res.status(200).json(updatedExpense);
+        res.status(200).json({
+            message: `Expense status updated to ${paymentStatus} successfully`,
+            expense: updatedExpense
+        });
     } catch (error) {
         console.error('Error updating expense status:', error);
         res.status(500).json({ message: error.message });
+    }
+};
+
+// Get expense totals
+const getExpenseTotals = async (req, res) => {
+    try {
+        const { period, residence, date } = req.query;
+        
+        // Build query based on filters
+        const query = {};
+
+        // Add residence filter if not 'all'
+        if (residence && residence !== 'all') {
+            try {
+                query.residence = new mongoose.Types.ObjectId(residence);
+            } catch (error) {
+                return res.status(400).json({
+                    message: 'Invalid residence ID format',
+                    field: 'residence'
+                });
+            }
+        }
+
+        // Handle date filter
+        if (date) {
+            const startDate = new Date(date);
+            startDate.setHours(0, 0, 0, 0);
+            const endDate = new Date(date);
+            endDate.setHours(23, 59, 59, 999);
+            query.expenseDate = { $gte: startDate, $lte: endDate };
+        }
+
+        // Handle period filter
+        if (period === 'weekly') {
+            const oneWeekAgo = new Date();
+            oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+            query.expenseDate = { $gte: oneWeekAgo };
+        } else if (period === 'monthly') {
+            const oneMonthAgo = new Date();
+            oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+            query.expenseDate = { $gte: oneMonthAgo };
+        }
+
+        // Get total expenses
+        const totalExpenses = await Expense.aggregate([
+            { $match: query },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+
+        // Get expenses by status
+        const expensesByStatus = await Expense.aggregate([
+            { $match: query },
+            { $group: { _id: '$paymentStatus', total: { $sum: '$amount' } } }
+        ]);
+
+        // Get expenses by category
+        const expensesByCategory = await Expense.aggregate([
+            { $match: query },
+            { $group: { _id: '$category', total: { $sum: '$amount' } } }
+        ]);
+
+        res.status(200).json({
+            total: totalExpenses[0]?.total || 0,
+            byStatus: expensesByStatus.reduce((acc, curr) => {
+                acc[curr._id] = curr.total;
+                return acc;
+            }, {}),
+            byCategory: expensesByCategory.reduce((acc, curr) => {
+                acc[curr._id] = curr.total;
+                return acc;
+            }, {})
+        });
+    } catch (error) {
+        console.error('Error getting expense totals:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+const approveExpense = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { paymentMethod } = req.body;
+
+        // Validate payment method
+        const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'];
+        if (!validPaymentMethods.includes(paymentMethod)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid payment method',
+                message: `Payment method must be one of: ${validPaymentMethods.join(', ')}`
+            });
+        }
+
+        // Find the expense
+        const expense = await Expense.findById(id);
+        if (!expense) {
+            return res.status(404).json({
+                success: false,
+                error: 'Not found',
+                message: 'Expense not found'
+            });
+        }
+
+        // Check if expense is already paid
+        if (expense.paymentStatus === 'Paid') {
+            return res.status(400).json({
+                success: false,
+                error: 'Already paid',
+                message: 'This expense has already been paid'
+            });
+        }
+
+        // Update the expense
+        expense.paymentStatus = 'Paid';
+        expense.paymentMethod = paymentMethod;
+        expense.paidDate = new Date();
+        expense.paidBy = req.user._id;
+        await expense.save();
+
+        // If this is a maintenance expense, update the maintenance request
+        if (expense.category === 'Maintenance' && expense.maintenanceRequest) {
+            const maintenance = await Maintenance.findById(expense.maintenanceRequest);
+            if (maintenance) {
+                // Update the maintenance request with approved status
+                maintenance.financeStatus = 'approved';
+                maintenance.actualCost = expense.amount;
+                maintenance.updates.push({
+                    message: `Expense approved and paid via ${paymentMethod}`,
+                    author: req.user._id,
+                    date: new Date()
+                });
+                await maintenance.save();
+            }
+        }
+
+        // Send response
+        res.json({
+            success: true,
+            message: 'Expense approved successfully',
+            data: expense
+        });
+    } catch (error) {
+        console.error('Error in approveExpense:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Server error',
+            message: error.message
+        });
     }
 };
 
@@ -233,5 +451,7 @@ module.exports = {
     getExpenses,
     addExpense,
     sendToFinance,
-    updateExpenseStatus
+    updateExpenseStatus,
+    getExpenseTotals,
+    approveExpense
 };
