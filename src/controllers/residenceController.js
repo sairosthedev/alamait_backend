@@ -137,6 +137,32 @@ exports.getBelvedereResidence = async (req, res) => {
     }
 };
 
+// Get Newlands residence
+exports.getNewlandsResidence = async (req, res) => {
+    try {
+        const residence = await Residence.findOne({ name: 'Newlands' });
+        
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Newlands residence not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: residence
+        });
+    } catch (error) {
+        console.error('Error in getNewlandsResidence:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching Newlands residence',
+            error: error.message
+        });
+    }
+};
+
 // Add a new residence
 exports.addResidence = async (req, res) => {
     try {
