@@ -134,11 +134,12 @@ exports.createExpense = async (req, res) => {
             paymentMethod,
             paidBy,
             paidDate,
-            receiptImage
+            receiptImage,
+            period
         } = req.body;
 
         // Validate required fields
-        const requiredFields = ['residence', 'category', 'amount', 'description', 'expenseDate'];
+        const requiredFields = ['residence', 'category', 'amount', 'description', 'expenseDate', 'period'];
         const missingFields = requiredFields.filter(field => !req.body[field]);
         
         if (missingFields.length > 0) {
@@ -187,6 +188,16 @@ exports.createExpense = async (req, res) => {
             });
         }
 
+        // Validate period
+        const validPeriods = ['weekly', 'monthly'];
+        if (!validPeriods.includes(period)) {
+            return res.status(400).json({ 
+                error: 'Invalid period',
+                field: 'period',
+                message: `Period must be one of: ${validPeriods.join(', ')}`
+            });
+        }
+
         // Generate unique expense ID
         const expenseId = await generateUniqueId('EXP');
 
@@ -199,7 +210,8 @@ exports.createExpense = async (req, res) => {
             description,
             expenseDate: date,
             paymentStatus: paymentStatus || 'Pending',
-            createdBy: req.user._id
+            createdBy: req.user._id,
+            period
         });
 
         // Add optional fields if provided
