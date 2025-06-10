@@ -343,7 +343,21 @@ exports.addRoom = async (req, res) => {
             });
         }
 
-        residence.rooms.push(req.body);
+        const newRoom = {
+            roomNumber: req.body.roomNumber,
+            type: req.body.type,
+            capacity: req.body.capacity,
+            price: req.body.price,
+            status: req.body.status,
+            currentOccupancy: req.body.currentOccupancy,
+            features: req.body.features,
+            amenities: req.body.amenities,
+            floor: req.body.floor,
+            area: req.body.area,
+            images: req.body.images
+        };
+
+        residence.rooms.push(newRoom);
         await residence.save();
 
         res.status(201).json({
