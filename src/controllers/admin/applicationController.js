@@ -139,86 +139,60 @@ exports.updateApplicationStatus = async (req, res) => {
         // Update application based on action
         switch (action) {
             case 'approve':
-                // Set the application status to approved directly
-                application.status = 'approved';
-                application.allocatedRoom = roomNumber; // Set allocated room directly
-                application.paymentStatus = 'unpaid';
-                const approvalDate = new Date();
-
-                // Generate application code if not exists
-                if (!application.applicationCode) {
-                    const year = new Date().getFullYear().toString().substr(-2);
-                    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-                    application.applicationCode = `APP${year}${random}`;
-                }
-
                 try {
+                    // Set the application status to approved directly
+                    application.status = 'approved';
+                    application.allocatedRoom = roomNumber;
+                    application.paymentStatus = 'unpaid';
+                    const approvalDate = new Date();
+
+                    // Generate application code if not exists
+                    if (!application.applicationCode) {
+                        const year = new Date().getFullYear().toString().substr(-2);
+                        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+                        application.applicationCode = `APP${year}${random}`;
+                    }
+
                     // Find the residence with the room
                     const residence = await Residence.findOne({ 'rooms.roomNumber': roomNumber });
-                    
                     if (!residence) {
-                        throw new Error('Room not found');
+                        return res.status(404).json({ error: 'Room not found in any residence' });
                     }
 
-                    // Get the room details
+                    // Get the room
                     const room = residence.rooms.find(r => r.roomNumber === roomNumber);
                     if (!room) {
-                        throw new Error('Room not found');
+                        return res.status(404).json({ error: 'Room not found' });
                     }
 
-                    // Store room capacity in the application
-                    application.roomOccupancy = {
-                        current: room.currentOccupancy,
-                        capacity: room.capacity || (room.type === 'single' ? 1 : room.type === 'double' ? 2 : room.type === 'studio' ? 1 : 4)
-                    };
-
-                    // Calculate validity period (4 months from approval date)
+                    // Calculate validity period (4 months from now)
                     const validUntil = new Date(approvalDate);
                     validUntil.setMonth(approvalDate.getMonth() + 4);
 
-                    // Handle room upgrade logic
                     if (application.requestType === 'upgrade') {
-                        // Get the student's current room information
-                        const student = await User.findById(application.student);
-                        if (!student) {
-                            throw new Error('Student not found');
-                        }
-
-                        const currentRoomNumber = student.currentRoom;
-                        
-                        // If student has a current room, update its occupancy
-                        if (currentRoomNumber) {
-                            // Find the residence with the current room
-                            const currentResidence = await Residence.findOne({ 'rooms.roomNumber': currentRoomNumber });
-                            if (currentResidence) {
-                                const currentRoom = currentResidence.rooms.find(r => r.roomNumber === currentRoomNumber);
-                                if (currentRoom) {
-                                    // Decrease occupancy of the current room
-                                    currentRoom.currentOccupancy = Math.max(0, currentRoom.currentOccupancy - 1);
-                                    
-                                    // Update room status based on occupancy
-                                    if (currentRoom.currentOccupancy === 0) {
-                                        currentRoom.status = 'available';
-                                    } else if (currentRoom.currentOccupancy < currentRoom.capacity) {
-                                        currentRoom.status = 'reserved';
-                                    }
-                                    
-                                    await currentResidence.save();
-                                }
+                        // Handle room upgrade
+                        const oldRoom = residence.rooms.find(r => r.roomNumber === application.currentRoom);
+                        if (oldRoom) {
+                            oldRoom.currentOccupancy = Math.max(0, oldRoom.currentOccupancy - 1);
+                            if (oldRoom.currentOccupancy === 0) {
+                                oldRoom.status = 'available';
                             }
                         }
-                        
-                        // Increment occupancy of the new room
-                        room.currentOccupancy += 1;
-                        
-                        // Update room status based on occupancy
-                        if (room.currentOccupancy >= room.capacity) {
-                            room.status = 'occupied';
-                        } else if (room.currentOccupancy > 0) {
-                            room.status = 'reserved';
-                        }
-                        
-                        await residence.save();
+                    }
+
+                    // Increment room occupancy
+                    room.currentOccupancy += 1;
+                    
+                    // Update room status based on occupancy
+                    if (room.currentOccupancy >= room.capacity) {
+                        room.status = 'occupied';
+                    } else if (room.currentOccupancy > 0) {
+                        room.status = 'reserved';
+                    }
+
+                    // Set the admin user as the manager
+                    residence.manager = req.user._id;
+                    await residence.save();
 
                     // Update student's current room and validity
                     await User.findByIdAndUpdate(
@@ -228,7 +202,7 @@ exports.updateApplicationStatus = async (req, res) => {
                                 currentRoom: roomNumber,
                                 roomValidUntil: validUntil,
                                 roomApprovalDate: approvalDate,
-                                residence: residence._id  // Set the residence reference
+                                residence: residence._id
                             }
                         }
                     );
@@ -236,53 +210,6 @@ exports.updateApplicationStatus = async (req, res) => {
                     // Update application with residence reference
                     application.residence = residence._id;
                     await application.save();
-                    
-                    // Send upgrade approval email
-                    await sendEmail({
-                        to: application.email,
-                        subject: 'Room Upgrade Approved - Alamait Student Accommodation',
-                        text: `
-                            Dear ${application.firstName} ${application.lastName},
-
-                            We are pleased to inform you that your room upgrade request has been approved.
-
-                            Upgrade Details:
-                            - Previous Room: ${currentRoomNumber || 'None'}
-                            - New Room: ${roomNumber}
-                            - Approval Date: ${approvalDate.toLocaleDateString()}
-                            - Valid Until: ${validUntil.toLocaleDateString()}
-
-                            Your room upgrade will be effective immediately. Please contact our office to arrange the move.
-
-                            Best regards,
-                            Alamait Student Accommodation Team
-                        `
-                    });
-                    } else {
-                        // Handle regular room approval (non-upgrade)
-                        // Increment room occupancy
-                        room.currentOccupancy += 1;
-                        
-                        // Update room status based on occupancy
-                        if (room.currentOccupancy >= room.capacity) {
-                            room.status = 'occupied';
-                        } else if (room.currentOccupancy > 0) {
-                            room.status = 'reserved';
-                        }
-                        
-                        await residence.save();
-                        
-                        // Update student's current room and validity
-                        await User.findByIdAndUpdate(
-                            application.student,
-                            {
-                                $set: {
-                                    currentRoom: roomNumber,
-                                roomValidUntil: validUntil,
-                                roomApprovalDate: approvalDate
-                            }
-                        }
-                    );
 
                     // Send approval email
                     await sendEmail({
@@ -313,10 +240,7 @@ exports.updateApplicationStatus = async (req, res) => {
                             Alamait Student Accommodation Team
                         `
                     });
-                    }
 
-                    await application.save();
-                    
                     // Prepare room information to return to the frontend
                     const roomInfo = {
                         name: roomNumber,
