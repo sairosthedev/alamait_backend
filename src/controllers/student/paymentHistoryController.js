@@ -129,21 +129,36 @@ exports.getPaymentHistory = async (req, res) => {
 
         // First check for approved application
         if (approvedApplication) {
-            // If we have an approved application with allocated room and residence
-            if (approvedApplication.allocatedRoom && approvedApplication.residence) {
+            // If we have an approved application with allocated room
+            if (approvedApplication.allocatedRoom) {
+                // Find the residence that contains this room
+                const residence = await Residence.findOne({
+                    'rooms.roomNumber': approvedApplication.allocatedRoom
+                });
+                
+                if (residence) {
+                    roomInfo = {
+                        number: approvedApplication.allocatedRoom,
+                        type: approvedApplication.roomType || 'Standard',
+                        location: residence.name
+                    };
+                    console.log('Using room info from approved application with residence lookup:', roomInfo);
+                } else {
+                    // If residence not found, still use the room info
                 roomInfo = {
                     number: approvedApplication.allocatedRoom,
-                    type: approvedApplication.roomType || '',
-                    location: approvedApplication.residence.name
+                        type: approvedApplication.roomType || 'Standard',
+                        location: 'Not Assigned'
                 };
-                console.log('Using room info from approved application:', roomInfo);
+                    console.log('Using room info from approved application (residence not found):', roomInfo);
+                }
             }
             // If we have residence but no allocated room yet
-            else if (approvedApplication.residence) {
+            else if (approvedApplication.residence && approvedApplication.residence !== 'No residence') {
                 roomInfo = {
                     number: 'Not Assigned',
-                    type: approvedApplication.roomType || '',
-                    location: approvedApplication.residence.name
+                    type: approvedApplication.roomType || 'Standard',
+                    location: approvedApplication.residence
                 };
                 console.log('Using residence from approved application (no room allocated yet):', roomInfo);
             }
@@ -197,6 +212,18 @@ exports.getPaymentHistory = async (req, res) => {
             applicationCode: approvedApplication ? approvedApplication.applicationCode : null,
             totalDue: (currentMonthPaid + pastDue + pastOverDue).toFixed(2) || '0.00'
         };
+
+        // Debug logs
+        console.log('Room Info:', {
+            number: roomInfo.number,
+            type: roomInfo.type,
+            location: roomInfo.location
+        });
+        console.log('Student Info being sent:', {
+            course: studentInfo.course,
+            residence: studentInfo.residence,
+            roomInfo: roomInfo
+        });
 
         console.log('Sending student info:', {
             name: studentInfo.name,
@@ -330,7 +357,13 @@ exports.uploadNewProofOfPayment = (req, res) => {
             const student = await User.findById(req.user._id)
                 .populate('residence');
             
-            // Find approved application or active booking to get room info
+            console.log('Student info:', {
+                id: student._id,
+                currentRoom: student.currentRoom,
+                residence: student.residence?.name
+            });
+
+            // First check for approved application
             const approvedApplication = await Application.findOne({
                 $or: [
                     { student: req.user._id },
@@ -339,65 +372,88 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 status: 'approved'
             }).populate('residence');
 
-            const activeBooking = await Booking.findOne({ 
-                student: req.user._id,
-                status: { $in: ['pending', 'confirmed'] }
-            }).populate('residence');
+            console.log('Approved application:', approvedApplication ? {
+                id: approvedApplication._id,
+                allocatedRoom: approvedApplication.allocatedRoom,
+                residence: approvedApplication.residence?.name
+            } : 'None');
 
-            // Find or get the residence reference
-            let residenceRef;
-            let roomInfo = {
-                number: 'Not Assigned',
-                type: ''
-            };
+            // Get residence information from various sources
+            let residenceRef = null;
+            let roomInfo = {};
 
-            // First try to get residence from student's current residence
-            if (student.residence) {
-                residenceRef = student.residence;
-                roomInfo.number = student.currentRoom || 'Not Assigned';
+            // First check approved application
+            if (approvedApplication && approvedApplication.allocatedRoom) {
+                // Find the residence that contains this room
+                const residence = await Residence.findOne({
+                    'rooms.roomNumber': approvedApplication.allocatedRoom
+                });
+                
+                if (residence) {
+                    residenceRef = residence;
+                    roomInfo = {
+                        number: approvedApplication.allocatedRoom,
+                        type: approvedApplication.roomType || 'Standard'
+                    };
+                    console.log('Using residence from approved application room lookup:', {
+                        residence: residenceRef.name,
+                        room: roomInfo
+                    });
+                }
             }
-            // Then from approved application
-            else if (approvedApplication?.residence) {
-                residenceRef = approvedApplication.residence;
-                roomInfo.number = approvedApplication.allocatedRoom;
-                roomInfo.type = approvedApplication.roomType;
+            // Then check current room
+            else if (student.currentRoom) {
+                const residence = await Residence.findOne({
+                    'rooms.roomNumber': student.currentRoom
+                });
+                if (residence) {
+                    residenceRef = residence;
+                    const room = residence.rooms.find(r => r.roomNumber === student.currentRoom);
+                    roomInfo = {
+                        number: student.currentRoom,
+                        type: room?.type || 'Standard'
+                    };
+                    console.log('Using residence from current room:', {
+                        residence: residenceRef.name,
+                        room: roomInfo
+                    });
+                }
             }
-            // Then from active booking
-            else if (activeBooking?.residence) {
-                residenceRef = activeBooking.residence;
-                roomInfo.number = activeBooking.room?.roomNumber;
-                roomInfo.type = activeBooking.room?.type;
-            }
-            // Finally, try to find residence by name from request body
-            else {
-                const residenceName = req.body.residence === 'St. Kilda' ? 'St Kilda Student House' :
-                                    req.body.residence === 'Belvedere' ? 'Belvedere Student House' :
-                                    req.body.residence;
-                                    
-                residenceRef = await Residence.findOne({ name: residenceName });
-                if (!residenceRef) {
-                    return res.status(404).json({ error: 'Residence not found' });
+            // Finally check residence from request body
+            else if (req.body.residence && req.body.residence !== 'Not Assigned') {
+                residenceRef = await Residence.findOne({ name: req.body.residence });
+                if (residenceRef) {
+                    roomInfo = {
+                        number: 'Not Assigned',
+                        type: 'Standard'
+                    };
+                    console.log('Using residence from request body:', {
+                        residence: residenceRef.name,
+                        room: roomInfo
+                    });
                 }
             }
 
-            // Get payment amounts from the request body
+            // If no residence found, return error
+            if (!residenceRef) {
+                console.log('No residence found in any source');
+                return res.status(400).json({ error: 'No residence found. Please ensure you have an approved application or assigned room.' });
+            }
+
+            // Generate a unique payment ID
+            const paymentId = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+            // Get payment amounts from request
             const rentAmount = parseFloat(req.body.rentAmount) || 0;
             const adminFee = parseFloat(req.body.adminFee) || 0;
             const deposit = parseFloat(req.body.deposit) || 0;
             const totalAmount = rentAmount + adminFee + deposit;
 
-            // Generate a unique payment ID
-            const date = new Date();
-            const year = date.getFullYear().toString().slice(-2);
-            const month = (date.getMonth() + 1).toString().padStart(2, '0');
-            const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-            const paymentId = `PAY${year}${month}${random}`;
-
             // Create a new payment record
             const payment = new Payment({
                 paymentId,
                 student: req.user._id,
-                residence: residenceRef._id,  // Use the residence reference
+                residence: residenceRef._id,
                 room: roomInfo.number,
                 roomType: roomInfo.type,
                 rentAmount,
@@ -406,7 +462,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 totalAmount,
                 date: new Date(),
                 status: 'Pending',
-                method: 'Bank Transfer', // Default method
+                method: 'Bank Transfer',
                 proofOfPayment: {
                     fileUrl: `/uploads/pop/${req.file.filename}`,
                     fileName: req.file.originalname,
@@ -426,7 +482,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
             console.log('New payment record created:', {
                 id: payment.paymentId,
                 student: `${payment.student.firstName} ${payment.student.lastName}`,
-                residence: payment.residence.name,
+                residence: payment.residence?.name || 'Not Assigned',
                 room: payment.room,
                 totalAmount: payment.totalAmount
             });
@@ -436,9 +492,9 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 payment: {
                     id: payment.paymentId,
                     student: `${payment.student.firstName} ${payment.student.lastName}`,
-                    residence: payment.residence.name === 'St Kilda Student House' ? 'St. Kilda' :
-                             payment.residence.name === 'Belvedere Student House' ? 'Belvedere' :
-                             payment.residence.name,
+                    residence: payment.residence?.name === 'St Kilda Student House' ? 'St. Kilda' :
+                             payment.residence?.name === 'Belvedere Student House' ? 'Belvedere' :
+                             payment.residence?.name || 'Not Assigned',
                     room: payment.room,
                     roomType: payment.roomType,
                     rentAmount: payment.rentAmount,
@@ -451,7 +507,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 }
             });
         } catch (error) {
-            console.error('Error in uploadNewProofOfPayment:', error);
+            console.error('Error uploading proof of payment:', error);
             res.status(500).json({ error: 'Error uploading proof of payment' });
         }
     });

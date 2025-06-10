@@ -247,7 +247,9 @@ const verifyProofOfPayment = async (req, res) => {
         payment.proofOfPayment.verificationDate = new Date();
 
         if (verified) {
-            payment.status = 'Paid';
+            payment.status = 'Verified';
+        } else {
+            payment.status = 'Rejected';
         }
 
         await payment.save();

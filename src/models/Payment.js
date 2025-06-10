@@ -15,7 +15,8 @@ const paymentSchema = new mongoose.Schema({
     residence: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Residence',
-        required: true
+        required: false,
+        default: null
     },
     room: {
         type: String,
