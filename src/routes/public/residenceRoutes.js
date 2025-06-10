@@ -11,9 +11,6 @@ router.get('/belvedere', residenceController.getBelvedereResidence);
 // Public route to get Newlands residence
 router.get('/newlands', residenceController.getNewlandsResidence);
 
-// Public route to get 1ACP residence
-router.get('/1ACP', residenceController.getOneACPResidence);
-
 // Public route to get residence by name
 router.get('/name/:name', residenceController.getResidenceByName);
 
