@@ -11,11 +11,22 @@ const residenceSchema = new mongoose.Schema({
         required: true
     },
     address: {
-        street: String,
-        city: String,
-        state: String,
-        zipCode: String,
-        country: String
+        street: {
+            type: String,
+            required: true
+        },
+        city: {
+            type: String,
+            required: true
+        },
+        state: {
+            type: String,
+            required: true
+        },
+        country: {
+            type: String,
+            required: true
+        }
     },
     location: {
         type: {
@@ -46,6 +57,11 @@ const residenceSchema = new mongoose.Schema({
             enum: ['single', 'double', 'studio', 'apartment', 'triple', 'quad'],
             required: true
         },
+        capacity: {
+            type: Number,
+            required: true,
+            min: 1
+        },
         price: {
             type: Number,
             required: true,
@@ -60,11 +76,6 @@ const residenceSchema = new mongoose.Schema({
             type: Number,
             default: 0,
             min: 0
-        },
-        capacity: {
-            type: Number,
-            required: true,
-            min: 1
         },
         features: [String],
         amenities: [String],
@@ -137,8 +148,7 @@ const residenceSchema = new mongoose.Schema({
     }],
     manager: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
+        ref: 'User'
     },
     status: {
         type: String,
@@ -161,25 +171,9 @@ const residenceSchema = new mongoose.Schema({
 // Index for location-based queries
 residenceSchema.index({ location: '2dsphere' });
 
-// Index for common queries
-residenceSchema.index({ name: 1 });
-residenceSchema.index({ status: 1 });
-residenceSchema.index({ 'rooms.status': 1 });
-residenceSchema.index({ 'rooms.type': 1 });
-
 // Virtual for total rooms
 residenceSchema.virtual('totalRooms').get(function() {
     return this.rooms.length;
-});
-
-// Virtual for available rooms
-residenceSchema.virtual('availableRooms').get(function() {
-    return this.rooms.filter(room => room.status === 'available').length;
-});
-
-// Virtual for occupied rooms
-residenceSchema.virtual('occupiedRooms').get(function() {
-    return this.rooms.filter(room => room.status === 'occupied').length;
 });
 
 // Method to update room occupancy
