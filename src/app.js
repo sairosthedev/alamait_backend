@@ -49,6 +49,7 @@ const studentRoutes = require('./routes/student/studentRoutes');
 const studentDashboardRoutes = require('./routes/student/dashboardRoutes');
 const bookingDetailsRoutes = require('./routes/student/bookingDetailsRoutes');
 const paymentHistoryRoutes = require('./routes/student/paymentHistoryRoutes');
+const studentResidenceRoutes = require('./routes/student/residenceRoutes');
 
 // Property Manager routes
 const propertyManagerResidenceRoutes = require('./routes/property_manager/residenceRoutes');
@@ -194,6 +195,7 @@ app.use('/api/finance/residences', financeResidenceRoutes);
 // Student routes
 app.use('/api/student', studentRoutes);
 app.use('/api/student/dashboard', studentDashboardRoutes);
+app.use('/api/student/residences', studentResidenceRoutes);
 app.use('/api/student/messages', studentMessageRoutes);
 app.use('/api/student/maintenance', studentMaintenanceRoutes);
 app.use('/api/student/events', studentEventRoutes);
