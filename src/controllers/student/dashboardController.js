@@ -39,36 +39,37 @@ exports.getDashboardData = async (req, res) => {
         };
 
         if (application) {
+            const currentDate = new Date();
+            const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+            
             if (application.paymentStatus === 'paid') {
-                // Calculate if 30 days have passed since last payment
-                const lastPaymentDate = new Date(application.updatedAt);
-                const thirtyDaysFromPayment = new Date(lastPaymentDate.getTime() + (30 * 24 * 60 * 60 * 1000));
-                const today = new Date();
-
-                if (today > thirtyDaysFromPayment) {
-                    // If 30 days have passed, show next payment
+                // If payment is already paid, show as paid
+                paymentInfo = {
+                    amount: 0,
+                    status: 'paid',
+                    dueDate: null,
+                    paidDate: application.updatedAt,
+                    nextPaymentDate: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1)
+                };
+            } else {
+                // If payment is not paid, check if we're past the 1st of the month
+                if (currentDate > firstDayOfMonth) {
+                    // Payment is due
                     paymentInfo = {
                         amount: application.roomPrice || 0,
-                        status: 'unpaid',
-                        dueDate: new Date(today.getTime() + (7 * 24 * 60 * 60 * 1000)), // Due in 7 days
-                        lastPaymentDate: lastPaymentDate
+                        status: 'due',
+                        dueDate: firstDayOfMonth,
+                        lastPaymentDate: null
                     };
                 } else {
-                    // Still within 30 days of payment
+                    // Payment is not due yet
                     paymentInfo = {
-                        amount: 0,
-                        status: 'paid',
-                        dueDate: null,
-                        paidDate: lastPaymentDate,
-                        nextPaymentDate: thirtyDaysFromPayment
+                        amount: application.roomPrice || 0,
+                        status: 'pending',
+                        dueDate: firstDayOfMonth,
+                        lastPaymentDate: null
                     };
                 }
-            } else {
-                paymentInfo = {
-                    amount: application.roomPrice || 0,
-                    status: 'unpaid',
-                    dueDate: new Date(application.createdAt.getTime() + (7 * 24 * 60 * 60 * 1000)) // 7 days from application
-                };
             }
         }
 
