@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const path = require('path');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const studentRoutes = require('./routes/student');
@@ -24,6 +25,9 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Connect to MongoDB
 connectDB().catch(err => {
