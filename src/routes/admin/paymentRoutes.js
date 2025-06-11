@@ -31,12 +31,11 @@ const verifyPopValidation = [
     check('notes').optional().isString()
 ];
 
-// All routes require admin role
+// Basic authentication for all routes
 router.use(auth);
-router.use(checkRole('admin'));
 
-// Get total income from payments
-router.get('/total-income', async (req, res) => {
+// Admin-only routes
+router.get('/total-income', checkRole('admin'), async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
         const query = { status: 'Confirmed' };
@@ -58,14 +57,14 @@ router.get('/total-income', async (req, res) => {
     }
 });
 
-// Routes
-router.get('/', getPayments);
-router.post('/', createPaymentValidation, createPayment);
-router.put('/:paymentId/status', updateStatusValidation, updatePaymentStatus);
+// Admin-only routes
+router.get('/', checkRole('admin'), getPayments);
+router.post('/', checkRole('admin'), createPaymentValidation, createPayment);
+router.put('/:paymentId/status', checkRole('admin'), updateStatusValidation, updatePaymentStatus);
+router.get('/total', checkRole('admin'), getPaymentTotals);
+
+// Routes accessible to all authenticated users (POP related)
 router.post('/:paymentId/upload-pop', uploadProofOfPayment);
 router.put('/:paymentId/verify-pop', verifyPopValidation, verifyProofOfPayment);
-
-// Route to get payment totals
-router.get('/total', getPaymentTotals);
 
 module.exports = router; 
