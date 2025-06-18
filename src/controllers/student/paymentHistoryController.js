@@ -126,6 +126,7 @@ exports.getPaymentHistory = async (req, res) => {
             type: '',
             location: 'Not Assigned'
         };
+        let allocatedRoomDetails = null;
 
         // First check for approved application
         if (approvedApplication) {
@@ -135,21 +136,22 @@ exports.getPaymentHistory = async (req, res) => {
                 const residence = await Residence.findOne({
                     'rooms.roomNumber': approvedApplication.allocatedRoom
                 });
-                
                 if (residence) {
+                    const room = residence.rooms.find(r => r.roomNumber === approvedApplication.allocatedRoom);
+                    allocatedRoomDetails = room ? { ...room.toObject?.() || room } : null;
                     roomInfo = {
                         number: approvedApplication.allocatedRoom,
-                        type: approvedApplication.roomType || 'Standard',
+                        type: approvedApplication.roomType || (room ? room.type : 'Standard'),
                         location: residence.name
                     };
                     console.log('Using room info from approved application with residence lookup:', roomInfo);
                 } else {
-                    // If residence not found, still use the room info
-                roomInfo = {
-                    number: approvedApplication.allocatedRoom,
+                    roomInfo = {
+                        number: approvedApplication.allocatedRoom,
                         type: approvedApplication.roomType || 'Standard',
                         location: 'Not Assigned'
-                };
+                    };
+                    allocatedRoomDetails = null;
                     console.log('Using room info from approved application (residence not found):', roomInfo);
                 }
             }
@@ -160,21 +162,32 @@ exports.getPaymentHistory = async (req, res) => {
                     type: approvedApplication.roomType || 'Standard',
                     location: approvedApplication.residence
                 };
+                allocatedRoomDetails = null;
                 console.log('Using residence from approved application (no room allocated yet):', roomInfo);
             }
         }
         // Then check for active booking if no approved application
         else if (activeBooking && activeBooking.room && activeBooking.room.roomNumber) {
+            // Find the residence and room
+            const residence = await Residence.findOne({
+                'rooms.roomNumber': activeBooking.room.roomNumber
+            });
+            let room = null;
+            if (residence) {
+                room = residence.rooms.find(r => r.roomNumber === activeBooking.room.roomNumber);
+            }
+            allocatedRoomDetails = room ? { ...room.toObject?.() || room } : null;
             roomInfo = {
                 number: activeBooking.room.roomNumber,
-                type: activeBooking.room.type || '',
-                location: activeBooking.residence?.name || 'Not Assigned'
+                type: activeBooking.room.type || (room ? room.type : ''),
+                location: activeBooking.residence?.name || residence?.name || 'Not Assigned'
             };
             console.log('Using room info from active booking:', roomInfo);
         }
         // Finally check user model if neither exists
         else if (student.currentRoom) {
             let residenceName = 'Not Assigned';
+            let room = null;
             if (student.residence?.name) {
                 residenceName = student.residence.name;
             } else {
@@ -183,18 +196,22 @@ exports.getPaymentHistory = async (req, res) => {
                         'rooms.roomNumber': student.currentRoom
                     });
                     residenceName = residence ? residence.name : 'Not Assigned';
+                    if (residence) {
+                        room = residence.rooms.find(r => r.roomNumber === student.currentRoom);
+                    }
                 } catch (err) {
                     console.error('Error finding residence:', err);
                 }
             }
-            
+            allocatedRoomDetails = room ? { ...room.toObject?.() || room } : null;
             roomInfo = {
                 number: student.currentRoom,
-                type: '',
+                type: room ? room.type : '',
                 location: residenceName
             };
             console.log('Using room info from user model:', roomInfo);
         } else {
+            allocatedRoomDetails = null;
             console.log('No room information found in any source');
         }
 
@@ -210,8 +227,48 @@ exports.getPaymentHistory = async (req, res) => {
             pastDue: pastDue.toFixed(2) || '0.00',
             pastOverDue: pastOverDue.toFixed(2) || '0.00',
             applicationCode: approvedApplication ? approvedApplication.applicationCode : null,
-            totalDue: (currentMonthPaid + pastDue + pastOverDue).toFixed(2) || '0.00'
+            totalDue: (currentMonthPaid + pastDue + pastOverDue).toFixed(2) || '0.00',
+            allocatedRoomDetails
         };
+
+        // Calculate the next unpaid month and set currentDue
+        let currentDue = 0;
+        if (allocatedRoomDetails && allocatedRoomDetails.price) {
+            // Find all months with confirmed rent payments
+            const paidMonths = payments
+                .filter(p => p.status === 'Confirmed' && p.rentAmount > 0)
+                .map(p => {
+                    const d = new Date(p.date);
+                    return d.getFullYear() + '-' + (d.getMonth() + 1); // e.g., '2025-7'
+                });
+            // Find the latest paid month
+            let nextDueMonth;
+            if (paidMonths.length > 0) {
+                // Get the latest paid month
+                const latestPaid = payments
+                    .filter(p => p.status === 'Confirmed' && p.rentAmount > 0)
+                    .map(p => new Date(p.date))
+                    .sort((a, b) => b - a)[0];
+                nextDueMonth = new Date(latestPaid.getFullYear(), latestPaid.getMonth() + 1, 1);
+            } else {
+                // If never paid, due is current month
+                nextDueMonth = new Date(currentYear, currentMonth, 1);
+            }
+            // Check if payment exists for nextDueMonth
+            const hasPaidNextMonth = payments.some(p => {
+                const d = new Date(p.date);
+                return (
+                    p.status === 'Confirmed' &&
+                    d.getMonth() === nextDueMonth.getMonth() &&
+                    d.getFullYear() === nextDueMonth.getFullYear() &&
+                    p.rentAmount > 0
+                );
+            });
+            if (!hasPaidNextMonth) {
+                currentDue = allocatedRoomDetails.price;
+            }
+        }
+        studentInfo.currentDue = currentDue.toFixed(2);
 
         // Debug logs
         console.log('Room Info:', {
