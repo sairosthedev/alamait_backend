@@ -529,6 +529,38 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 return res.status(400).json({ error: 'No residence found. Please ensure you have an approved application or assigned room.' });
             }
 
+            // --- Prevent Overpayment Logic ---
+            // Find all payments for this student
+            const allPayments = await Payment.find({ student: req.user._id });
+            // Find all months with confirmed rent payments
+            const paidMonths = allPayments
+                .filter(p => p.status === 'Confirmed' && p.rentAmount > 0)
+                .map(p => new Date(p.date));
+            const currentDate = new Date();
+            const currentMonth = currentDate.getMonth();
+            const currentYear = currentDate.getFullYear();
+            let nextDueMonth;
+            if (paidMonths.length > 0) {
+                const latestPaid = new Date(Math.max(...paidMonths));
+                nextDueMonth = new Date(latestPaid.getFullYear(), latestPaid.getMonth() + 1, 1);
+            } else {
+                nextDueMonth = new Date(currentYear, currentMonth, 1);
+            }
+            // Check if payment already exists for nextDueMonth
+            const hasPaidNextMonth = allPayments.some(p => {
+                const d = new Date(p.date);
+                return (
+                    p.status === 'Confirmed' &&
+                    d.getMonth() === nextDueMonth.getMonth() &&
+                    d.getFullYear() === nextDueMonth.getFullYear() &&
+                    p.rentAmount > 0
+                );
+            });
+            if (hasPaidNextMonth) {
+                return res.status(400).json({ error: 'Rent for the next due month has already been paid.' });
+            }
+            // --- End Prevent Overpayment Logic ---
+
             // Generate a unique payment ID
             const paymentId = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
