@@ -11,37 +11,27 @@ const {
     syncRoomOccupancy
 } = require('../../controllers/admin/applicationController');
 
-// All routes require admin role
-router.use(auth);
-router.use(checkRole('admin'));
-
-// Validation middleware
+// Validation middleware for specific routes if needed in future
 const updateStatusValidation = [
-    check('action')
-        .isIn(['approve', 'reject', 'waitlist'])
-        .withMessage('Invalid action'),
-    check('roomNumber')
-        .if(check('action').equals('approve'))
-        .notEmpty()
-        .withMessage('Room number is required for approval')
+    // ... validation logic can be kept here for future use
 ];
 
 // Get all applications with room status
-router.get('/', getApplications);
+router.get('/', auth, checkRole('admin'), getApplications);
 
 // Update application status (approve/reject/waitlist)
-router.put('/:applicationId', updateApplicationStatus);
+router.put('/:applicationId', auth, checkRole('admin'), updateApplicationStatus);
 
 // Update payment status
-router.put('/:applicationId/payment', updatePaymentStatus);
+router.put('/:applicationId/payment', auth, checkRole('admin'), updatePaymentStatus);
 
 // Delete application
-router.delete('/:applicationId', deleteApplication);
+router.delete('/:applicationId', auth, checkRole('admin'), deleteApplication);
 
 // Update room validity
-router.put('/user/:userId/room-validity', updateRoomValidity);
+router.put('/user/:userId/room-validity', auth, checkRole('admin'), updateRoomValidity);
 
 // Sync room occupancy with allocations
-router.post('/sync-room-occupancy', syncRoomOccupancy);
+router.post('/sync-room-occupancy', auth, checkRole('admin'), syncRoomOccupancy);
 
 module.exports = router; 
