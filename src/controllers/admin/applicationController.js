@@ -127,6 +127,11 @@ exports.getApplications = async (req, res) => {
 // Update application status
 exports.updateApplicationStatus = async (req, res) => {
     try {
+        console.log('--- Approving Application ---');
+        console.log('Request Body:', JSON.stringify(req.body, null, 2));
+        console.log('Application ID:', req.params.applicationId);
+        console.log('-----------------------------');
+
         const { action, roomNumber } = req.body;
         
         if (!action) {
@@ -285,6 +290,15 @@ exports.updateApplicationStatus = async (req, res) => {
                                 Alamait Student Accommodation Team
                             `
                         });
+
+                        // Define roomInfo for the response even in case of failure
+                        const roomInfo = {
+                            name: roomNumber,
+                            status: room.status,
+                            currentOccupancy: room.currentOccupancy,
+                            capacity: room.capacity,
+                            occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+                        };
 
                         // Skip the rest of the logic for sending the email with attachment
                         return res.json({ 
