@@ -30,7 +30,7 @@ const updateStatusValidation = [
 router.get('/', getApplications);
 
 // Update application status (approve/reject/waitlist)
-router.put('/:applicationId', updateStatusValidation, updateApplicationStatus);
+router.put('/:applicationId', updateApplicationStatus);
 
 // Update payment status
 router.put('/:applicationId/payment', updatePaymentStatus);

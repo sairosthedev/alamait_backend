@@ -1642,13 +1642,18 @@ paths:
               type: object
               required:
                 - action
+                - roomNumber
+                - residenceId
               properties:
                 action:
                   type: string
                   enum: [approve, reject, waitlist]
                 roomNumber:
                   type: string
-                  description: Required when action is 'approve'
+                  description: Required when action is 'approve' or 'waitlist'
+                residenceId:
+                  type: string
+                  description: "Required when action is 'approve'"
       responses:
         '200':
           description: Application status updated successfully

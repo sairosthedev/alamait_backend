@@ -127,19 +127,18 @@ exports.getApplications = async (req, res) => {
 // Update application status
 exports.updateApplicationStatus = async (req, res) => {
     try {
-        console.log('--- Approving Application ---');
-        console.log('Request Body:', JSON.stringify(req.body, null, 2));
-        console.log('Application ID:', req.params.applicationId);
-        console.log('-----------------------------');
-
-        const { action, roomNumber } = req.body;
+        const { action, roomNumber, residenceId } = req.body;
         
         if (!action) {
             return res.status(400).json({ error: 'Action is required' });
         }
 
-        if ((action === 'approve' || action === 'waitlist') && !roomNumber) {
-            return res.status(400).json({ error: 'Room number is required for approval or waitlisting' });
+        if (action === 'approve' && (!roomNumber || !residenceId)) {
+            return res.status(400).json({ error: 'Room number and residence ID are required for approval' });
+        }
+        
+        if (action === 'waitlist' && !roomNumber) {
+            return res.status(400).json({ error: 'Room number is required for waitlisting' });
         }
 
         const application = await Application.findById(req.params.applicationId);
@@ -165,15 +164,15 @@ exports.updateApplicationStatus = async (req, res) => {
                     }
 
                     // Find the residence with the room
-                    const residence = await Residence.findOne({ 'rooms.roomNumber': roomNumber });
+                    const residence = await Residence.findById(residenceId);
                     if (!residence) {
-                        return res.status(404).json({ error: 'Room not found in any residence' });
+                        return res.status(404).json({ error: 'Residence not found with the provided ID' });
                     }
 
-                    // Get the room
+                    // Get the room and verify it exists in this residence
                     const room = residence.rooms.find(r => r.roomNumber === roomNumber);
                     if (!room) {
-                        return res.status(404).json({ error: 'Room not found' });
+                        return res.status(404).json({ error: `Room ${roomNumber} not found in residence ${residence.name}` });
                     }
 
                     // Calculate validity period (4 months from now)
