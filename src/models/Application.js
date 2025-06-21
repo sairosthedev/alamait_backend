@@ -50,6 +50,12 @@ const applicationSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
+    startDate: {
+        type: Date,
+    },
+    endDate: {
+        type: Date,
+    },
     preferredRoom: {
         type: String,
         required: function() { return this.requestType === 'new'; }

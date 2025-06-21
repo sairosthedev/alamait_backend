@@ -39,6 +39,7 @@ const adminMessageRoutes = require('./routes/admin/messageRoutes');
 const adminEventRoutes = require('./routes/admin/eventRoutes');
 const adminExpenseRoutes = require('./routes/admin/expenseRoutes');
 const financeResidenceRoutes = require('./routes/finance/residenceRoutes');
+const leaseTemplateRoutes = require('./routes/admin/leaseTemplateRoutes');
 
 // Student routes
 const studentBookingRoutes = require('./routes/student/bookingRoutes');
@@ -185,6 +186,7 @@ app.use('/api/admin/profile', adminProfileRoutes);
 app.use('/api/admin/messages', adminMessageRoutes);
 app.use('/api/admin/events', adminEventRoutes);
 app.use('/api/finance/residences', financeResidenceRoutes);
+app.use('/api/admin/lease', leaseTemplateRoutes);
 
 // Student routes
 app.use('/api/student', studentRoutes);

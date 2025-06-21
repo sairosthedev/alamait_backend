@@ -11,7 +11,9 @@ exports.submitApplication = async (req, res) => {
             email,
             phone,
             preferredRoom,
-            alternateRooms
+            alternateRooms,
+            startDate,
+            endDate
         } = req.body;
 
         // Create new application
@@ -22,7 +24,9 @@ exports.submitApplication = async (req, res) => {
             phone,
             requestType: 'new',
             preferredRoom,
-            alternateRooms: alternateRooms || []
+            alternateRooms: alternateRooms || [],
+            startDate,
+            endDate
         });
 
         await application.save();
@@ -38,6 +42,8 @@ exports.submitApplication = async (req, res) => {
             Application Details:
             - Preferred Room: ${preferredRoom}
             - Alternative Rooms: ${alternateRooms.join(', ') || 'None'}
+            - Desired Start Date: ${new Date(startDate).toLocaleDateString()}
+            - Desired End Date: ${new Date(endDate).toLocaleDateString()}
             
             Please keep this email for your records.
             

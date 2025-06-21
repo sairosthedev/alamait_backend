@@ -3,6 +3,10 @@ const User = require('../../models/User');
 const Residence = require('../../models/Residence');
 const { validationResult } = require('express-validator');
 const { sendEmail } = require('../../utils/email');
+const path = require('path');
+const fs = require('fs');
+const PizZip = require('pizzip');
+const Docxtemplater = require('docxtemplater');
 
 // Get all applications with room status
 exports.getApplications = async (req, res) => {
@@ -87,6 +91,8 @@ exports.getApplications = async (req, res) => {
             status: app.status,
             paymentStatus: app.paymentStatus,
             applicationDate: app.applicationDate.toISOString().split('T')[0],
+            startDate: app.startDate ? app.startDate.toISOString().split('T')[0] : null,
+            endDate: app.endDate ? app.endDate.toISOString().split('T')[0] : null,
             preferredRoom: app.preferredRoom,
             alternateRooms: app.alternateRooms || [],
             currentRoom: app.currentRoom,
@@ -210,6 +216,83 @@ exports.updateApplicationStatus = async (req, res) => {
                     // Update application with residence reference
                     application.residence = residence._id;
                     await application.save();
+
+                    // Generate and send lease agreement
+                    let attachments = [];
+                    try {
+                        const templatePath = path.join(__dirname, `../../../uploads/lease_agreement_${residence._id}.docx`);
+                        
+                        if (!fs.existsSync(templatePath)) {
+                            throw new Error(`Lease template for residence ${residence.name} not found.`);
+                        }
+
+                        const content = fs.readFileSync(templatePath, 'binary');
+
+                        const zip = new PizZip(content);
+                        const doc = new Docxtemplater(zip, {
+                            paragraphLoop: true,
+                            linebreaks: true,
+                        });
+
+                        doc.setData({
+                            firstName: application.firstName,
+                            lastName: application.lastName,
+                            applicationCode: application.applicationCode,
+                            allocatedRoom: roomNumber,
+                            approvalDate: approvalDate.toLocaleDateString(),
+                            validUntil: validUntil.toLocaleDateString(),
+                            residenceName: residence.name,
+                            residenceAddress: residence.address,
+                        });
+
+                        doc.render();
+
+                        const buf = doc.getZip().generate({ type: 'nodebuffer' });
+
+                        const tempDir = path.join(__dirname, '../../../temp');
+                        if (!fs.existsSync(tempDir)) {
+                            fs.mkdirSync(tempDir);
+                        }
+                        
+                        const outputPath = path.join(tempDir, `lease_agreement_${application.applicationCode}.docx`);
+                        fs.writeFileSync(outputPath, buf);
+
+                        attachments.push({
+                            filename: `Lease_Agreement_${application.firstName}_${application.lastName}.docx`,
+                            path: outputPath,
+                            contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        });
+                    } catch (error) {
+                        console.error('Error generating lease agreement:', error);
+                        // Send email without attachment and log the error
+                        await sendEmail({
+                            to: application.email,
+                            subject: 'Application Approved - Action Required',
+                            text: `
+                                Dear ${application.firstName} ${application.lastName},
+
+                                We are pleased to inform you that your application for Alamait Student Accommodation has been approved.
+
+                                IMPORTANT: We were unable to attach the lease agreement to this email. Please contact administration to receive your lease agreement.
+
+                                Application Details:
+                                - Application Code: ${application.applicationCode}
+                                - Allocated Room: ${roomNumber}
+                                - Approval Date: ${approvalDate.toLocaleDateString()}
+                                - Valid Until: ${validUntil.toLocaleDateString()}
+
+                                Best regards,
+                                Alamait Student Accommodation Team
+                            `
+                        });
+
+                        // Skip the rest of the logic for sending the email with attachment
+                        return res.json({ 
+                            message: 'Application approved, but failed to attach lease agreement. Email sent without attachment.',
+                            application,
+                            room: roomInfo
+                        });
+                    }
 
                     // Send approval email
                     await sendEmail({

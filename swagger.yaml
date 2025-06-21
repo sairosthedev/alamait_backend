@@ -1525,6 +1525,8 @@ paths:
                 - email
                 - phone
                 - preferredRoom
+                - startDate
+                - endDate
               properties:
                 firstName:
                   type: string
@@ -1540,6 +1542,14 @@ paths:
                   type: array
                   items:
                     type: string
+                startDate:
+                  type: string
+                  format: date
+                  description: "Desired start date for accommodation"
+                endDate:
+                  type: string
+                  format: date
+                  description: "Desired end date for accommodation"
       responses:
         '201':
           description: Application submitted successfully
@@ -2101,6 +2111,32 @@ paths:
           description: Forbidden - Admin access required
         500:
           description: Failed to delete backup
+
+  /api/admin/backup/upload:
+    post:
+      tags:
+        - Backup Management
+      summary: Upload a new lease template
+      description: Upload a new lease template for a specific residence
+      consumes:
+        - multipart/form-data
+      parameters:
+        - name: residenceId
+          in: formData
+          type: string
+          required: true
+          description: The ID of the residence for which the template is being uploaded.
+        - name: leaseTemplate
+          in: formData
+      responses:
+        200:
+          description: Lease template uploaded successfully
+        400:
+          description: Invalid request parameters
+        401:
+          description: Unauthorized
+        500:
+          description: Server error
 
 tags:
   - name: Monitoring
