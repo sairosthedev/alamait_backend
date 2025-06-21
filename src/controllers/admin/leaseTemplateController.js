@@ -1,18 +1,11 @@
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const Residence = require('../../models/Residence');
 const mongoose = require('mongoose');
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, 'uploads/');
-    },
-    filename: (req, file, cb) => {
-        const residenceId = req.body.residenceId;
-        // The filename will be lease_agreement_<residenceId>.docx
-        cb(null, `lease_agreement_${residenceId}.docx`);
-    }
-});
+// Use memoryStorage to process the file in memory before saving
+const storage = multer.memoryStorage();
 
 // Export the multer middleware directly
 exports.uploadMiddleware = multer({
@@ -30,13 +23,26 @@ exports.uploadMiddleware = multer({
     }
 }).single('leaseTemplate');
 
-// A new handler for after the upload and validation are complete
+// This handler now saves the file from memory to disk
 exports.uploadLeaseTemplate = (req, res) => {
     if (!req.file) {
-        // This check is a fallback, multer should catch this earlier.
         return res.status(400).json({ error: 'Please select a file' });
     }
-    res.status(200).json({ 
-        message: `Lease agreement template for residence ${req.body.residenceId} uploaded successfully` 
-    });
+
+    try {
+        const residenceId = req.body.residenceId;
+        const filename = `lease_agreement_${residenceId}.docx`;
+        const outputPath = path.join(__dirname, '..', '..', '..', 'uploads', filename);
+
+        // Manually write the file from the buffer to the disk
+        fs.writeFileSync(outputPath, req.file.buffer);
+
+        res.status(200).json({ 
+            message: `Lease agreement template for residence ${residenceId} uploaded successfully` 
+        });
+
+    } catch (error) {
+        console.error('Error saving lease template from memory:', error);
+        res.status(500).json({ error: 'Failed to save the uploaded file.' });
+    }
 }; 
