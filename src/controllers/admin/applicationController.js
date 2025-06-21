@@ -225,10 +225,12 @@ exports.updateApplicationStatus = async (req, res) => {
                     // Generate and send lease agreement
                     let attachments = [];
                     try {
+                        const templateName = `lease_agreement_${residence._id}.docx`;
+                        const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', templateName));
+
                         console.log(`--- Generating Lease Agreement ---`);
                         console.log(`Searching for residence with ID: ${residence._id}`);
-                        const templatePath = path.join(__dirname, `../../../uploads/lease_agreement_${residence._id}.docx`);
-                        console.log(`Constructed template path: ${templatePath}`);
+                        console.log(`Constructed (normalized) template path: ${templatePath}`);
                         
                         if (!fs.existsSync(templatePath)) {
                             console.error('File not found at the specified path.');
