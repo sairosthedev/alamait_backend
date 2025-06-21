@@ -63,6 +63,7 @@ exports.getApplications = async (req, res) => {
                     price: room.price,
                     status: status,
                     residenceName: residence.name,
+                    residenceId: residence._id,
                     type: room.type
                 };
             });
