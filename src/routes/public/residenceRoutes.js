@@ -17,10 +17,4 @@ router.get('/1ACP', residenceController.getOneACPResidence);
 // Public route to get residence by name
 router.get('/name/:name', residenceController.getResidenceByName);
 
-// Public route to get all room statuses for a residence by name
-router.get('/name/:name/rooms', residenceController.getRoomStatusesByResidenceName);
-
-// Public route to get a specific room's status by residence name and room number
-router.get('/name/:name/room/:roomNumber', residenceController.getRoomStatusByResidenceAndRoomNumber);
-
 module.exports = router; 
