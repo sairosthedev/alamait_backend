@@ -1,6 +1,5 @@
 const Residence = require('../models/Residence');
 const { validationResult } = require('express-validator');
-const Application = require('../models/Application');
 
 // Get St Kilda residence
 exports.getStKildaResidence = async (req, res) => {
@@ -547,35 +546,12 @@ exports.getRoomStatusesByResidenceName = async (req, res) => {
                 message: 'Residence not found'
             });
         }
-        // Get all approved applications for this residence's rooms
-        const roomNumbers = residence.rooms.map(room => room.roomNumber);
-        const applications = await Application.find({
-            status: 'approved',
-            $or: [
-                { allocatedRoom: { $in: roomNumbers } },
-                { preferredRoom: { $in: roomNumbers } }
-            ]
-        });
-        // For each room, count approved applications and set status
-        const roomStatuses = residence.rooms.map(room => {
-            const approvedCount = applications.filter(app =>
-                app.allocatedRoom === room.roomNumber || app.preferredRoom === room.roomNumber
-            ).length;
-            let status = 'available';
-            if (approvedCount === 0) {
-                status = 'available';
-            } else if (approvedCount >= room.capacity) {
-                status = 'occupied';
-            } else {
-                status = 'reserved';
-            }
-            return {
-                roomNumber: room.roomNumber,
-                status,
-                occupancy: approvedCount,
-                capacity: room.capacity
-            };
-        });
+        const roomStatuses = residence.rooms.map(room => ({
+            roomNumber: room.roomNumber,
+            status: getRoomStatus(room),
+            currentOccupancy: room.currentOccupancy,
+            capacity: room.capacity
+        }));
         res.status(200).json({
             success: true,
             data: roomStatuses
