@@ -515,6 +515,27 @@ exports.getResidenceByName = async (req, res) => {
     }
 };
 
+// Shared helper to determine room status (matches admin logic)
+function getRoomStatus(room) {
+    const capacity = room.capacity || (
+        room.type === 'single' ? 1 :
+        room.type === 'double' ? 2 :
+        room.type === 'studio' ? 1 :
+        room.type === 'triple' ? 3 :
+        room.type === 'quad' ? 4 : 4
+    );
+    let currentOccupancy = room.currentOccupancy || 0;
+    let status = room.status?.toLowerCase() || 'unavailable';
+    if (currentOccupancy === 0) {
+        status = 'available';
+    } else if (currentOccupancy >= capacity) {
+        status = 'occupied';
+    } else if (currentOccupancy > 0) {
+        status = 'reserved';
+    }
+    return status;
+}
+
 // Public: Get status and occupancy for all rooms in a residence by name
 exports.getRoomStatusesByResidenceName = async (req, res) => {
     try {
@@ -527,7 +548,7 @@ exports.getRoomStatusesByResidenceName = async (req, res) => {
         }
         const roomStatuses = residence.rooms.map(room => ({
             roomNumber: room.roomNumber,
-            status: room.status,
+            status: getRoomStatus(room),
             currentOccupancy: room.currentOccupancy,
             capacity: room.capacity
         }));
@@ -565,7 +586,7 @@ exports.getRoomStatusByResidenceAndRoomNumber = async (req, res) => {
             success: true,
             data: {
                 roomNumber: room.roomNumber,
-                status: room.status,
+                status: getRoomStatus(room),
                 currentOccupancy: room.currentOccupancy,
                 capacity: room.capacity
             }
