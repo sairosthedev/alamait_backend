@@ -354,10 +354,16 @@ exports.updateApplicationStatus = async (req, res) => {
                     };
                     
                     res.json({ 
-                        message: 'Application approved successfully',
+                        message: 'Application approved and email sent successfully',
                         application,
                         room: roomInfo
                     });
+
+                    // Clean up temporary files
+                    if (attachments.length > 0) {
+                        fs.unlinkSync(attachments[0].path);
+                    }
+
                 } catch (error) {
                     console.error('Error in approval process:', error);
                     return res.status(400).json({ 
@@ -730,9 +736,3 @@ exports.syncRoomOccupancy = async (req, res) => {
         
         res.json({
             message: `Room occupancy synced successfully. Updated ${updatedRooms} rooms.`
-        });
-    } catch (error) {
-        console.error('Error in syncRoomOccupancy:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-}; 
