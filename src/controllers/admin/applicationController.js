@@ -736,9 +736,3 @@ exports.syncRoomOccupancy = async (req, res) => {
         
         res.json({
             message: `Room occupancy synced successfully. Updated ${updatedRooms} rooms.`
-        });
-    } catch (error) {
-        console.error('Error syncing room occupancy:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-};
