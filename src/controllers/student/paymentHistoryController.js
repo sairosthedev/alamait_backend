@@ -569,6 +569,12 @@ exports.uploadNewProofOfPayment = (req, res) => {
             const adminFee = parseFloat(req.body.adminFee) || 0;
             const deposit = parseFloat(req.body.deposit) || 0;
             const totalAmount = rentAmount + adminFee + deposit;
+            const { paymentMonth } = req.body;
+
+            // Validate paymentMonth
+            if (!paymentMonth || !/^\d{4}-\d{2}$/.test(paymentMonth)) {
+                return res.status(400).json({ error: 'Payment month is required in YYYY-MM format.' });
+            }
 
             // Create a new payment record
             const payment = new Payment({
@@ -581,6 +587,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 adminFee,
                 deposit,
                 totalAmount,
+                paymentMonth,
                 date: new Date(),
                 status: 'Pending',
                 method: 'Bank Transfer',
@@ -623,6 +630,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
                     deposit: payment.deposit,
                     totalAmount: payment.totalAmount,
                     date: payment.date,
+                    paymentMonth: payment.paymentMonth,
                     status: payment.status,
                     proofOfPayment: payment.proofOfPayment
                 }

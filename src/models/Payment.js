@@ -42,6 +42,10 @@ const paymentSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    paymentMonth: {
+        type: String, // Format: "YYYY-MM"
+        required: true
+    },
     date: {
         type: Date,
         required: true
