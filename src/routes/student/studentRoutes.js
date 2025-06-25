@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const { check } = require('express-validator');
+const leaseRoutes = require('./leaseRoutes');
 
 // Import controllers (you'll need to create these)
 const {
@@ -50,5 +51,7 @@ router.get('/lease-agreement', downloadLeaseAgreement);
 
 // Add route for uploading signed lease
 router.post('/lease-agreement/upload', uploadSignedLeaseHandler);
+
+router.use('/lease', leaseRoutes);
 
 module.exports = router; 
