@@ -225,56 +225,34 @@ exports.updateApplicationStatus = async (req, res) => {
                     // Generate and send lease agreement
                     let attachments = [];
                     try {
-                        const templateName = `lease_agreement_${residence._id}.docx`;
-                        const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', templateName));
-
-                        console.log(`--- Generating Lease Agreement ---`);
-                        console.log(`Searching for residence with ID: ${residence._id}`);
-                        console.log(`Constructed (normalized) template path: ${templatePath}`);
-                        
-                        if (!fs.existsSync(templatePath)) {
-                            console.error('File not found at the specified path.');
-                            throw new Error(`Lease template for residence ${residence.name} not found.`);
+                        // Map residence name to static lease file
+                        let leaseFile = null;
+                        const name = residence.name.toLowerCase();
+                        if (name.includes('st kilda')) {
+                            leaseFile = 'ST Kilda Boarding Agreement1.docx';
+                        } else if (name.includes('belvedere')) {
+                            leaseFile = 'Belvedere.docx';
+                        } else if (name.includes('newlands')) {
+                            leaseFile = 'Lease_Agreement_Template.docx';
+                        } else if (name.includes('office')) {
+                            leaseFile = 'Alamait lease agreement.docx';
                         }
-
-                        const content = fs.readFileSync(templatePath, 'binary');
-
-                        const zip = new PizZip(content);
-                        const doc = new Docxtemplater(zip, {
-                            paragraphLoop: true,
-                            linebreaks: true,
-                        });
-
-                        doc.setData({
-                            firstName: application.firstName,
-                            lastName: application.lastName,
-                            applicationCode: application.applicationCode,
-                            allocatedRoom: roomNumber,
-                            approvalDate: approvalDate.toLocaleDateString(),
-                            validUntil: validUntil.toLocaleDateString(),
-                            residenceName: residence.name,
-                            residenceAddress: residence.address,
-                        });
-
-                        doc.render();
-
-                        const buf = doc.getZip().generate({ type: 'nodebuffer' });
-
-                        const tempDir = path.join(__dirname, '../../../temp');
-                        if (!fs.existsSync(tempDir)) {
-                            fs.mkdirSync(tempDir);
+                        if (leaseFile) {
+                            const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', leaseFile));
+                            if (fs.existsSync(templatePath)) {
+                                attachments.push({
+                                    filename: leaseFile,
+                                    path: templatePath,
+                                    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                                });
+                            } else {
+                                throw new Error(`Lease template for residence ${residence.name} not found.`);
+                            }
+                        } else {
+                            throw new Error(`No lease template mapping for residence ${residence.name}`);
                         }
-                        
-                        const outputPath = path.join(tempDir, `lease_agreement_${application.applicationCode}.docx`);
-                        fs.writeFileSync(outputPath, buf);
-
-                        attachments.push({
-                            filename: `Lease_Agreement_${application.firstName}_${application.lastName}.docx`,
-                            path: outputPath,
-                            contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                        });
                     } catch (error) {
-                        console.error('Error generating lease agreement:', error);
+                        console.error('Error attaching lease agreement:', error);
                         // Send email without attachment and log the error
                         await sendEmail({
                             to: application.email,
@@ -296,7 +274,6 @@ exports.updateApplicationStatus = async (req, res) => {
                                 Alamait Student Accommodation Team
                             `
                         });
-
                         // Define roomInfo for the response even in case of failure
                         const roomInfo = {
                             name: roomNumber,
@@ -305,7 +282,6 @@ exports.updateApplicationStatus = async (req, res) => {
                             capacity: room.capacity,
                             occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
                         };
-
                         // Skip the rest of the logic for sending the email with attachment
                         return res.json({ 
                             message: 'Application approved, but failed to attach lease agreement. Email sent without attachment.',
@@ -341,7 +317,8 @@ exports.updateApplicationStatus = async (req, res) => {
 
                             Best regards,
                             Alamait Student Accommodation Team
-                        `
+                        `,
+                        attachments: attachments.length > 0 ? attachments : undefined
                     });
 
                     // Prepare room information to return to the frontend

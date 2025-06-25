@@ -24,7 +24,8 @@ exports.sendEmail = async (options) => {
             to: options.to,
             subject: options.subject,
             text: options.text,
-            html: options.html
+            html: options.html,
+            attachments: options.attachments
         };
 
         await transporter.sendMail(mailOptions);

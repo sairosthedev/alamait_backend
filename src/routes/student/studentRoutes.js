@@ -9,7 +9,9 @@ const {
     updateProfile,
     changePassword,
     getCurrentResidence,
-    getAllUsersForMessaging
+    getAllUsersForMessaging,
+    downloadLeaseAgreement,
+    uploadSignedLeaseHandler
 } = require('../../controllers/student/studentController');
 
 // Validation middleware
@@ -42,5 +44,11 @@ router.get('/current-residence', getCurrentResidence);
 
 // Add route for getting all students for messaging
 router.get('/users/students', getAllUsersForMessaging);
+
+// Add route for downloading lease agreement as PDF
+router.get('/lease-agreement', downloadLeaseAgreement);
+
+// Add route for uploading signed lease
+router.post('/lease-agreement/upload', uploadSignedLeaseHandler);
 
 module.exports = router; 

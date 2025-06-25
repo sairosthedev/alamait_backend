@@ -5,6 +5,11 @@ const bcrypt = require('bcryptjs');
 const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const Booking = require('../../models/Booking');
+const path = require('path');
+const fs = require('fs');
+const mammoth = require('mammoth');
+const PDFDocument = require('pdfkit');
+const multer = require('multer');
 
 // Get all students
 const getAllStudents = async (req, res) => {
@@ -350,6 +355,89 @@ const getAllUsersForMessaging = async (req, res) => {
   }
 };
 
+// Download lease agreement as PDF
+const downloadLeaseAgreement = async (req, res) => {
+    try {
+        // 1. Find the student's residenceId
+        let residenceId = req.user.residence;
+        let firstName = req.user.firstName || 'Student';
+        let lastName = req.user.lastName || '';
+        // If not in user, try latest approved application
+        if (!residenceId) {
+            const application = await Application.findOne({
+                email: req.user.email,
+                status: 'approved'
+            }).sort({ updatedAt: -1 });
+            if (application && application.residence) {
+                residenceId = application.residence;
+                firstName = application.firstName || firstName;
+                lastName = application.lastName || lastName;
+            }
+        }
+        if (!residenceId) {
+            return res.status(404).json({ error: 'Residence not found for student.' });
+        }
+        // 2. Locate the correct lease agreement DOCX
+        const templateName = `lease_agreement_${residenceId}.docx`;
+        const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', templateName));
+        if (!fs.existsSync(templatePath)) {
+            return res.status(404).json({ error: 'Lease agreement template not found for your property.' });
+        }
+        // 3. Convert DOCX to HTML using mammoth
+        const docxBuffer = fs.readFileSync(templatePath);
+        const { value: html } = await mammoth.convertToHtml({ buffer: docxBuffer });
+        // 4. Convert HTML to PDF using pdfkit
+        const doc = new PDFDocument();
+        let filename = `Lease_Agreement_${firstName}_${lastName}.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        doc.pipe(res);
+        // Simple HTML to PDF rendering (for more complex, use pdfmake or puppeteer)
+        doc.fontSize(12).text(html.replace(/<[^>]+>/g, ''), { align: 'left' });
+        doc.end();
+    } catch (error) {
+        console.error('Error downloading lease agreement:', error);
+        res.status(500).json({ error: 'Failed to generate lease agreement PDF.' });
+    }
+};
+
+// Multer storage for signed leases
+const signedLeaseStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        const dir = path.join(__dirname, '..', '..', '..', 'uploads', 'signed_leases');
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        cb(null, dir);
+    },
+    filename: function (req, file, cb) {
+        const ext = file.originalname.split('.').pop();
+        cb(null, `${req.user._id}_${Date.now()}.${ext}`);
+    }
+});
+const uploadSignedLease = multer({
+    storage: signedLeaseStorage,
+    fileFilter: (req, file, cb) => {
+        const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
+        if (allowed.includes(file.mimetype)) cb(null, true);
+        else cb(new Error('Only PDF, JPEG, or PNG allowed'));
+    },
+    limits: { fileSize: 10 * 1024 * 1024 }
+}).single('signedLease');
+
+// Student uploads signed lease
+const uploadSignedLeaseHandler = async (req, res) => {
+    uploadSignedLease(req, res, async function (err) {
+        if (err) {
+            return res.status(400).json({ error: err.message });
+        }
+        // Save file path in user model
+        const filePath = `/uploads/signed_leases/${req.file.filename}`;
+        await User.findByIdAndUpdate(req.user._id, { signedLeasePath: filePath });
+        res.json({ message: 'Signed lease uploaded successfully', filePath });
+    });
+};
+
 module.exports = {
     getAllStudents,
     getStudentById,
@@ -360,5 +448,7 @@ module.exports = {
     updateProfile,
     changePassword,
     getCurrentResidence,
-    getAllUsersForMessaging
+    getAllUsersForMessaging,
+    downloadLeaseAgreement,
+    uploadSignedLeaseHandler
 }; 

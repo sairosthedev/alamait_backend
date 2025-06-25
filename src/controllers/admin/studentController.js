@@ -1,6 +1,10 @@
 const User = require('../../models/User');
 const Booking = require('../../models/Booking');
 const { validationResult } = require('express-validator');
+const { sendEmail } = require('../../utils/email');
+const path = require('path');
+const fs = require('fs');
+const Residence = require('../../models/Residence');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -70,7 +74,7 @@ exports.createStudent = async (req, res) => {
     }
 
     try {
-        const { email, firstName, lastName, phone, status, emergencyContact } = req.body;
+        const { email, firstName, lastName, phone, status, emergencyContact, residenceId } = req.body;
 
         // Check if user exists
         let student = await User.findOne({ email });
@@ -97,8 +101,57 @@ exports.createStudent = async (req, res) => {
 
         await student.save();
 
-        // TODO: Send email with temporary password
-        // sendTempPasswordEmail(email, tempPassword);
+        // Prepare lease agreement attachment if residenceId is provided
+        let attachments = [];
+        if (residenceId) {
+            // Fetch the residence name from DB
+            const residence = await Residence.findById(residenceId);
+
+            // Map residence name to file
+            let leaseFile = null;
+            if (residence) {
+                const name = residence.name.toLowerCase();
+                if (name.includes('st kilda') || name.includes('belvedere')) {
+                    leaseFile = 'ST Kilda Boarding Agreement1.docx';
+                } else if (name.includes('newlands')) {
+                    leaseFile = 'Lease_Agreement_Template.docx';
+                } else if (name.includes('office')) {
+                    leaseFile = 'Office_Lease_Agreement.docx'; // replace with actual filename if different
+                }
+            }
+
+            if (leaseFile) {
+                const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', leaseFile));
+                if (fs.existsSync(templatePath)) {
+                    attachments.push({
+                        filename: leaseFile,
+                        path: templatePath,
+                        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    });
+                }
+            }
+        }
+
+        // Send onboarding email with temporary password and lease agreement if available
+        await sendEmail({
+            to: email,
+            subject: 'Welcome to Alamait Student Accommodation',
+            text: `
+                Dear ${firstName} ${lastName},
+
+                Welcome to Alamait Student Accommodation! Your account has been created.
+
+                Temporary Password: (provided upon registration)
+
+                Please log in and change your password as soon as possible.
+
+                Your lease agreement is attached to this email. Please review and sign it as required.
+
+                Best regards,
+                Alamait Student Accommodation Team
+            `,
+            attachments: attachments.length > 0 ? attachments : undefined
+        });
 
         res.status(201).json({
             ...student.toObject(),
@@ -203,5 +256,25 @@ exports.getStudentPayments = async (req, res) => {
     } catch (error) {
         console.error('Error in getStudentPayments:', error);
         res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Admin downloads a student's signed lease
+exports.downloadSignedLease = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const user = await User.findById(studentId);
+        if (!user || !user.signedLeasePath) {
+            return res.status(404).json({ error: 'Signed lease not found for this student.' });
+        }
+        const filePath = path.join(__dirname, '..', '..', '..', user.signedLeasePath);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'Signed lease file missing from server.' });
+        }
+        res.download(filePath, err => {
+            if (err) res.status(500).json({ error: 'Failed to download file.' });
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Server error.' });
     }
 }; 

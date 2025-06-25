@@ -8,7 +8,8 @@ const {
     createStudent,
     updateStudent,
     deleteStudent,
-    getStudentPayments
+    getStudentPayments,
+    downloadSignedLease
 } = require('../../controllers/admin/studentController');
 const User = require('../../models/User');
 
@@ -52,5 +53,6 @@ router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);
 router.delete('/:studentId', deleteStudent);
 router.get('/:studentId/payments', getStudentPayments);
+router.get('/lease-agreement/:studentId', downloadSignedLease);
 
 module.exports = router; 
