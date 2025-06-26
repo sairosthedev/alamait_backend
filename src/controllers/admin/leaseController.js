@@ -12,8 +12,7 @@ exports.getAllLeases = async (req, res) => {
       return {
         ...leaseObject,
         residenceName: lease.residence && lease.residence.name ? lease.residence.name : leaseObject.residenceName || '-',
-        downloadUrl: `/api/leases/download/${leaseObject.filename}`,
-        viewUrl: `/api/leases/view/${leaseObject.filename}`
+        downloadUrl: `/api/leases/download/${leaseObject.filename}`
       };
     });
     res.json(formattedLeases);
