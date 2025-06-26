@@ -40,6 +40,7 @@ const adminEventRoutes = require('./routes/admin/eventRoutes');
 const adminExpenseRoutes = require('./routes/admin/expenseRoutes');
 const financeResidenceRoutes = require('./routes/finance/residenceRoutes');
 const leaseTemplateRoutes = require('./routes/admin/leaseTemplateRoutes');
+const adminLeaseRoutes = require('./routes/admin/leaseRoutes');
 
 // Student routes
 const studentBookingRoutes = require('./routes/student/bookingRoutes');
@@ -173,9 +174,8 @@ app.get('/api/student/bookingdetails/health', (req, res) => {
 // Auth routes (public)
 app.use('/api/auth', authRoutes);
 
-// Admin routes
+// Admin routes - more specific routes first
 app.use('/api/admin/expenses', adminExpenseRoutes);
-app.use('/api/admin', adminRoutes);
 app.use('/api/admin/users', adminUserRoutes);
 app.use('/api/admin/reports', adminReportRoutes);
 app.use('/api/admin/residences', adminResidenceRoutes);
@@ -185,8 +185,14 @@ app.use('/api/admin/payments', adminPaymentRoutes);
 app.use('/api/admin/profile', adminProfileRoutes);
 app.use('/api/admin/messages', adminMessageRoutes);
 app.use('/api/admin/events', adminEventRoutes);
-app.use('/api/finance/residences', financeResidenceRoutes);
-app.use('/api/admin/lease', leaseTemplateRoutes);
+app.use('/api/admin/lease-templates', leaseTemplateRoutes);
+app.use('/api/admin/leases', adminLeaseRoutes);
+// Generic admin routes last
+app.use('/api/admin', adminRoutes);
+
+// General lease routes
+const leaseRoutes = require('./routes/leaseRoutes');
+app.use('/api/leases', leaseRoutes);
 
 // Student routes
 app.use('/api/student', studentRoutes);
