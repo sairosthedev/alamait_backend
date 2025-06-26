@@ -599,24 +599,41 @@ exports.updatePaymentStatus = async (req, res) => {
 // Delete application
 exports.deleteApplication = async (req, res) => {
     try {
+        const applicationId = req.params.applicationId;
+        console.log('Attempting to delete application with ID:', applicationId);
         // Find the application by ID
-        const application = await Application.findById(req.params.applicationId).populate('student');
+        const application = await Application.findById(applicationId).populate('student');
         
         if (!application) {
+            console.error('Application not found for ID:', applicationId);
             return res.status(404).json({ error: 'Application not found' });
         }
 
         // Delete associated user account if it exists
         if (application.student) {
-            await User.findByIdAndDelete(application.student._id);
+            try {
+                await User.findByIdAndDelete(application.student._id);
+                console.log('Deleted associated user with ID:', application.student._id);
+            } catch (userDeleteError) {
+                console.error('Error deleting associated user:', userDeleteError);
+            }
+        } else {
+            console.log('No associated user to delete for application:', applicationId);
         }
 
         // Delete the application itself
-        await application.remove();
+        try {
+            await application.remove();
+            console.log('Deleted application with ID:', applicationId);
+        } catch (appDeleteError) {
+            console.error('Error deleting application:', appDeleteError);
+            return res.status(500).json({ error: 'Failed to delete application', details: appDeleteError.message });
+        }
+
         res.json({ message: 'Application and associated user deleted successfully' });
     } catch (error) {
-        console.error('Error in deleteApplication:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Error in deleteApplication:', error, error.stack);
+        res.status(500).json({ error: 'Server error', details: error.message });
     }
 };
 
