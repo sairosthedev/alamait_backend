@@ -19,7 +19,8 @@ exports.uploadLease = async (req, res) => {
       path: req.file.path,
       mimetype: req.file.mimetype,
       size: req.file.size,
-      uploadedAt: new Date()
+      uploadedAt: new Date(),
+      residence: user.residence
     });
     await user.save();
     res.status(200).json({
