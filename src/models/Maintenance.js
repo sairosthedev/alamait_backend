@@ -78,11 +78,13 @@ const maintenanceSchema = new mongoose.Schema({
     },
     estimatedCost: {
         type: Number,
-        min: 0
+        min: 0,
+        default: 0
     },
     actualCost: {
         type: Number,
-        min: 0
+        min: 0,
+        default: 0
     },
     financeStatus: {
         type: String,
