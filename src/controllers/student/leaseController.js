@@ -1,5 +1,7 @@
 const path = require('path');
 const User = require('../../models/User');
+const Application = require('../../models/Application');
+const Residence = require('../../models/Residence');
 
 // Handles file upload (multer middleware will save the file)
 exports.uploadLease = async (req, res) => {
@@ -12,6 +14,34 @@ exports.uploadLease = async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    // Find the latest approved or waitlisted application for this user
+    const application = await Application.findOne({
+      student: user._id,
+      status: { $in: ['approved', 'waitlisted'] }
+    }).sort({ applicationDate: -1 });
+
+    let startDate = null;
+    let endDate = null;
+    let residence = user.residence;
+    let residenceName = null;
+
+    if (application) {
+      startDate = application.startDate;
+      endDate = application.endDate;
+      if (application.residence) {
+        residence = application.residence;
+      }
+    }
+
+    // Populate residence name if possible
+    if (residence) {
+      const residenceDoc = await Residence.findById(residence);
+      if (residenceDoc) {
+        residenceName = residenceDoc.name;
+      }
+    }
+
     // Push lease info to user's leases array
     user.leases.push({
       filename: req.file.filename,
@@ -20,7 +50,10 @@ exports.uploadLease = async (req, res) => {
       mimetype: req.file.mimetype,
       size: req.file.size,
       uploadedAt: new Date(),
-      residence: user.residence
+      residence: residence,
+      residenceName: residenceName,
+      startDate: startDate,
+      endDate: endDate
     });
     await user.save();
     res.status(200).json({
@@ -29,7 +62,11 @@ exports.uploadLease = async (req, res) => {
       originalname: req.file.originalname,
       path: req.file.path,
       mimetype: req.file.mimetype,
-      size: req.file.size
+      size: req.file.size,
+      residence: residence,
+      residenceName: residenceName,
+      startDate: startDate,
+      endDate: endDate
     });
   } catch (error) {
     console.error('Error uploading lease:', error);
