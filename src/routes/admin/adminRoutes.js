@@ -39,6 +39,7 @@ const {
 } = require('../../controllers/admin/paymentController');
 
 const adminController = require('../../controllers/admin/adminController');
+const leaseController = require('../../controllers/student/leaseController');
 
 // Validation middleware
 const maintenanceUpdateValidation = [
@@ -134,7 +135,7 @@ router.get('/payments', getPayments);
 router.put('/payments/:paymentId', updatePaymentStatus);
 router.post('/payments', paymentValidation, createPayment);
 
-// Add route for fetching all leases from all students
-router.get('/leases', adminController.getAllLeases);
+// Add route for fetching all leases from all students (unified logic)
+router.get('/leases2', leaseController.listAllLeases);
 
 module.exports = router; 

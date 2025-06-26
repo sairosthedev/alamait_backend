@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const leaseController = require('../../controllers/student/leaseController');
+const { auth, checkRole } = require('../../middleware/auth');
 
 // Set up multer storage
 const storage = multer.diskStorage({
