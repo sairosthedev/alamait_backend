@@ -38,6 +38,8 @@ const {
     createPayment
 } = require('../../controllers/admin/paymentController');
 
+const adminController = require('../../controllers/admin/adminController');
+
 // Validation middleware
 const maintenanceUpdateValidation = [
     check('status')
@@ -131,5 +133,8 @@ router.delete('/applications/:applicationId', deleteApplication);
 router.get('/payments', getPayments);
 router.put('/payments/:paymentId', updatePaymentStatus);
 router.post('/payments', paymentValidation, createPayment);
+
+// Add route for fetching all leases from all students
+router.get('/leases', adminController.getAllLeases);
 
 module.exports = router; 
