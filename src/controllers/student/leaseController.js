@@ -16,29 +16,9 @@ exports.uploadLease = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Find the latest approved or waitlisted application for this user
-    const application = await Application.findOne({
-      student: user._id,
-      status: { $in: ['approved', 'waitlisted'] }
-    }).sort({ applicationDate: -1 });
-
-    let startDate = null;
-    let endDate = null;
-    let residence = null;
+    // Always use residence from user document
+    const residence = user.residence;
     let residenceName = null;
-
-    if (application) {
-      startDate = application.startDate;
-      endDate = application.endDate;
-      if (application.residence) {
-        residence = application.residence;
-      }
-      console.log('Lease upload: found application', application._id, 'with residence', residence);
-    } else {
-      // Fallback to user's residence if no application found
-      residence = user.residence;
-      console.log('Lease upload: no application found, using user.residence', residence);
-    }
 
     // Populate residence name if possible
     if (residence) {
@@ -51,6 +31,19 @@ exports.uploadLease = async (req, res) => {
       }
     } else {
       console.log('Lease upload: no residence found');
+    }
+
+    // Find the latest approved or waitlisted application for this user (for start/end date)
+    const application = await Application.findOne({
+      student: user._id,
+      status: { $in: ['approved', 'waitlisted'] }
+    }).sort({ applicationDate: -1 });
+
+    let startDate = null;
+    let endDate = null;
+    if (application) {
+      startDate = application.startDate;
+      endDate = application.endDate;
     }
 
     // Create a Lease document in the leases collection
