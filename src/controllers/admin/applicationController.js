@@ -599,21 +599,28 @@ exports.updatePaymentStatus = async (req, res) => {
 // Delete application
 exports.deleteApplication = async (req, res) => {
     try {
-        const application = await User.findById(req.params.applicationId);
+        // Find the application by ID
+        const application = await Application.findById(req.params.applicationId).populate('student');
         
         if (!application) {
             return res.status(404).json({ error: 'Application not found' });
         }
 
-        // Only delete if not verified
+        // Only delete if not verified (if you want to keep this logic)
         if (application.isVerified) {
             return res.status(400).json({ 
                 error: 'Cannot delete verified application' 
             });
         }
 
+        // Delete associated user account if it exists
+        if (application.student) {
+            await User.findByIdAndDelete(application.student._id);
+        }
+
+        // Delete the application itself
         await application.remove();
-        res.json({ message: 'Application deleted successfully' });
+        res.json({ message: 'Application and associated user deleted successfully' });
     } catch (error) {
         console.error('Error in deleteApplication:', error);
         res.status(500).json({ error: 'Server error' });
