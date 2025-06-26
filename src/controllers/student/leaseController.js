@@ -31,11 +31,11 @@ exports.uploadLease = async (req, res) => {
       residence = application.residence;
       startDate = application.startDate;
       endDate = application.endDate;
-      console.log('Lease upload: using residence from application', residence);
+      console.log('Lease upload: using residence from application', residence, typeof residence);
     } else {
       // Fallback to user's residence if no application found
       residence = user.residence;
-      console.log('Lease upload: no application found, using user.residence', residence);
+      console.log('Lease upload: no application found, using user.residence', residence, typeof residence);
     }
 
     // Populate residence name if possible

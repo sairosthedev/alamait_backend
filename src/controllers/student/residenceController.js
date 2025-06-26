@@ -1,5 +1,8 @@
 const Residence = require('../../models/Residence');
 const { validationResult } = require('express-validator');
+const Application = require('../../models/Application');
+const User = require('../../models/User');
+const Lease = require('../../models/Lease');
 
 // @route   GET /api/student/residences
 // @desc    Get all available residences
@@ -44,11 +47,26 @@ exports.getAvailableResidences = async (req, res) => {
 // @access  Private (Student only)
 exports.getResidenceDetails = async (req, res) => {
     try {
-        const residence = await Residence.findById(req.params.id)
+        const user = await User.findById(req.user.id).select('residence');
+
+        // Find the latest approved or waitlisted application for this user
+        const application = await Application.findOne({
+            student: req.user.id,
+            status: { $in: ['approved', 'waitlisted'] }
+        }).sort({ applicationDate: -1 });
+
+        let residence = null;
+        if (application && application.residence) {
+            residence = application.residence; // <-- THIS IS THE RESIDENCE ID FROM APPLICATION
+        } else {
+            residence = user.residence; // fallback
+        }
+
+        const residenceDetails = await Residence.findById(residence)
             .select('-manager')
             .lean();
 
-        if (!residence) {
+        if (!residenceDetails) {
             return res.status(404).json({
                 success: false,
                 error: 'Residence not found'
@@ -56,7 +74,7 @@ exports.getResidenceDetails = async (req, res) => {
         }
 
         // Format room information to include only necessary details
-        const formattedRooms = residence.rooms.map(room => ({
+        const formattedRooms = residenceDetails.rooms.map(room => ({
             number: room.roomNumber,
             type: room.type,
             price: room.price,
@@ -70,18 +88,18 @@ exports.getResidenceDetails = async (req, res) => {
 
         // Format the response
         const formattedResidence = {
-            id: residence._id,
-            name: residence.name,
-            description: residence.description,
-            address: residence.address,
-            amenities: residence.amenities,
-            features: residence.features,
-            rules: residence.rules,
-            images: residence.images,
-            contactInfo: residence.contactInfo,
+            id: residenceDetails._id,
+            name: residenceDetails.name,
+            description: residenceDetails.description,
+            address: residenceDetails.address,
+            amenities: residenceDetails.amenities,
+            features: residenceDetails.features,
+            rules: residenceDetails.rules,
+            images: residenceDetails.images,
+            contactInfo: residenceDetails.contactInfo,
             rooms: formattedRooms,
-            totalRooms: residence.rooms.length,
-            availableRooms: residence.rooms.filter(room => 
+            totalRooms: residenceDetails.rooms.length,
+            availableRooms: residenceDetails.rooms.filter(room => 
                 room.status === 'available' || room.status === 'reserved'
             ).length
         };
@@ -95,6 +113,52 @@ exports.getResidenceDetails = async (req, res) => {
         res.status(500).json({ 
             success: false, 
             error: 'Failed to fetch residence details',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+// @route   POST /api/student/lease
+// @desc    Create a new lease
+// @access  Private (Student only)
+exports.createLease = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+
+        // Find the latest approved or waitlisted application for this user
+        const application = await Application.findOne({
+            student: req.user.id,
+            status: { $in: ['approved', 'waitlisted'] }
+        }).sort({ applicationDate: -1 });
+
+        let residence = null;
+        if (application && application.residence) {
+            residence = application.residence; // <-- THIS IS THE RESIDENCE ID FROM APPLICATION
+        } else {
+            residence = user.residence; // fallback
+        }
+
+        if (!residence) {
+            return res.status(400).json({ message: 'No residence found in application or user profile.' });
+        }
+
+        const leaseDoc = await Lease.create({
+            studentId: user._id,
+            studentName: `${user.firstName} ${user.lastName}`,
+            email: user.email,
+            residence: residence,
+            // ...other fields
+        });
+
+        res.json({
+            success: true,
+            data: leaseDoc
+        });
+    } catch (error) {
+        console.error('Error in createLease:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to create lease',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
