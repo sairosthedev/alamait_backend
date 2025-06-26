@@ -2,6 +2,7 @@ const path = require('path');
 const User = require('../../models/User');
 const Application = require('../../models/Application');
 const Residence = require('../../models/Residence');
+const Lease = require('../../models/Lease');
 
 // Handles file upload (multer middleware will save the file)
 exports.uploadLease = async (req, res) => {
@@ -52,31 +53,26 @@ exports.uploadLease = async (req, res) => {
       console.log('Lease upload: no residence found');
     }
 
-    // Push lease info to user's leases array
-    user.leases.push({
+    // Create a Lease document in the leases collection
+    const leaseDoc = await Lease.create({
+      studentId: user._id,
+      studentName: `${user.firstName} ${user.lastName}`,
+      email: user.email,
+      residence: residence,
+      residenceName: residenceName,
+      startDate: startDate,
+      endDate: endDate,
       filename: req.file.filename,
       originalname: req.file.originalname,
       path: req.file.path,
       mimetype: req.file.mimetype,
       size: req.file.size,
-      uploadedAt: new Date(),
-      residence: residence,
-      residenceName: residenceName,
-      startDate: startDate,
-      endDate: endDate
+      uploadedAt: new Date()
     });
-    await user.save();
+
     res.status(200).json({
       message: 'Lease uploaded successfully',
-      filename: req.file.filename,
-      originalname: req.file.originalname,
-      path: req.file.path,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
-      residence: residence,
-      residenceName: residenceName,
-      startDate: startDate,
-      endDate: endDate
+      lease: leaseDoc
     });
   } catch (error) {
     console.error('Error uploading lease:', error);
@@ -87,11 +83,8 @@ exports.uploadLease = async (req, res) => {
 // List uploaded leases for the current user
 exports.listLeases = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    res.status(200).json(user.leases || []);
+    const leases = await Lease.find({ studentId: req.user.id });
+    res.status(200).json(leases);
   } catch (error) {
     console.error('Error listing leases:', error);
     res.status(500).json({ message: 'Server error' });
