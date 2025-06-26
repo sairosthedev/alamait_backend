@@ -6,11 +6,15 @@ exports.getAllLeases = async (req, res) => {
   try {
     // Find all leases and populate residence name
     const leases = await Lease.find({}).populate('residence', 'name');
-    // Format leases to include residence name at top level
-    const formattedLeases = leases.map(lease => ({
-      ...lease.toObject(),
-      residenceName: lease.residence && lease.residence.name ? lease.residence.name : lease.residenceName || '-',
-    }));
+    // Format leases to include residence name and download URL at top level
+    const formattedLeases = leases.map(lease => {
+      const leaseObject = lease.toObject();
+      return {
+        ...leaseObject,
+        residenceName: lease.residence && lease.residence.name ? lease.residence.name : leaseObject.residenceName || '-',
+        downloadUrl: `/api/leases/download/${leaseObject.filename}`
+      };
+    });
     res.json(formattedLeases);
   } catch (err) {
     console.error('Error fetching all leases:', err);
