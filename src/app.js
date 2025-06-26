@@ -40,6 +40,7 @@ const adminEventRoutes = require('./routes/admin/eventRoutes');
 const adminExpenseRoutes = require('./routes/admin/expenseRoutes');
 const financeResidenceRoutes = require('./routes/finance/residenceRoutes');
 const leaseTemplateRoutes = require('./routes/admin/leaseTemplateRoutes');
+const adminLeaseRoutes = require('./routes/admin/leaseRoutes');
 
 // Student routes
 const studentBookingRoutes = require('./routes/student/bookingRoutes');
@@ -184,7 +185,8 @@ app.use('/api/admin/payments', adminPaymentRoutes);
 app.use('/api/admin/profile', adminProfileRoutes);
 app.use('/api/admin/messages', adminMessageRoutes);
 app.use('/api/admin/events', adminEventRoutes);
-app.use('/api/admin/lease', leaseTemplateRoutes);
+app.use('/api/admin/lease-templates', leaseTemplateRoutes);
+app.use('/api/admin/leases', adminLeaseRoutes);
 // Generic admin routes last
 app.use('/api/admin', adminRoutes);
 
