@@ -23,7 +23,7 @@ exports.uploadLease = async (req, res) => {
 
     let startDate = null;
     let endDate = null;
-    let residence = user.residence;
+    let residence = null;
     let residenceName = null;
 
     if (application) {
@@ -32,6 +32,11 @@ exports.uploadLease = async (req, res) => {
       if (application.residence) {
         residence = application.residence;
       }
+      console.log('Lease upload: found application', application._id, 'with residence', residence);
+    } else {
+      // Fallback to user's residence if no application found
+      residence = user.residence;
+      console.log('Lease upload: no application found, using user.residence', residence);
     }
 
     // Populate residence name if possible
@@ -39,7 +44,12 @@ exports.uploadLease = async (req, res) => {
       const residenceDoc = await Residence.findById(residence);
       if (residenceDoc) {
         residenceName = residenceDoc.name;
+        console.log('Lease upload: found residence name', residenceName);
+      } else {
+        console.log('Lease upload: residence not found in DB for id', residence);
       }
+    } else {
+      console.log('Lease upload: no residence found');
     }
 
     // Push lease info to user's leases array
