@@ -606,13 +606,6 @@ exports.deleteApplication = async (req, res) => {
             return res.status(404).json({ error: 'Application not found' });
         }
 
-        // Only delete if not verified (if you want to keep this logic)
-        if (application.isVerified) {
-            return res.status(400).json({ 
-                error: 'Cannot delete verified application' 
-            });
-        }
-
         // Delete associated user account if it exists
         if (application.student) {
             await User.findByIdAndDelete(application.student._id);
