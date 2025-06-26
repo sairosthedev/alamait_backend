@@ -621,9 +621,34 @@ exports.deleteApplication = async (req, res) => {
             console.log('No associated user to delete for application:', applicationId);
         }
 
+        // Update room occupancy and occupants if allocatedRoom and residence exist
+        if (application.allocatedRoom && application.residence) {
+            try {
+                const residence = await Residence.findById(application.residence);
+                if (residence) {
+                    const room = residence.rooms.find(r => r.roomNumber === application.allocatedRoom);
+                    if (room) {
+                        // Remove the student from occupants
+                        if (application.student) {
+                            room.occupants = room.occupants.filter(
+                                occupantId => occupantId.toString() !== application.student._id.toString()
+                            );
+                        }
+                        // Decrement occupancy
+                        room.currentOccupancy = Math.max(0, room.currentOccupancy - 1);
+                        // Update status
+                        room.status = room.currentOccupancy === 0 ? 'available' : (room.currentOccupancy < room.capacity ? 'reserved' : 'occupied');
+                        await residence.save();
+                    }
+                }
+            } catch (roomUpdateError) {
+                console.error('Error updating room occupancy:', roomUpdateError);
+            }
+        }
+
         // Delete the application itself
         try {
-            await application.remove();
+            await application.deleteOne();
             console.log('Deleted application with ID:', applicationId);
         } catch (appDeleteError) {
             console.error('Error deleting application:', appDeleteError);
