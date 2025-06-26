@@ -123,32 +123,25 @@ exports.getResidenceDetails = async (req, res) => {
 // @access  Private (Student only)
 exports.createLease = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id);
-
-        // Find the latest approved or waitlisted application for this user
-        const application = await Application.findOne({
-            student: req.user.id,
-            status: { $in: ['approved', 'waitlisted'] }
-        }).sort({ applicationDate: -1 });
-
-        let residence = null;
-        if (application && application.residence) {
-            residence = application.residence; // <-- THIS IS THE RESIDENCE ID FROM APPLICATION
+        const user = await User.findOne({ email: req.body.email });
+        if (user) {
+            // Existing student: allow new application/lease
+            await Application.create({
+                student: user._id,
+                startDate: req.body.startDate,
+                endDate: req.body.endDate,
+                // ...other fields
+            });
         } else {
-            residence = user.residence; // fallback
+            // New student
+            const newUser = await User.create({ ...req.body });
+            await Application.create({
+                student: newUser._id,
+                startDate: req.body.startDate,
+                endDate: req.body.endDate,
+                // ...other fields
+            });
         }
-
-        if (!residence) {
-            return res.status(400).json({ message: 'No residence found in application or user profile.' });
-        }
-
-        const leaseDoc = await Lease.create({
-            studentId: user._id,
-            studentName: `${user.firstName} ${user.lastName}`,
-            email: user.email,
-            residence: residence,
-            // ...other fields
-        });
 
         res.json({
             success: true,
