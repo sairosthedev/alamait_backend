@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { auth, checkRole } = require('../../middleware/auth');
+const { auth, checkAdminOrFinance } = require('../../middleware/auth');
 const { check } = require('express-validator');
 const {
     getApplications,
@@ -17,21 +17,21 @@ const updateStatusValidation = [
 ];
 
 // Get all applications with room status
-router.get('/', auth, checkRole('admin'), getApplications);
+router.get('/', auth, checkAdminOrFinance, getApplications);
 
 // Update application status (approve/reject/waitlist)
-router.put('/:applicationId', auth, checkRole('admin'), updateApplicationStatus);
+router.put('/:applicationId', auth, checkAdminOrFinance, updateApplicationStatus);
 
 // Update payment status
-router.put('/:applicationId/payment', auth, checkRole('admin'), updatePaymentStatus);
+router.put('/:applicationId/payment', auth, checkAdminOrFinance, updatePaymentStatus);
 
 // Delete application
-router.delete('/:applicationId', auth, checkRole('admin'), deleteApplication);
+router.delete('/:applicationId', auth, checkAdminOrFinance, deleteApplication);
 
 // Update room validity
-router.put('/user/:userId/room-validity', auth, checkRole('admin'), updateRoomValidity);
+router.put('/user/:userId/room-validity', auth, checkAdminOrFinance, updateRoomValidity);
 
 // Sync room occupancy with allocations
-router.post('/sync-room-occupancy', auth, checkRole('admin'), syncRoomOccupancy);
+router.post('/sync-room-occupancy', auth, checkAdminOrFinance, syncRoomOccupancy);
 
 module.exports = router; 

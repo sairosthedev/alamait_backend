@@ -102,6 +102,37 @@ const checkRole = (...roles) => {
     };
 };
 
+const checkAdminOrFinance = (req, res, next) => {
+    const allowedRoles = ['admin', 'finance'];
+    console.log('Admin/Finance role check - User:', {
+        id: req.user?._id,
+        email: req.user?.email,
+        role: req.user?.role,
+        allowedRoles
+    });
+
+    if (!req.user) {
+        console.error('Admin/Finance role check - No user found');
+        return res.status(401).json({ 
+            success: false,
+            message: 'Please authenticate' 
+        });
+    }
+
+    if (!allowedRoles.includes(req.user.role)) {
+        console.error('Admin/Finance role check - Invalid role:', {
+            userRole: req.user.role,
+            allowedRoles
+        });
+        return res.status(403).json({ 
+            success: false,
+            message: 'Access denied. Required role: admin or finance'
+        });
+    }
+
+    next();
+};
+
 const verifyApplicationCode = async (req, res, next) => {
     try {
         const { applicationCode } = req.body;
@@ -229,6 +260,7 @@ module.exports = {
     auth,
     isAdmin,
     checkRole,
+    checkAdminOrFinance,
     verifyApplicationCode,
     financeAccess
 }; 
