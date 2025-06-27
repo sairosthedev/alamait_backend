@@ -57,7 +57,7 @@ const maintenanceUpdateValidation = [
         .withMessage('Invalid date format'),
     check('priority')
         .optional()
-        .isIn(['Low', 'Medium', 'High'])
+        .isIn(['low', 'medium', 'high', 'Low', 'Medium', 'High'])
         .withMessage('Invalid priority level'),
     check('category')
         .optional()

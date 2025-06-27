@@ -539,23 +539,38 @@ exports.updateMaintenanceRequest = async (req, res) => {
 
         // Apply updates using findByIdAndUpdate for atomic operation
         const updateOperation = {
-            $set: updates,
-            $push: {
-                updates: comment ? {
+            $set: updates
+        };
+
+        // Add updates array push if comment exists
+        if (comment) {
+            updateOperation.$push = {
+                updates: {
                     message: comment,
                     author: req.user._id,
                     date: new Date()
-                } : undefined,
-                requestHistory: {
-                    date: new Date(),
-                    action: 'Request updated',
-                    user: req.user._id,
-                    changes: changes
                 }
-            }
+            };
+        }
+
+        // Always add to request history
+        if (!updateOperation.$push) {
+            updateOperation.$push = {};
+        }
+        updateOperation.$push.requestHistory = {
+            date: new Date(),
+            action: 'Request updated',
+            user: req.user._id,
+            changes: changes
         };
 
         console.log('MongoDB update operation:', JSON.stringify(updateOperation, null, 2));
+
+        console.log('About to perform update with operation:', {
+            requestId: objectId,
+            updateOperation: updateOperation,
+            changes: changes
+        });
 
         const updatedRequest = await Maintenance.findByIdAndUpdate(
             objectId,
@@ -592,10 +607,47 @@ exports.updateMaintenanceRequest = async (req, res) => {
             newValue: verifyRequest[field]
         })));
 
+        // Transform the response to include frontend-expected fields
+        const formatDate = (date) => {
+            return date ? new Date(date).toISOString().split('T')[0] : null;
+        };
+
+        const transformedResponse = {
+            ...updatedRequest.toObject(),
+            id: updatedRequest._id,
+            room: updatedRequest.room,
+            requestedBy: updatedRequest.student ? `${updatedRequest.student.firstName} ${updatedRequest.student.lastName}` : 'Unknown',
+            studentId: updatedRequest.student?._id,
+            studentName: updatedRequest.student ? `${updatedRequest.student.firstName} ${updatedRequest.student.lastName}` : 'Unknown',
+            roomNumber: updatedRequest.room,
+            issue: updatedRequest.issue,
+            status: updatedRequest.status,
+            priority: updatedRequest.priority,
+            description: updatedRequest.description,
+            dateRequested: formatDate(updatedRequest.requestDate),
+            dateAssigned: formatDate(updatedRequest.scheduledDate),
+            expectedCompletion: formatDate(updatedRequest.estimatedCompletion),
+            amount: updatedRequest.estimatedCost !== null && updatedRequest.estimatedCost !== undefined ? updatedRequest.estimatedCost : 0,
+            laborCost: updatedRequest.actualCost !== null && updatedRequest.actualCost !== undefined ? updatedRequest.actualCost : 0,
+            financeStatus: updatedRequest.financeStatus,
+            financeNotes: updatedRequest.financeNotes,
+            adminNotes: updatedRequest.updates?.[0]?.message,
+            requestHistory: updatedRequest.requestHistory?.map(history => ({
+                date: formatDate(history.date),
+                action: history.action,
+                user: history.user
+            })) || [],
+            assignedTo: updatedRequest.assignedTo ? {
+                _id: updatedRequest.assignedTo._id,
+                name: updatedRequest.assignedTo.name,
+                surname: updatedRequest.assignedTo.surname
+            } : null
+        };
+
         res.json({
             success: true,
             message: 'Maintenance request updated successfully',
-            request: updatedRequest
+            request: transformedResponse
         });
     } catch (error) {
         console.error('Error in updateMaintenanceRequest:', error);
