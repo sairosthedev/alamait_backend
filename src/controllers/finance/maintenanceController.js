@@ -39,8 +39,8 @@ exports.getAllMaintenanceRequests = async (req, res) => {
             scheduledDate: request.scheduledDate,
             estimatedCompletion: request.estimatedCompletion,
             completedDate: request.completedDate,
-            estimatedCost: request.estimatedCost,
-            actualCost: request.actualCost,
+            materials: request.materials,
+            labour: request.labour,
             financeStatus: request.financeStatus,
             financeNotes: request.financeNotes,
             updates: request.updates
@@ -80,7 +80,7 @@ exports.getMaintenanceRequestById = async (req, res) => {
 // Update maintenance request financial details
 exports.updateMaintenanceRequestFinance = async (req, res) => {
     try {
-        const { estimatedCost, actualCost, financeStatus, financeNotes } = req.body;
+        const { materials, labour, financeStatus, financeNotes } = req.body;
 
         const request = await Maintenance.findById(req.params.id);
         if (!request) {
@@ -88,8 +88,8 @@ exports.updateMaintenanceRequestFinance = async (req, res) => {
         }
 
         // Update financial details
-        if (estimatedCost !== undefined) request.estimatedCost = parseFloat(estimatedCost);
-        if (actualCost !== undefined) request.actualCost = parseFloat(actualCost);
+        if (materials !== undefined) request.materials = parseFloat(materials);
+        if (labour !== undefined) request.labour = parseFloat(labour);
         if (financeStatus) request.financeStatus = financeStatus.toLowerCase();
         if (financeNotes) request.financeNotes = financeNotes;
 
@@ -150,8 +150,8 @@ exports.getMaintenanceFinancialStats = async (req, res) => {
                 $group: {
                     _id: '$financeStatus',
                     count: { $sum: 1 },
-                    totalEstimatedCost: { $sum: '$estimatedCost' },
-                    totalActualCost: { $sum: '$actualCost' }
+                    totalMaterials: { $sum: '$materials' },
+                    totalLabour: { $sum: '$labour' }
                 }
             }
         ]);
@@ -161,8 +161,8 @@ exports.getMaintenanceFinancialStats = async (req, res) => {
             pendingRequests: await Maintenance.countDocuments({ financeStatus: 'pending' }),
             approvedRequests: await Maintenance.countDocuments({ financeStatus: 'approved' }),
             rejectedRequests: await Maintenance.countDocuments({ financeStatus: 'rejected' }),
-            totalEstimatedCost: stats.reduce((sum, stat) => sum + (stat.totalEstimatedCost || 0), 0),
-            totalActualCost: stats.reduce((sum, stat) => sum + (stat.totalActualCost || 0), 0)
+            totalMaterials: stats.reduce((sum, stat) => sum + (stat.totalMaterials || 0), 0),
+            totalLabour: stats.reduce((sum, stat) => sum + (stat.totalLabour || 0), 0)
         };
 
         res.json(totalStats);

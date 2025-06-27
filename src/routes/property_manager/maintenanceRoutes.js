@@ -27,7 +27,10 @@ const maintenanceUpdateValidation = [
     check('estimatedCost')
         .optional()
         .isFloat({ min: 0 }),
-    check('actualCost')
+    check('materials')
+        .optional()
+        .isFloat({ min: 0 }),
+    check('labour')
         .optional()
         .isFloat({ min: 0 })
 ];

@@ -30,16 +30,16 @@ async function testMaintenanceUpdate() {
             _id: testRequest._id,
             issue: testRequest.issue,
             status: testRequest.status,
-            estimatedCost: testRequest.estimatedCost,
-            actualCost: testRequest.actualCost
+            materials: testRequest.materials,
+            labour: testRequest.labour
         });
 
         // Test update operation
         const updateData = {
             status: 'in-progress',
             priority: 'high',
-            estimatedCost: 1500,
-            actualCost: 800,
+            materials: 1500,
+            labour: 800,
             financeStatus: 'approved'
         };
 
@@ -75,8 +75,8 @@ async function testMaintenanceUpdate() {
             _id: updatedRequest._id,
             status: updatedRequest.status,
             priority: updatedRequest.priority,
-            estimatedCost: updatedRequest.estimatedCost,
-            actualCost: updatedRequest.actualCost,
+            materials: updatedRequest.materials,
+            labour: updatedRequest.labour,
             financeStatus: updatedRequest.financeStatus
         });
 

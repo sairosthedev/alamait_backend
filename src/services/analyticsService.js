@@ -29,7 +29,7 @@ class AnalyticsService {
             completedDate: { $gte: startDate, $lte: endDate }
         });
         
-        const maintenanceCost = maintenance.reduce((sum, m) => sum + (m.cost || 0), 0);
+        const maintenanceCost = maintenance.reduce((sum, m) => sum + (m.materials + m.labour || 0), 0);
         
         // Mock data for other expenses (replace with actual data)
         const utilities = maintenanceCost * 0.3;

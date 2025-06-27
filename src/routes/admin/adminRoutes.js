@@ -73,14 +73,14 @@ const maintenanceUpdateValidation = [
         .trim()
         .notEmpty()
         .withMessage('Comment cannot be empty'),
-    check('estimatedCost')
+    check('materials')
         .optional()
         .isFloat({ min: 0 })
-        .withMessage('Estimated cost must be a positive number'),
-    check('actualCost')
+        .withMessage('Materials cost must be a positive number'),
+    check('labour')
         .optional()
         .isFloat({ min: 0 })
-        .withMessage('Actual cost must be a positive number'),
+        .withMessage('Labour cost must be a positive number'),
     check('scheduledDate')
         .optional()
         .isISO8601()

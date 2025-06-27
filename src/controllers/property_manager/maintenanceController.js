@@ -77,7 +77,7 @@ exports.updateMaintenanceRequest = async (req, res) => {
         // Update allowed fields
         const allowedUpdates = [
             'status', 'priority', 'assignedTo', 'scheduledDate',
-            'estimatedCost', 'actualCost'
+            'materials', 'labour'
         ];
 
         allowedUpdates.forEach(update => {

@@ -421,7 +421,7 @@ const approveExpense = async (req, res) => {
             if (maintenance) {
                 // Update the maintenance request with approved status
                 maintenance.financeStatus = 'approved';
-                maintenance.actualCost = expense.amount;
+                maintenance.materials = expense.amount;
                 maintenance.updates.push({
                     message: `Expense approved and paid via ${paymentMethod}`,
                     author: req.user._id,
