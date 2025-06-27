@@ -2,11 +2,11 @@
  * Script to fix maintenance requests with null or undefined cost fields
  * 
  * This script updates any existing maintenance requests in the database
- * that have null or undefined estimatedCost or actualCost fields,
+ * that have null or undefined amount fields,
  * setting them to default values of 0.
  * 
  * This ensures that the frontend always receives valid numeric values
- * for the amount and laborCost fields, preventing "N/A" displays.
+ * for the amount field, preventing "N/A" displays.
  */
 
 const mongoose = require('mongoose');
@@ -22,17 +22,15 @@ async function fixMaintenanceCosts() {
         });
         console.log('Connected to MongoDB');
 
-        // Find all maintenance requests with null or undefined estimatedCost or actualCost
+        // Find all maintenance requests with null or undefined amount
         const requestsToUpdate = await Maintenance.find({
             $or: [
-                { estimatedCost: null },
-                { estimatedCost: undefined },
-                { actualCost: null },
-                { actualCost: undefined }
+                { amount: null },
+                { amount: undefined }
             ]
         });
 
-        console.log(`Found ${requestsToUpdate.length} maintenance requests with null/undefined cost fields`);
+        console.log(`Found ${requestsToUpdate.length} maintenance requests with null/undefined amount fields`);
 
         if (requestsToUpdate.length === 0) {
             console.log('No maintenance requests need updating');
@@ -43,22 +41,19 @@ async function fixMaintenanceCosts() {
         const updateResult = await Maintenance.updateMany(
             {
                 $or: [
-                    { estimatedCost: null },
-                    { estimatedCost: undefined },
-                    { actualCost: null },
-                    { actualCost: undefined }
+                    { amount: null },
+                    { amount: undefined }
                 ]
             },
             {
                 $set: {
-                    estimatedCost: 0,
-                    actualCost: 0
+                    amount: 0
                 }
             }
         );
 
         console.log(`Updated ${updateResult.modifiedCount} maintenance requests`);
-        console.log('Maintenance cost fields have been fixed successfully');
+        console.log('Maintenance amount fields have been fixed successfully');
 
     } catch (error) {
         console.error('Error fixing maintenance costs:', error);

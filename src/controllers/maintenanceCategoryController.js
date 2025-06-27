@@ -9,42 +9,42 @@ const seedDefaultCategories = async () => {
                 description: 'All plumbing related maintenance issues',
                 priority: 'High',
                 estimatedTime: 2,
-                estimatedCost: 150
+                amount: 150
             },
             {
                 name: 'Electrical',
                 description: 'Electrical system maintenance and repairs',
                 priority: 'High',
                 estimatedTime: 3,
-                estimatedCost: 200
+                amount: 200
             },
             {
                 name: 'HVAC',
                 description: 'Heating, ventilation, and air conditioning issues',
                 priority: 'Medium',
                 estimatedTime: 4,
-                estimatedCost: 300
+                amount: 300
             },
             {
                 name: 'Appliance',
                 description: 'Maintenance and repairs for room appliances',
                 priority: 'Medium',
                 estimatedTime: 2,
-                estimatedCost: 100
+                amount: 100
             },
             {
                 name: 'Structural',
                 description: 'Building structure and integrity issues',
                 priority: 'High',
                 estimatedTime: 6,
-                estimatedCost: 500
+                amount: 500
             },
             {
                 name: 'General',
                 description: 'General maintenance and repairs',
                 priority: 'Low',
                 estimatedTime: 1,
-                estimatedCost: 50
+                amount: 50
             }
         ];
 

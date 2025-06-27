@@ -76,12 +76,7 @@ const maintenanceSchema = new mongoose.Schema({
     completedDate: {
         type: Date
     },
-    estimatedCost: {
-        type: Number,
-        min: 0,
-        default: 0
-    },
-    actualCost: {
+    amount: {
         type: Number,
         min: 0,
         default: 0

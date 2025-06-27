@@ -124,15 +124,14 @@ exports.updateMaintenanceRequest = async (req, res) => {
             return res.status(404).json({ error: 'Maintenance request not found or cannot be updated' });
         }
 
-        const { title, description, category, priority, status, amount, laborCost, comment } = req.body;
+        const { title, description, category, priority, status, amount, comment } = req.body;
 
         // Update allowed fields
         if (title) request.title = title;
         if (description) request.description = description;
         if (category) request.category = category;
         if (priority) request.priority = priority;
-        if (amount !== undefined) request.estimatedCost = parseFloat(amount) || 0;
-        if (laborCost !== undefined) request.actualCost = parseFloat(laborCost) || 0;
+        if (amount !== undefined) request.amount = parseFloat(amount) || 0;
 
         // Add update to history
         request.updates.push({
@@ -145,8 +144,7 @@ exports.updateMaintenanceRequest = async (req, res) => {
 
         res.json({
             ...request.toObject(),
-            amount: request.estimatedCost !== null && request.estimatedCost !== undefined ? request.estimatedCost : 0,
-            laborCost: request.actualCost !== null && request.actualCost !== undefined ? request.actualCost : 0
+            amount: request.amount !== null && request.amount !== undefined ? request.amount : 0,
         });
     } catch (error) {
         console.error('Error in updateMaintenanceRequest:', error);

@@ -77,7 +77,7 @@ exports.updateMaintenanceRequest = async (req, res) => {
         // Update allowed fields
         const allowedUpdates = [
             'status', 'priority', 'assignedTo', 'scheduledDate',
-            'amount', 'laborCost'
+            'amount'
         ];
 
         allowedUpdates.forEach(update => {
@@ -100,8 +100,7 @@ exports.updateMaintenanceRequest = async (req, res) => {
 
         res.json({
             ...updatedMaintenance.toObject(),
-            amount: updatedMaintenance.estimatedCost !== null && updatedMaintenance.estimatedCost !== undefined ? updatedMaintenance.estimatedCost : 0,
-            laborCost: updatedMaintenance.actualCost !== null && updatedMaintenance.actualCost !== undefined ? updatedMaintenance.actualCost : 0
+            amount: updatedMaintenance.amount !== null && updatedMaintenance.amount !== undefined ? updatedMaintenance.amount : 0,
         });
     } catch (error) {
         console.error('Update maintenance request error:', error);

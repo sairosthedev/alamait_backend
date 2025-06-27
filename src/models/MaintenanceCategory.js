@@ -24,7 +24,7 @@ const maintenanceCategorySchema = new mongoose.Schema({
         type: Number, // in hours
         default: 2
     },
-    estimatedCost: {
+    amount: {
         type: Number,
         default: 0
     }

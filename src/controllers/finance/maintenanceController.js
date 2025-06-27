@@ -39,8 +39,7 @@ exports.getAllMaintenanceRequests = async (req, res) => {
             scheduledDate: request.scheduledDate,
             estimatedCompletion: request.estimatedCompletion,
             completedDate: request.completedDate,
-            estimatedCost: request.estimatedCost,
-            actualCost: request.actualCost,
+            amount: request.amount,
             financeStatus: request.financeStatus,
             financeNotes: request.financeNotes,
             updates: request.updates
@@ -80,7 +79,7 @@ exports.getMaintenanceRequestById = async (req, res) => {
 // Update maintenance request financial details
 exports.updateMaintenanceRequestFinance = async (req, res) => {
     try {
-        const { amount, laborCost, financeStatus, financeNotes } = req.body;
+        const { amount, financeStatus, financeNotes } = req.body;
 
         const request = await Maintenance.findById(req.params.id);
         if (!request) {
@@ -88,8 +87,7 @@ exports.updateMaintenanceRequestFinance = async (req, res) => {
         }
 
         // Update financial details
-        if (amount !== undefined) request.estimatedCost = parseFloat(amount) || 0;
-        if (laborCost !== undefined) request.actualCost = parseFloat(laborCost) || 0;
+        if (amount !== undefined) request.amount = parseFloat(amount) || 0;
         if (financeStatus) request.financeStatus = financeStatus.toLowerCase();
         if (financeNotes) request.financeNotes = financeNotes;
 
@@ -107,8 +105,7 @@ exports.updateMaintenanceRequestFinance = async (req, res) => {
             message: 'Maintenance request financial details updated successfully',
             request: {
                 ...request.toObject(),
-                amount: request.estimatedCost !== null && request.estimatedCost !== undefined ? request.estimatedCost : 0,
-                laborCost: request.actualCost !== null && request.actualCost !== undefined ? request.actualCost : 0
+                amount: request.amount !== null && request.amount !== undefined ? request.amount : 0,
             }
         });
     } catch (error) {
@@ -155,8 +152,7 @@ exports.getMaintenanceFinancialStats = async (req, res) => {
                 $group: {
                     _id: '$financeStatus',
                     count: { $sum: 1 },
-                    totalEstimatedCost: { $sum: '$estimatedCost' },
-                    totalActualCost: { $sum: '$actualCost' }
+                    totalAmount: { $sum: '$amount' }
                 }
             }
         ]);
@@ -166,8 +162,7 @@ exports.getMaintenanceFinancialStats = async (req, res) => {
             pendingRequests: await Maintenance.countDocuments({ financeStatus: 'pending' }),
             approvedRequests: await Maintenance.countDocuments({ financeStatus: 'approved' }),
             rejectedRequests: await Maintenance.countDocuments({ financeStatus: 'rejected' }),
-            totalEstimatedCost: stats.reduce((sum, stat) => sum + (stat.totalEstimatedCost || 0), 0),
-            totalActualCost: stats.reduce((sum, stat) => sum + (stat.totalActualCost || 0), 0)
+            totalAmount: stats.reduce((sum, stat) => sum + (stat.totalAmount || 0), 0)
         };
 
         res.json(totalStats);
