@@ -128,8 +128,8 @@ exports.getAllMaintenanceRequests = async (req, res) => {
                 status: request.status,
                 dateAssigned: request.dateAssigned,
                 expectedCompletion: request.expectedCompletion,
-                amount: request.materials !== null && request.materials !== undefined ? request.materials : 0,
-                laborCost: request.labour !== null && request.labour !== undefined ? request.labour : 0,
+                amount: request.estimatedCost !== null && request.estimatedCost !== undefined ? request.estimatedCost : 0,
+                laborCost: request.actualCost !== null && request.actualCost !== undefined ? request.actualCost : 0,
                 priority: request.priority,
                 studentResponse: request.studentResponse,
                 financeStatus: request.financeStatus,
@@ -248,8 +248,8 @@ exports.createMaintenanceRequest = async (req, res) => {
             priority: priority?.toLowerCase() || 'low',
             category: 'other',
             // Map financial fields
-            materials: amount ? parseFloat(amount) : 0,
-            labour: laborCost ? parseFloat(laborCost) : 0,
+            estimatedCost: amount ? parseFloat(amount) : 0,
+            actualCost: laborCost ? parseFloat(laborCost) : 0,
             // Map date fields
             requestDate: dateAssigned ? new Date(dateAssigned) : new Date(),
             scheduledDate: dateAssigned ? new Date(dateAssigned) : undefined,
@@ -335,8 +335,8 @@ exports.createMaintenanceRequest = async (req, res) => {
             dateRequested: formatDate(populatedRequest.requestDate),
             dateAssigned: formatDate(populatedRequest.scheduledDate),
             expectedCompletion: formatDate(populatedRequest.estimatedCompletion),
-            amount: populatedRequest.materials !== null && populatedRequest.materials !== undefined ? populatedRequest.materials : 0,
-            laborCost: populatedRequest.labour !== null && populatedRequest.labour !== undefined ? populatedRequest.labour : 0,
+            amount: populatedRequest.estimatedCost !== null && populatedRequest.estimatedCost !== undefined ? populatedRequest.estimatedCost : 0,
+            laborCost: populatedRequest.actualCost !== null && populatedRequest.actualCost !== undefined ? populatedRequest.actualCost : 0,
             financeStatus: populatedRequest.financeStatus,
             financeNotes: populatedRequest.financeNotes,
             adminNotes: populatedRequest.updates[0]?.message,
@@ -403,8 +403,8 @@ exports.updateMaintenanceRequest = async (req, res) => {
             category,
             description,
             comment,
-            materials,
-            labour,
+            amount,
+            laborCost,
             scheduledDate,
             financeStatus
         } = req.body;
@@ -418,8 +418,8 @@ exports.updateMaintenanceRequest = async (req, res) => {
             category,
             description,
             comment,
-            materials,
-            labour,
+            amount,
+            laborCost,
             scheduledDate,
             financeStatus
         });
@@ -517,13 +517,13 @@ exports.updateMaintenanceRequest = async (req, res) => {
             updates.description = description;
             changes.push('description');
         }
-        if (materials) {
-            updates.materials = parseFloat(materials);
-            changes.push('materials');
+        if (amount !== undefined) {
+            updates.estimatedCost = parseFloat(amount) || 0;
+            changes.push('amount');
         }
-        if (labour) {
-            updates.labour = parseFloat(labour);
-            changes.push('labour');
+        if (laborCost !== undefined) {
+            updates.actualCost = parseFloat(laborCost) || 0;
+            changes.push('laborCost');
         }
         if (scheduledDate) {
             updates.scheduledDate = new Date(scheduledDate);
@@ -627,8 +627,8 @@ exports.updateMaintenanceRequest = async (req, res) => {
             dateRequested: formatDate(updatedRequest.requestDate),
             dateAssigned: formatDate(updatedRequest.scheduledDate),
             expectedCompletion: formatDate(updatedRequest.estimatedCompletion),
-            amount: updatedRequest.materials !== null && updatedRequest.materials !== undefined ? updatedRequest.materials : 0,
-            laborCost: updatedRequest.labour !== null && updatedRequest.labour !== undefined ? updatedRequest.labour : 0,
+            amount: updatedRequest.estimatedCost !== null && updatedRequest.estimatedCost !== undefined ? updatedRequest.estimatedCost : 0,
+            laborCost: updatedRequest.actualCost !== null && updatedRequest.actualCost !== undefined ? updatedRequest.actualCost : 0,
             financeStatus: updatedRequest.financeStatus,
             financeNotes: updatedRequest.financeNotes,
             adminNotes: updatedRequest.updates?.[0]?.message,

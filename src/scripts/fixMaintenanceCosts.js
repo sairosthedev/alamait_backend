@@ -2,7 +2,7 @@
  * Script to fix maintenance requests with null or undefined cost fields
  * 
  * This script updates any existing maintenance requests in the database
- * that have null or undefined materials or labour fields,
+ * that have null or undefined estimatedCost or actualCost fields,
  * setting them to default values of 0.
  * 
  * This ensures that the frontend always receives valid numeric values
@@ -22,13 +22,13 @@ async function fixMaintenanceCosts() {
         });
         console.log('Connected to MongoDB');
 
-        // Find all maintenance requests with null or undefined materials or labour
+        // Find all maintenance requests with null or undefined estimatedCost or actualCost
         const requestsToUpdate = await Maintenance.find({
             $or: [
-                { materials: null },
-                { materials: undefined },
-                { labour: null },
-                { labour: undefined }
+                { estimatedCost: null },
+                { estimatedCost: undefined },
+                { actualCost: null },
+                { actualCost: undefined }
             ]
         });
 
@@ -43,16 +43,16 @@ async function fixMaintenanceCosts() {
         const updateResult = await Maintenance.updateMany(
             {
                 $or: [
-                    { materials: null },
-                    { materials: undefined },
-                    { labour: null },
-                    { labour: undefined }
+                    { estimatedCost: null },
+                    { estimatedCost: undefined },
+                    { actualCost: null },
+                    { actualCost: undefined }
                 ]
             },
             {
                 $set: {
-                    materials: 0,
-                    labour: 0
+                    estimatedCost: 0,
+                    actualCost: 0
                 }
             }
         );
