@@ -1,6 +1,7 @@
 const Maintenance = require('../../models/Maintenance');
 const { validationResult } = require('express-validator');
 const User = require('../../models/User');
+const Residence = require('../../models/Residence');
 
 // Get all maintenance requests for a student
 exports.getMaintenanceRequests = async (req, res) => {
@@ -65,19 +66,41 @@ exports.createMaintenanceRequest = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const { title, description, category, priority, location, images } = req.body;
+        const { title, description, category, priority, location, images, residenceId } = req.body;
 
         // Get user's residence automatically
         const user = await User.findById(req.user._id);
-        if (!user || !user.residence) {
+        if (!user) {
+            return res.status(400).json({ 
+                error: 'User not found' 
+            });
+        }
+
+        // Determine residence ID - prioritize user's residence, fallback to sent residenceId
+        let finalResidenceId = user.residence;
+        
+        if (!finalResidenceId && residenceId) {
+            // If user doesn't have a residence but frontend sent one, use it
+            finalResidenceId = residenceId;
+        }
+        
+        if (!finalResidenceId) {
             return res.status(400).json({ 
                 error: 'Student not assigned to any residence. Please contact administrator.' 
             });
         }
 
+        // Validate that the residence exists
+        const residence = await Residence.findById(finalResidenceId);
+        if (!residence) {
+            return res.status(400).json({ 
+                error: 'Invalid residence ID. Please contact administrator.' 
+            });
+        }
+
         const newRequest = new Maintenance({
             student: req.user._id, // Automatically set student ID
-            residence: user.residence, // Automatically set residence ID
+            residence: finalResidenceId, // Use determined residence ID
             title,
             description,
             category,
