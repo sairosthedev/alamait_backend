@@ -38,6 +38,11 @@ exports.uploadLease = async (req, res) => {
       console.log('Lease upload: no application found, using user.residence', residence, typeof residence);
     }
 
+    // Ensure residence is available
+    if (!residence) {
+      return res.status(400).json({ message: 'No residence found for user. Please contact administrator.' });
+    }
+
     // Populate residence name if possible
     if (residence) {
       const residenceDoc = await Residence.findById(residence);
@@ -46,9 +51,11 @@ exports.uploadLease = async (req, res) => {
         console.log('Lease upload: found residence name', residenceName);
       } else {
         console.log('Lease upload: residence not found in DB for id', residence);
+        return res.status(400).json({ message: 'Invalid residence. Please contact administrator.' });
       }
     } else {
       console.log('Lease upload: no residence found');
+      return res.status(400).json({ message: 'No residence found for user. Please contact administrator.' });
     }
 
     // Create a Lease document in the leases collection

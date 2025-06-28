@@ -1527,6 +1527,7 @@ paths:
                 - preferredRoom
                 - startDate
                 - endDate
+                - residence
               properties:
                 firstName:
                   type: string
@@ -1550,6 +1551,9 @@ paths:
                   type: string
                   format: date
                   description: "Desired end date for accommodation"
+                residence:
+                  type: string
+                  description: "Residence ID where the application is being submitted"
       responses:
         '201':
           description: Application submitted successfully

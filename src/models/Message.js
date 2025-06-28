@@ -24,6 +24,11 @@ const messageSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
+    residence: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Residence',
+        required: true
+    },
     title: {
         type: String,
         required: true

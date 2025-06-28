@@ -1,0 +1,331 @@
+[
+  {
+    "_id": "67c023adae5e27657502e887",
+    "email": "admin@alamait.com",
+    "password": "$2a$10$mJ55PMd7lzDoP5t7z68rmu14jzty6XAmm76cA2kYCZU8VOJrQ/Fam",
+    "role": "admin",
+    "firstName": "System",
+    "lastName": "Adminstrator",
+    "phone": "+263771234567",
+    "isVerified": true,
+    "createdAt": "2025-02-27T08:34:53.927Z",
+    "updatedAt": "2025-06-28T10:36:31.381Z",
+    "__v": 2,
+    "lastLogin": "2025-06-28T10:36:31.291Z",
+    "documents": [],
+    "maintenanceRequests": [],
+    "paymentHistory": [],
+    "preferences": {
+      "language": "en",
+      "notifications": {
+        "email": true,
+        "sms": true
+      }
+    },
+    "status": "active",
+    "leases": []
+  },
+  {
+    "_id": "67d729fca64c5a633492be55",
+    "email": "macdonaldsairos01@gmail.com",
+    "role": "student",
+    "firstName": "Macdonald",
+    "lastName": "Sairos",
+    "phone": "0786033933",
+    "applicationCode": "APP250452",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "createdAt": "2025-03-16T19:43:56.460Z",
+    "password": "$2a$10$hPjexR1eB3j6tq0mwlKcT.PB4YF4yfTLe4rUrqGr7kAR0C/HB9bM2",
+    "updatedAt": "2025-06-26T15:20:01.826Z",
+    "__v": 3,
+    "lastLogin": "2025-06-26T15:20:01.821Z",
+    "documents": [],
+    "maintenanceRequests": [],
+    "paymentHistory": [],
+    "preferences": {
+      "language": "en",
+      "notifications": {
+        "email": true,
+        "sms": true
+      }
+    },
+    "status": "active",
+    "leases": [
+      {
+        "filename": "1750943925615-262192336-ST Kilda Boarding Agreement Macdonald.pdf",
+        "originalname": "ST Kilda Boarding Agreement Macdonald.pdf",
+        "path": "C:\\Users\\HP\\Documents\\GitHub\\alamait_backend\\uploads\\1750943925615-262192336-ST Kilda Boarding Agreement Macdonald.pdf",
+        "mimetype": "application/pdf",
+        "size": 161417,
+        "uploadedAt": "2025-06-26T13:18:45.706Z",
+        "_id": "685d48b5c0adb75402fa2e80"
+      }
+    ]
+  },
+  {
+    "_id": "67d8606bac023e0d8487288d",
+    "email": "kudzaipemhiwa@gmail.com",
+    "role": "student",
+    "firstName": "Kudzai Cindyrella",
+    "lastName": "Pemhiwa",
+    "phone": "0786209200",
+    "applicationCode": "APP252085",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "createdAt": "2025-03-17T17:48:27.973Z",
+    "password": "$2a$10$DI29KWAcDuwDXj0G3TyCuOx2/TymviVbRIlFMbr70Dy/BLzzlpKxK",
+    "updatedAt": "2025-06-27T12:56:57.057Z",
+    "__v": 1,
+    "lastLogin": "2025-06-27T12:56:57.056Z",
+    "documents": [],
+    "leases": [],
+    "maintenanceRequests": [],
+    "paymentHistory": [],
+    "preferences": {
+      "language": "en",
+      "notifications": {
+        "email": true,
+        "sms": true
+      }
+    },
+    "status": "active"
+  },
+  {
+    "_id": "67f4ef0fcb87ffa3fb7e2d73",
+    "email": "finance@alamait.com",
+    "password": "$2a$10$iXsq/BH5zulnXtV4MywNa.9/Ppni1j9R2NsG0ql/xfZMHYvLTqj..",
+    "role": "finance_admin",
+    "firstName": "Finance",
+    "lastName": "Manager",
+    "phone": "+1234567890",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "createdAt": "2025-04-08T09:40:31.652Z",
+    "updatedAt": "2025-06-27T13:05:45.656Z",
+    "__v": 2,
+    "documents": [],
+    "maintenanceRequests": [],
+    "paymentHistory": [],
+    "preferences": {
+      "language": "en",
+      "notifications": {
+        "email": true,
+        "sms": true
+      }
+    },
+    "status": "active",
+    "lastLogin": "2025-06-27T13:05:45.656Z",
+    "leases": []
+  },
+  {
+    "_id": "68094895f27fc4324cead902",
+    "email": "kcpemhiwa@gmail.com",
+    "role": "student",
+    "firstName": "Sharmaine P",
+    "lastName": "Swarayi",
+    "phone": "0786209200",
+    "applicationCode": "APP255961",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "createdAt": "2025-04-23T20:07:49.770Z",
+    "password": "$2a$10$d3f5u9N3cicHm8ucu/XV.eMyryi9FX/MIpzvZssguhCzerB8mR0K.",
+    "updatedAt": "2025-04-23T20:07:49.770Z",
+    "__v": 0
+  },
+  {
+    "_id": "68094c3df27fc4324cead9aa",
+    "email": "cindypemhiwa@gmail.com",
+    "role": "student",
+    "firstName": "Kunashe",
+    "lastName": "Tamia",
+    "phone": "0773557720",
+    "applicationCode": "APP252349",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "createdAt": "2025-04-23T20:23:25.768Z",
+    "password": "$2a$10$3dkTSCoFHc9BdGTO/TCL/eVAzNkmk0OlE2Ne4eCXNnkvyg9TN0Tku",
+    "updatedAt": "2025-04-23T20:23:25.768Z",
+    "__v": 0
+  },
+  {
+    "_id": "6825e3523c851de6b5337b9c",
+    "email": "macdonaldsairos@gmail.com",
+    "role": "student",
+    "firstName": "Miccs",
+    "lastName": "Chakozoka",
+    "phone": "0786033934",
+    "applicationCode": "APP259292",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "createdAt": "2025-05-15T12:51:30.467Z",
+    "password": "$2a$10$hHlJ0xnFox9kEKPTeRPJte700D63oJhGzTmHI5cmJZ1uUb9LaHT8G",
+    "updatedAt": "2025-06-26T18:16:38.706Z",
+    "__v": 2,
+    "lastLogin": "2025-06-26T18:16:38.616Z",
+    "documents": [],
+    "maintenanceRequests": [],
+    "paymentHistory": [],
+    "preferences": {
+      "language": "en",
+      "notifications": {
+        "email": true,
+        "sms": true
+      }
+    },
+    "status": "active",
+    "leases": []
+  },
+  {
+    "_id": "68272a0100408bee103ff06d",
+    "email": "kudzaicindyrellapemhiwa@gmail.com",
+    "password": "$2a$10$rY0DQbFfxuz.pQIxA9wf3uUGYk.SnIGwcnqRUb/rpBzt4hpYdqeya",
+    "role": "student",
+    "firstName": "Kudzai Cindyrella",
+    "lastName": "Pemhiwa",
+    "phone": "0786209200",
+    "applicationCode": "APP257415",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "createdAt": "2025-05-16T12:05:21.844Z",
+    "updatedAt": "2025-06-27T12:59:26.057Z",
+    "__v": 3,
+    "lastLogin": "2025-06-27T12:59:26.056Z",
+    "documents": [],
+    "maintenanceRequests": [],
+    "paymentHistory": [],
+    "preferences": {
+      "language": "en",
+      "notifications": {
+        "email": true,
+        "sms": true
+      }
+    },
+    "status": "active",
+    "leases": [
+      {
+        "filename": "1750942243965-812325543-ST Kilda Boarding Agreement1[1].pdf",
+        "originalname": "ST Kilda Boarding Agreement1[1].pdf",
+        "path": "C:\\Users\\HP\\Documents\\GitHub\\alamait_backend\\uploads\\1750942243965-812325543-ST Kilda Boarding Agreement1[1].pdf",
+        "mimetype": "application/pdf",
+        "size": 161417,
+        "uploadedAt": "2025-06-26T12:50:44.057Z",
+        "_id": "685d422450f1ca2808d21155"
+      },
+      {
+        "filename": "1750944611479-271691-ST Kilda Boarding Agreement Macdonald.pdf",
+        "originalname": "ST Kilda Boarding Agreement Macdonald.pdf",
+        "path": "C:\\Users\\HP\\Documents\\GitHub\\alamait_backend\\uploads\\1750944611479-271691-ST Kilda Boarding Agreement Macdonald.pdf",
+        "mimetype": "application/pdf",
+        "size": 161417,
+        "uploadedAt": "2025-06-26T13:30:11.697Z",
+        "_id": "685d4b631c7bca9d0627ce79"
+      }
+    ]
+  },
+  {
+    "_id": "6848022ec24b96747e3a3924",
+    "email": "tjena7095@gmail.com",
+    "password": "$2a$10$.chVSxWc8/ttNTPUs5NHw.eDOK8uxJfjnXy0/KOAuFwv9LqZDJoKa",
+    "role": "student",
+    "firstName": "taku",
+    "lastName": "jema",
+    "phone": "0786209200",
+    "applicationCode": "APP256742",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "roomApprovalDate": null,
+    "maintenanceRequests": [],
+    "paymentHistory": [],
+    "documents": [],
+    "preferences": {
+      "notifications": {
+        "email": true,
+        "sms": true
+      },
+      "language": "en"
+    },
+    "status": "active",
+    "createdAt": "2025-06-10T10:00:14.574Z",
+    "updatedAt": "2025-06-10T10:00:24.322Z",
+    "__v": 0,
+    "lastLogin": "2025-06-10T10:00:24.321Z"
+  },
+  {
+    "_id": "68532b503beb73b463c61218",
+    "email": "kudzai.pemhiwa@students.uz.ac.zw",
+    "password": "$2a$10$WFkmbfaS4Ij0KJxmQm2lA.lf2VoDwrP2Fa2hdf7R5Tt6yhcM10IHK",
+    "role": "student",
+    "firstName": "kuku",
+    "lastName": "gwekwerere",
+    "phone": "0786209200",
+    "applicationCode": "APP259121",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "roomApprovalDate": null,
+    "maintenanceRequests": [],
+    "paymentHistory": [],
+    "documents": [],
+    "preferences": {
+      "notifications": {
+        "email": true,
+        "sms": true
+      },
+      "language": "en"
+    },
+    "status": "active",
+    "createdAt": "2025-06-18T21:10:40.443Z",
+    "updatedAt": "2025-06-18T21:10:50.991Z",
+    "__v": 0,
+    "lastLogin": "2025-06-18T21:10:50.990Z"
+  },
+  {
+    "_id": "685bf8273a7b8a38526cfe6d",
+    "email": "macdonaldsairos24@gmail.com",
+    "password": "$2a$10$2A0Zx1B0uaMw1N/4YoBBt.DwQ25kb1F9AT486BFAXkMRrP97a1nuO",
+    "role": "student",
+    "firstName": "Macdonald",
+    "lastName": "Shoto",
+    "phone": "0786009999",
+    "applicationCode": "APP254010",
+    "isVerified": true,
+    "currentRoom": null,
+    "roomValidUntil": null,
+    "roomApprovalDate": null,
+    "maintenanceRequests": [],
+    "paymentHistory": [],
+    "documents": [],
+    "preferences": {
+      "notifications": {
+        "email": true,
+        "sms": true
+      },
+      "language": "en"
+    },
+    "status": "active",
+    "createdAt": "2025-06-25T13:22:47.663Z",
+    "updatedAt": "2025-06-26T17:08:38.352Z",
+    "__v": 2,
+    "lastLogin": "2025-06-26T17:08:38.351Z",
+    "leases": [
+      {
+        "filename": "1750940526483-351232756-ALAMAIT BOARDING SCHOOL PROJECT DOCUMENTATION.docx",
+        "originalname": "ALAMAIT BOARDING SCHOOL PROJECT DOCUMENTATION.docx",
+        "path": "/opt/render/project/src/uploads/1750940526483-351232756-ALAMAIT BOARDING SCHOOL PROJECT DOCUMENTATION.docx",
+        "mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "size": 1245883,
+        "uploadedAt": "2025-06-26T12:22:08.393Z",
+        "_id": "685d3b702d4cecc8abc3ea94"
+      }
+    ]
+  }
+]

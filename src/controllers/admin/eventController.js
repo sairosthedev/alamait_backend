@@ -3,7 +3,12 @@ const Event = require('../../models/Event');
 // Create a new event
 const createEvent = async (req, res) => {
     try {
-        const { title, date, time, location, category, description, status, startTime, endTime } = req.body;
+        const { title, date, time, location, category, description, status, startTime, endTime, residence } = req.body;
+        
+        // Validate residence ID
+        if (!residence) {
+            return res.status(400).json({ error: 'Residence ID is required' });
+        }
         
         // Handle time in different formats
         let eventStartTime, eventEndTime;
@@ -31,7 +36,8 @@ const createEvent = async (req, res) => {
             visibility: 'all',
             capacity: 50,
             requirements: [],
-            resources: []
+            resources: [],
+            residence
         });
 
         await event.save();

@@ -1,0 +1,53 @@
+[
+  {
+    "_id": "6845ba9da9739f9b63a7d8bc",
+    "description": "Accounts Payable",
+    "type": "Current",
+    "category": "Payables",
+    "entity": "Grey Stone",
+    "amount": 20000,
+    "updatedAt": "2025-06-08T19:42:38.752Z",
+    "value": 2000
+  },
+  {
+    "_id": "6845ba9da9739f9b63a7d8bd",
+    "description": "Short-term Loans",
+    "type": "Current",
+    "category": "Debt",
+    "entity": "Grey Stone",
+    "amount": 30000,
+    "updatedAt": "2025-06-08T19:42:24.133Z",
+    "value": 5000
+  },
+  {
+    "_id": "6845ba9da9739f9b63a7d8be",
+    "description": "Long-term Loans",
+    "type": "Current",
+    "category": "Debt",
+    "entity": "St. Kilda",
+    "amount": 100000,
+    "updatedAt": "2025-06-08T19:41:54.882Z",
+    "value": 1000
+  },
+  {
+    "_id": "6845ba9da9739f9b63a7d8bf",
+    "description": "Accrued Expenses",
+    "type": "Non-Current",
+    "category": "Payables",
+    "entity": "All",
+    "amount": 15000,
+    "updatedAt": "2025-06-08T19:41:34.235Z",
+    "value": 10000
+  },
+  {
+    "_id": "6845d8fc0cb73889ba442121",
+    "category": "ummm",
+    "description": "loan",
+    "createdAt": "2025-06-08T18:39:56.135Z",
+    "updatedAt": "2025-06-08T19:14:22.391Z",
+    "__v": 0,
+    "entity": "Grey Stone",
+    "type": "Current",
+    "value": 2000
+  }
+]

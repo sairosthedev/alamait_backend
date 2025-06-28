@@ -76,6 +76,11 @@ exports.createStudent = async (req, res) => {
     try {
         const { email, firstName, lastName, phone, status, emergencyContact, residenceId } = req.body;
 
+        // Validate residence ID
+        if (!residenceId) {
+            return res.status(400).json({ error: 'Residence ID is required' });
+        }
+
         // Check if user exists
         let student = await User.findOne({ email });
         if (student) {
@@ -91,7 +96,8 @@ exports.createStudent = async (req, res) => {
             status: status || 'pending',
             emergencyContact,
             role: 'student',
-            isVerified: false
+            isVerified: false,
+            residence: residenceId
         });
 
         // Generate temporary password

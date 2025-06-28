@@ -1,0 +1,195 @@
+[
+  {
+    "_id": "6828b7bf227c49a1e631f1ff",
+    "id": 3,
+    "room": "B1",
+    "issue": "HVAC Repair",
+    "description": "Air conditioning not cooling properly",
+    "requestedBy": "Carol Davis",
+    "status": "in-progress",
+    "dateAssigned": "2024-02-11",
+    "expectedCompletion": "2024-02-13",
+    "amount": 1500,
+    "laborCost": 400,
+    "priority": "high",
+    "studentResponse": "Waiting for response",
+    "financeStatus": "approved",
+    "financeNotes": "",
+    "adminNotes": "Technician scheduled for tomorrow",
+    "requestHistory": [
+      {
+        "date": "2024-02-11",
+        "action": "Request submitted",
+        "user": "Carol Davis"
+      },
+      {
+        "date": "2024-02-11",
+        "action": "Request assigned to Sarah Wilson",
+        "user": "Admin"
+      },
+      {
+        "date": "2024-02-12",
+        "action": "Technician scheduled for tomorrow",
+        "user": "Admin"
+      },
+      {
+        "date": "2025-06-27T00:18:32.952Z",
+        "action": "Request updated",
+        "changes": [
+          "status",
+          "priority",
+          "estimatedCost",
+          "actualCost",
+          "financeStatus"
+        ],
+        "_id": "685de358046df91250825ec5"
+      },
+      {
+        "date": "2025-06-27T00:52:15.387Z",
+        "action": "Request updated",
+        "changes": [
+          "status",
+          "priority",
+          "materials",
+          "labour",
+          "financeStatus"
+        ],
+        "_id": "685deb3f56125b8c32be30f7"
+      }
+    ],
+    "assignedTo": {
+      "_id": "6828dd4d5899165100a73dcb",
+      "name": "Trust",
+      "surname": "Jings"
+    },
+    "updatedAt": "2025-06-27T00:52:15.388Z",
+    "actualCost": 800,
+    "estimatedCost": 1500,
+    "labour": 800,
+    "materials": 1500
+  },
+  {
+    "_id": "682920aa530221ff3da1435b",
+    "student": "6827299600408bee103ff00e",
+    "issue": "Lights broken",
+    "description": "fix lighta",
+    "room": "M2",
+    "category": "electrical",
+    "priority": "medium",
+    "status": "assigned",
+    "financeStatus": "approved",
+    "requestHistory": [
+      {
+        "date": "2025-05-17T23:50:02.216Z",
+        "action": "Request submitted",
+        "user": "6827299600408bee103ff00e",
+        "changes": [],
+        "_id": "682920aa530221ff3da1435c"
+      },
+      {
+        "date": "2025-06-09T17:40:42.376Z",
+        "action": "Request rejected by finance",
+        "user": "6827299600408bee103ff00e",
+        "changes": [],
+        "_id": "68471c9ae4e2b6dcd4382263"
+      },
+      {
+        "date": "2025-06-09T22:58:46.951Z",
+        "action": "Request approved by finance",
+        "user": "6827299600408bee103ff00e",
+        "changes": [],
+        "_id": "68476726114ba961d0965e19"
+      },
+      {
+        "date": "2025-06-09T22:58:48.525Z",
+        "action": "Request approved by finance",
+        "user": "6827299600408bee103ff00e",
+        "changes": [],
+        "_id": "68476728114ba961d0965e3b"
+      }
+    ],
+    "requestDate": "2025-05-17T23:50:02.443Z",
+    "images": [],
+    "updates": [],
+    "createdAt": "2025-05-17T23:50:02.482Z",
+    "updatedAt": "2025-06-27T07:22:03.139Z",
+    "__v": 3,
+    "assignedTo": {
+      "_id": "684021d0ed98ba6ab5055a6e",
+      "name": "trust",
+      "surname": "jings"
+    },
+    "actualCost": 0,
+    "estimatedCost": 0,
+    "labour": 0,
+    "materials": 0
+  },
+  {
+    "_id": "685307ed1e02eec2f97f5a61",
+    "student": "6847ff9b8431a489bcfb6793",
+    "issue": "Lights broken",
+    "description": "Our lights are not working",
+    "room": "Studio1",
+    "category": "electrical",
+    "priority": "high",
+    "status": "assigned",
+    "assignedTo": {
+      "_id": "6828dd4d5899165100a73dcb",
+      "name": "Trust",
+      "surname": "Jings"
+    },
+    "financeStatus": "pending",
+    "requestHistory": [
+      {
+        "date": "2025-06-18T18:39:41.520Z",
+        "action": "Request submitted and assigned",
+        "user": "6847ff9b8431a489bcfb6793",
+        "changes": [],
+        "_id": "685307ed1e02eec2f97f5a62"
+      }
+    ],
+    "requestDate": "2025-06-18T18:39:41.930Z",
+    "images": [],
+    "updates": [],
+    "createdAt": "2025-06-18T18:39:41.935Z",
+    "updatedAt": "2025-06-27T00:52:28.711Z",
+    "__v": 0,
+    "actualCost": 0,
+    "estimatedCost": 0,
+    "labour": 0,
+    "materials": 0
+  },
+  {
+    "_id": "685e470bfd42f459b549e064",
+    "student": "67d729a1c4173fdd42f92751",
+    "issue": "water tank leaking",
+    "description": "water tank is leaking",
+    "room": "C1",
+    "category": "plumbing",
+    "priority": "medium",
+    "status": "assigned",
+    "assignedTo": {
+      "_id": "6828dd4d5899165100a73dcb",
+      "name": "Trust",
+      "surname": "Jings"
+    },
+    "estimatedCost": 0,
+    "actualCost": 0,
+    "financeStatus": "pending",
+    "requestHistory": [
+      {
+        "date": "2025-06-27T07:23:53.788Z",
+        "action": "Request submitted and assigned",
+        "user": "67d729a1c4173fdd42f92751",
+        "changes": [],
+        "_id": "685e470bfd42f459b549e065"
+      }
+    ],
+    "requestDate": "2025-06-27T07:23:55.193Z",
+    "images": [],
+    "updates": [],
+    "createdAt": "2025-06-27T07:23:55.197Z",
+    "updatedAt": "2025-06-27T07:23:55.197Z",
+    "__v": 0
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "_id": "6847ef4ff040a39603257d92",
+    "residenceId": "67d723cf20f89c4ae69804f3",
+    "roomNumber": "M1",
+    "capacity": 3,
+    "price": 180,
+    "currentOccupancy": 3,
+    "images": [
+      "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af",
+      "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267"
+    ]
+  }
+]

@@ -175,7 +175,12 @@ exports.createMessage = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const { title, content, recipient, specificStudent } = req.body;
+        const { title, content, recipient, specificStudent, residence } = req.body;
+
+        // Validate residence ID
+        if (!residence) {
+            return res.status(400).json({ error: 'Residence ID is required' });
+        }
 
         // Get recipients based on type
         let recipients = [];
@@ -195,6 +200,7 @@ exports.createMessage = async (req, res) => {
 
         const newMessage = new Message({
             author: req.user._id,
+            residence,
             title,
             content,
             type: 'announcement',

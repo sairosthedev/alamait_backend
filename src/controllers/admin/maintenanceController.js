@@ -183,7 +183,8 @@ exports.createMaintenanceRequest = async (req, res) => {
             financeNotes,
             adminNotes,
             requestHistory,
-            assignedTo
+            assignedTo,
+            residence
         } = req.body;
 
         console.log('Received request data:', {
@@ -194,7 +195,8 @@ exports.createMaintenanceRequest = async (req, res) => {
             dateAssigned,
             expectedCompletion,
             amount,
-            assignedTo
+            assignedTo,
+            residence
         });
 
         // Validate required fields
@@ -222,6 +224,19 @@ exports.createMaintenanceRequest = async (req, res) => {
             });
         }
 
+        // Get residence ID from request body or student's residence
+        let residenceId = residence;
+        if (!residenceId) {
+            if (!student.residence) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Residence ID is required',
+                    message: 'Student does not have an assigned residence'
+                });
+            }
+            residenceId = student.residence;
+        }
+
         // If assignedTo is provided, validate the staff member
         let staffMember = null;
         if (assignedTo) {
@@ -241,6 +256,7 @@ exports.createMaintenanceRequest = async (req, res) => {
             description,
             room,
             student: student._id,
+            residence: residenceId,
             status: status?.toLowerCase() || 'pending',
             priority: priority?.toLowerCase() || 'low',
             category: 'other',

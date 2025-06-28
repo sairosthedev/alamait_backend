@@ -10,7 +10,8 @@ const messageValidation = [
     body('title').trim().notEmpty().withMessage('Title is required'),
     body('content').trim().notEmpty().withMessage('Content is required'),
     body('recipient').isIn(['admin', 'all-students', 'specific-student']).withMessage('Invalid recipient type'),
-    body('specificStudent').optional().isMongoId().withMessage('Invalid student ID')
+    body('specificStudent').optional().isMongoId().withMessage('Invalid student ID'),
+    body('residence').optional().isMongoId().withMessage('Invalid residence ID format')
 ];
 
 const replyValidation = [

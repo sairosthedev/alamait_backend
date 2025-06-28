@@ -1,0 +1,40 @@
+[
+  {
+    "_id": "6828dd4d5899165100a73dcb",
+    "name": "Trust",
+    "email": "tjngs@gmail.com",
+    "surname": "Jings",
+    "speciality": "Electrician",
+    "location": "Mangura",
+    "contact": "0773557750",
+    "isActive": true,
+    "assignedTasks": [],
+    "performance": {
+      "completedTasks": 0,
+      "averageResponseTime": 0,
+      "rating": 0
+    },
+    "createdAt": "2025-05-17T19:02:37.734Z",
+    "updatedAt": "2025-05-17T19:02:37.734Z",
+    "__v": 0
+  },
+  {
+    "_id": "684021d0ed98ba6ab5055a6e",
+    "name": "trust",
+    "email": "trustjings@gmail.com",
+    "surname": "jings",
+    "speciality": "electrician",
+    "location": "hwange",
+    "contact": "0765457890",
+    "isActive": true,
+    "assignedTasks": [],
+    "performance": {
+      "completedTasks": 0,
+      "averageResponseTime": 0,
+      "rating": 0
+    },
+    "createdAt": "2025-06-04T10:37:04.901Z",
+    "updatedAt": "2025-06-04T10:37:04.901Z",
+    "__v": 0
+  }
+]

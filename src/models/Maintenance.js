@@ -6,6 +6,11 @@ const maintenanceSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
+    residence: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Residence',
+        required: true
+    },
     issue: {
         type: String,
         required: true,

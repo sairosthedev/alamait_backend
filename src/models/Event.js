@@ -56,7 +56,8 @@ const eventSchema = new mongoose.Schema({
     }],
     residence: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Residence'
+        ref: 'Residence',
+        required: true
     },
     image: {
         url: String,

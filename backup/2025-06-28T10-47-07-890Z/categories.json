@@ -1,0 +1,62 @@
+[
+  {
+    "_id": "6828e40db428c502d6bb5d15",
+    "name": "Plumbing"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d16",
+    "name": "Electrical"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d17",
+    "name": "HVAC"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d18",
+    "name": "Carpentry"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d19",
+    "name": "Painting"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d1a",
+    "name": "Appliances"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d1b",
+    "name": "Windows & Doors"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d1c",
+    "name": "Flooring"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d1d",
+    "name": "Roofing"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d1e",
+    "name": "Internet/Networking"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d1f",
+    "name": "General Cleaning"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d20",
+    "name": "Security"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d21",
+    "name": "Grounds/Landscaping"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d22",
+    "name": "Pest Control"
+  },
+  {
+    "_id": "6828e40db428c502d6bb5d23",
+    "name": "Other"
+  }
+]

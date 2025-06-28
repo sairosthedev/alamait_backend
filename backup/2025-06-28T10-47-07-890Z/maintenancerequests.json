@@ -1,0 +1,36 @@
+[
+  {
+    "_id": "68279ed12b1c9f50e548d850",
+    "room": "Room M1",
+    "issue": "Plumbing Issue",
+    "description": "Leaking faucet in bathroom",
+    "requestedBy": "Alice Johnson",
+    "assignee": "John Doe",
+    "status": "In Progress",
+    "dateAssigned": "2024-02-10T00:00:00.000Z",
+    "expectedCompletion": "2024-02-12T00:00:00.000Z",
+    "amount": 1200,
+    "laborCost": 300,
+    "priority": "High",
+    "studentResponse": "Waiting for response",
+    "financeStatus": "Pending",
+    "adminNotes": "Plumber scheduled for tomorrow",
+    "requestHistory": [
+      {
+        "date": "2024-02-10T00:00:00.000Z",
+        "action": "Request submitted",
+        "user": "Alice Johnson"
+      },
+      {
+        "date": "2024-02-10T00:00:00.000Z",
+        "action": "Request assigned to John Doe",
+        "user": "Admin"
+      },
+      {
+        "date": "2024-02-11T00:00:00.000Z",
+        "action": "Plumber scheduled for tomorrow",
+        "user": "Admin"
+      }
+    ]
+  }
+]

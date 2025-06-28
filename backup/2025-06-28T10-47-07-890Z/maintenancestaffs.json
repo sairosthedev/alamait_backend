@@ -1,0 +1,38 @@
+[
+  {
+    "_id": "6828d74533bfa803281280a2",
+    "name": "Trust",
+    "surname": "Jings",
+    "speciality": "Electrician",
+    "location": "Mangura",
+    "contact": "0773557750",
+    "isActive": true,
+    "assignedTasks": [],
+    "performance": {
+      "completedTasks": 0,
+      "averageResponseTime": 0,
+      "rating": 0
+    },
+    "createdAt": "2025-05-17T18:36:53.903Z",
+    "updatedAt": "2025-05-17T18:36:53.903Z",
+    "__v": 0
+  },
+  {
+    "_id": "6828db5e89a80cb3e188f6e6",
+    "name": "Sharmie",
+    "surname": "Muswe",
+    "speciality": "Plumber",
+    "location": "Gweru",
+    "contact": "0765537689",
+    "isActive": true,
+    "assignedTasks": [],
+    "performance": {
+      "completedTasks": 0,
+      "averageResponseTime": 0,
+      "rating": 0
+    },
+    "createdAt": "2025-05-17T18:54:22.104Z",
+    "updatedAt": "2025-05-17T18:54:22.104Z",
+    "__v": 0
+  }
+]

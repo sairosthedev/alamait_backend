@@ -132,7 +132,17 @@ exports.createMessage = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const { title, content, recipient, specificStudent } = req.body;
+        const { title, content, recipient, specificStudent, residence } = req.body;
+
+        // Get residence ID from request body or user's residence
+        let residenceId = residence;
+        if (!residenceId) {
+            const user = await User.findById(req.user._id);
+            if (!user || !user.residence) {
+                return res.status(400).json({ error: 'Residence ID is required' });
+            }
+            residenceId = user.residence;
+        }
 
         // Validate recipient type
         if (recipient === 'specific-student' && !specificStudent) {
@@ -157,6 +167,7 @@ exports.createMessage = async (req, res) => {
 
         const newMessage = new Message({
             author: req.user._id,
+            residence: residenceId,
             title,
             content,
             type: 'discussion',

@@ -27,7 +27,8 @@ const studentSchema = new mongoose.Schema({
   room: String,
   residence: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Residence'
+    ref: 'Residence',
+    required: true
   },
   status: String,
   phone: String,

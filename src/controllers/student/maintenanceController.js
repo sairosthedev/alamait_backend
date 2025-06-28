@@ -1,5 +1,6 @@
 const Maintenance = require('../../models/Maintenance');
 const { validationResult } = require('express-validator');
+const User = require('../../models/User');
 
 // Get all maintenance requests for a student
 exports.getMaintenanceRequests = async (req, res) => {
@@ -64,8 +65,17 @@ exports.createMaintenanceRequest = async (req, res) => {
 
         const { title, description, category, priority, location, images } = req.body;
 
+        // Get user's residence automatically
+        const user = await User.findById(req.user._id);
+        if (!user || !user.residence) {
+            return res.status(400).json({ 
+                error: 'Student not assigned to any residence. Please contact administrator.' 
+            });
+        }
+
         const newRequest = new Maintenance({
-            student: req.user._id,
+            student: req.user._id, // Automatically set student ID
+            residence: user.residence, // Automatically set residence ID
             title,
             description,
             category,
@@ -83,7 +93,15 @@ exports.createMaintenanceRequest = async (req, res) => {
 
         await newRequest.save();
 
-        res.status(201).json(newRequest);
+        // Populate the response with student and residence info
+        const populatedRequest = await Maintenance.findById(newRequest._id)
+            .populate('student', 'firstName lastName email')
+            .populate('residence', 'name');
+
+        res.status(201).json({
+            message: 'Maintenance request created successfully',
+            request: populatedRequest
+        });
     } catch (error) {
         console.error('Error in createMaintenanceRequest:', error);
         res.status(500).json({ error: 'Error creating maintenance request' });

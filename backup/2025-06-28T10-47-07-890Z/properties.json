@@ -1,0 +1,41 @@
+[
+  {
+    "_id": "682a482f36d36c797ee16787",
+    "title": "Modern Downtown Apartment",
+    "description": "Beautiful 2-bedroom apartment in the heart of downtown",
+    "price": 250000,
+    "location": "123 Main St, Downtown",
+    "bedrooms": 2,
+    "bathrooms": 2,
+    "area": 1200,
+    "imageUrl": "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267",
+    "createdAt": "2025-05-18T20:50:55.161Z",
+    "__v": 0
+  },
+  {
+    "_id": "682a482f36d36c797ee16788",
+    "title": "Luxury Villa with Pool",
+    "description": "Spacious 4-bedroom villa with private pool and garden",
+    "price": 750000,
+    "location": "456 Luxury Lane, Uptown",
+    "bedrooms": 4,
+    "bathrooms": 3,
+    "area": 3000,
+    "imageUrl": "https://images.unsplash.com/photo-1613977257363-707ba9348227",
+    "createdAt": "2025-05-18T20:50:55.165Z",
+    "__v": 0
+  },
+  {
+    "_id": "682a482f36d36c797ee16789",
+    "title": "Cozy Studio Apartment",
+    "description": "Perfect studio apartment for single professionals",
+    "price": 150000,
+    "location": "789 Student Ave, University District",
+    "bedrooms": 1,
+    "bathrooms": 1,
+    "area": 600,
+    "imageUrl": "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688",
+    "createdAt": "2025-05-18T20:50:55.165Z",
+    "__v": 0
+  }
+]

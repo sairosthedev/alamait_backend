@@ -1,0 +1,22 @@
+[
+  {
+    "_id": "6845ba8267ce8abbd77daf1c",
+    "description": "Common Stock",
+    "type": "Earnings",
+    "category": "Shareholders",
+    "entity": "All",
+    "amount": 100000,
+    "updatedAt": "2025-06-08T19:40:47.648Z",
+    "value": 10000
+  },
+  {
+    "_id": "6845ba8267ce8abbd77daf1d",
+    "description": "Retained Earnings",
+    "type": "Capital",
+    "category": "Shareholders",
+    "entity": "All",
+    "amount": 50000,
+    "updatedAt": "2025-06-08T19:41:09.651Z",
+    "value": 50000
+  }
+]

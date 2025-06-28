@@ -13,8 +13,14 @@ exports.submitApplication = async (req, res) => {
             preferredRoom,
             alternateRooms,
             startDate,
-            endDate
+            endDate,
+            residence
         } = req.body;
+
+        // Validate residence ID
+        if (!residence) {
+            return res.status(400).json({ error: 'Residence ID is required' });
+        }
 
         // Create new application
         const application = new Application({
@@ -26,7 +32,8 @@ exports.submitApplication = async (req, res) => {
             preferredRoom,
             alternateRooms: alternateRooms || [],
             startDate,
-            endDate
+            endDate,
+            residence
         });
 
         await application.save();

@@ -1,0 +1,429 @@
+[
+  {
+    "_id": "67c7f2cbb35654a124cd21f2",
+    "author": "67c0bf38d7be0715d65a3658",
+    "title": "Mauto",
+    "content": "mauto",
+    "type": "discussion",
+    "recipients": [
+      "67c023adae5e27657502e887"
+    ],
+    "pinned": false,
+    "replies": [],
+    "readBy": [],
+    "createdAt": "2025-03-05T06:44:27.124Z",
+    "updatedAt": "2025-03-05T06:44:27.124Z",
+    "__v": 0
+  },
+  {
+    "_id": "67c7f4a41cbf683de6788d88",
+    "author": "67c023adae5e27657502e887",
+    "title": "eff",
+    "content": "fff",
+    "type": "announcement",
+    "recipients": [
+      "67c0bf38d7be0715d65a3658",
+      "67c14ae5104e7e3a59d401c2",
+      "67c41ff25d395803acaf1380"
+    ],
+    "pinned": false,
+    "replies": [],
+    "readBy": [],
+    "createdAt": "2025-03-05T06:52:20.629Z",
+    "updatedAt": "2025-03-05T06:52:20.629Z",
+    "__v": 0
+  },
+  {
+    "_id": "67f4d7986b9d3ff83334fe91",
+    "author": "67d7247cc4173fdd42f91aa4",
+    "title": "hgfds",
+    "content": "dfffffffff",
+    "type": "discussion",
+    "recipients": [
+      "67c023adae5e27657502e887"
+    ],
+    "pinned": false,
+    "replies": [
+      {
+        "author": "67c023adae5e27657502e887",
+        "content": "hey",
+        "timestamp": "2025-05-16T19:39:37.812Z",
+        "_id": "682794792a7ef48e205c93f7",
+        "createdAt": "2025-05-16T19:39:37.842Z",
+        "updatedAt": "2025-05-16T19:39:37.842Z"
+      }
+    ],
+    "readBy": [],
+    "createdAt": "2025-04-08T08:00:24.747Z",
+    "updatedAt": "2025-05-16T19:39:37.843Z",
+    "__v": 1
+  },
+  {
+    "_id": "67f4dc7324dc4e1ae3261fea",
+    "author": "67c023adae5e27657502e887",
+    "title": "yuuuuuuuuu",
+    "content": "uyyyyyyyyyyy",
+    "type": "announcement",
+    "recipients": [
+      "67d7247cc4173fdd42f91aa4",
+      "67d729fca64c5a633492be55",
+      "67d741807112d0560093dbaa",
+      "67d8606bac023e0d8487288d",
+      "67ee50a78e8fe6de0639dc05",
+      "67f27cf6e2f9f21e24bf8998"
+    ],
+    "pinned": false,
+    "replies": [],
+    "readBy": [],
+    "createdAt": "2025-04-08T08:21:07.273Z",
+    "updatedAt": "2025-04-08T08:21:07.273Z",
+    "__v": 0
+  },
+  {
+    "_id": "6823a369101722daff525032",
+    "author": "67c023adae5e27657502e887",
+    "title": "llllll",
+    "content": ";lkjhgtrfe",
+    "type": "announcement",
+    "recipients": [
+      "67d729fca64c5a633492be55"
+    ],
+    "pinned": false,
+    "replies": [],
+    "readBy": [],
+    "createdAt": "2025-05-13T19:54:17.181Z",
+    "updatedAt": "2025-05-13T19:54:17.181Z",
+    "__v": 0
+  },
+  {
+    "_id": "6823a38c101722daff52503a",
+    "author": "67c023adae5e27657502e887",
+    "title": "reduce noise",
+    "content": "please reduce noise in your room",
+    "type": "announcement",
+    "recipients": [
+      "67d729fca64c5a633492be55"
+    ],
+    "pinned": true,
+    "replies": [],
+    "readBy": [],
+    "createdAt": "2025-05-13T19:54:52.515Z",
+    "updatedAt": "2025-05-16T13:46:15.307Z",
+    "__v": 0
+  },
+  {
+    "_id": "6825d4763c851de6b53376bd",
+    "author": "67d729fca64c5a633492be55",
+    "title": "wedrftgyhuji",
+    "content": "edrftghj",
+    "type": "discussion",
+    "recipients": [
+      "67d8606bac023e0d8487288d"
+    ],
+    "pinned": false,
+    "replies": [],
+    "readBy": [],
+    "createdAt": "2025-05-15T11:48:06.846Z",
+    "updatedAt": "2025-05-15T11:48:06.846Z",
+    "__v": 0
+  },
+  {
+    "_id": "6825e531bebe6f5ceb80a981",
+    "author": "6825e3523c851de6b5337b9c",
+    "title": "wedrftgyhuji",
+    "content": "tttttttttt",
+    "type": "discussion",
+    "recipients": [
+      "67d729fca64c5a633492be55"
+    ],
+    "pinned": false,
+    "replies": [
+      {
+        "author": "6825e3523c851de6b5337b9c",
+        "content": "ssssssssssssssss",
+        "timestamp": "2025-05-15T13:00:16.145Z",
+        "_id": "6825e560bebe6f5ceb80a9be",
+        "createdAt": "2025-05-15T13:00:16.157Z",
+        "updatedAt": "2025-05-15T13:00:16.157Z"
+      },
+      {
+        "author": "67d729fca64c5a633492be55",
+        "content": "ssssssssssssssss",
+        "timestamp": "2025-05-15T13:00:24.522Z",
+        "_id": "6825e568bebe6f5ceb80a9cb",
+        "createdAt": "2025-05-15T13:00:24.524Z",
+        "updatedAt": "2025-05-15T13:00:24.524Z"
+      },
+      {
+        "author": "6825e3523c851de6b5337b9c",
+        "content": "my guy",
+        "timestamp": "2025-05-15T13:09:06.843Z",
+        "_id": "6825e772bebe6f5ceb80abd1",
+        "createdAt": "2025-05-15T13:09:06.865Z",
+        "updatedAt": "2025-05-15T13:09:06.865Z"
+      },
+      {
+        "author": "67d729fca64c5a633492be55",
+        "content": "hee",
+        "timestamp": "2025-05-15T13:10:26.182Z",
+        "_id": "6825e7c2bebe6f5ceb80ac33",
+        "createdAt": "2025-05-15T13:10:26.188Z",
+        "updatedAt": "2025-05-15T13:10:26.188Z"
+      },
+      {
+        "author": "67d729fca64c5a633492be55",
+        "content": "lets go out for some drinks",
+        "timestamp": "2025-05-15T13:16:40.196Z",
+        "_id": "6825e938bebe6f5ceb80acc4",
+        "createdAt": "2025-05-15T13:16:40.199Z",
+        "updatedAt": "2025-05-15T13:16:40.199Z"
+      },
+      {
+        "author": "6825e3523c851de6b5337b9c",
+        "content": "okay",
+        "timestamp": "2025-05-15T13:17:06.358Z",
+        "_id": "6825e952bebe6f5ceb80acec",
+        "createdAt": "2025-05-15T13:17:06.360Z",
+        "updatedAt": "2025-05-15T13:17:06.360Z"
+      },
+      {
+        "author": "67d729fca64c5a633492be55",
+        "content": "maddness",
+        "timestamp": "2025-05-16T13:37:41.110Z",
+        "_id": "68273fa5592c05ecd29f3b5e",
+        "createdAt": "2025-05-16T13:37:41.121Z",
+        "updatedAt": "2025-05-16T13:37:41.121Z"
+      },
+      {
+        "author": "6825e3523c851de6b5337b9c",
+        "content": "what",
+        "timestamp": "2025-05-17T15:24:55.507Z",
+        "_id": "6828aa4763709f1a4418e938",
+        "createdAt": "2025-05-17T15:24:55.552Z",
+        "updatedAt": "2025-05-17T15:24:55.552Z"
+      }
+    ],
+    "readBy": [],
+    "createdAt": "2025-05-15T12:59:29.748Z",
+    "updatedAt": "2025-05-17T15:24:55.555Z",
+    "__v": 8
+  },
+  {
+    "_id": "6825f8eb485764106f82addf",
+    "author": "67c023adae5e27657502e887",
+    "title": "RENT",
+    "content": "120",
+    "type": "announcement",
+    "recipients": [
+      "67d729fca64c5a633492be55",
+      "67d8606bac023e0d8487288d",
+      "68094895f27fc4324cead902",
+      "68094c3df27fc4324cead9aa",
+      "6825e3523c851de6b5337b9c"
+    ],
+    "pinned": true,
+    "replies": [
+      {
+        "author": "67d729fca64c5a633492be55",
+        "content": "thank you",
+        "timestamp": "2025-05-16T12:00:22.186Z",
+        "_id": "682728d600408bee103fef66",
+        "createdAt": "2025-05-16T12:00:22.243Z",
+        "updatedAt": "2025-05-16T12:00:22.243Z"
+      }
+    ],
+    "readBy": [],
+    "createdAt": "2025-05-15T14:23:39.798Z",
+    "updatedAt": "2025-05-16T13:08:27.781Z",
+    "__v": 1
+  },
+  {
+    "_id": "682604148a98ccc0b8b12935",
+    "author": "6825e3523c851de6b5337b9c",
+    "title": "Updates",
+    "content": "system updates",
+    "type": "discussion",
+    "recipients": [
+      "67d8606bac023e0d8487288d"
+    ],
+    "pinned": false,
+    "replies": [],
+    "readBy": [],
+    "createdAt": "2025-05-15T15:11:16.603Z",
+    "updatedAt": "2025-05-15T15:11:16.603Z",
+    "__v": 0
+  },
+  {
+    "_id": "68272b1a00408bee103ff17b",
+    "author": "68272a0100408bee103ff06d",
+    "title": "Discussion",
+    "content": "Hey Macdonald are you freee today . Do you think we can meet today after classes and have a discussion together at the library. Please let me know if your schedule is free for me to squeeze in .",
+    "type": "discussion",
+    "recipients": [
+      "67d729fca64c5a633492be55"
+    ],
+    "pinned": true,
+    "replies": [
+      {
+        "author": "67d729fca64c5a633492be55",
+        "content": "Heyy Kudzai .Well l am not quite sure .Will look at my schedule and l will let you know if we can meet or not",
+        "timestamp": "2025-05-16T12:11:24.313Z",
+        "_id": "68272b6c00408bee103ff1b7",
+        "createdAt": "2025-05-16T12:11:24.330Z",
+        "updatedAt": "2025-05-16T12:11:24.330Z"
+      },
+      {
+        "author": "68272a0100408bee103ff06d",
+        "content": "Okay thanks .Have a great day .",
+        "timestamp": "2025-05-16T12:13:33.939Z",
+        "_id": "68272bed00408bee103ff24d",
+        "createdAt": "2025-05-16T12:13:33.945Z",
+        "updatedAt": "2025-05-16T12:13:33.945Z"
+      },
+      {
+        "author": "67d729fca64c5a633492be55",
+        "content": "heyy",
+        "timestamp": "2025-05-16T13:14:01.534Z",
+        "_id": "68273a19592c05ecd29f3a2f",
+        "createdAt": "2025-05-16T13:14:01.546Z",
+        "updatedAt": "2025-05-16T13:14:01.546Z"
+      },
+      {
+        "author": "68272a0100408bee103ff06d",
+        "content": "hey dude",
+        "timestamp": "2025-05-16T13:42:43.106Z",
+        "_id": "682740d3592c05ecd29f3bcd",
+        "createdAt": "2025-05-16T13:42:43.111Z",
+        "updatedAt": "2025-05-16T13:42:43.111Z"
+      },
+      {
+        "author": "68272a0100408bee103ff06d",
+        "content": "wassup imi",
+        "timestamp": "2025-05-16T13:49:10.671Z",
+        "_id": "68274256592c05ecd29f3cae",
+        "createdAt": "2025-05-16T13:49:10.678Z",
+        "updatedAt": "2025-05-16T13:49:10.678Z"
+      }
+    ],
+    "readBy": [],
+    "createdAt": "2025-05-16T12:10:02.190Z",
+    "updatedAt": "2025-05-16T13:49:10.680Z",
+    "__v": 5
+  },
+  {
+    "_id": "6827334700408bee103ff97b",
+    "author": "68272a0100408bee103ff06d",
+    "title": "Please fix bulbs",
+    "content": "Gooday miss admin. May you kindly fix the bulbs for our toilets it has gone for over a week now and we don't have lights. It's inconveniencing us.",
+    "type": "discussion",
+    "recipients": [
+      "67c023adae5e27657502e887"
+    ],
+    "pinned": true,
+    "replies": [
+      {
+        "author": "68272a0100408bee103ff06d",
+        "content": "hey mam",
+        "timestamp": "2025-05-16T12:45:36.656Z",
+        "_id": "6827337000408bee103ff9f3",
+        "createdAt": "2025-05-16T12:45:36.666Z",
+        "updatedAt": "2025-05-16T12:45:36.666Z"
+      },
+      {
+        "author": "67c023adae5e27657502e887",
+        "content": "hi kudzai your request has been submitted will attend it",
+        "timestamp": "2025-05-16T18:58:47.919Z",
+        "_id": "68278ae72a7ef48e205c8e3b",
+        "createdAt": "2025-05-16T18:58:47.963Z",
+        "updatedAt": "2025-05-16T18:58:47.963Z"
+      },
+      {
+        "author": "68272a0100408bee103ff06d",
+        "content": "thank you mama",
+        "timestamp": "2025-05-16T19:00:12.685Z",
+        "_id": "68278b3c2a7ef48e205c8f1b",
+        "createdAt": "2025-05-16T19:00:12.690Z",
+        "updatedAt": "2025-05-16T19:00:12.690Z"
+      },
+      {
+        "author": "67c023adae5e27657502e887",
+        "content": "welx",
+        "timestamp": "2025-05-16T19:22:03.239Z",
+        "_id": "6827905b2a7ef48e205c922c",
+        "createdAt": "2025-05-16T19:22:03.262Z",
+        "updatedAt": "2025-05-16T19:22:03.262Z"
+      },
+      {
+        "author": "67c023adae5e27657502e887",
+        "content": "hey",
+        "timestamp": "2025-05-16T19:33:26.543Z",
+        "_id": "682793062a7ef48e205c930f",
+        "createdAt": "2025-05-16T19:33:26.563Z",
+        "updatedAt": "2025-05-16T19:33:26.563Z"
+      },
+      {
+        "author": "67c023adae5e27657502e887",
+        "content": "hey",
+        "timestamp": "2025-05-16T19:34:46.032Z",
+        "_id": "682793562a7ef48e205c936a",
+        "createdAt": "2025-05-16T19:34:46.035Z",
+        "updatedAt": "2025-05-16T19:34:46.035Z"
+      },
+      {
+        "author": "67c023adae5e27657502e887",
+        "content": "hey",
+        "timestamp": "2025-05-16T19:36:05.183Z",
+        "_id": "682793a52a7ef48e205c93a0",
+        "createdAt": "2025-05-16T19:36:05.191Z",
+        "updatedAt": "2025-05-16T19:36:05.191Z"
+      }
+    ],
+    "readBy": [],
+    "createdAt": "2025-05-16T12:44:55.545Z",
+    "updatedAt": "2025-05-16T20:03:00.488Z",
+    "__v": 9
+  },
+  {
+    "_id": "68275f6f3636b06e901a2944",
+    "author": "68272a0100408bee103ff06d",
+    "title": "lol",
+    "content": "looll",
+    "type": "discussion",
+    "recipients": [
+      "67d729fca64c5a633492be55",
+      "67d8606bac023e0d8487288d",
+      "68094895f27fc4324cead902",
+      "68094c3df27fc4324cead9aa",
+      "6825e3523c851de6b5337b9c",
+      "68272a0100408bee103ff06d"
+    ],
+    "pinned": false,
+    "replies": [],
+    "readBy": [],
+    "createdAt": "2025-05-16T15:53:19.683Z",
+    "updatedAt": "2025-05-16T15:53:19.683Z",
+    "__v": 0
+  },
+  {
+    "_id": "684765c0114ba961d0965adf",
+    "author": "67c023adae5e27657502e887",
+    "title": "Turn of the lights",
+    "content": "Please turn of the lights to save power",
+    "type": "announcement",
+    "recipients": [
+      "67d729fca64c5a633492be55",
+      "67d8606bac023e0d8487288d",
+      "68094895f27fc4324cead902",
+      "68094c3df27fc4324cead9aa",
+      "6825e3523c851de6b5337b9c",
+      "68272a0100408bee103ff06d",
+      "6844656137604312d8ad6fd7"
+    ],
+    "pinned": false,
+    "replies": [],
+    "readBy": [],
+    "createdAt": "2025-06-09T22:52:48.507Z",
+    "updatedAt": "2025-06-09T22:52:48.507Z",
+    "__v": 0
+  }
+]

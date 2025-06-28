@@ -26,7 +26,8 @@ const studentValidation = [
     check('status').optional().isIn(['active', 'inactive', 'pending']),
     check('emergencyContact.name', 'Emergency contact name is required').optional().notEmpty(),
     check('emergencyContact.relationship', 'Emergency contact relationship is required').optional().notEmpty(),
-    check('emergencyContact.phone', 'Emergency contact phone is required').optional().notEmpty()
+    check('emergencyContact.phone', 'Emergency contact phone is required').optional().notEmpty(),
+    check('residenceId', 'Residence ID is required').notEmpty().isMongoId().withMessage('Invalid residence ID format')
 ];
 
 // All routes require admin role

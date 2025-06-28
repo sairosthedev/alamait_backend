@@ -1,0 +1,42 @@
+[
+  {
+    "_id": "67efad134a5687db5351798e",
+    "title": "Pool Party",
+    "description": "sdfghjkl",
+    "date": "2025-06-06T00:00:00.000Z",
+    "startTime": "23:57",
+    "endTime": "23:57",
+    "location": "Wave Burg,Zimbabwe",
+    "category": "Social",
+    "status": "Open",
+    "visibility": "all",
+    "capacity": 50,
+    "requirements": [],
+    "resources": [],
+    "participants": [],
+    "feedback": [],
+    "createdAt": "2025-04-04T09:57:39.505Z",
+    "updatedAt": "2025-04-04T09:57:39.505Z",
+    "__v": 0
+  },
+  {
+    "_id": "67efade43ac30934f6c1a604",
+    "title": "Braai",
+    "description": "$10 ",
+    "date": "2025-07-03T00:00:00.000Z",
+    "startTime": "13:01",
+    "endTime": "13:01",
+    "location": "Tanaka's Place",
+    "category": "Social",
+    "status": "Required",
+    "visibility": "all",
+    "capacity": 50,
+    "requirements": [],
+    "resources": [],
+    "participants": [],
+    "feedback": [],
+    "createdAt": "2025-04-04T10:01:08.148Z",
+    "updatedAt": "2025-04-04T10:01:08.154Z",
+    "__v": 0
+  }
+]

@@ -10,7 +10,8 @@ const leaseSchema = new mongoose.Schema({
   email: String,
   residence: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Residence'
+    ref: 'Residence',
+    required: true
   },
   residenceName: String,
   startDate: Date,

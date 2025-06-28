@@ -26,7 +26,24 @@ exports.getMaintenanceById = async (req, res) => {
 // Create new maintenance request
 exports.createMaintenance = async (req, res) => {
     try {
-        const maintenance = new Maintenance(req.body);
+        const { issue, description, room, category, priority, residence } = req.body;
+
+        // Validate residence ID
+        if (!residence) {
+            return res.status(400).json({ message: 'Residence ID is required' });
+        }
+
+        const maintenance = new Maintenance({
+            issue,
+            description,
+            room,
+            category,
+            priority,
+            residence,
+            status: 'pending',
+            requestDate: new Date()
+        });
+        
         const savedMaintenance = await maintenance.save();
         res.status(201).json(savedMaintenance);
     } catch (error) {

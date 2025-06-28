@@ -1,0 +1,1096 @@
+[
+  {
+    "_id": "67c13eb8425a2e078f61d00e",
+    "name": "Belvedere Student House",
+    "description": "Located in the heart of Belvedere, our student accommodation offers a perfect blend of comfort and convenience. With easy access to major universities and amenities, it's an ideal choice for students seeking quality living.",
+    "address": {
+      "street": "12 Belvedere Road",
+      "city": "Belvedere",
+      "state": "Harare",
+      "country": "Zimbabwe"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        -17.8252,
+        31.0335
+      ]
+    },
+    "rooms": [
+      {
+        "roomNumber": "A1",
+        "type": "single",
+        "price": 180,
+        "status": "occupied",
+        "currentOccupancy": 1,
+        "capacity": 1,
+        "features": [
+          "Private bathroom",
+          "Study desk",
+          "Built-in wardrobe"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "desk",
+          "bathroom",
+          "mirror"
+        ],
+        "floor": 1,
+        "area": 20,
+        "images": [
+          "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af",
+          "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267",
+          "https://images.unsplash.com/photo-1513694203232-719a280e022f"
+        ],
+        "_id": "67d7257a2e2ea446f958515e"
+      },
+      {
+        "roomNumber": "B1",
+        "type": "double",
+        "price": 150,
+        "status": "occupied",
+        "currentOccupancy": 2,
+        "capacity": 2,
+        "features": [
+          "Shared bathroom",
+          "Twin beds",
+          "Study area"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "desk",
+          "bathroom",
+          "mirror"
+        ],
+        "floor": 1,
+        "area": 30,
+        "images": [
+          "https://images.unsplash.com/photo-1595526114035-0d45ed16cfbf",
+          "https://images.unsplash.com/photo-1595526384581-dd9c86b4d0f4",
+          "https://images.unsplash.com/photo-1595526384763-b6e4b16265b5"
+        ],
+        "_id": "67d7257a2e2ea446f958515f"
+      },
+      {
+        "roomNumber": "E1",
+        "type": "triple",
+        "price": 130,
+        "status": "reserved",
+        "currentOccupancy": 1,
+        "capacity": 3,
+        "features": [
+          "Shared facilities",
+          "Common room access",
+          "Study space"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "desk",
+          "bathroom",
+          "mirror"
+        ],
+        "floor": 1,
+        "area": 35,
+        "images": [
+          "https://images.unsplash.com/photo-1507652313519-d4e9174996dd",
+          "https://images.unsplash.com/photo-1507652955-f3dcef5a3be5",
+          "https://images.unsplash.com/photo-1507652313519-d4e9174996dd"
+        ],
+        "_id": "67d7257a2e2ea446f9585160"
+      },
+      {
+        "roomNumber": "D1",
+        "type": "quad",
+        "price": 120,
+        "status": "available",
+        "currentOccupancy": 0,
+        "capacity": 4,
+        "features": [
+          "Shared bathroom",
+          "Common study area",
+          "Quad arrangement"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "desk",
+          "bathroom",
+          "mirror"
+        ],
+        "floor": 2,
+        "area": 40,
+        "images": [
+          "https://images.unsplash.com/photo-1628745277752-8dabs84e7a74",
+          "https://images.unsplash.com/photo-1628744448840-55847c1f1f02",
+          "https://images.unsplash.com/photo-1628744448836-0d434f5f505d"
+        ],
+        "_id": "67d7257a2e2ea446f9585161"
+      }
+    ],
+    "amenities": [
+      {
+        "name": "High-Speed WiFi",
+        "description": "Fast and reliable internet throughout the building",
+        "icon": "Wifi",
+        "_id": "67d7257a2e2ea446f9585162"
+      },
+      {
+        "name": "Study Areas",
+        "description": "Multiple quiet study spaces and common areas",
+        "icon": "BookOpen",
+        "_id": "67d7257a2e2ea446f9585163"
+      },
+      {
+        "name": "Air Conditioning",
+        "description": "Climate control in all rooms",
+        "icon": "Wind",
+        "_id": "67d7257a2e2ea446f9585164"
+      },
+      {
+        "name": "Security",
+        "description": "24/7 security and access control",
+        "icon": "Shield",
+        "_id": "67d7257a2e2ea446f9585165"
+      }
+    ],
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1595526114035-0d45ed16cfbf",
+        "caption": "Modern student living",
+        "_id": "67d7257a2e2ea446f9585166"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1618221469555-7f3ad97540d6",
+        "caption": "Study area",
+        "_id": "67d7257a2e2ea446f9585167"
+      }
+    ],
+    "rules": [
+      {
+        "title": "Quiet Hours",
+        "description": "Quiet hours are from 10 PM to 6 AM",
+        "_id": "67d7257a2e2ea446f9585168"
+      },
+      {
+        "title": "Visitors",
+        "description": "Visitors must sign in at reception and leave by 10 PM",
+        "_id": "67d7257a2e2ea446f9585169"
+      },
+      {
+        "title": "Common Areas",
+        "description": "Keep common areas clean and tidy",
+        "_id": "67d7257a2e2ea446f958516a"
+      }
+    ],
+    "features": [
+      {
+        "name": "Location",
+        "description": "Close to major universities",
+        "icon": "MapPin",
+        "_id": "67d7257a2e2ea446f958516b"
+      },
+      {
+        "name": "Security",
+        "description": "24/7 security personnel and CCTV",
+        "icon": "Shield",
+        "_id": "67d7257a2e2ea446f958516c"
+      },
+      {
+        "name": "Facilities",
+        "description": "Modern amenities and study spaces",
+        "icon": "LayoutDashboard",
+        "_id": "67d7257a2e2ea446f958516d"
+      }
+    ],
+    "manager": "67c023adae5e27657502e887",
+    "status": "active",
+    "contactInfo": {
+      "email": "belvedere@alamait.com",
+      "phone": "+263786209200",
+      "website": "https://alamait.com/belvedere"
+    },
+    "createdAt": "2025-02-28T04:42:32.357Z",
+    "updatedAt": "2025-06-25T13:13:30.109Z",
+    "__v": 0
+  },
+  {
+    "_id": "67d723cf20f89c4ae69804f3",
+    "name": "St Kilda Student House",
+    "description": "Nestled in the peaceful St Kilda neighborhood, our student house combines modern comfort with a serene study environment. Featuring well-equipped common areas and a supportive student community, it's perfect for academic success.",
+    "address": {
+      "street": "4 St Kilda Road",
+      "city": "St Kilda",
+      "state": "Harare",
+      "country": "Zimbabwe"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        -17.8252,
+        31.0335
+      ]
+    },
+    "rooms": [
+      {
+        "roomNumber": "Exclusive Room",
+        "type": "single",
+        "price": 220,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Built-in wardrobe",
+          "Mirror",
+          "High-Speed WiFi",
+          "Study Desk",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 1,
+        "area": 20,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804f4",
+        "capacity": 1
+      },
+      {
+        "roomNumber": "C1",
+        "type": "double",
+        "price": 190,
+        "status": "reserved",
+        "currentOccupancy": 1,
+        "features": [
+          "Shared bathroom",
+          "Common study area",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 1,
+        "area": 25,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804f5",
+        "capacity": 2
+      },
+      {
+        "roomNumber": "C2",
+        "type": "double",
+        "price": 190,
+        "status": "reserved",
+        "currentOccupancy": 1,
+        "features": [
+          "Shared bathroom",
+          "Common study area",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 1,
+        "area": 25,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804f6",
+        "capacity": 2
+      },
+      {
+        "roomNumber": "M1",
+        "type": "studio",
+        "price": 180,
+        "status": "reserved",
+        "currentOccupancy": 1,
+        "features": [
+          "Shared bathroom",
+          "Common study area",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 2,
+        "area": 30,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804f7",
+        "capacity": 3
+      },
+      {
+        "roomNumber": "M2",
+        "type": "double",
+        "price": 170,
+        "status": "reserved",
+        "currentOccupancy": 1,
+        "features": [
+          "Shared bathroom",
+          "Common study area",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 2,
+        "area": 25,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804f8",
+        "capacity": 4
+      },
+      {
+        "roomNumber": "M3",
+        "type": "double",
+        "price": 180,
+        "status": "reserved",
+        "currentOccupancy": 1,
+        "features": [
+          "Shared bathroom",
+          "Common study area",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 2,
+        "area": 25,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804f9",
+        "capacity": 3
+      },
+      {
+        "roomNumber": "M4",
+        "type": "double",
+        "price": 180,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Shared bathroom",
+          "Walk in closet",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 2,
+        "area": 25,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804fa",
+        "capacity": 3
+      },
+      {
+        "roomNumber": "M5",
+        "type": "double",
+        "price": 180,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Shared bathroom",
+          "Common study area",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 2,
+        "area": 25,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804fb",
+        "capacity": 3
+      },
+      {
+        "roomNumber": "M6",
+        "type": "double",
+        "price": 180,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Shared bathroom",
+          "Walk in closet",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 2,
+        "area": 25,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804fc",
+        "capacity": 3
+      },
+      {
+        "roomNumber": "M7",
+        "type": "double",
+        "price": 180,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Shared bathroom",
+          "Built in wardrobe",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 2,
+        "area": 25,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804fd",
+        "capacity": 3
+      },
+      {
+        "roomNumber": "M8",
+        "type": "apartment",
+        "price": 160,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Shared bathroom",
+          "Common study area",
+          "High-Speed WiFi",
+          "Air Conditioning",
+          "Kitchenette"
+        ],
+        "amenities": [],
+        "floor": 3,
+        "area": 40,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804fe",
+        "capacity": 6
+      },
+      {
+        "roomNumber": "Bus1",
+        "type": "apartment",
+        "price": 160,
+        "status": "reserved",
+        "currentOccupancy": 1,
+        "features": [
+          "Shared bathroom",
+          "Common study area",
+          "High-Speed WiFi",
+          "Air Conditioning",
+          "Kitchenette"
+        ],
+        "amenities": [],
+        "floor": 3,
+        "area": 40,
+        "images": [],
+        "_id": "67d723cf20f89c4ae69804ff",
+        "capacity": 6
+      },
+      {
+        "roomNumber": "Bus2",
+        "type": "apartment",
+        "price": 160,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Shared bathroom",
+          "Basic furniture",
+          "High-Speed WiFi",
+          "Air Conditioning",
+          "Kitchenette"
+        ],
+        "amenities": [],
+        "floor": 3,
+        "area": 35,
+        "images": [],
+        "_id": "67d723cf20f89c4ae6980500",
+        "capacity": 5
+      },
+      {
+        "roomNumber": "Extension 1",
+        "type": "apartment",
+        "price": 160,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Large windows",
+          "Double bed",
+          "High-Speed WiFi",
+          "Air Conditioning",
+          "Coffee Station",
+          "Kitchenette"
+        ],
+        "amenities": [],
+        "floor": 1,
+        "area": 35,
+        "images": [],
+        "_id": "67d723cf20f89c4ae6980501",
+        "capacity": 6
+      },
+      {
+        "roomNumber": "Extension 2",
+        "type": "single",
+        "price": 160,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Corner room",
+          "Extra storage",
+          "High-Speed WiFi",
+          "Air Conditioning"
+        ],
+        "amenities": [],
+        "floor": 1,
+        "area": 15,
+        "images": [],
+        "_id": "67d723cf20f89c4ae6980502",
+        "capacity": 5
+      }
+    ],
+    "amenities": [
+      {
+        "name": "No Gender Preference",
+        "description": "Rooms available for all genders",
+        "icon": "Users",
+        "_id": "67d723cf20f89c4ae6980503"
+      },
+      {
+        "name": "Quiet Study Area",
+        "description": "Dedicated spaces for focused studying",
+        "icon": "BookOpen",
+        "_id": "67d723cf20f89c4ae6980504"
+      },
+      {
+        "name": "24/7 Security",
+        "description": "Round-the-clock security for your safety",
+        "icon": "Shield",
+        "_id": "67d723cf20f89c4ae6980505"
+      },
+      {
+        "name": "Utilities Included",
+        "description": "All utilities included in the rent",
+        "icon": "Zap",
+        "_id": "67d723cf20f89c4ae6980506"
+      },
+      {
+        "name": "Maintenance",
+        "description": "Regular maintenance service",
+        "icon": "Wrench",
+        "_id": "67d723cf20f89c4ae6980507"
+      }
+    ],
+    "images": [
+      {
+        "url": "/stkilda-main.jpg",
+        "caption": "Main Building",
+        "_id": "67d723cf20f89c4ae6980508"
+      },
+      {
+        "url": "/stkilda1.jpg",
+        "caption": "Common Area",
+        "_id": "67d723cf20f89c4ae6980509"
+      },
+      {
+        "url": "/stkilda2.jpg",
+        "caption": "Study Room",
+        "_id": "67d723cf20f89c4ae698050a"
+      },
+      {
+        "url": "/stkilda3.jpg",
+        "caption": "Bedroom",
+        "_id": "67d723cf20f89c4ae698050b"
+      },
+      {
+        "url": "/stkilda4.jpg",
+        "caption": "Kitchen",
+        "_id": "67d723cf20f89c4ae698050c"
+      },
+      {
+        "url": "/hos5.jpeg",
+        "caption": "Building Exterior",
+        "_id": "67d723cf20f89c4ae698050d"
+      },
+      {
+        "url": "/hos7.jpeg",
+        "caption": "Student Lounge",
+        "_id": "67d723cf20f89c4ae698050e"
+      },
+      {
+        "url": "/hos9.jpeg",
+        "caption": "Study Area",
+        "_id": "67d723cf20f89c4ae698050f"
+      }
+    ],
+    "rules": [
+      {
+        "title": "Quiet Hours",
+        "description": "10 PM - 6 AM daily",
+        "_id": "67d723cf20f89c4ae6980510"
+      },
+      {
+        "title": "Visitors",
+        "description": "Visitors allowed until 9 PM",
+        "_id": "67d723cf20f89c4ae6980511"
+      },
+      {
+        "title": "Cleaning",
+        "description": "Keep common areas clean",
+        "_id": "67d723cf20f89c4ae6980512"
+      }
+    ],
+    "features": [
+      {
+        "name": "Study Areas",
+        "description": "Multiple quiet study spaces",
+        "icon": "BookOpen",
+        "_id": "67d723cf20f89c4ae6980513"
+      },
+      {
+        "name": "High-Speed Internet",
+        "description": "Fast and reliable WiFi throughout",
+        "icon": "Wifi",
+        "_id": "67d723cf20f89c4ae6980514"
+      },
+      {
+        "name": "Security",
+        "description": "24/7 security personnel",
+        "icon": "Shield",
+        "_id": "67d723cf20f89c4ae6980515"
+      }
+    ],
+    "manager": "67c023adae5e27657502e887",
+    "status": "active",
+    "contactInfo": {
+      "email": "stkilda@alamait.com",
+      "phone": "+263786209200",
+      "website": "https://alamait.com/stkilda"
+    },
+    "createdAt": "2025-03-16T19:17:35.596Z",
+    "updatedAt": "2025-06-27T12:56:18.847Z",
+    "__v": 0
+  },
+  {
+    "_id": "6847f562e536db246e853f91",
+    "name": "Newlands",
+    "description": "Newlands student accommodation offering comfort and convenience.",
+    "address": {
+      "street": "10 Cambridge Road Newlands",
+      "city": "Harare",
+      "state": "Harare",
+      "country": "Zimbabwe"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        31.0522,
+        -17.8292
+      ]
+    },
+    "rooms": [
+      {
+        "roomNumber": "Studio1",
+        "type": "single",
+        "capacity": 1,
+        "price": 150,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Private bathroom",
+          "Kitchenette"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "desk",
+          "bathroom",
+          "mirror"
+        ],
+        "floor": 1,
+        "area": 25,
+        "images": [
+          "https://images.unsplash.com/photo-1519125323398-675f0ddb6308"
+        ]
+      },
+      {
+        "roomNumber": "Studio2",
+        "type": "single",
+        "capacity": 1,
+        "price": 150,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Private bathroom",
+          "Kitchenette"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "desk",
+          "bathroom",
+          "mirror"
+        ],
+        "floor": 1,
+        "area": 25,
+        "images": [
+          "https://images.unsplash.com/photo-1519985176271-adb1088fa94c"
+        ]
+      },
+      {
+        "roomNumber": "Sharing1",
+        "type": "double",
+        "capacity": 2,
+        "price": 100,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Shared bathroom",
+          "Study area"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "desk",
+          "bathroom",
+          "mirror"
+        ],
+        "floor": 2,
+        "area": 35,
+        "images": [
+          "https://images.unsplash.com/photo-1465101178521-c1a9136a3fdc"
+        ]
+      },
+      {
+        "roomNumber": "Sharing2",
+        "type": "double",
+        "capacity": 2,
+        "price": 100,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Shared bathroom",
+          "Study area"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "desk",
+          "bathroom",
+          "mirror"
+        ],
+        "floor": 2,
+        "area": 35,
+        "images": [
+          "https://images.unsplash.com/photo-1465101046530-73398c7f28ca"
+        ]
+      },
+      {
+        "roomNumber": "Sharing3",
+        "type": "double",
+        "capacity": 2,
+        "price": 100,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Shared bathroom",
+          "Study area"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "desk",
+          "bathroom",
+          "mirror"
+        ],
+        "floor": 2,
+        "area": 35,
+        "images": [
+          "https://images.unsplash.com/photo-1464983953574-0892a716854b"
+        ]
+      }
+    ],
+    "amenities": [],
+    "images": [],
+    "rules": [],
+    "features": [],
+    "manager": "67c023adae5e27657502e887",
+    "status": "active",
+    "contactInfo": {
+      "email": "newlands@alamait.com",
+      "phone": "+263700000000",
+      "website": "https://alamait.com/newlands"
+    },
+    "createdAt": "2025-06-10T09:05:38.820Z",
+    "updatedAt": "2025-06-26T16:53:19.529Z",
+    "__v": 0
+  },
+  {
+    "_id": "6848258b1149b66fc94a261d",
+    "name": "1ACP",
+    "description": "offices",
+    "address": {
+      "street": "183 21crescent Glen View 1",
+      "city": "Harare",
+      "state": "Harare",
+      "country": "Zimbabwe"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        31.0335,
+        -17.8252
+      ]
+    },
+    "rooms": [
+      {
+        "roomNumber": "Big 1",
+        "type": "single",
+        "capacity": 1,
+        "price": 400,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "desks"
+        ],
+        "amenities": [
+          "wifi"
+        ],
+        "floor": 1,
+        "area": 350,
+        "images": [
+          "blob:http://localhost:5173/ffc6dbd6-97ac-4daf-87a4-d1d4138f3eca"
+        ],
+        "occupants": [],
+        "maintenance": [],
+        "averageOccupancy": 0,
+        "maintenanceRequests": 0,
+        "cleaningFrequency": "weekly",
+        "_id": "6848258b1149b66fc94a261e"
+      },
+      {
+        "roomNumber": "SO1",
+        "type": "single",
+        "capacity": 1,
+        "price": 250,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Private Office",
+          "High-speed Internet",
+          "Air Conditioning"
+        ],
+        "amenities": [
+          "wifi",
+          "ac"
+        ],
+        "floor": 1,
+        "area": 25,
+        "images": [
+          "/office1.jpg"
+        ],
+        "occupants": [],
+        "maintenance": [],
+        "averageOccupancy": 0,
+        "maintenanceRequests": 0,
+        "cleaningFrequency": "weekly"
+      },
+      {
+        "roomNumber": "SO2",
+        "type": "single",
+        "capacity": 1,
+        "price": 250,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Private Office",
+          "High-speed Internet",
+          "Air Conditioning"
+        ],
+        "amenities": [
+          "wifi",
+          "ac"
+        ],
+        "floor": 1,
+        "area": 25,
+        "images": [
+          "/office1.jpg"
+        ],
+        "occupants": [],
+        "maintenance": [],
+        "averageOccupancy": 0,
+        "maintenanceRequests": 0,
+        "cleaningFrequency": "weekly"
+      },
+      {
+        "roomNumber": "SO3",
+        "type": "single",
+        "capacity": 1,
+        "price": 250,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Private Office",
+          "High-speed Internet",
+          "Air Conditioning"
+        ],
+        "amenities": [
+          "wifi",
+          "ac"
+        ],
+        "floor": 1,
+        "area": 25,
+        "images": [
+          "/office1.jpg"
+        ],
+        "occupants": [],
+        "maintenance": [],
+        "averageOccupancy": 0,
+        "maintenanceRequests": 0,
+        "cleaningFrequency": "weekly"
+      },
+      {
+        "roomNumber": "PO1",
+        "type": "pool",
+        "capacity": 5,
+        "price": 350,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Open Plan",
+          "Collaborative Space",
+          "Meeting Area"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "meeting area"
+        ],
+        "floor": 2,
+        "area": 80,
+        "images": [
+          "/pool office.jpg"
+        ],
+        "occupants": [],
+        "maintenance": [],
+        "averageOccupancy": 0,
+        "maintenanceRequests": 0,
+        "cleaningFrequency": "weekly"
+      },
+      {
+        "roomNumber": "PO2",
+        "type": "pool",
+        "capacity": 5,
+        "price": 350,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [
+          "Open Plan",
+          "Collaborative Space",
+          "Meeting Area"
+        ],
+        "amenities": [
+          "wifi",
+          "ac",
+          "meeting area"
+        ],
+        "floor": 2,
+        "area": 80,
+        "images": [
+          "/pool office.jpg"
+        ],
+        "occupants": [],
+        "maintenance": [],
+        "averageOccupancy": 0,
+        "maintenanceRequests": 0,
+        "cleaningFrequency": "weekly"
+      }
+    ],
+    "amenities": [],
+    "images": [],
+    "rules": [],
+    "features": [],
+    "manager": "67c023adae5e27657502e887",
+    "status": "active",
+    "contactInfo": {
+      "email": "kudzaicindyrellapemhiwa@gmail.com",
+      "phone": "0786209200",
+      "website": "alamait.com"
+    },
+    "createdAt": "2025-06-10T12:31:07.474Z",
+    "updatedAt": "2025-06-10T12:31:07.474Z",
+    "__v": 0
+  },
+  {
+    "_id": "6859be80cabd83fabe7761de",
+    "name": "Fife Avenue",
+    "description": "A Safe and Supportive Home Away from Home\nOur boys' boarding house in Fife Avenue provides a comfortable, secure, and nurturing environment for students to thrive. With a focus on academic excellence and personal growth, our boarding house offers :\n- Spacious and well-maintained rooms\n- Nutritious meals and snacks\n- Supportive staff and house parents\n- Opportunities for socialization and extracurricular activities\n- A safe and stable environment for students to focus on their studies\n",
+    "address": {
+      "street": "Fife Avenue",
+      "city": "Harare",
+      "state": "Harare",
+      "country": "Zimbabwe"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        31.0335,
+        -17.8252
+      ]
+    },
+    "rooms": [
+      {
+        "roomNumber": "F1",
+        "type": "single",
+        "capacity": 1,
+        "price": 100,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [],
+        "amenities": [],
+        "floor": 1,
+        "area": 300,
+        "images": [
+          "blob:http://localhost:5173/dd57ae34-2da2-4b0a-bc8c-34987a5f44dd"
+        ],
+        "occupants": [],
+        "maintenance": [],
+        "averageOccupancy": 0,
+        "maintenanceRequests": 0,
+        "cleaningFrequency": "weekly",
+        "_id": "6859be80cabd83fabe7761df"
+      },
+      {
+        "roomNumber": "F2",
+        "type": "single",
+        "capacity": 1,
+        "price": 110,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [],
+        "amenities": [],
+        "floor": 1,
+        "area": 300,
+        "images": [],
+        "occupants": [],
+        "maintenance": [],
+        "averageOccupancy": 0,
+        "maintenanceRequests": 0,
+        "cleaningFrequency": "weekly",
+        "_id": "6859be80cabd83fabe7761e0"
+      },
+      {
+        "roomNumber": "F3",
+        "type": "double",
+        "capacity": 2,
+        "price": 100,
+        "status": "available",
+        "currentOccupancy": 0,
+        "features": [],
+        "amenities": [],
+        "floor": 1,
+        "area": 400,
+        "images": [
+          "blob:http://localhost:5173/4f83f2ff-a70b-46a3-a725-8a4e7d2eed36"
+        ],
+        "occupants": [],
+        "maintenance": [],
+        "averageOccupancy": 0,
+        "maintenanceRequests": 0,
+        "cleaningFrequency": "weekly",
+        "_id": "6859be80cabd83fabe7761e1"
+      }
+    ],
+    "amenities": [],
+    "images": [],
+    "rules": [],
+    "features": [],
+    "manager": "67c023adae5e27657502e887",
+    "status": "active",
+    "contactInfo": {
+      "email": "kudzaicindyrellapemhiwa@gmail.com",
+      "phone": "0786209200",
+      "website": "alamait.vercel.app"
+    },
+    "createdAt": "2025-06-23T20:52:16.275Z",
+    "updatedAt": "2025-06-23T20:52:16.275Z",
+    "__v": 0
+  }
+]

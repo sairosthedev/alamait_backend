@@ -1,0 +1,74 @@
+[
+  {
+    "_id": "6828e7cba6d7ca03de0bbf27",
+    "name": "Plumbing",
+    "description": "All plumbing related maintenance issues",
+    "isActive": true,
+    "priority": "High",
+    "estimatedTime": 2,
+    "estimatedCost": 150,
+    "__v": 0,
+    "createdAt": "2025-05-17T19:47:23.841Z",
+    "updatedAt": "2025-05-17T19:47:23.841Z"
+  },
+  {
+    "_id": "6828e7cba6d7ca03de0bbf28",
+    "name": "Electrical",
+    "description": "Electrical system maintenance and repairs",
+    "isActive": true,
+    "priority": "High",
+    "estimatedTime": 3,
+    "estimatedCost": 200,
+    "__v": 0,
+    "createdAt": "2025-05-17T19:47:23.842Z",
+    "updatedAt": "2025-05-17T19:47:23.842Z"
+  },
+  {
+    "_id": "6828e7cba6d7ca03de0bbf29",
+    "name": "HVAC",
+    "description": "Heating, ventilation, and air conditioning issues",
+    "isActive": true,
+    "priority": "Medium",
+    "estimatedTime": 4,
+    "estimatedCost": 300,
+    "__v": 0,
+    "createdAt": "2025-05-17T19:47:23.842Z",
+    "updatedAt": "2025-05-17T19:47:23.842Z"
+  },
+  {
+    "_id": "6828e7cba6d7ca03de0bbf2a",
+    "name": "Appliance",
+    "description": "Maintenance and repairs for room appliances",
+    "isActive": true,
+    "priority": "Medium",
+    "estimatedTime": 2,
+    "estimatedCost": 100,
+    "__v": 0,
+    "createdAt": "2025-05-17T19:47:23.842Z",
+    "updatedAt": "2025-05-17T19:47:23.842Z"
+  },
+  {
+    "_id": "6828e7cba6d7ca03de0bbf2b",
+    "name": "Structural",
+    "description": "Building structure and integrity issues",
+    "isActive": true,
+    "priority": "High",
+    "estimatedTime": 6,
+    "estimatedCost": 500,
+    "__v": 0,
+    "createdAt": "2025-05-17T19:47:23.842Z",
+    "updatedAt": "2025-05-17T19:47:23.842Z"
+  },
+  {
+    "_id": "6828e7cba6d7ca03de0bbf2c",
+    "name": "General",
+    "description": "General maintenance and repairs",
+    "isActive": true,
+    "priority": "Low",
+    "estimatedTime": 1,
+    "estimatedCost": 50,
+    "__v": 0,
+    "createdAt": "2025-05-17T19:47:23.842Z",
+    "updatedAt": "2025-05-17T19:47:23.842Z"
+  }
+]

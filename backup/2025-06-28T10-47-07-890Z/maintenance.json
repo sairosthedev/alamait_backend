@@ -1,0 +1,192 @@
+[
+  {
+    "_id": "6828b737227c49a1e631f1f9",
+    "id": 1,
+    "room": "Room M1",
+    "issue": "Plumbing Issue",
+    "description": "Leaking faucet in bathroom",
+    "requestedBy": "Alice Johnson",
+    "assignee": "John Doe",
+    "status": "In Progress",
+    "dateAssigned": "2024-02-10",
+    "expectedCompletion": "2024-02-12",
+    "amount": 1200,
+    "laborCost": 300,
+    "priority": "High",
+    "studentResponse": "Waiting for response",
+    "financeStatus": "Pending",
+    "financeNotes": "",
+    "adminNotes": "Plumber scheduled for tomorrow",
+    "requestHistory": [
+      {
+        "date": "2024-02-10",
+        "action": "Request submitted",
+        "user": "Alice Johnson"
+      },
+      {
+        "date": "2024-02-10",
+        "action": "Request assigned to John Doe",
+        "user": "Admin"
+      },
+      {
+        "date": "2024-02-11",
+        "action": "Plumber scheduled for tomorrow",
+        "user": "Admin"
+      }
+    ]
+  },
+  {
+    "_id": "6828b737227c49a1e631f1fa",
+    "id": 2,
+    "room": "Room C2",
+    "issue": "Electrical Repair",
+    "description": "Power outlet not working",
+    "requestedBy": "Bob Brown",
+    "assignee": "Mike Smith",
+    "status": "Completed",
+    "dateAssigned": "2024-02-08",
+    "expectedCompletion": "2024-02-09",
+    "amount": 800,
+    "laborCost": 200,
+    "priority": "Medium",
+    "studentResponse": "Resolved",
+    "financeStatus": "Approved",
+    "financeNotes": "Payment processed",
+    "adminNotes": "Work completed on time",
+    "requestHistory": [
+      {
+        "date": "2024-02-08",
+        "action": "Request submitted",
+        "user": "Bob Brown"
+      },
+      {
+        "date": "2024-02-08",
+        "action": "Request assigned to Mike Smith",
+        "user": "Admin"
+      },
+      {
+        "date": "2024-02-09",
+        "action": "Work completed",
+        "user": "Mike Smith"
+      },
+      {
+        "date": "2024-02-09",
+        "action": "Payment approved by finance",
+        "user": "Finance"
+      }
+    ]
+  },
+  {
+    "_id": "6828b737227c49a1e631f1fb",
+    "id": 3,
+    "room": "Room A3",
+    "issue": "HVAC Repair",
+    "description": "Air conditioning not cooling properly",
+    "requestedBy": "Carol Davis",
+    "assignee": "Sarah Wilson",
+    "status": "In Progress",
+    "dateAssigned": "2024-02-11",
+    "expectedCompletion": "2024-02-13",
+    "amount": 1500,
+    "laborCost": 400,
+    "priority": "High",
+    "studentResponse": "Waiting for response",
+    "financeStatus": "Pending",
+    "financeNotes": "",
+    "adminNotes": "Technician scheduled for tomorrow",
+    "requestHistory": [
+      {
+        "date": "2024-02-11",
+        "action": "Request submitted",
+        "user": "Carol Davis"
+      },
+      {
+        "date": "2024-02-11",
+        "action": "Request assigned to Sarah Wilson",
+        "user": "Admin"
+      },
+      {
+        "date": "2024-02-12",
+        "action": "Technician scheduled for tomorrow",
+        "user": "Admin"
+      }
+    ]
+  },
+  {
+    "_id": "6828b737227c49a1e631f1fc",
+    "id": 4,
+    "room": "Room B4",
+    "issue": "Window Repair",
+    "description": "Window won't close properly",
+    "requestedBy": "David Miller",
+    "assignee": "James Taylor",
+    "status": "in-progress",
+    "dateAssigned": "2024-02-12",
+    "expectedCompletion": "2024-02-14",
+    "amount": 700,
+    "laborCost": 150,
+    "priority": "Low",
+    "studentResponse": "Waiting for response",
+    "financeStatus": "approved",
+    "financeNotes": "",
+    "adminNotes": "Need to assess the issue",
+    "requestHistory": [
+      {
+        "date": "2024-02-12",
+        "action": "Request submitted",
+        "user": "David Miller"
+      },
+      {
+        "date": "2024-02-12",
+        "action": "Request assigned to James Taylor",
+        "user": "Admin"
+      }
+    ],
+    "paymentMethod": "Bank Transfer\n",
+    "updatedAt": "2025-06-27T13:11:25.887Z",
+    "assignedTo": {
+      "_id": "6828dd4d5899165100a73dcb",
+      "name": "Trust",
+      "surname": "Jings"
+    }
+  },
+  {
+    "_id": "685e67417d4e0414c8299e74",
+    "student": "67d729a1c4173fdd42f92751",
+    "issue": "bulbs not working",
+    "description": "we have exams",
+    "room": "C1",
+    "category": "electrical",
+    "priority": "medium",
+    "status": "pending",
+    "assignedTo": {
+      "_id": "6828dd4d5899165100a73dcb",
+      "name": "Trust",
+      "surname": "Jings"
+    },
+    "amount": 50,
+    "financeStatus": "approved",
+    "requestHistory": [
+      {
+        "date": "2025-06-27T09:41:20.259Z",
+        "action": "Request submitted and assigned",
+        "user": "67d729a1c4173fdd42f92751",
+        "changes": [],
+        "_id": "685e67417d4e0414c8299e75"
+      },
+      {
+        "date": "2025-06-27T09:42:50.419Z",
+        "action": "Request approved by finance",
+        "user": "67d729a1c4173fdd42f92751",
+        "changes": [],
+        "_id": "685e679a7d4e0414c8299ea8"
+      }
+    ],
+    "requestDate": "2025-06-27T09:41:21.428Z",
+    "images": [],
+    "updates": [],
+    "createdAt": "2025-06-27T09:41:21.481Z",
+    "updatedAt": "2025-06-27T09:42:50.422Z",
+    "__v": 1
+  }
+]

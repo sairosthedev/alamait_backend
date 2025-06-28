@@ -1,0 +1,160 @@
+[
+  {
+    "_id": "67d729a1c4173fdd42f92751",
+    "email": "macdonaldsairos01@gmail.com",
+    "firstName": "Macdonald",
+    "lastName": "Sairos",
+    "phone": "0786033933",
+    "requestType": "new",
+    "status": "approved",
+    "paymentStatus": "paid",
+    "preferredRoom": "C1",
+    "alternateRooms": [
+      "Extension 1",
+      "Bus1"
+    ],
+    "applicationDate": "2025-03-16T19:42:25.677Z",
+    "createdAt": "2025-03-16T19:42:25.678Z",
+    "updatedAt": "2025-03-16T19:43:06.967Z",
+    "__v": 0,
+    "allocatedRoom": "C1",
+    "applicationCode": "APP250452",
+    "residenceId": "67c13eb8425a2e078f61d00e"
+  },
+  {
+    "_id": "684861203e03b22b44b8f81a",
+    "email": "berthamajoni@gmail.com",
+    "firstName": "bertha",
+    "lastName": "majoni",
+    "phone": "0786209200",
+    "requestType": "new",
+    "status": "rejected",
+    "paymentStatus": "unpaid",
+    "preferredRoom": "Big 1",
+    "alternateRooms": [
+      "SO1",
+      "SO2"
+    ],
+    "roomOccupancy": {
+      "current": 0,
+      "capacity": 1
+    },
+    "applicationDate": "2025-06-10T16:45:20.380Z",
+    "createdAt": "2025-06-10T16:45:20.381Z",
+    "updatedAt": "2025-06-18T22:00:05.120Z",
+    "__v": 0,
+    "waitlistedRoom": "Big 1"
+  },
+  {
+    "_id": "685bf5d55ae8bfc77319495c",
+    "email": "macdonaldsairos24@gmail.com",
+    "firstName": "Macdonald",
+    "lastName": "Shoto",
+    "phone": "07867676767",
+    "requestType": "new",
+    "status": "approved",
+    "paymentStatus": "unpaid",
+    "startDate": "2025-06-27T00:00:00.000Z",
+    "endDate": "2025-11-13T00:00:00.000Z",
+    "preferredRoom": "E1",
+    "alternateRooms": [
+      "B1",
+      "D1"
+    ],
+    "roomOccupancy": {
+      "current": 0,
+      "capacity": 0
+    },
+    "applicationDate": "2025-06-25T13:12:53.653Z",
+    "createdAt": "2025-06-25T13:12:53.668Z",
+    "updatedAt": "2025-06-25T13:13:30.294Z",
+    "__v": 0,
+    "allocatedRoom": "E1",
+    "applicationCode": "APP254010",
+    "residence": "67c13eb8425a2e078f61d00e"
+  },
+  {
+    "_id": "685dc28b25babd56e71bfbc0",
+    "email": "kudzaipemhiwa@gmail.com",
+    "firstName": "kudzai",
+    "lastName": "pemhiwa",
+    "phone": "0786209200",
+    "requestType": "new",
+    "status": "approved",
+    "paymentStatus": "unpaid",
+    "startDate": "2025-06-27T00:00:00.000Z",
+    "endDate": "2026-06-26T00:00:00.000Z",
+    "preferredRoom": "C2",
+    "alternateRooms": [
+      "M2",
+      "C1"
+    ],
+    "roomOccupancy": {
+      "current": 0,
+      "capacity": 0
+    },
+    "applicationDate": "2025-06-26T21:58:35.085Z",
+    "createdAt": "2025-06-26T21:58:35.086Z",
+    "updatedAt": "2025-06-26T22:02:43.304Z",
+    "__v": 0,
+    "allocatedRoom": "C2",
+    "applicationCode": "APP258044",
+    "residence": "67d723cf20f89c4ae69804f3"
+  },
+  {
+    "_id": "685e8c57a79798715afd1cef",
+    "email": "kudzaicindyrellapemhiwa@gmail.com",
+    "firstName": "Kudzai C",
+    "lastName": "Pemhiwa",
+    "phone": "0786209200",
+    "requestType": "new",
+    "status": "approved",
+    "paymentStatus": "paid",
+    "startDate": "2025-06-27T00:00:00.000Z",
+    "endDate": "2025-12-27T00:00:00.000Z",
+    "preferredRoom": "M2",
+    "alternateRooms": [
+      "M1",
+      "M5"
+    ],
+    "roomOccupancy": {
+      "current": 1,
+      "capacity": 4
+    },
+    "applicationDate": "2025-06-27T12:19:35.463Z",
+    "createdAt": "2025-06-27T12:19:35.464Z",
+    "updatedAt": "2025-06-27T12:29:22.516Z",
+    "__v": 0,
+    "allocatedRoom": "M2",
+    "applicationCode": "APP256800",
+    "residence": "67d723cf20f89c4ae69804f3"
+  },
+  {
+    "_id": "685e9496d6c41ce43ce5628f",
+    "email": "kudzaipemhiwa@gmail.com",
+    "firstName": "Makanaka",
+    "lastName": "Pemhiwa",
+    "phone": "0786209200",
+    "requestType": "new",
+    "status": "approved",
+    "paymentStatus": "unpaid",
+    "startDate": "2025-06-27T00:00:00.000Z",
+    "endDate": "2025-12-27T00:00:00.000Z",
+    "preferredRoom": "M3",
+    "alternateRooms": [
+      "M1",
+      "M4"
+    ],
+    "roomOccupancy": {
+      "current": 0,
+      "capacity": 0
+    },
+    "applicationDate": "2025-06-27T12:54:46.128Z",
+    "createdAt": "2025-06-27T12:54:46.151Z",
+    "updatedAt": "2025-06-27T12:56:19.420Z",
+    "__v": 0,
+    "allocatedRoom": "M3",
+    "applicationCode": "APP250880",
+    "residence": "67d723cf20f89c4ae69804f3"
+  }
+]

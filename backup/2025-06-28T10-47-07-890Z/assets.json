@@ -1,0 +1,53 @@
+[
+  {
+    "_id": "6845b9fb4f1bf35573f10756",
+    "description": "Cash and Cash Equivalents",
+    "type": "Non-Current",
+    "category": "Liquid",
+    "entity": "Grey Stone",
+    "amount": 50000,
+    "updatedAt": "2025-06-08T19:40:18.154Z",
+    "value": 1000
+  },
+  {
+    "_id": "6845b9fb4f1bf35573f10757",
+    "description": "Accounts Receivable",
+    "type": "Non-Current",
+    "category": "Receivables",
+    "entity": "Grey Stone",
+    "amount": 25000,
+    "updatedAt": "2025-06-08T19:39:40.697Z",
+    "value": 1000
+  },
+  {
+    "_id": "6845b9fb4f1bf35573f10758",
+    "description": "Property and Equipment",
+    "type": "Current",
+    "category": "Fixed",
+    "entity": "St. Kilda",
+    "amount": 150000,
+    "updatedAt": "2025-06-08T19:38:56.128Z",
+    "value": 3000
+  },
+  {
+    "_id": "6845b9fb4f1bf35573f10759",
+    "description": "Investments",
+    "type": "Current",
+    "category": "Long-term",
+    "entity": "St. Kilda",
+    "amount": 75000,
+    "updatedAt": "2025-06-08T19:38:31.288Z",
+    "value": 20000
+  },
+  {
+    "_id": "6845ca748d8167970bafd6ed",
+    "category": "lol",
+    "description": "land",
+    "createdAt": "2025-06-08T17:37:56.792Z",
+    "updatedAt": "2025-06-08T17:56:01.117Z",
+    "__v": 0,
+    "value": 5000,
+    "entity": "St. Kilda",
+    "type": "Current"
+  }
+]
