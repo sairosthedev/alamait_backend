@@ -22,6 +22,7 @@ exports.getAllMaintenanceRequests = async (req, res) => {
             .limit(parseInt(limit))
             .populate('student', 'firstName lastName')
             .populate('assignedTo', 'firstName lastName')
+            .populate('residence', 'name')
             .lean();
 
         // Format requests to include financial details
@@ -35,6 +36,7 @@ exports.getAllMaintenanceRequests = async (req, res) => {
             status: request.status,
             student: request.student,
             assignedTo: request.assignedTo,
+            residence: request.residence ? request.residence.name : 'Unknown',
             requestDate: request.requestDate,
             scheduledDate: request.scheduledDate,
             estimatedCompletion: request.estimatedCompletion,
@@ -63,13 +65,20 @@ exports.getMaintenanceRequestById = async (req, res) => {
         const request = await Maintenance.findById(req.params.id)
             .populate('student', 'firstName lastName')
             .populate('assignedTo', 'firstName lastName')
+            .populate('residence', 'name')
             .lean();
 
         if (!request) {
             return res.status(404).json({ error: 'Maintenance request not found' });
         }
 
-        res.json(request);
+        // Add residence name to the response
+        const response = {
+            ...request,
+            residenceName: request.residence ? request.residence.name : 'Unknown'
+        };
+
+        res.json(response);
     } catch (error) {
         console.error('Error in getMaintenanceRequestById:', error);
         res.status(500).json({ error: 'Error retrieving maintenance request' });
@@ -130,10 +139,17 @@ exports.getMaintenanceRequestsByFinanceStatus = async (req, res) => {
             .limit(parseInt(limit))
             .populate('student', 'firstName lastName')
             .populate('assignedTo', 'firstName lastName')
+            .populate('residence', 'name')
             .lean();
 
+        // Add residence name to each request
+        const formattedRequests = requests.map(request => ({
+            ...request,
+            residence: request.residence ? request.residence.name : 'Unknown'
+        }));
+
         res.json({
-            requests,
+            requests: formattedRequests,
             currentPage: parseInt(page),
             totalPages: Math.ceil(total / limit),
             total

@@ -17,12 +17,13 @@ exports.getMaintenanceRequests = async (req, res) => {
         // Get total count for pagination
         const total = await Maintenance.countDocuments(query);
 
-        // Fetch requests with pagination
+        // Fetch requests with pagination and populate residence
         const requests = await Maintenance.find(query)
             .sort({ requestDate: -1 })
             .skip(skip)
             .limit(limit)
             .populate('assignedTo', 'firstName lastName')
+            .populate('residence', 'name') // Populate residence name
             .lean();
 
         // Format requests to match frontend structure
@@ -36,6 +37,7 @@ exports.getMaintenanceRequests = async (req, res) => {
             status: request.status,
             requestDate: request.requestDate || request.createdAt,
             expectedCompletion: request.estimatedCompletion,
+            residence: request.residence ? request.residence.name : 'Unknown', // Include residence name
             updates: request.updates ? request.updates.map(update => ({
                 date: update.date,
                 message: update.message,
@@ -116,13 +118,20 @@ exports.getMaintenanceRequestDetails = async (req, res) => {
             student: req.user._id
         })
         .populate('assignedTo', 'firstName lastName')
+        .populate('residence', 'name') // Populate residence name
         .lean();
 
         if (!request) {
             return res.status(404).json({ error: 'Maintenance request not found' });
         }
 
-        res.json(request);
+        // Add residence name to the response
+        const response = {
+            ...request,
+            residenceName: request.residence ? request.residence.name : 'Unknown'
+        };
+
+        res.json(response);
     } catch (error) {
         console.error('Error in getMaintenanceRequestDetails:', error);
         res.status(500).json({ error: 'Error retrieving maintenance request details' });

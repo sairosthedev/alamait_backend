@@ -136,6 +136,7 @@ exports.getAllMaintenanceRequests = async (req, res) => {
                 adminNotes: request.adminNotes,
                 requestHistory: request.requestHistory,
                 assignedTo: assignedTo,
+                residence: request.residence ? request.residence.name : 'Unknown',
                 updatedAt: request.updatedAt
             };
         });
