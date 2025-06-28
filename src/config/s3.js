@@ -15,36 +15,68 @@ const s3Configs = {
   signedLeases: {
     bucket: bucketName,
     key: (req, file) => `signed_leases/${req.user._id}_${Date.now()}_${file.originalname}`,
-    acl: 'public-read'
+    acl: 'private'
   },
   
   // For proof of payment files
   proofOfPayment: {
     bucket: bucketName,
     key: (req, file) => `proof_of_payment/${req.user._id}_${Date.now()}_${file.originalname}`,
-    acl: 'public-read'
+    acl: 'private'
   },
   
   // For lease uploads
   leases: {
     bucket: bucketName,
     key: (req, file) => `leases/${req.user._id}_${Date.now()}_${file.originalname}`,
-    acl: 'public-read'
+    acl: 'private'
   },
   
   // For lease templates
   leaseTemplates: {
     bucket: bucketName,
     key: (req, file) => `lease_templates/${req.body.residenceId}_${Date.now()}_${file.originalname}`,
-    acl: 'public-read'
+    acl: 'private'
   },
   
   // For general uploads
   general: {
     bucket: bucketName,
     key: (req, file) => `general/${Date.now()}_${file.originalname}`,
-    acl: 'public-read'
+    acl: 'private'
   }
+};
+
+// Function to generate signed URL for private objects
+const generateSignedUrl = async (key, expiresIn = 3600) => {
+  try {
+    const signedUrl = await s3.getSignedUrlPromise('getObject', {
+      Bucket: bucketName,
+      Key: key,
+      Expires: expiresIn // URL expires in 1 hour by default
+    });
+    return signedUrl;
+  } catch (error) {
+    console.error('Error generating signed URL:', error);
+    return null;
+  }
+};
+
+// Function to extract key from S3 URL
+const getKeyFromUrl = (s3Url) => {
+  if (!s3Url || !s3Url.includes(bucketName)) return null;
+  return s3Url.split(`${bucketName}.s3.amazonaws.com/`)[1];
+};
+
+// Function to convert S3 URL to signed URL
+const convertToSignedUrl = async (s3Url) => {
+  if (!s3Url || s3Url.startsWith('http')) {
+    const key = getKeyFromUrl(s3Url);
+    if (key) {
+      return await generateSignedUrl(key);
+    }
+  }
+  return s3Url;
 };
 
 // File filter function
@@ -68,5 +100,8 @@ module.exports = {
   bucketName,
   s3Configs,
   fileFilter,
-  fileTypes
+  fileTypes,
+  generateSignedUrl,
+  getKeyFromUrl,
+  convertToSignedUrl
 }; 

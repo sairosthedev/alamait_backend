@@ -3,6 +3,7 @@ const User = require('../../models/User');
 const Application = require('../../models/Application');
 const Residence = require('../../models/Residence');
 const Lease = require('../../models/Lease');
+const { generateSignedUrl, getKeyFromUrl } = require('../../config/s3');
 
 // Handles file upload (multer middleware will save the file to S3)
 exports.uploadLease = async (req, res) => {
@@ -85,11 +86,31 @@ exports.uploadLease = async (req, res) => {
   }
 };
 
-// List uploaded leases for the current user
+// List uploaded leases for the current user with signed URLs
 exports.listLeases = async (req, res) => {
   try {
     const leases = await Lease.find({ studentId: req.user.id });
-    res.status(200).json(leases);
+    
+    // Convert S3 URLs to signed URLs for each lease
+    const leasesWithSignedUrls = await Promise.all(
+      leases.map(async (lease) => {
+        const leaseObj = lease.toObject();
+        if (leaseObj.path) {
+          try {
+            const key = getKeyFromUrl(leaseObj.path);
+            if (key) {
+              leaseObj.path = await generateSignedUrl(key);
+            }
+          } catch (error) {
+            console.error('Error generating signed URL:', error);
+            // Keep original URL if signed URL generation fails
+          }
+        }
+        return leaseObj;
+      })
+    );
+    
+    res.status(200).json(leasesWithSignedUrls);
   } catch (error) {
     console.error('Error listing leases:', error);
     res.status(500).json({ message: 'Server error' });
