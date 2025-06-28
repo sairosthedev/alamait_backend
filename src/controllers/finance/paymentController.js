@@ -117,11 +117,7 @@ exports.getStudentPayments = async (req, res) => {
                 datePaid: payment.date.toISOString().split('T')[0],
                 paymentType: paymentType,
                 status: payment.status,
-                proof: payment.proofOfPayment?.fileUrl ? 
-                    (payment.proofOfPayment.fileUrl.startsWith('http') ? 
-                        payment.proofOfPayment.fileUrl : 
-                        `${process.env.BACKEND_URL || 'http://localhost:5000'}${payment.proofOfPayment.fileUrl}`) 
-                    : null,
+                proof: payment.proofOfPayment?.fileUrl || null,
                 studentId: payment.student ? payment.student._id : null,
                 residenceId: payment.residence ? payment.residence._id : null
             };

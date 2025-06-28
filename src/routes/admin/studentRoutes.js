@@ -61,23 +61,21 @@ router.all('/:studentId/download-lease', async (req, res) => {
         // Find the latest lease for the specified student
         const lease = await Lease.findOne({ studentId }).sort({ uploadedAt: -1 });
 
-        if (!lease || !lease.filename) {
+        if (!lease) {
             return res.status(404).json({ message: 'No lease agreement found for this student.' });
         }
 
-        const filePath = path.join(__dirname, '..', '..', '..', 'uploads', lease.filename);
-
-        // Check if the physical file exists on the server
-        if (fs.existsSync(filePath)) {
+        // lease.path now contains an S3 URL
+        if (lease.path && lease.path.startsWith('http')) {
             if (req.method === 'HEAD') {
                 // If the frontend is just checking for existence, send a success status
                 res.status(200).end();
             } else {
-                // If the frontend wants the file, send it for download
-                res.download(filePath, lease.originalname);
+                // If the frontend wants the file, redirect to S3 URL
+                res.redirect(lease.path);
             }
         } else {
-            return res.status(404).json({ message: 'Lease file not found on server.' });
+            return res.status(404).json({ message: 'Lease file not available.' });
         }
     } catch (error) {
         console.error('Error fetching lease for download:', error);

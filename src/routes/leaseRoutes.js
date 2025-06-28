@@ -1,31 +1,32 @@
 const express = require('express');
 const router = express.Router();
-const path = require('path');
-const fs = require('fs');
 const { auth } = require('../middleware/auth');
 const Lease = require('../models/Lease');
 
-// GET /api/leases/download/:filename
+// GET /api/leases/download/:leaseId
 // Allows authenticated users (students or admins) to download a lease file
-router.get('/download/:filename', auth, async (req, res) => {
+router.get('/download/:leaseId', auth, async (req, res) => {
   try {
-    const { filename } = req.params;
+    const { leaseId } = req.params;
 
-    // Optional: Add extra security check to ensure the user has permission
-    // For now, any authenticated user can download if they have the filename
+    // Find the lease by ID
+    const lease = await Lease.findById(leaseId);
+    
+    if (!lease) {
+      return res.status(404).json({ error: 'Lease not found' });
+    }
 
-    const filePath = path.join(__dirname, '../../uploads', filename);
+    // Check if the user has permission to download this lease
+    if (req.user.role !== 'admin' && lease.studentId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
-    // Check if file exists
-    if (fs.existsSync(filePath)) {
-      res.download(filePath, (err) => {
-        if (err) {
-          console.error('Error downloading file:', err);
-          res.status(500).json({ error: 'Failed to download file' });
-        }
-      });
+    // lease.path now contains an S3 URL
+    if (lease.path && lease.path.startsWith('http')) {
+      // Redirect to S3 URL for download
+      res.redirect(lease.path);
     } else {
-      res.status(404).json({ error: 'File not found' });
+      res.status(404).json({ error: 'Lease file not available' });
     }
   } catch (error) {
     console.error('Error in download route:', error);

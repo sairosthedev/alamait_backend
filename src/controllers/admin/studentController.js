@@ -255,17 +255,20 @@ exports.downloadSignedLease = async (req, res) => {
     try {
         const { studentId } = req.params;
         const user = await User.findById(studentId);
+        
         if (!user || !user.signedLeasePath) {
             return res.status(404).json({ error: 'Signed lease not found for this student.' });
         }
-        const filePath = path.join(__dirname, '..', '..', '..', user.signedLeasePath);
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'Signed lease file missing from server.' });
+        
+        // signedLeasePath now contains an S3 URL
+        if (user.signedLeasePath.startsWith('http')) {
+            // Redirect to S3 URL for download
+            res.redirect(user.signedLeasePath);
+        } else {
+            return res.status(404).json({ error: 'Invalid signed lease URL.' });
         }
-        res.download(filePath, err => {
-            if (err) res.status(500).json({ error: 'Failed to download file.' });
-        });
     } catch (error) {
+        console.error('Error downloading signed lease:', error);
         res.status(500).json({ error: 'Server error.' });
     }
 }; 
