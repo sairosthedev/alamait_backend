@@ -27,44 +27,14 @@ exports.getApplications = async (req, res) => {
         
         // Create a map of room statuses
         const roomStatusMap = {};
-        
         residences.forEach(residence => {
             residence.rooms.forEach(room => {
-                // Get capacity based on room type
-                const capacity = room.capacity || (
-                    room.type === 'single' ? 1 : 
-                    room.type === 'double' ? 2 : 
-                    room.type === 'studio' ? 1 : 
-                    room.type === 'triple' ? 3 : 
-                    room.type === 'quad' ? 4 : 4
-                );
-                
-                // Set occupancy based on data
-                let currentOccupancy = room.currentOccupancy || 0;
-                
-                // Determine the correct status based on occupancy
-                let status = room.status?.toLowerCase() || 'unavailable';
-                
-                // If occupancy is 0, room should be available
-                if (currentOccupancy === 0) {
-                    status = 'available';
-                } 
-                // If occupancy equals capacity, room should be occupied
-                else if (currentOccupancy >= capacity) {
-                    status = 'occupied';
-                }
-                // If occupancy is between 0 and capacity, room should be reserved
-                else if (currentOccupancy > 0) {
-                    status = 'reserved';
-                }
-                
                 roomStatusMap[room.roomNumber] = {
-                    capacity: capacity,
-                    currentOccupancy: currentOccupancy,
+                    residence: residence.name,
+                    status: room.status,
+                    currentOccupancy: room.currentOccupancy,
+                    capacity: room.capacity,
                     price: room.price,
-                    status: status,
-                    residenceName: residence.name,
-                    residenceId: residence._id,
                     type: room.type
                 };
             });
@@ -112,8 +82,11 @@ exports.getApplications = async (req, res) => {
             };
         });
 
+        // Return response in the format expected by frontend (similar to residences API)
         res.json({
-            applications: transformedApplications,
+            success: true,
+            count: transformedApplications.length,
+            data: transformedApplications,
             rooms: Object.entries(roomStatusMap).map(([roomNumber, details]) => ({
                 name: roomNumber,
                 ...details,

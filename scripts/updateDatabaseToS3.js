@@ -104,10 +104,7 @@ const updatePaymentRecords = async () => {
   try {
     const payments = await Payment.find({
       'proofOfPayment.fileUrl': {
-        $or: [
-          { $regex: /^\/uploads\// }, // Unix paths
-          { $not: /^https?:\/\// } // Not URLs
-        ]
+        $regex: /^\/uploads\//
       }
     });
 
