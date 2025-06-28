@@ -118,6 +118,40 @@ exports.getResidenceDetails = async (req, res) => {
     }
 };
 
+// @route   GET /api/student/residences/id/:id
+// @desc    Get residence information by ID (for resolving residence names)
+// @access  Private (Student only)
+exports.getResidenceById = async (req, res) => {
+    try {
+        const residence = await Residence.findById(req.params.id)
+            .select('name address')
+            .lean();
+
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                error: 'Residence not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                id: residence._id,
+                name: residence.name,
+                address: residence.address
+            }
+        });
+    } catch (error) {
+        console.error('Error in getResidenceById:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to fetch residence information',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
 // @route   POST /api/student/lease
 // @desc    Create a new lease
 // @access  Private (Student only)

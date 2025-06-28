@@ -17,4 +17,7 @@ router.get('/1ACP', residenceController.getOneACPResidence);
 // Public route to get residence by name
 router.get('/name/:name', residenceController.getResidenceByName);
 
+// Public route to get residence by ID (for resolving residence names)
+router.get('/id/:id', residenceController.getResidenceById);
+
 module.exports = router; 

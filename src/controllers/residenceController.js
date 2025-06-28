@@ -505,11 +505,47 @@ exports.getResidenceByName = async (req, res) => {
             });
         }
 
-        res.status(200).json(residence);
+        res.status(200).json({
+            success: true,
+            data: residence
+        });
     } catch (error) {
+        console.error('Error in getResidenceByName:', error);
         res.status(500).json({
             success: false,
             message: 'Error fetching residence',
+            error: error.message
+        });
+    }
+};
+
+// Get residence information by ID (for resolving residence names)
+exports.getResidenceById = async (req, res) => {
+    try {
+        const residence = await Residence.findById(req.params.id)
+            .select('name address')
+            .lean();
+
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                id: residence._id,
+                name: residence.name,
+                address: residence.address
+            }
+        });
+    } catch (error) {
+        console.error('Error in getResidenceById:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching residence information',
             error: error.message
         });
     }

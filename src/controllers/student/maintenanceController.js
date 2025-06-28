@@ -61,15 +61,22 @@ exports.getMaintenanceRequests = async (req, res) => {
 // Create new maintenance request
 exports.createMaintenanceRequest = async (req, res) => {
     try {
+        console.log('=== CREATE MAINTENANCE REQUEST DEBUG ===');
+        console.log('User ID:', req.user._id);
+        console.log('Request body:', req.body);
+        
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
+            console.log('Validation errors:', errors.array());
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const { title, description, category, priority, location, images, residenceId } = req.body;
+        const { title, description, category, priority, location, images, residenceId, room, studentResponse } = req.body;
 
         // Get user's residence automatically
         const user = await User.findById(req.user._id);
+        console.log('Found user:', user ? { id: user._id, email: user.email, residence: user.residence } : 'User not found');
+        
         if (!user) {
             return res.status(400).json({ 
                 error: 'User not found' 
@@ -84,6 +91,8 @@ exports.createMaintenanceRequest = async (req, res) => {
             finalResidenceId = residenceId;
         }
         
+        console.log('Final residence ID:', finalResidenceId);
+        
         if (!finalResidenceId) {
             return res.status(400).json({ 
                 error: 'Student not assigned to any residence. Please contact administrator.' 
@@ -92,6 +101,8 @@ exports.createMaintenanceRequest = async (req, res) => {
 
         // Validate that the residence exists
         const residence = await Residence.findById(finalResidenceId);
+        console.log('Found residence:', residence ? { id: residence._id, name: residence.name } : 'Residence not found');
+        
         if (!residence) {
             return res.status(400).json({ 
                 error: 'Invalid residence ID. Please contact administrator.' 
@@ -106,9 +117,11 @@ exports.createMaintenanceRequest = async (req, res) => {
             category,
             priority: priority || 'low',
             location,
-            status: 'pending',
+            room: room || null, // Include room if provided
+            status: 'pending', // Always start as pending
             requestDate: new Date(),
             images: images || [],
+            studentResponse: studentResponse || 'Waiting for response', // Include student response if provided
             updates: [{
                 date: new Date(),
                 message: 'Maintenance request submitted',
@@ -116,18 +129,29 @@ exports.createMaintenanceRequest = async (req, res) => {
             }]
         });
 
+        console.log('Creating maintenance request with data:', {
+            student: newRequest.student,
+            residence: newRequest.residence,
+            title: newRequest.title,
+            category: newRequest.category,
+            priority: newRequest.priority
+        });
+
         await newRequest.save();
+        console.log('Maintenance request saved successfully');
 
         // Populate the response with student and residence info
         const populatedRequest = await Maintenance.findById(newRequest._id)
             .populate('student', 'firstName lastName email')
             .populate('residence', 'name');
 
+        console.log('=== CREATE MAINTENANCE REQUEST SUCCESS ===');
         res.status(201).json({
             message: 'Maintenance request created successfully',
             request: populatedRequest
         });
     } catch (error) {
+        console.error('=== CREATE MAINTENANCE REQUEST ERROR ===');
         console.error('Error in createMaintenanceRequest:', error);
         res.status(500).json({ error: 'Error creating maintenance request' });
     }
