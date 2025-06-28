@@ -127,6 +127,7 @@ exports.getPaymentHistory = async (req, res) => {
             location: 'Not Assigned'
         };
         let allocatedRoomDetails = null;
+        let residenceId = null; // Track residence ID
 
         // First check for approved application
         if (approvedApplication) {
@@ -144,6 +145,7 @@ exports.getPaymentHistory = async (req, res) => {
                         type: approvedApplication.roomType || (room ? room.type : 'Standard'),
                         location: residence.name
                     };
+                    residenceId = residence._id; // Set residence ID
                     console.log('Using room info from approved application with residence lookup:', roomInfo);
                 } else {
                     roomInfo = {
@@ -163,6 +165,10 @@ exports.getPaymentHistory = async (req, res) => {
                     location: approvedApplication.residence
                 };
                 allocatedRoomDetails = null;
+                // Try to get residence ID from the application's residence field
+                if (approvedApplication.residence && typeof approvedApplication.residence === 'object') {
+                    residenceId = approvedApplication.residence._id;
+                }
                 console.log('Using residence from approved application (no room allocated yet):', roomInfo);
             }
         }
@@ -175,6 +181,7 @@ exports.getPaymentHistory = async (req, res) => {
             let room = null;
             if (residence) {
                 room = residence.rooms.find(r => r.roomNumber === activeBooking.room.roomNumber);
+                residenceId = residence._id; // Set residence ID
             }
             allocatedRoomDetails = room ? { ...room.toObject?.() || room } : null;
             roomInfo = {
@@ -190,6 +197,7 @@ exports.getPaymentHistory = async (req, res) => {
             let room = null;
             if (student.residence?.name) {
                 residenceName = student.residence.name;
+                residenceId = student.residence._id; // Set residence ID from student's residence
             } else {
                 try {
                     const residence = await Residence.findOne({
@@ -198,6 +206,7 @@ exports.getPaymentHistory = async (req, res) => {
                     residenceName = residence ? residence.name : 'Not Assigned';
                     if (residence) {
                         room = residence.rooms.find(r => r.roomNumber === student.currentRoom);
+                        residenceId = residence._id; // Set residence ID
                     }
                 } catch (err) {
                     console.error('Error finding residence:', err);
@@ -223,6 +232,7 @@ exports.getPaymentHistory = async (req, res) => {
             year: student.roomValidUntil ? new Date(student.roomValidUntil).getFullYear() : null,
             institution: "University of Zimbabwe",
             residence: roomInfo.location,
+            residenceId: residenceId, // Include residence ID
             currentDue: currentMonthPaid.toFixed(2) || '0.00',
             pastDue: pastDue.toFixed(2) || '0.00',
             pastOverDue: pastOverDue.toFixed(2) || '0.00',

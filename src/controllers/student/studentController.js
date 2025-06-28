@@ -146,17 +146,25 @@ const getProfile = async (req, res) => {
 
         // Determine the residence name from various sources
         let residenceName = null;
+        let residenceId = null; // Track residence ID
         if (currentBooking?.residence?.name) {
             residenceName = currentBooking.residence.name;
+            residenceId = currentBooking.residence._id; // Get residence ID from booking
         } else if (approvedApplication?.residence?.name) {
             residenceName = approvedApplication.residence.name;
+            residenceId = approvedApplication.residence._id; // Get residence ID from application
         } else if (residenceDetails?.name) {
             residenceName = residenceDetails.name;
+            // Try to get residence ID from the residence lookup
+            const residence = await Residence.findOne({ name: residenceDetails.name });
+            residenceId = residence ? residence._id : null;
         } else if (student.residence?.name) {
             residenceName = student.residence.name;
+            residenceId = student.residence._id; // Get residence ID from student
         }
 
         console.log('Determined residence name:', residenceName);
+        console.log('Determined residence ID:', residenceId);
 
         // Format response to match frontend requirements
         const formattedProfile = {
@@ -179,21 +187,24 @@ const getProfile = async (req, res) => {
                 approvalDate: currentBooking.startDate,
                 roomNumber: currentBooking.room.roomNumber,
                 roomType: currentBooking.room.type,
-                residence: currentBooking.residence.name
+                residence: currentBooking.residence.name,
+                residenceId: currentBooking.residence._id
             } : student.currentRoom && residenceDetails ? {
                 status: 'active',
                 validUntil: student.roomValidUntil,
                 approvalDate: student.roomApprovalDate,
                 roomNumber: student.currentRoom,
                 roomType: residenceDetails.room.type,
-                residence: residenceDetails.name
+                residence: residenceDetails.name,
+                residenceId: residenceId
             } : approvedApplication ? {
                 status: 'approved',
                 validUntil: approvedApplication.actionDate ? new Date(new Date(approvedApplication.actionDate).setMonth(new Date(approvedApplication.actionDate).getMonth() + 4)) : new Date(Date.now() + (4 * 30 * 24 * 60 * 60 * 1000)),
                 approvalDate: approvedApplication.actionDate || new Date(),
                 roomNumber: approvedApplication.allocatedRoom || approvedApplication.preferredRoom,
                 roomType: 'Standard',
-                residence: residenceName || 'Not Assigned'
+                residence: residenceName || 'Not Assigned',
+                residenceId: residenceId
             } : null
         };
 
@@ -315,6 +326,7 @@ const getCurrentResidence = async (req, res) => {
         const response = {
             name: currentBooking.residence.name,
             address: currentBooking.residence.address,
+            residenceId: currentBooking.residence._id,
             room: {
                 number: currentBooking.room.roomNumber,
                 type: currentBooking.room.type,
