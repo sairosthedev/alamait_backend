@@ -4,32 +4,18 @@ const Booking = require('../../models/Booking');
 const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+const multerS3 = require('multer-s3');
+const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        // Use the uploads/pop directory which is created at server startup
-        const uploadDir = path.join(process.cwd(), 'uploads/pop');
-        cb(null, uploadDir);
-    },
-    filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'pop-' + uniqueSuffix + path.extname(file.originalname));
-    }
-});
-
+// Configure multer for S3 file uploads
 const upload = multer({
-    storage: storage,
-    fileFilter: (req, file, cb) => {
-        const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
-        if (allowedTypes.includes(file.mimetype)) {
-            cb(null, true);
-        } else {
-            cb(new Error('Invalid file type. Only JPEG, PNG and PDF files are allowed.'));
-        }
-    },
+    storage: multerS3({
+        s3: s3,
+        bucket: s3Configs.proofOfPayment.bucket,
+        acl: s3Configs.proofOfPayment.acl,
+        key: s3Configs.proofOfPayment.key
+    }),
+    fileFilter: fileFilter([...fileTypes.images, 'application/pdf']),
     limits: {
         fileSize: 5 * 1024 * 1024 // 5MB limit
     }
@@ -409,9 +395,9 @@ exports.uploadProofOfPayment = (req, res) => {
             payment.deposit = deposit;
             payment.totalAmount = totalAmount;
 
-            // Update payment with proof of payment details
+            // Update payment with proof of payment details (S3 URL)
             payment.proofOfPayment = {
-                fileUrl: `/uploads/pop/${req.file.filename}`,
+                fileUrl: req.file.location, // S3 URL
                 fileName: req.file.originalname,
                 uploadDate: new Date(),
                 verificationStatus: 'Pending'
@@ -602,9 +588,10 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 status: 'Pending',
                 method: 'Bank Transfer',
                 proofOfPayment: {
-                    fileUrl: `/uploads/pop/${req.file.filename}`,
+                    fileUrl: req.file.location, // S3 URL
                     fileName: req.file.originalname,
-                    uploadDate: new Date()
+                    uploadDate: new Date(),
+                    verificationStatus: 'Pending'
                 },
                 createdBy: req.user._id
             });

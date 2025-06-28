@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
+const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateService');
 
 // Get all applications with room status
 exports.getApplications = async (req, res) => {
@@ -225,31 +226,12 @@ exports.updateApplicationStatus = async (req, res) => {
                     // Generate and send lease agreement
                     let attachments = [];
                     try {
-                        // Map residence name to static lease file
-                        let leaseFile = null;
-                        const name = residence.name.toLowerCase();
-                        if (name.includes('st kilda')) {
-                            leaseFile = 'ST Kilda Boarding Agreement1.docx';
-                        } else if (name.includes('belvedere')) {
-                            leaseFile = 'Belvedere.docx';
-                        } else if (name.includes('newlands')) {
-                            leaseFile = 'Lease_Agreement_Template.docx';
-                        } else if (name.includes('office')) {
-                            leaseFile = 'Alamait lease agreement.docx';
-                        }
-                        if (leaseFile) {
-                            const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', leaseFile));
-                            if (fs.existsSync(templatePath)) {
-                                attachments.push({
-                                    filename: leaseFile,
-                                    path: templatePath,
-                                    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                                });
-                            } else {
-                                throw new Error(`Lease template for residence ${residence.name} not found.`);
-                            }
+                        // Get lease template attachment from S3
+                        const templateAttachment = await getLeaseTemplateAttachment(residence.name);
+                        if (templateAttachment) {
+                            attachments.push(templateAttachment);
                         } else {
-                            throw new Error(`No lease template mapping for residence ${residence.name}`);
+                            throw new Error(`No lease template found for residence ${residence.name}`);
                         }
                     } catch (error) {
                         console.error('Error attaching lease agreement:', error);

@@ -10,6 +10,8 @@ const fs = require('fs');
 const mammoth = require('mammoth');
 const PDFDocument = require('pdfkit');
 const multer = require('multer');
+const multerS3 = require('multer-s3');
+const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 
 // Get all students
 const getAllStudents = async (req, res) => {
@@ -413,41 +415,29 @@ const downloadLeaseAgreement = async (req, res) => {
     }
 };
 
-// Multer storage for signed leases
-const signedLeaseStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        const dir = path.join(__dirname, '..', '..', '..', 'uploads', 'signed_leases');
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        cb(null, dir);
-    },
-    filename: function (req, file, cb) {
-        const ext = file.originalname.split('.').pop();
-        cb(null, `${req.user._id}_${Date.now()}.${ext}`);
-    }
-});
+// Set up multer to use S3 for signed leases
 const uploadSignedLease = multer({
-    storage: signedLeaseStorage,
-    fileFilter: (req, file, cb) => {
-        const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
-        if (allowed.includes(file.mimetype)) cb(null, true);
-        else cb(new Error('Only PDF, JPEG, or PNG allowed'));
-    },
-    limits: { fileSize: 10 * 1024 * 1024 }
+  storage: multerS3({
+    s3: s3,
+    bucket: s3Configs.signedLeases.bucket,
+    acl: s3Configs.signedLeases.acl,
+    key: s3Configs.signedLeases.key
+  }),
+  fileFilter: fileFilter([...fileTypes.documents, ...fileTypes.images]),
+  limits: { fileSize: 10 * 1024 * 1024 }
 }).single('signedLease');
 
-// Student uploads signed lease
+// Student uploads signed lease (to S3)
 const uploadSignedLeaseHandler = async (req, res) => {
-    uploadSignedLease(req, res, async function (err) {
-        if (err) {
-            return res.status(400).json({ error: err.message });
-        }
-        // Save file path in user model
-        const filePath = `/uploads/signed_leases/${req.file.filename}`;
-        await User.findByIdAndUpdate(req.user._id, { signedLeasePath: filePath });
-        res.json({ message: 'Signed lease uploaded successfully', filePath });
-    });
+  uploadSignedLease(req, res, async function (err) {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    // Save S3 file URL in user model
+    const fileUrl = req.file.location;
+    await User.findByIdAndUpdate(req.user._id, { signedLeasePath: fileUrl });
+    res.json({ message: 'Signed lease uploaded successfully', fileUrl });
+  });
 };
 
 module.exports = {

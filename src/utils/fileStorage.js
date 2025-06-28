@@ -1,33 +1,11 @@
-const fs = require('fs');
-const path = require('path');
-
 /**
  * Ensures that necessary upload directories exist
- * Creates them if they don't exist
+ * Note: This function is kept for backward compatibility but is now a no-op
+ * since all files are stored in S3 instead of local directories
  */
 const ensureUploadDirectoriesExist = () => {
-    // Base uploads directory
-    const uploadsDir = path.join(process.cwd(), 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
-        console.log('Creating uploads directory');
-        fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-
-    // Proof of Payment uploads directory
-    const popDir = path.join(uploadsDir, 'pop');
-    if (!fs.existsSync(popDir)) {
-        console.log('Creating uploads/pop directory');
-        fs.mkdirSync(popDir, { recursive: true });
-    }
-
-    // Add other upload directories as needed
-    // const otherDir = path.join(uploadsDir, 'other');
-    // if (!fs.existsSync(otherDir)) {
-    //     console.log('Creating uploads/other directory');
-    //     fs.mkdirSync(otherDir, { recursive: true });
-    // }
-
-    console.log('Upload directories verified');
+    // No longer needed since we're using S3 for all file storage
+    console.log('File storage is now handled by S3 - no local directories needed');
 };
 
 module.exports = {

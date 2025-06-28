@@ -4,7 +4,7 @@ const Application = require('../../models/Application');
 const Residence = require('../../models/Residence');
 const Lease = require('../../models/Lease');
 
-// Handles file upload (multer middleware will save the file)
+// Handles file upload (multer middleware will save the file to S3)
 exports.uploadLease = async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ message: 'No file uploaded' });
@@ -58,7 +58,7 @@ exports.uploadLease = async (req, res) => {
       return res.status(400).json({ message: 'No residence found for user. Please contact administrator.' });
     }
 
-    // Create a Lease document in the leases collection
+    // Create a Lease document in the leases collection with S3 URL
     const leaseDoc = await Lease.create({
       studentId: user._id,
       studentName: `${user.firstName} ${user.lastName}`,
@@ -67,9 +67,9 @@ exports.uploadLease = async (req, res) => {
       residenceName: residenceName,
       startDate: startDate,
       endDate: endDate,
-      filename: req.file.filename,
+      filename: req.file.originalname,
       originalname: req.file.originalname,
-      path: req.file.path,
+      path: req.file.location, // S3 URL
       mimetype: req.file.mimetype,
       size: req.file.size,
       uploadedAt: new Date()

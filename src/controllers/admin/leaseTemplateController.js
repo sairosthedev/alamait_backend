@@ -1,29 +1,22 @@
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+const multerS3 = require('multer-s3');
+const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 const Residence = require('../../models/Residence');
 const mongoose = require('mongoose');
 
-// Use memoryStorage to process the file in memory before saving
-const storage = multer.memoryStorage();
-
-// Export the multer middleware directly
+// Export the multer middleware for S3 uploads
 exports.uploadMiddleware = multer({
-    storage: storage,
-    fileFilter: (req, file, cb) => {
-        // Correctly check for .docx mimetype and extension
-        const isDocx = file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' &&
-                       path.extname(file.originalname).toLowerCase() === '.docx';
-
-        if (isDocx) {
-            return cb(null, true);
-        }
-        
-        cb(new Error('File upload only supports .docx format'));
-    }
+    storage: multerS3({
+        s3: s3,
+        bucket: s3Configs.leaseTemplates.bucket,
+        acl: s3Configs.leaseTemplates.acl,
+        key: s3Configs.leaseTemplates.key
+    }),
+    fileFilter: fileFilter(['application/vnd.openxmlformats-officedocument.wordprocessingml.document']),
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 }).single('leaseTemplate');
 
-// This handler now saves the file from memory to disk
+// This handler now saves the file to S3 and returns the S3 URL
 exports.uploadLeaseTemplate = (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'Please select a file' });
@@ -31,18 +24,18 @@ exports.uploadLeaseTemplate = (req, res) => {
 
     try {
         const residenceId = req.body.residenceId;
-        const filename = `lease_agreement_${residenceId}.docx`;
-        const outputPath = path.join(__dirname, '..', '..', '..', 'uploads', filename);
-
-        // Manually write the file from the buffer to the disk
-        fs.writeFileSync(outputPath, req.file.buffer);
-
+        
+        // The file is already uploaded to S3 by multer-s3
+        // req.file.location contains the S3 URL
+        
         res.status(200).json({ 
-            message: `Lease agreement template for residence ${residenceId} uploaded successfully` 
+            message: `Lease agreement template for residence ${residenceId} uploaded successfully`,
+            fileUrl: req.file.location,
+            fileName: req.file.originalname
         });
 
     } catch (error) {
-        console.error('Error saving lease template from memory:', error);
-        res.status(500).json({ error: 'Failed to save the uploaded file.' });
+        console.error('Error uploading lease template to S3:', error);
+        res.status(500).json({ error: 'Failed to upload the file to S3.' });
     }
 }; 

@@ -5,6 +5,7 @@ const { sendEmail } = require('../../utils/email');
 const path = require('path');
 const fs = require('fs');
 const Residence = require('../../models/Residence');
+const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateService');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -113,27 +114,11 @@ exports.createStudent = async (req, res) => {
             // Fetch the residence name from DB
             const residence = await Residence.findById(residenceId);
 
-            // Map residence name to file
-            let leaseFile = null;
+            // Get lease template attachment from S3
             if (residence) {
-                const name = residence.name.toLowerCase();
-                if (name.includes('st kilda') || name.includes('belvedere')) {
-                    leaseFile = 'ST Kilda Boarding Agreement1.docx';
-                } else if (name.includes('newlands')) {
-                    leaseFile = 'Lease_Agreement_Template.docx';
-                } else if (name.includes('office')) {
-                    leaseFile = 'Office_Lease_Agreement.docx'; // replace with actual filename if different
-                }
-            }
-
-            if (leaseFile) {
-                const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', leaseFile));
-                if (fs.existsSync(templatePath)) {
-                    attachments.push({
-                        filename: leaseFile,
-                        path: templatePath,
-                        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                    });
+                const templateAttachment = await getLeaseTemplateAttachment(residence.name);
+                if (templateAttachment) {
+                    attachments.push(templateAttachment);
                 }
             }
         }
