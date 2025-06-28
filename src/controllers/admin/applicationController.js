@@ -86,11 +86,21 @@ exports.getApplications = async (req, res) => {
         res.json({
             success: true,
             count: transformedApplications.length,
-            data: transformedApplications,
+            applications: transformedApplications,
             rooms: Object.entries(roomStatusMap).map(([roomNumber, details]) => ({
                 name: roomNumber,
                 ...details,
                 occupancyDisplay: `${details.currentOccupancy}/${details.capacity}`
+            })),
+            residences: residences.map(residence => ({
+                id: residence._id,
+                name: residence.name,
+                address: residence.address,
+                manager: residence.manager,
+                totalRooms: residence.rooms.length,
+                availableRooms: residence.rooms.filter(room => room.status === 'available').length,
+                occupiedRooms: residence.rooms.filter(room => room.status === 'occupied').length,
+                reservedRooms: residence.rooms.filter(room => room.status === 'reserved').length
             }))
         });
     } catch (error) {
