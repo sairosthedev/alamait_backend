@@ -65,6 +65,8 @@ const financeIncomeStatementRoutes = require('./routes/finance/incomeStatementRo
 const financeDashboardRoutes = require('./routes/finance/dashboardRoutes');
 const financePaymentRoutes = require('./routes/finance/paymentRoutes');
 const financeLeaseRoutes = require('./routes/finance/leaseRoutes');
+const financeApplicationRoutes = require('./routes/finance/applicationRoutes');
+const financeRoomPriceRoutes = require('./routes/finance/roomPriceRoutes');
 
 const app = express();
 
@@ -216,6 +218,8 @@ app.use('/api/finance/dashboard', financeDashboardRoutes);
 app.use('/api/finance/payments', financePaymentRoutes);
 app.use('/api/finance/residences', financeResidenceRoutes);
 app.use('/api/finance/leases', financeLeaseRoutes);
+app.use('/api/finance/applications', financeApplicationRoutes);
+app.use('/api/finance/room-prices', financeRoomPriceRoutes);
 
 // 404 handler
 app.use((req, res) => {
