@@ -78,7 +78,8 @@ exports.createStudent = async (req, res) => {
     }
 
     try {
-        const { email, firstName, lastName, phone, status, emergencyContact, residenceId } = req.body;
+        const { email, firstName, lastName, phone, status, emergencyContact } = req.body;
+        const { residenceId } = req.params;
 
         // Validate residence ID
         if (!residenceId) {

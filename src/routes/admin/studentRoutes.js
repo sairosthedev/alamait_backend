@@ -88,7 +88,16 @@ router.all('/:studentId/download-lease', async (req, res) => {
     }
 });
 
-router.post('/', studentValidation, createStudent);
+router.post('/residence/:residenceId', [
+    check('email', 'Please include a valid email').isEmail(),
+    check('firstName', 'First name is required').notEmpty(),
+    check('lastName', 'Last name is required').notEmpty(),
+    check('phone', 'Phone number is required').optional().notEmpty(),
+    check('status').optional().isIn(['active', 'inactive', 'pending']),
+    check('emergencyContact.name', 'Emergency contact name is required').optional().notEmpty(),
+    check('emergencyContact.relationship', 'Emergency contact relationship is required').optional().notEmpty(),
+    check('emergencyContact.phone', 'Emergency contact phone is required').optional().notEmpty()
+], createStudent);
 router.get('/expired', getExpiredStudents);
 router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);
