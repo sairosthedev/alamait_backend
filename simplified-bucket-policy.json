@@ -1,0 +1,43 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AllowPublicReadForAllObjects",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "*"
+            },
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion"
+            ],
+            "Resource": "arn:aws:s3:::alamait-uploads/*"
+        },
+        {
+            "Sid": "AllowPublicListBucket",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "*"
+            },
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws:s3:::alamait-uploads"
+        },
+        {
+            "Sid": "AllowAuthenticatedUploads",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "*"
+            },
+            "Action": [
+                "s3:PutObject",
+                "s3:PutObjectAcl"
+            ],
+            "Resource": "arn:aws:s3:::alamait-uploads/*",
+            "Condition": {
+                "StringEquals": {
+                    "aws:PrincipalType": "IAMUser"
+                }
+            }
+        }
+    ]
+} 
