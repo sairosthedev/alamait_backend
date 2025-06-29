@@ -13,7 +13,10 @@ const upload = multer({
         s3: s3,
         bucket: s3Configs.proofOfPayment.bucket,
         acl: s3Configs.proofOfPayment.acl,
-        key: s3Configs.proofOfPayment.key
+        key: s3Configs.proofOfPayment.key,
+        metadata: function (req, file, cb) {
+            cb(null, { fieldName: file.fieldname });
+        }
     }),
     fileFilter: fileFilter([...fileTypes.images, 'application/pdf']),
     limits: {
@@ -426,17 +429,49 @@ exports.uploadProofOfPayment = (req, res) => {
 
 // Upload new proof of payment without a specific payment ID
 exports.uploadNewProofOfPayment = (req, res) => {
+    console.log('=== Starting uploadNewProofOfPayment ===');
+    console.log('Request body:', req.body);
+    console.log('Request file:', req.file ? {
+        originalname: req.file.originalname,
+        size: req.file.size,
+        mimetype: req.file.mimetype,
+        location: req.file.location
+    } : 'No file');
+    
+    // Add timeout to prevent hanging
+    const timeout = setTimeout(() => {
+        console.error('Upload timeout - request took too long');
+        if (!res.headersSent) {
+            res.status(408).json({ error: 'Upload timeout - request took too long' });
+        }
+    }, 30000); // 30 second timeout
+    
     upload(req, res, async function(err) {
+        console.log('=== Inside upload callback ===');
+        
+        // Clear timeout since we got a response
+        clearTimeout(timeout);
+        
         if (err) {
-            return res.status(400).json({ error: err.message });
+            console.error('Upload error:', err);
+            if (!res.headersSent) {
+                return res.status(400).json({ error: err.message });
+            }
+            return;
         }
 
         try {
             console.log('Uploading new proof of payment without specific payment ID');
             
             if (!req.file) {
-                return res.status(400).json({ error: 'No file uploaded' });
+                console.log('No file uploaded');
+                if (!res.headersSent) {
+                    return res.status(400).json({ error: 'No file uploaded' });
+                }
+                return;
             }
+
+            console.log('File uploaded successfully to S3:', req.file.location);
 
             // Get student info including room
             const student = await User.findById(req.user._id)
@@ -525,6 +560,8 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 return res.status(400).json({ error: 'No residence found. Please ensure you have an approved application or assigned room.' });
             }
 
+            console.log('Residence found:', residenceRef.name);
+
             // --- Prevent Overpayment Logic ---
             // Find all payments for this student
             const allPayments = await Payment.find({ student: req.user._id });
@@ -553,9 +590,12 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 );
             });
             if (hasPaidNextMonth) {
+                console.log('Payment for next month already exists');
                 return res.status(400).json({ error: 'Rent for the next due month has already been paid.' });
             }
             // --- End Prevent Overpayment Logic ---
+
+            console.log('Creating new payment record...');
 
             // Generate a unique payment ID
             const paymentId = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -567,8 +607,11 @@ exports.uploadNewProofOfPayment = (req, res) => {
             const totalAmount = rentAmount + adminFee + deposit;
             const { paymentMonth } = req.body;
 
+            console.log('Payment amounts:', { rentAmount, adminFee, deposit, totalAmount, paymentMonth });
+
             // Validate paymentMonth
             if (!paymentMonth || !/^\d{4}-\d{2}$/.test(paymentMonth)) {
+                console.log('Invalid payment month format');
                 return res.status(400).json({ error: 'Payment month is required in YYYY-MM format.' });
             }
 
@@ -596,7 +639,9 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 createdBy: req.user._id
             });
 
+            console.log('Saving payment to database...');
             await payment.save();
+            console.log('Payment saved successfully');
 
             // Populate the payment with residence info for response
             await payment.populate([
@@ -612,6 +657,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 totalAmount: payment.totalAmount
             });
 
+            console.log('Sending success response...');
             res.status(200).json({
                 message: 'Proof of payment uploaded successfully',
                 payment: {
@@ -632,6 +678,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
                     proofOfPayment: payment.proofOfPayment
                 }
             });
+            console.log('=== uploadNewProofOfPayment completed successfully ===');
         } catch (error) {
             console.error('Error uploading proof of payment:', error);
             res.status(500).json({ error: 'Error uploading proof of payment' });

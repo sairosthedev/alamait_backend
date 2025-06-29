@@ -15,6 +15,9 @@ const {
     uploadSignedLeaseHandler
 } = require('../../controllers/student/studentController');
 
+// Import payment history controller
+const { getPaymentHistory } = require('../../controllers/student/paymentHistoryController');
+
 // Validation middleware
 const profileUpdateValidation = [
     check('firstName', 'First name is required').optional().notEmpty(),
@@ -51,6 +54,9 @@ router.get('/lease-agreement', downloadLeaseAgreement);
 
 // Add route for uploading signed lease
 router.post('/lease-agreement/upload', uploadSignedLeaseHandler);
+
+// Add payment history route
+router.get('/paymenthistory', getPaymentHistory);
 
 router.use('/lease', leaseRoutes);
 

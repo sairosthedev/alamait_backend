@@ -2,10 +2,39 @@ const express = require('express');
 const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const { getPaymentHistory, uploadProofOfPayment, uploadNewProofOfPayment } = require('../../controllers/student/paymentHistoryController');
+const { s3, bucketName } = require('../../config/s3');
 
 // Apply authentication and role middleware
 router.use(auth);
 router.use(checkRole('student'));
+
+// Test S3 configuration endpoint
+router.get('/test-s3', async (req, res) => {
+    try {
+        console.log('Testing S3 configuration...');
+        console.log('Bucket name:', bucketName);
+        
+        // Test S3 connection by listing objects (limited to 1)
+        const result = await s3.listObjectsV2({
+            Bucket: bucketName,
+            MaxKeys: 1
+        }).promise();
+        
+        res.json({
+            message: 'S3 connection successful',
+            bucket: bucketName,
+            objectsCount: result.KeyCount,
+            isTruncated: result.IsTruncated
+        });
+    } catch (error) {
+        console.error('S3 test failed:', error);
+        res.status(500).json({
+            error: 'S3 connection failed',
+            message: error.message,
+            bucket: bucketName
+        });
+    }
+});
 
 // Get payment history route
 router.get('/', getPaymentHistory);

@@ -9,6 +9,15 @@ const s3 = new AWS.S3({
 
 const bucketName = process.env.AWS_BUCKET_NAME;
 
+// Debug S3 configuration
+console.log('=== S3 Configuration Debug ===');
+console.log('AWS_ACCESS_KEY:', process.env.AWS_ACCESS_KEY ? 'Set' : 'Not set');
+console.log('AWS_SECRET_KEY:', process.env.AWS_SECRET_KEY ? 'Set' : 'Not set');
+console.log('AWS_REGION:', process.env.AWS_REGION || 'Not set');
+console.log('AWS_BUCKET_NAME:', bucketName || 'Not set');
+console.log('Expected bucket: alamait-uploads');
+console.log('================================');
+
 // Common S3 upload configurations
 const s3Configs = {
   // For signed leases
