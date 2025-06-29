@@ -574,41 +574,37 @@ exports.deleteApplication = async (req, res) => {
             return res.status(404).json({ error: 'Application not found' });
         }
 
-        // Delete associated user account if it exists
-        if (application.student) {
-            try {
-                await User.findByIdAndDelete(application.student._id);
-                console.log('Deleted associated user with ID:', application.student._id);
-            } catch (userDeleteError) {
-                console.error('Error deleting associated user:', userDeleteError);
+        // Archive before removing the user and application
+        try {
+            const ExpiredStudent = require('../../models/ExpiredStudent');
+            const Booking = require('../../models/Booking');
+            const Lease = require('../../models/Lease');
+            let user = null;
+            if (application.student) {
+                user = await User.findById(application.student._id);
             }
-        } else {
-            console.log('No associated user to delete for application:', applicationId);
-        }
-
-        // Update room occupancy and occupants if allocatedRoom and residence exist
-        if (application.allocatedRoom && application.residence) {
-            try {
-                const residence = await Residence.findById(application.residence);
-                if (residence) {
-                    const room = residence.rooms.find(r => r.roomNumber === application.allocatedRoom);
-                    if (room) {
-                        // Remove the student from occupants
-                        if (application.student) {
-                            room.occupants = room.occupants.filter(
-                                occupantId => occupantId.toString() !== application.student._id.toString()
-                            );
-                        }
-                        // Decrement occupancy
-                        room.currentOccupancy = Math.max(0, room.currentOccupancy - 1);
-                        // Update status
-                        room.status = room.currentOccupancy === 0 ? 'available' : (room.currentOccupancy < room.capacity ? 'reserved' : 'occupied');
-                        await residence.save();
-                    }
-                }
-            } catch (roomUpdateError) {
-                console.error('Error updating room occupancy:', roomUpdateError);
+            // Fetch payment history
+            let paymentHistory = [];
+            if (user) {
+                const bookings = await Booking.find({ student: user._id }).lean();
+                paymentHistory = bookings.flatMap(booking => booking.payments || []);
             }
+            // Fetch leases
+            let leases = [];
+            if (user) {
+                leases = await Lease.find({ studentId: user._id }).lean();
+            }
+            await ExpiredStudent.create({
+                student: user ? user.toObject() : null,
+                application: application.toObject(),
+                previousApplicationCode: application.applicationCode,
+                archivedAt: new Date(),
+                reason: 'application_deleted',
+                paymentHistory,
+                leases
+            });
+        } catch (archiveError) {
+            console.error('Error archiving to ExpiredStudent:', archiveError);
         }
 
         // Delete the application itself

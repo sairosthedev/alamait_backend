@@ -13,47 +13,76 @@ exports.getStKildaResidence = async (req, res) => {
             });
         }
 
-        // Ensure room status is consistent with occupancy
+        if (!Array.isArray(residence.rooms)) {
+            return res.status(500).json({
+                success: false,
+                message: 'Rooms data is missing or malformed for St Kilda residence'
+            });
+        }
+
         let hasUpdates = false;
-        residence.rooms.forEach(room => {
-            // Get capacity based on room type if not set
-            const capacity = room.capacity || (
-                room.type === 'single' ? 1 : 
-                room.type === 'double' ? 2 : 
-                room.type === 'studio' ? 1 : 
-                room.type === 'triple' ? 3 : 
-                room.type === 'quad' ? 4 : 4
-            );
-            
-            // Ensure currentOccupancy is a number
-            let currentOccupancy = room.currentOccupancy;
-            if (currentOccupancy === undefined || currentOccupancy === null) {
-                currentOccupancy = 0;
-                room.currentOccupancy = 0;
-                hasUpdates = true;
-            }
-            
-            // Update room status based on occupancy
-            let newStatus = room.status;
-            if (currentOccupancy === 0) {
-                newStatus = 'available';
-            } else if (currentOccupancy >= capacity) {
-                newStatus = 'occupied';
-            } else if (currentOccupancy > 0) {
-                newStatus = 'reserved';
-            }
-            
-            // Only update if status has changed
-            if (room.status !== newStatus) {
-                room.status = newStatus;
-                hasUpdates = true;
+        residence.rooms.forEach((room, idx) => {
+            try {
+                // Defensive: Ensure room has required fields
+                if (!room || typeof room !== 'object') {
+                    console.error(`Room at index ${idx} is not an object:`, room);
+                    return;
+                }
+                if (!room.type) {
+                    console.warn(`Room ${room.roomNumber || idx} missing type, defaulting to 'single'`);
+                    room.type = 'single';
+                    hasUpdates = true;
+                }
+                if (room.currentOccupancy == null) {
+                    console.warn(`Room ${room.roomNumber || idx} missing currentOccupancy, defaulting to 0`);
+                    room.currentOccupancy = 0;
+                    hasUpdates = true;
+                }
+                if (!room.status) {
+                    console.warn(`Room ${room.roomNumber || idx} missing status, defaulting to 'available'`);
+                    room.status = 'available';
+                    hasUpdates = true;
+                }
+                // Get capacity based on room type if not set
+                const capacity = room.capacity || (
+                    room.type === 'single' ? 1 : 
+                    room.type === 'double' ? 2 : 
+                    room.type === 'studio' ? 1 : 
+                    room.type === 'triple' ? 3 : 
+                    room.type === 'quad' ? 4 : 4
+                );
+                // Update room status based on occupancy
+                let newStatus = room.status;
+                if (room.currentOccupancy === 0) {
+                    newStatus = 'available';
+                } else if (room.currentOccupancy >= capacity) {
+                    newStatus = 'occupied';
+                } else if (room.currentOccupancy > 0) {
+                    newStatus = 'reserved';
+                }
+                // Only update if status has changed
+                if (room.status !== newStatus) {
+                    room.status = newStatus;
+                    hasUpdates = true;
+                }
+            } catch (roomError) {
+                console.error(`Error processing room at index ${idx}:`, room, roomError);
             }
         });
 
         // Save changes if any updates were made
         if (hasUpdates) {
-            await residence.save();
-            ('Updated room statuses and occupancy for St Kilda residence');
+            try {
+                await residence.save();
+                console.log('Updated room statuses and occupancy for St Kilda residence');
+            } catch (saveError) {
+                console.error('Error saving residence updates:', saveError);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Error saving updated room data',
+                    error: saveError.message
+                });
+            }
         }
 
         res.status(200).json({
@@ -61,6 +90,7 @@ exports.getStKildaResidence = async (req, res) => {
             data: residence
         });
     } catch (error) {
+        console.error('Error fetching St Kilda residence:', error);
         res.status(500).json({
             success: false,
             message: 'Error fetching St Kilda residence',

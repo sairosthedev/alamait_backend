@@ -8,6 +8,8 @@ const Lease = require('../../models/Lease');
 const Application = require('../../models/Application');
 const ExpiredStudent = require('../../models/ExpiredStudent');
 const Residence = require('../../models/Residence');
+const User = require('../../models/User');
+const Booking = require('../../models/Booking');
 
 const {
     getStudents,
@@ -19,7 +21,6 @@ const {
     downloadSignedLease,
     getExpiredStudents
 } = require('../../controllers/admin/studentController');
-const User = require('../../models/User');
 
 // Validation middleware
 const studentValidation = [
@@ -101,12 +102,37 @@ router.delete('/:studentId', async (req, res) => {
         }
 
         const application = await Application.findOne({ student: student._id }).sort({ createdAt: -1 });
-        await ExpiredStudent.create({
-            student: student.toObject(),
-            application: application ? application.toObject() : null,
-            previousApplicationCode: application ? application.applicationCode : null,
-            archivedAt: new Date()
-        });
+        if (application) {
+            // Archive before removing the user and application
+            try {
+                let user = null;
+                if (application.student) {
+                    user = await User.findById(application.student._id);
+                }
+                // Fetch payment history
+                let paymentHistory = [];
+                if (user) {
+                    const bookings = await Booking.find({ student: user._id }).lean();
+                    paymentHistory = bookings.flatMap(booking => booking.payments || []);
+                }
+                // Fetch leases
+                let leases = [];
+                if (user) {
+                    leases = await Lease.find({ studentId: user._id }).lean();
+                }
+                await ExpiredStudent.create({
+                    student: user ? user.toObject() : null,
+                    application: application.toObject(),
+                    previousApplicationCode: application.applicationCode,
+                    archivedAt: new Date(),
+                    reason: 'application_deleted',
+                    paymentHistory,
+                    leases
+                });
+            } catch (archiveError) {
+                console.error('Error archiving to ExpiredStudent:', archiveError);
+            }
+        }
 
         if (student.residence && student.currentRoom) {
             const residence = await Residence.findById(student.residence);
