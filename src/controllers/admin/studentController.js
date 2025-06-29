@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const Residence = require('../../models/Residence');
 const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateService');
+const ExpiredStudent = require('../../models/ExpiredStudent');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -214,6 +215,27 @@ exports.deleteStudent = async (req, res) => {
             return res.status(400).json({ error: 'Cannot delete student with active bookings' });
         }
 
+        // Before removing the student, update room status in residence
+        if (student.residence && student.currentRoom) {
+            const residence = await Residence.findById(student.residence);
+            if (residence) {
+                const room = residence.rooms.find(r => r.roomNumber === student.currentRoom);
+                if (room) {
+                    // Decrement occupancy, but not below 0
+                    room.currentOccupancy = Math.max(0, (room.currentOccupancy || 1) - 1);
+                    // Update status
+                    if (room.currentOccupancy === 0) {
+                        room.status = 'available';
+                    } else if (room.currentOccupancy < room.capacity) {
+                        room.status = 'reserved';
+                    } else {
+                        room.status = 'occupied';
+                    }
+                    await residence.save();
+                }
+            }
+        }
+
         await student.remove();
 
         res.json({ message: 'Student deleted successfully' });
@@ -270,5 +292,30 @@ exports.downloadSignedLease = async (req, res) => {
     } catch (error) {
         console.error('Error downloading signed lease:', error);
         res.status(500).json({ error: 'Server error.' });
+    }
+};
+
+// Fetch expired (archived) students
+exports.getExpiredStudents = async (req, res) => {
+    try {
+        const { page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const total = await ExpiredStudent.countDocuments();
+        const expiredStudents = await ExpiredStudent.find()
+            .sort({ archivedAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+        res.json({
+            success: true,
+            expiredStudents,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / limit),
+                total,
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
     }
 }; 

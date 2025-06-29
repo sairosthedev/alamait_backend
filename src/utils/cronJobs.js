@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { handleExpiredApplications } = require('./applicationUtils');
+const { handleExpiredApplications, sendExpiryWarnings } = require('./applicationUtils');
 
 // Schedule tasks to be run on the server
 const initCronJobs = () => {
@@ -7,6 +7,8 @@ const initCronJobs = () => {
     cron.schedule('0 0 * * *', async () => {
         console.log('Running expired applications check...');
         await handleExpiredApplications();
+        console.log('Running expiry warning emails...');
+        await sendExpiryWarnings();
     });
 };
 

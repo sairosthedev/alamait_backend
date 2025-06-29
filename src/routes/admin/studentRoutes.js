@@ -13,7 +13,8 @@ const {
     updateStudent,
     deleteStudent,
     getStudentPayments,
-    downloadSignedLease
+    downloadSignedLease,
+    getExpiredStudents
 } = require('../../controllers/admin/studentController');
 const User = require('../../models/User');
 
@@ -89,5 +90,6 @@ router.put('/:studentId', studentValidation, updateStudent);
 router.delete('/:studentId', deleteStudent);
 router.get('/:studentId/payments', getStudentPayments);
 router.get('/lease-agreement/:studentId', downloadSignedLease);
+router.get('/expired', getExpiredStudents);
 
 module.exports = router; 

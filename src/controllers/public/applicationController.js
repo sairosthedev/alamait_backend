@@ -1,6 +1,8 @@
 const Application = require('../../models/Application');
 const { sendEmail } = require('../../utils/email');
 const whatsappService = require('../../services/whatsappService');
+const User = require('../../models/User');
+const ExpiredStudent = require('../../models/ExpiredStudent');
 
 // Submit new application
 exports.submitApplication = async (req, res) => {
@@ -102,5 +104,36 @@ exports.getApplicationStatus = async (req, res) => {
     } catch (error) {
         console.error('Error in getApplicationStatus:', error);
         res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Check if email has been used before and if eligible for renewal
+exports.checkEmailUsage = async (req, res) => {
+    try {
+        const { email } = req.query;
+        if (!email) return res.status(400).json({ error: 'Email is required' });
+
+        // Check active user
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (user) {
+            return res.json({ used: true, isRenewal: false });
+        }
+
+        // Check active or pending application
+        const activeApp = await Application.findOne({ email: email.toLowerCase(), status: { $in: ['pending', 'approved', 'waitlisted'] } });
+        if (activeApp) {
+            return res.json({ used: true, isRenewal: false });
+        }
+
+        // Check expired/archived students
+        const expired = await ExpiredStudent.findOne({ 'student.email': email.toLowerCase() });
+        if (expired) {
+            return res.json({ used: true, isRenewal: true, previousApplication: expired.application });
+        }
+
+        // Not used
+        return res.json({ used: false, isRenewal: false });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 }; 
