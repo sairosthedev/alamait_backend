@@ -41,7 +41,6 @@ exports.getAllApplications = async (req, res) => {
             .sort(sortOptions)
             .skip(skip)
             .limit(parseInt(limit))
-            .populate('student', 'firstName lastName email phone')
             .lean();
 
         // Get all residences to check room status
@@ -77,9 +76,9 @@ exports.getAllApplications = async (req, res) => {
             
             return {
                 id: app._id,
-                studentName: app.student ? `${app.student.firstName} ${app.student.lastName}` : `${app.firstName} ${app.lastName}`,
-                email: app.student ? app.student.email : app.email,
-                contact: app.student ? app.student.phone : app.phone,
+                studentName: app.firstName && app.lastName ? `${app.firstName} ${app.lastName}` : 'N/A',
+                email: app.email,
+                contact: app.phone,
                 requestType: app.requestType,
                 status: app.status,
                 paymentStatus: app.paymentStatus,
@@ -118,9 +117,7 @@ exports.getAllApplications = async (req, res) => {
 // Get single application (for finance)
 exports.getApplication = async (req, res) => {
     try {
-        const application = await Application.findById(req.params.id)
-            .populate('student', 'firstName lastName email phone')
-            .lean();
+        const application = await Application.findById(req.params.id).lean();
 
         if (!application) {
             return res.status(404).json({ error: 'Application not found' });
@@ -153,9 +150,9 @@ exports.getApplication = async (req, res) => {
 
         const formattedApplication = {
             id: application._id,
-            studentName: application.student ? `${application.student.firstName} ${application.student.lastName}` : `${application.firstName} ${application.lastName}`,
-            email: application.student ? application.student.email : application.email,
-            contact: application.student ? application.student.phone : application.phone,
+            studentName: application.firstName && application.lastName ? `${application.firstName} ${application.lastName}` : 'N/A',
+            email: application.email,
+            contact: application.phone,
             requestType: application.requestType,
             status: application.status,
             paymentStatus: application.paymentStatus,
@@ -184,6 +181,8 @@ exports.getApplicationStats = async (req, res) => {
     try {
         const { status, type } = req.query;
         
+        console.log('Finance: Getting application stats with filters:', { status, type });
+        
         // Build filter object
         const filter = {};
         
@@ -195,8 +194,11 @@ exports.getApplicationStats = async (req, res) => {
             filter.requestType = type;
         }
 
+        console.log('Finance: Using filter:', filter);
+
         // Get total applications
         const totalApplications = await Application.countDocuments(filter);
+        console.log('Finance: Total applications found:', totalApplications);
         
         // Get applications by status
         const applicationsByStatus = await Application.aggregate([
@@ -205,12 +207,16 @@ exports.getApplicationStats = async (req, res) => {
             { $sort: { count: -1 } }
         ]);
         
+        console.log('Finance: Applications by status:', applicationsByStatus);
+        
         // Get applications by type
         const applicationsByType = await Application.aggregate([
             { $match: filter },
             { $group: { _id: '$requestType', count: { $sum: 1 } } },
             { $sort: { count: -1 } }
         ]);
+
+        console.log('Finance: Applications by type:', applicationsByType);
 
         // Get applications by month (last 12 months)
         const twelveMonthsAgo = new Date();
@@ -235,30 +241,42 @@ exports.getApplicationStats = async (req, res) => {
             { $sort: { '_id.year': 1, '_id.month': 1 } }
         ]);
 
-        // Get recent applications (last 5)
+        console.log('Finance: Applications by month:', applicationsByMonth);
+
+        // Get recent applications (last 5) - without population to avoid User model issues
         const recentApplications = await Application.find(filter)
             .sort({ applicationDate: -1 })
             .limit(5)
-            .populate('student', 'firstName lastName')
             .lean();
+
+        console.log('Finance: Recent applications found:', recentApplications.length);
 
         const formattedRecentApplications = recentApplications.map(app => ({
             id: app._id,
-            studentName: app.student ? `${app.student.firstName} ${app.student.lastName}` : `${app.firstName} ${app.lastName}`,
+            studentName: app.firstName && app.lastName ? `${app.firstName} ${app.lastName}` : 'N/A',
             requestType: app.requestType,
             status: app.status,
             applicationDate: app.applicationDate ? app.applicationDate.toISOString().split('T')[0] : null
         }));
 
-        res.json({
+        const response = {
             totalApplications,
             applicationsByStatus,
             applicationsByType,
             applicationsByMonth,
             recentApplications: formattedRecentApplications
-        });
+        };
+
+        console.log('Finance: Sending response:', response);
+
+        res.json(response);
     } catch (error) {
         console.error('Finance: Error in getApplicationStats:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Finance: Error stack:', error.stack);
+        res.status(500).json({ 
+            error: 'Server error',
+            message: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 }; 
