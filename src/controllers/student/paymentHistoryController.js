@@ -650,6 +650,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 date: new Date(),
                 status: 'Pending',
                 method: 'Bank Transfer',
+                createdBy: req.user._id,
                 proofOfPayment: {
                     fileUrl: s3Result.Location, // Use the S3 URL from manual upload
                     fileName: req.file.originalname,
