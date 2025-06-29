@@ -7,6 +7,7 @@ const fs = require('fs');
 const Residence = require('../../models/Residence');
 const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateService');
 const ExpiredStudent = require('../../models/ExpiredStudent');
+const Application = require('../../models/Application');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -214,6 +215,15 @@ exports.deleteStudent = async (req, res) => {
         if (activeBookings) {
             return res.status(400).json({ error: 'Cannot delete student with active bookings' });
         }
+
+        // Archive before removing the student
+        const application = await Application.findOne({ student: student._id }).sort({ createdAt: -1 });
+        await ExpiredStudent.create({
+            student: student.toObject(),
+            application: application ? application.toObject() : null,
+            previousApplicationCode: application ? application.applicationCode : null,
+            archivedAt: new Date()
+        });
 
         // Before removing the student, update room status in residence
         if (student.residence && student.currentRoom) {
