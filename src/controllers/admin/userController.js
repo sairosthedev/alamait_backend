@@ -64,6 +64,31 @@ exports.deleteUser = async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
 
+        // Decrement room occupancy if user has a currentRoom and residence
+        if (user.currentRoom && user.residence) {
+            const Residence = require('../../models/Residence');
+            const residence = await Residence.findById(user.residence);
+            if (residence) {
+                const room = residence.rooms.find(r => r.roomNumber === user.currentRoom);
+                if (room) {
+                    room.currentOccupancy = Math.max(0, (room.currentOccupancy || 1) - 1);
+                    // Update room status based on new occupancy
+                    if (room.currentOccupancy === 0) {
+                        room.status = 'available';
+                    } else if (room.currentOccupancy < room.capacity) {
+                        room.status = 'reserved';
+                    } else {
+                        room.status = 'occupied';
+                    }
+                    // Remove user from occupants array if present
+                    if (room.occupants) {
+                        room.occupants = room.occupants.filter(occ => occ.toString() !== user._id.toString());
+                    }
+                    await residence.save();
+                }
+            }
+        }
+
         await user.remove();
         res.json({ message: 'User deleted successfully' });
     } catch (error) {

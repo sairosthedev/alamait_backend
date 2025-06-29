@@ -31,6 +31,7 @@ exports.getApplications = async (req, res) => {
             residence.rooms.forEach(room => {
                 roomStatusMap[room.roomNumber] = {
                     residence: residence.name,
+                    residenceId: residence._id,
                     status: room.status,
                     currentOccupancy: room.currentOccupancy,
                     capacity: room.capacity,
@@ -78,7 +79,9 @@ exports.getApplications = async (req, res) => {
                 waitlistedRoomDetails: waitlistedRoomDetails,
             roomOccupancy: app.roomOccupancy || { current: 0, capacity: 0 },
                 applicationCode: app.applicationCode,
-                priceDifference: priceDifference
+                priceDifference: priceDifference,
+                residence: app.residence,
+                residenceId: app.residence
             };
         });
 
