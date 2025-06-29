@@ -1,8 +1,10 @@
 const Booking = require('../../models/Booking');
-const Room = require('../../models/Room');
 const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const { sendEmail } = require('../../utils/email');
+const { validationResult } = require('express-validator');
+const User = require('../../models/User');
+const Lease = require('../../models/Lease');
 
 // Get current booking
 exports.getCurrentBooking = async (req, res) => {
@@ -118,13 +120,12 @@ exports.getCurrentBooking = async (req, res) => {
                 });
                 
                 // Get room details from the approved application
-                const room = await Room.findOne({
-                    roomNumber: approvedApplication.allocatedRoom,
-                    status: 'occupied'
-                })
-                .populate('residence', 'name address image');
+                const residence = await Residence.findOne({
+                    'rooms.roomNumber': approvedApplication.allocatedRoom,
+                    'rooms.status': 'occupied'
+                }).select('name address image rooms').lean();
 
-                if (!room) {
+                if (!residence) {
                     ('Room not found by roomNumber, returning application details:', {
                         roomNumber: approvedApplication.allocatedRoom
                     });
@@ -147,6 +148,8 @@ exports.getCurrentBooking = async (req, res) => {
                     });
                 }
 
+                const room = residence.rooms.find(r => r.roomNumber === approvedApplication.allocatedRoom);
+
                 ('Found allocated room:', {
                     roomId: room._id,
                     roomNumber: room.roomNumber,
@@ -163,7 +166,7 @@ exports.getCurrentBooking = async (req, res) => {
                         endDate: null,
                         monthlyRent: room.price || 0,
                         status: 'approved',
-                        image: room.residence?.image || '',
+                        image: residence.image || '',
                         features: room.features || [],
                         applicationCode: approvedApplication.applicationCode,
                         applicationDate: approvedApplication.applicationDate
@@ -184,13 +187,14 @@ exports.getCurrentBooking = async (req, res) => {
             // First check user's currentRoom field
             if (req.user.currentRoom) {
                 ('User has currentRoom:', req.user.currentRoom);
-                const room = await Room.findOne({
-                    roomNumber: req.user.currentRoom,
-                    status: 'occupied'
-                })
-                .populate('residence', 'name address image');
+                const residence = await Residence.findOne({
+                    'rooms.roomNumber': req.user.currentRoom,
+                    'rooms.status': 'occupied'
+                }).select('name address image rooms').lean();
 
-                if (room) {
+                if (residence) {
+                    const room = residence.rooms.find(r => r.roomNumber === req.user.currentRoom);
+                    
                     ('Found room from currentRoom field:', {
                         roomId: room._id,
                         roomNumber: room.roomNumber,
@@ -208,7 +212,7 @@ exports.getCurrentBooking = async (req, res) => {
                             endDate: null,
                             monthlyRent: room.price || 0,
                             status: 'occupied',
-                            image: room.residence?.image || '',
+                            image: residence.image || '',
                             features: room.features || []
                         }
                     });
@@ -216,46 +220,51 @@ exports.getCurrentBooking = async (req, res) => {
             }
             
             // Then check for room with user in occupants
-            const allocatedRoom = await Room.findOne({
-                'occupants': req.user._id,
-                status: 'occupied'
-            })
-            .populate('residence', 'name address image');
+            const residenceWithOccupant = await Residence.findOne({
+                'rooms.occupants': req.user._id,
+                'rooms.status': 'occupied'
+            }).select('name address image rooms').lean();
 
-            ('Allocated room query result:', {
-                found: !!allocatedRoom,
-                room: allocatedRoom ? {
-                    id: allocatedRoom._id,
-                    roomNumber: allocatedRoom.roomNumber,
-                    type: allocatedRoom.type,
-                    price: allocatedRoom.price,
-                    occupants: allocatedRoom.occupants
-                } : null
-            });
+            if (residenceWithOccupant) {
+                const allocatedRoom = residenceWithOccupant.rooms.find(r => 
+                    r.occupants && r.occupants.some(occupant => occupant.toString() === req.user._id.toString())
+                );
 
-            if (allocatedRoom) {
-                ('Found allocated room:', {
-                    roomId: allocatedRoom._id,
-                    roomNumber: allocatedRoom.roomNumber,
-                    type: allocatedRoom.type,
-                    price: allocatedRoom.price,
-                    occupants: allocatedRoom.occupants
-                });
-
-                return res.json({
-                    success: true,
-                    booking: {
+                ('Allocated room query result:', {
+                    found: !!allocatedRoom,
+                    room: allocatedRoom ? {
                         id: allocatedRoom._id,
-                        roomNumber: allocatedRoom.roomNumber || 'N/A',
-                        roomType: allocatedRoom.type || 'N/A',
-                        startDate: null,
-                        endDate: null,
-                        monthlyRent: allocatedRoom.price || 0,
-                        status: 'occupied',
-                        image: allocatedRoom.residence?.image || '',
-                        features: allocatedRoom.features || []
-                    }
+                        roomNumber: allocatedRoom.roomNumber,
+                        type: allocatedRoom.type,
+                        price: allocatedRoom.price,
+                        occupants: allocatedRoom.occupants
+                    } : null
                 });
+
+                if (allocatedRoom) {
+                    ('Found allocated room:', {
+                        roomId: allocatedRoom._id,
+                        roomNumber: allocatedRoom.roomNumber,
+                        type: allocatedRoom.type,
+                        price: allocatedRoom.price,
+                        occupants: allocatedRoom.occupants
+                    });
+
+                    return res.json({
+                        success: true,
+                        booking: {
+                            id: allocatedRoom._id,
+                            roomNumber: allocatedRoom.roomNumber || 'N/A',
+                            roomType: allocatedRoom.type || 'N/A',
+                            startDate: null,
+                            endDate: null,
+                            monthlyRent: allocatedRoom.price || 0,
+                            status: 'occupied',
+                            image: residenceWithOccupant.image || '',
+                            features: allocatedRoom.features || []
+                        }
+                    });
+                }
             }
 
             // Finally check residence rooms

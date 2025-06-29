@@ -1,7 +1,6 @@
 const Residence = require('../../models/Residence');
-const Room = require('../../models/Room');
 
-// Get all room prices (for finance)
+// Get all room prices (for finance) - fetching from rooms in residences collection
 exports.getAllRoomPrices = async (req, res) => {
     try {
         const { 
@@ -15,60 +14,100 @@ exports.getAllRoomPrices = async (req, res) => {
             sortOrder = 'asc'
         } = req.query;
 
-        // Build filter object
-        const filter = {};
+        // Build filter object for residences
+        const residenceFilter = {};
         
         if (residence) {
-            filter.residence = residence;
+            residenceFilter._id = residence;
         }
+
+        // Build filter object for rooms within residences
+        const roomFilter = {};
         
         if (roomType) {
-            filter.type = roomType;
+            roomFilter['rooms.type'] = roomType;
         }
         
         // Price filtering
         if (minPrice || maxPrice) {
-            filter.price = {};
-            if (minPrice) filter.price.$gte = parseFloat(minPrice);
-            if (maxPrice) filter.price.$lte = parseFloat(maxPrice);
+            roomFilter['rooms.price'] = {};
+            if (minPrice) roomFilter['rooms.price'].$gte = parseFloat(minPrice);
+            if (maxPrice) roomFilter['rooms.price'].$lte = parseFloat(maxPrice);
+        }
+
+        // Combine filters
+        const combinedFilter = { ...residenceFilter, ...roomFilter };
+
+        // Get residences with rooms
+        const residences = await Residence.find(combinedFilter)
+            .select('name address rooms')
+            .lean();
+
+        // Extract and flatten all rooms from all residences
+        let allRooms = [];
+        residences.forEach(residence => {
+            const rooms = residence.rooms.map(room => ({
+                ...room,
+                residence: {
+                    id: residence._id,
+                    name: residence.name,
+                    address: residence.address
+                }
+            }));
+            allRooms = [...allRooms, ...rooms];
+        });
+
+        // Apply room-level filters
+        let filteredRooms = allRooms;
+        
+        if (roomType) {
+            filteredRooms = filteredRooms.filter(room => room.type === roomType);
+        }
+        
+        if (minPrice || maxPrice) {
+            filteredRooms = filteredRooms.filter(room => {
+                if (minPrice && room.price < parseFloat(minPrice)) return false;
+                if (maxPrice && room.price > parseFloat(maxPrice)) return false;
+                return true;
+            });
         }
 
         // Sorting
-        const sortOptions = {};
-        sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+        filteredRooms.sort((a, b) => {
+            let aValue = a[sortBy];
+            let bValue = b[sortBy];
+            
+            if (sortBy === 'price') {
+                aValue = parseFloat(aValue) || 0;
+                bValue = parseFloat(bValue) || 0;
+            }
+            
+            if (sortOrder === 'asc') {
+                return aValue > bValue ? 1 : -1;
+            } else {
+                return aValue < bValue ? 1 : -1;
+            }
+        });
 
         // Pagination
+        const total = filteredRooms.length;
         const skip = (parseInt(page) - 1) * parseInt(limit);
-        
-        // Get total count for pagination
-        const total = await Room.countDocuments(filter);
-        
-        // Get rooms with pagination and population
-        const rooms = await Room.find(filter)
-            .sort(sortOptions)
-            .skip(skip)
-            .limit(parseInt(limit))
-            .populate('residence', 'name address')
-            .lean();
+        const paginatedRooms = filteredRooms.slice(skip, skip + parseInt(limit));
 
         // Format rooms for response
-        const formattedRooms = rooms.map(room => ({
+        const formattedRooms = paginatedRooms.map(room => ({
             id: room._id,
             roomNumber: room.roomNumber,
             type: room.type,
             price: room.price,
             capacity: room.capacity,
-            currentOccupancy: room.currentOccupancy,
+            currentOccupancy: room.currentOccupancy || 0,
             status: room.status,
             floor: room.floor,
             area: room.area,
-            features: room.features,
-            residence: room.residence ? {
-                id: room.residence._id,
-                name: room.residence.name,
-                address: room.residence.address
-            } : null,
-            occupancyRate: room.capacity > 0 ? Math.round((room.currentOccupancy / room.capacity) * 100) : 0
+            features: room.features || [],
+            residence: room.residence,
+            occupancyRate: room.capacity > 0 ? Math.round(((room.currentOccupancy || 0) / room.capacity) * 100) : 0
         }));
 
         res.json({
@@ -86,13 +125,23 @@ exports.getAllRoomPrices = async (req, res) => {
     }
 };
 
-// Get single room price (for finance)
+// Get single room price (for finance) - fetching from rooms in residences collection
 exports.getRoomPrice = async (req, res) => {
     try {
-        const room = await Room.findById(req.params.id)
-            .populate('residence', 'name address')
-            .lean();
+        const { id } = req.params;
+        
+        // Find the residence that contains this room
+        const residence = await Residence.findOne({
+            'rooms._id': id
+        }).select('name address rooms').lean();
 
+        if (!residence) {
+            return res.status(404).json({ error: 'Room not found' });
+        }
+
+        // Find the specific room
+        const room = residence.rooms.find(r => r._id.toString() === id);
+        
         if (!room) {
             return res.status(404).json({ error: 'Room not found' });
         }
@@ -103,17 +152,17 @@ exports.getRoomPrice = async (req, res) => {
             type: room.type,
             price: room.price,
             capacity: room.capacity,
-            currentOccupancy: room.currentOccupancy,
+            currentOccupancy: room.currentOccupancy || 0,
             status: room.status,
             floor: room.floor,
             area: room.area,
-            features: room.features,
-            residence: room.residence ? {
-                id: room.residence._id,
-                name: room.residence.name,
-                address: room.residence.address
-            } : null,
-            occupancyRate: room.capacity > 0 ? Math.round((room.currentOccupancy / room.capacity) * 100) : 0
+            features: room.features || [],
+            residence: {
+                id: residence._id,
+                name: residence.name,
+                address: residence.address
+            },
+            occupancyRate: room.capacity > 0 ? Math.round(((room.currentOccupancy || 0) / room.capacity) * 100) : 0
         };
 
         res.json(formattedRoom);
@@ -123,108 +172,142 @@ exports.getRoomPrice = async (req, res) => {
     }
 };
 
-// Get room pricing statistics (for finance)
+// Get room pricing statistics (for finance) - fetching from rooms in residences collection
 exports.getRoomPriceStats = async (req, res) => {
     try {
         const { residence, roomType } = req.query;
         
-        // Build filter object
-        const filter = {};
+        // Build filter object for residences
+        const residenceFilter = {};
         
         if (residence) {
-            filter.residence = residence;
+            residenceFilter._id = residence;
         }
+
+        // Build filter object for rooms within residences
+        const roomFilter = {};
         
         if (roomType) {
-            filter.type = roomType;
+            roomFilter['rooms.type'] = roomType;
         }
 
-        // Get total rooms
-        const totalRooms = await Room.countDocuments(filter);
-        
-        // Get rooms by type
-        const roomsByType = await Room.aggregate([
-            { $match: filter },
-            { $group: { 
-                _id: '$type', 
-                count: { $sum: 1 },
-                avgPrice: { $avg: '$price' },
-                minPrice: { $min: '$price' },
-                maxPrice: { $max: '$price' }
-            }},
-            { $sort: { avgPrice: -1 } }
-        ]);
-        
-        // Get rooms by residence
-        const roomsByResidence = await Room.aggregate([
-            { $match: filter },
-            { $group: { 
-                _id: '$residence', 
-                count: { $sum: 1 },
-                avgPrice: { $avg: '$price' },
-                totalRevenue: { $sum: '$price' }
-            }},
-            { $sort: { avgPrice: -1 } }
-        ]);
+        // Combine filters
+        const combinedFilter = { ...residenceFilter, ...roomFilter };
 
-        // Populate residence names
-        const residenceIds = roomsByResidence.map(item => item._id);
-        const residences = await Residence.find({ _id: { $in: residenceIds } }, 'name');
-        const residenceMap = {};
-        residences.forEach(residence => {
-            residenceMap[residence._id.toString()] = residence.name;
-        });
-
-        const formattedRoomsByResidence = roomsByResidence.map(item => ({
-            residenceId: item._id,
-            residenceName: residenceMap[item._id.toString()] || 'Unknown',
-            count: item.count,
-            avgPrice: Math.round(item.avgPrice * 100) / 100,
-            totalRevenue: Math.round(item.totalRevenue * 100) / 100
-        }));
-
-        // Get price ranges
-        const priceRanges = await Room.aggregate([
-            { $match: filter },
-            { $group: { 
-                _id: null, 
-                minPrice: { $min: '$price' },
-                maxPrice: { $max: '$price' },
-                avgPrice: { $avg: '$price' },
-                totalRevenue: { $sum: '$price' }
-            }}
-        ]);
-
-        // Get rooms by status
-        const roomsByStatus = await Room.aggregate([
-            { $match: filter },
-            { $group: { _id: '$status', count: { $sum: 1 } } }
-        ]);
-
-        // Get recent room updates (last 5)
-        const recentRooms = await Room.find(filter)
-            .sort({ updatedAt: -1 })
-            .limit(5)
-            .populate('residence', 'name')
+        // Get residences with rooms
+        const residences = await Residence.find(combinedFilter)
+            .select('name rooms')
             .lean();
 
-        const formattedRecentRooms = recentRooms.map(room => ({
-            id: room._id,
-            roomNumber: room.roomNumber,
-            type: room.type,
-            price: room.price,
-            status: room.status,
-            residenceName: room.residence ? room.residence.name : 'Unknown',
-            updatedAt: room.updatedAt
+        // Extract and flatten all rooms from all residences
+        let allRooms = [];
+        residences.forEach(residence => {
+            const rooms = residence.rooms.map(room => ({
+                ...room,
+                residenceId: residence._id,
+                residenceName: residence.name
+            }));
+            allRooms = [...allRooms, ...rooms];
+        });
+
+        // Apply room-level filters
+        let filteredRooms = allRooms;
+        
+        if (roomType) {
+            filteredRooms = filteredRooms.filter(room => room.type === roomType);
+        }
+
+        const totalRooms = filteredRooms.length;
+        
+        // Get rooms by type
+        const roomsByType = {};
+        filteredRooms.forEach(room => {
+            if (!roomsByType[room.type]) {
+                roomsByType[room.type] = {
+                    count: 0,
+                    totalPrice: 0,
+                    minPrice: Infinity,
+                    maxPrice: 0
+                };
+            }
+            roomsByType[room.type].count++;
+            roomsByType[room.type].totalPrice += room.price;
+            roomsByType[room.type].minPrice = Math.min(roomsByType[room.type].minPrice, room.price);
+            roomsByType[room.type].maxPrice = Math.max(roomsByType[room.type].maxPrice, room.price);
+        });
+
+        const formattedRoomsByType = Object.entries(roomsByType).map(([type, data]) => ({
+            _id: type,
+            count: data.count,
+            avgPrice: Math.round((data.totalPrice / data.count) * 100) / 100,
+            minPrice: data.minPrice === Infinity ? 0 : data.minPrice,
+            maxPrice: data.maxPrice
+        })).sort((a, b) => b.avgPrice - a.avgPrice);
+        
+        // Get rooms by residence
+        const roomsByResidence = {};
+        filteredRooms.forEach(room => {
+            if (!roomsByResidence[room.residenceId]) {
+                roomsByResidence[room.residenceId] = {
+                    residenceName: room.residenceName,
+                    count: 0,
+                    totalPrice: 0
+                };
+            }
+            roomsByResidence[room.residenceId].count++;
+            roomsByResidence[room.residenceId].totalPrice += room.price;
+        });
+
+        const formattedRoomsByResidence = Object.entries(roomsByResidence).map(([residenceId, data]) => ({
+            residenceId,
+            residenceName: data.residenceName,
+            count: data.count,
+            avgPrice: Math.round((data.totalPrice / data.count) * 100) / 100,
+            totalRevenue: Math.round(data.totalPrice * 100) / 100
+        })).sort((a, b) => b.avgPrice - a.avgPrice);
+
+        // Get price ranges
+        const prices = filteredRooms.map(room => room.price);
+        const priceRanges = {
+            minPrice: prices.length > 0 ? Math.min(...prices) : 0,
+            maxPrice: prices.length > 0 ? Math.max(...prices) : 0,
+            avgPrice: prices.length > 0 ? Math.round((prices.reduce((sum, price) => sum + price, 0) / prices.length) * 100) / 100 : 0,
+            totalRevenue: Math.round(prices.reduce((sum, price) => sum + price, 0) * 100) / 100
+        };
+
+        // Get rooms by status
+        const roomsByStatus = {};
+        filteredRooms.forEach(room => {
+            const status = room.status || 'available';
+            roomsByStatus[status] = (roomsByStatus[status] || 0) + 1;
+        });
+
+        const formattedRoomsByStatus = Object.entries(roomsByStatus).map(([status, count]) => ({
+            _id: status,
+            count
         }));
+
+        // Get recent room updates (last 5)
+        const recentRooms = filteredRooms
+            .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
+            .slice(0, 5)
+            .map(room => ({
+                id: room._id,
+                roomNumber: room.roomNumber,
+                type: room.type,
+                price: room.price,
+                status: room.status,
+                residenceName: room.residenceName,
+                updatedAt: room.updatedAt
+            }));
 
         res.json({
             totalRooms,
-            roomsByType,
+            roomsByType: formattedRoomsByType,
             roomsByResidence: formattedRoomsByResidence,
-            roomsByStatus,
-            priceRanges: priceRanges[0] || { minPrice: 0, maxPrice: 0, avgPrice: 0, totalRevenue: 0 },
-            recentRooms: formattedRecentRooms
+            roomsByStatus: formattedRoomsByStatus,
+            priceRanges,
+            recentRooms
         });
     } catch (error) {
         console.error('Finance: Error in getRoomPriceStats:', error);
@@ -232,40 +315,48 @@ exports.getRoomPriceStats = async (req, res) => {
     }
 };
 
-// Get room prices by residence (for finance)
+// Get room prices by residence (for finance) - fetching from rooms in residences collection
 exports.getRoomPricesByResidence = async (req, res) => {
     try {
         const { residenceId } = req.params;
         
-        const rooms = await Room.find({ residence: residenceId })
-            .populate('residence', 'name address')
-            .sort({ price: 1 })
+        const residence = await Residence.findById(residenceId)
+            .select('name address rooms')
             .lean();
 
-        const formattedRooms = rooms.map(room => ({
+        if (!residence) {
+            return res.status(404).json({ error: 'Residence not found' });
+        }
+
+        // Sort rooms by price
+        const sortedRooms = residence.rooms.sort((a, b) => a.price - b.price);
+
+        const formattedRooms = sortedRooms.map(room => ({
             id: room._id,
             roomNumber: room.roomNumber,
             type: room.type,
             price: room.price,
             capacity: room.capacity,
-            currentOccupancy: room.currentOccupancy,
+            currentOccupancy: room.currentOccupancy || 0,
             status: room.status,
             floor: room.floor,
             area: room.area,
-            features: room.features,
-            occupancyRate: room.capacity > 0 ? Math.round((room.currentOccupancy / room.capacity) * 100) : 0
+            features: room.features || [],
+            occupancyRate: room.capacity > 0 ? Math.round(((room.currentOccupancy || 0) / room.capacity) * 100) : 0
         }));
 
+        const avgPrice = formattedRooms.length > 0 ? 
+            Math.round((formattedRooms.reduce((sum, room) => sum + room.price, 0) / formattedRooms.length) * 100) / 100 : 0;
+
         res.json({
-            residence: rooms[0]?.residence ? {
-                id: rooms[0].residence._id,
-                name: rooms[0].residence.name,
-                address: rooms[0].residence.address
-            } : null,
+            residence: {
+                id: residence._id,
+                name: residence.name,
+                address: residence.address
+            },
             rooms: formattedRooms,
             totalRooms: formattedRooms.length,
-            avgPrice: formattedRooms.length > 0 ? 
-                Math.round((formattedRooms.reduce((sum, room) => sum + room.price, 0) / formattedRooms.length) * 100) / 100 : 0
+            avgPrice
         });
     } catch (error) {
         console.error('Finance: Error in getRoomPricesByResidence:', error);

@@ -1,5 +1,4 @@
 const Student = require('../models/Student');
-const Room = require('../models/Room');
 const Residence = require('../models/Residence');
 const Payment = require('../models/Payment');
 const mongoose = require('mongoose');
@@ -39,13 +38,16 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
   const rental = getCurrentRental(student.rentalHistory || [], currentDate);
   if (!rental) throw new Error('No active rental found for student');
 
-  // 3. Get room
-  const room = await Room.findOne({ name: rental.room || student.room });
+  // 3. Get room from residences collection
+  const residence = await Residence.findOne({
+    'rooms.name': rental.room || student.room
+  }).lean();
+  
+  if (!residence) throw new Error('Residence not found');
+  
+  const room = residence.rooms.find(r => r.name === (rental.room || student.room));
   if (!room) throw new Error('Room not found');
 
-  // 4. Get residence
-  const residence = await Residence.findById(room.residence);
-  if (!residence) throw new Error('Residence not found');
   const isStKilda = residence.name.trim().toLowerCase() === 'st kilda';
 
   // 5. Calculate stay duration (months)

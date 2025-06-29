@@ -1,6 +1,7 @@
 const Application = require('../../models/Application');
-const Residence = require('../../models/Residence');
 const User = require('../../models/User');
+const Residence = require('../../models/Residence');
+const { validationResult } = require('express-validator');
 
 // Get all applications (for finance)
 exports.getAllApplications = async (req, res) => {
@@ -9,9 +10,7 @@ exports.getAllApplications = async (req, res) => {
             page = 1, 
             limit = 10, 
             status, 
-            residence, 
-            startDate, 
-            endDate,
+            type,
             sortBy = 'applicationDate',
             sortOrder = 'desc'
         } = req.query;
@@ -23,15 +22,8 @@ exports.getAllApplications = async (req, res) => {
             filter.status = status;
         }
         
-        if (residence) {
-            filter.residence = residence;
-        }
-        
-        // Date filtering
-        if (startDate || endDate) {
-            filter.applicationDate = {};
-            if (startDate) filter.applicationDate.$gte = new Date(startDate);
-            if (endDate) filter.applicationDate.$lte = new Date(endDate);
+        if (type) {
+            filter.requestType = type;
         }
 
         // Sorting
@@ -44,45 +36,69 @@ exports.getAllApplications = async (req, res) => {
         // Get total count for pagination
         const total = await Application.countDocuments(filter);
         
-        // Get applications with pagination and population
+        // Get applications with pagination
         const applications = await Application.find(filter)
             .sort(sortOptions)
             .skip(skip)
             .limit(parseInt(limit))
-            .populate('residence', 'name address')
             .populate('student', 'firstName lastName email phone')
             .lean();
 
+        // Get all residences to check room status
+        const residences = await Residence.find({}, 'name rooms');
+        
+        // Create a map of room statuses
+        const roomStatusMap = {};
+        residences.forEach(residence => {
+            residence.rooms.forEach(room => {
+                roomStatusMap[room.roomNumber] = {
+                    residence: residence.name,
+                    status: room.status,
+                    currentOccupancy: room.currentOccupancy,
+                    capacity: room.capacity,
+                    price: room.price,
+                    type: room.type
+                };
+            });
+        });
+
         // Format applications for response
-        const formattedApplications = applications.map(app => ({
-            id: app._id,
-            applicationCode: app.applicationCode,
-            firstName: app.firstName,
-            lastName: app.lastName,
-            email: app.email,
-            phone: app.phone,
-            requestType: app.requestType,
-            status: app.status,
-            paymentStatus: app.paymentStatus,
-            applicationDate: app.applicationDate,
-            startDate: app.startDate,
-            endDate: app.endDate,
-            preferredRoom: app.preferredRoom,
-            allocatedRoom: app.allocatedRoom,
-            currentRoom: app.currentRoom,
-            reason: app.reason,
-            residence: app.residence ? {
-                id: app.residence._id,
-                name: app.residence.name,
-                address: app.residence.address
-            } : null,
-            student: app.student ? {
-                id: app.student._id,
-                name: `${app.student.firstName} ${app.student.lastName}`,
-                email: app.student.email,
-                phone: app.student.phone
-            } : null
-        }));
+        const formattedApplications = applications.map(app => {
+            // Get room details for current and requested rooms
+            const currentRoomDetails = app.currentRoom ? roomStatusMap[app.currentRoom] : null;
+            const requestedRoomDetails = app.requestedRoom ? roomStatusMap[app.requestedRoom] : null;
+            const allocatedRoomDetails = app.allocatedRoom ? roomStatusMap[app.allocatedRoom] : null;
+            
+            // Calculate price difference for upgrades
+            let priceDifference = null;
+            if (app.requestType === 'upgrade' && currentRoomDetails && requestedRoomDetails) {
+                priceDifference = requestedRoomDetails.price - currentRoomDetails.price;
+            }
+            
+            return {
+                id: app._id,
+                studentName: app.student ? `${app.student.firstName} ${app.student.lastName}` : `${app.firstName} ${app.lastName}`,
+                email: app.student ? app.student.email : app.email,
+                contact: app.student ? app.student.phone : app.phone,
+                requestType: app.requestType,
+                status: app.status,
+                paymentStatus: app.paymentStatus,
+                applicationDate: app.applicationDate ? app.applicationDate.toISOString().split('T')[0] : null,
+                startDate: app.startDate ? app.startDate.toISOString().split('T')[0] : null,
+                endDate: app.endDate ? app.endDate.toISOString().split('T')[0] : null,
+                preferredRoom: app.preferredRoom,
+                alternateRooms: app.alternateRooms || [],
+                currentRoom: app.currentRoom,
+                currentRoomDetails: currentRoomDetails,
+                requestedRoom: app.requestedRoom,
+                requestedRoomDetails: requestedRoomDetails,
+                reason: app.reason,
+                allocatedRoom: app.allocatedRoom,
+                allocatedRoomDetails: allocatedRoomDetails,
+                applicationCode: app.applicationCode,
+                priceDifference: priceDifference
+            };
+        });
 
         res.json({
             applications: formattedApplications,
@@ -103,7 +119,6 @@ exports.getAllApplications = async (req, res) => {
 exports.getApplication = async (req, res) => {
     try {
         const application = await Application.findById(req.params.id)
-            .populate('residence', 'name address')
             .populate('student', 'firstName lastName email phone')
             .lean();
 
@@ -111,34 +126,50 @@ exports.getApplication = async (req, res) => {
             return res.status(404).json({ error: 'Application not found' });
         }
 
+        // Get residence details if room is allocated
+        let residenceDetails = null;
+        if (application.allocatedRoom) {
+            const residence = await Residence.findOne({
+                'rooms.roomNumber': application.allocatedRoom
+            }).select('name address rooms').lean();
+            
+            if (residence) {
+                const room = residence.rooms.find(r => r.roomNumber === application.allocatedRoom);
+                residenceDetails = {
+                    id: residence._id,
+                    name: residence.name,
+                    address: residence.address,
+                    room: room ? {
+                        roomNumber: room.roomNumber,
+                        type: room.type,
+                        price: room.price,
+                        status: room.status,
+                        currentOccupancy: room.currentOccupancy,
+                        capacity: room.capacity
+                    } : null
+                };
+            }
+        }
+
         const formattedApplication = {
             id: application._id,
-            applicationCode: application.applicationCode,
-            firstName: application.firstName,
-            lastName: application.lastName,
-            email: application.email,
-            phone: application.phone,
+            studentName: application.student ? `${application.student.firstName} ${application.student.lastName}` : `${application.firstName} ${application.lastName}`,
+            email: application.student ? application.student.email : application.email,
+            contact: application.student ? application.student.phone : application.phone,
             requestType: application.requestType,
             status: application.status,
             paymentStatus: application.paymentStatus,
-            applicationDate: application.applicationDate,
-            startDate: application.startDate,
-            endDate: application.endDate,
+            applicationDate: application.applicationDate ? application.applicationDate.toISOString().split('T')[0] : null,
+            startDate: application.startDate ? application.startDate.toISOString().split('T')[0] : null,
+            endDate: application.endDate ? application.endDate.toISOString().split('T')[0] : null,
             preferredRoom: application.preferredRoom,
-            allocatedRoom: application.allocatedRoom,
+            alternateRooms: application.alternateRooms || [],
             currentRoom: application.currentRoom,
+            requestedRoom: application.requestedRoom,
             reason: application.reason,
-            residence: application.residence ? {
-                id: application.residence._id,
-                name: application.residence.name,
-                address: application.residence.address
-            } : null,
-            student: application.student ? {
-                id: application.student._id,
-                name: `${application.student.firstName} ${application.student.lastName}`,
-                email: application.student.email,
-                phone: application.student.phone
-            } : null
+            allocatedRoom: application.allocatedRoom,
+            applicationCode: application.applicationCode,
+            residence: residenceDetails
         };
 
         res.json(formattedApplication);
@@ -151,20 +182,17 @@ exports.getApplication = async (req, res) => {
 // Get application statistics (for finance)
 exports.getApplicationStats = async (req, res) => {
     try {
-        const { residence, startDate, endDate } = req.query;
+        const { status, type } = req.query;
         
         // Build filter object
         const filter = {};
         
-        if (residence) {
-            filter.residence = residence;
+        if (status) {
+            filter.status = status;
         }
         
-        // Date filtering
-        if (startDate || endDate) {
-            filter.applicationDate = {};
-            if (startDate) filter.applicationDate.$gte = new Date(startDate);
-            if (endDate) filter.applicationDate.$lte = new Date(endDate);
+        if (type) {
+            filter.requestType = type;
         }
 
         // Get total applications
@@ -173,59 +201,60 @@ exports.getApplicationStats = async (req, res) => {
         // Get applications by status
         const applicationsByStatus = await Application.aggregate([
             { $match: filter },
-            { $group: { _id: '$status', count: { $sum: 1 } } }
+            { $group: { _id: '$status', count: { $sum: 1 } } },
+            { $sort: { count: -1 } }
         ]);
         
-        // Get applications by residence
-        const applicationsByResidence = await Application.aggregate([
+        // Get applications by type
+        const applicationsByType = await Application.aggregate([
             { $match: filter },
-            { $group: { _id: '$residence', count: { $sum: 1 } } },
+            { $group: { _id: '$requestType', count: { $sum: 1 } } },
             { $sort: { count: -1 } }
         ]);
 
-        // Populate residence names
-        const residenceIds = applicationsByResidence.map(item => item._id);
-        const residences = await Residence.find({ _id: { $in: residenceIds } }, 'name');
-        const residenceMap = {};
-        residences.forEach(residence => {
-            residenceMap[residence._id.toString()] = residence.name;
-        });
-
-        const formattedApplicationsByResidence = applicationsByResidence.map(item => ({
-            residenceId: item._id,
-            residenceName: residenceMap[item._id.toString()] || 'Unknown',
-            count: item.count
-        }));
-
-        // Get applications by payment status
-        const applicationsByPaymentStatus = await Application.aggregate([
-            { $match: filter },
-            { $group: { _id: '$paymentStatus', count: { $sum: 1 } } }
+        // Get applications by month (last 12 months)
+        const twelveMonthsAgo = new Date();
+        twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+        
+        const applicationsByMonth = await Application.aggregate([
+            { 
+                $match: { 
+                    ...filter,
+                    applicationDate: { $gte: twelveMonthsAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        year: { $year: '$applicationDate' },
+                        month: { $month: '$applicationDate' }
+                    },
+                    count: { $sum: 1 }
+                }
+            },
+            { $sort: { '_id.year': 1, '_id.month': 1 } }
         ]);
 
         // Get recent applications (last 5)
         const recentApplications = await Application.find(filter)
             .sort({ applicationDate: -1 })
             .limit(5)
-            .populate('residence', 'name')
             .populate('student', 'firstName lastName')
             .lean();
 
         const formattedRecentApplications = recentApplications.map(app => ({
             id: app._id,
-            applicationCode: app.applicationCode,
-            studentName: app.student ? `${app.student.firstName} ${app.student.lastName}` : 'Unknown',
-            residenceName: app.residence ? app.residence.name : 'Unknown',
-            applicationDate: app.applicationDate,
+            studentName: app.student ? `${app.student.firstName} ${app.student.lastName}` : `${app.firstName} ${app.lastName}`,
+            requestType: app.requestType,
             status: app.status,
-            paymentStatus: app.paymentStatus
+            applicationDate: app.applicationDate ? app.applicationDate.toISOString().split('T')[0] : null
         }));
 
         res.json({
             totalApplications,
             applicationsByStatus,
-            applicationsByResidence: formattedApplicationsByResidence,
-            applicationsByPaymentStatus,
+            applicationsByType,
+            applicationsByMonth,
             recentApplications: formattedRecentApplications
         });
     } catch (error) {
