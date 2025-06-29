@@ -100,6 +100,7 @@ exports.getAllApplications = async (req, res) => {
         });
 
         res.json({
+            success: true,
             applications: formattedApplications,
             pagination: {
                 currentPage: parseInt(page),
@@ -110,7 +111,7 @@ exports.getAllApplications = async (req, res) => {
         });
     } catch (error) {
         console.error('Finance: Error in getAllApplications:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ success: false, error: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
     }
 };
 

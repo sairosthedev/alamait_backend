@@ -111,7 +111,8 @@ exports.getAllRoomPrices = async (req, res) => {
         }));
 
         res.json({
-            rooms: formattedRooms,
+            success: true,
+            roomPrices: formattedRooms,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(total / limit),
@@ -121,7 +122,7 @@ exports.getAllRoomPrices = async (req, res) => {
         });
     } catch (error) {
         console.error('Finance: Error in getAllRoomPrices:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ success: false, error: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
     }
 };
 
@@ -302,16 +303,19 @@ exports.getRoomPriceStats = async (req, res) => {
             }));
 
         res.json({
-            totalRooms,
-            roomsByType: formattedRoomsByType,
-            roomsByResidence: formattedRoomsByResidence,
-            roomsByStatus: formattedRoomsByStatus,
-            priceRanges,
-            recentRooms
+            success: true,
+            stats: {
+                totalRooms,
+                roomsByType: formattedRoomsByType,
+                roomsByResidence: formattedRoomsByResidence,
+                roomsByStatus: formattedRoomsByStatus,
+                priceRanges,
+                recentRooms
+            }
         });
     } catch (error) {
         console.error('Finance: Error in getRoomPriceStats:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ success: false, error: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
     }
 };
 
@@ -349,17 +353,18 @@ exports.getRoomPricesByResidence = async (req, res) => {
             Math.round((formattedRooms.reduce((sum, room) => sum + room.price, 0) / formattedRooms.length) * 100) / 100 : 0;
 
         res.json({
+            success: true,
             residence: {
                 id: residence._id,
                 name: residence.name,
                 address: residence.address
             },
-            rooms: formattedRooms,
+            roomPrices: formattedRooms,
             totalRooms: formattedRooms.length,
             avgPrice
         });
     } catch (error) {
         console.error('Finance: Error in getRoomPricesByResidence:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ success: false, error: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
     }
 }; 
