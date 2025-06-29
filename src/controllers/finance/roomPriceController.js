@@ -17,14 +17,15 @@ exports.getAllRoomPrices = async (req, res) => {
         // Build filter object for residences
         const residenceFilter = {};
         
-        if (residence) {
+        // Treat 'all' and '' as no filter
+        if (residence && residence !== 'all' && residence !== '') {
             residenceFilter._id = residence;
         }
 
         // Build filter object for rooms within residences
         const roomFilter = {};
         
-        if (roomType) {
+        if (roomType && roomType !== 'all' && roomType !== '') {
             roomFilter['rooms.type'] = roomType;
         }
         
@@ -181,14 +182,15 @@ exports.getRoomPriceStats = async (req, res) => {
         // Build filter object for residences
         const residenceFilter = {};
         
-        if (residence) {
+        // Treat 'all' and '' as no filter
+        if (residence && residence !== 'all' && residence !== '') {
             residenceFilter._id = residence;
         }
 
         // Build filter object for rooms within residences
         const roomFilter = {};
         
-        if (roomType) {
+        if (roomType && roomType !== 'all' && roomType !== '') {
             roomFilter['rooms.type'] = roomType;
         }
 
