@@ -105,9 +105,10 @@ exports.getAllApplications = async (req, res) => {
             };
         });
 
+        // Return all DB fields for each application
         res.json({
             success: true,
-            applications: formattedApplications,
+            applications: applications,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(total / limit),

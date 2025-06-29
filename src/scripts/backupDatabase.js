@@ -14,7 +14,6 @@ const Lease = require('../models/Lease');
 const Residence = require('../models/Residence');
 const User = require('../models/User');
 const Booking = require('../models/Booking');
-const Room = require('../models/Room');
 
 async function connectToDatabase() {
     try {
