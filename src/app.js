@@ -213,6 +213,7 @@ app.use('/api/finance/balance-sheets', financeBalanceSheetRoutes);
 app.use('/api/finance/income-statements', financeIncomeStatementRoutes);
 app.use('/api/finance/dashboard', financeDashboardRoutes);
 app.use('/api/finance/payments', financePaymentRoutes);
+app.use('/api/finance/residences', financeResidenceRoutes);
 
 // 404 handler
 app.use((req, res) => {
