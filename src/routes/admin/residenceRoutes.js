@@ -9,7 +9,8 @@ const {
     getAllResidences,
     getResidence,
     updateResidence,
-    deleteResidence
+    deleteResidence,
+    getRoomsByResidence
 } = require('../../controllers/admin/residenceController');
 
 // Validation middleware
@@ -67,5 +68,6 @@ router.get('/', getAllResidences);
 router.get('/:id', getResidence);
 router.put('/:id', residenceValidation, updateResidence);
 router.delete('/:id', deleteResidence);
+router.get('/:residenceId/rooms', getRoomsByResidence);
 
 module.exports = router; 

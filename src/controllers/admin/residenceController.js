@@ -206,4 +206,61 @@ exports.deleteResidence = async (req, res) => {
             error: error.message
         });
     }
+};
+
+// Get rooms for a specific residence
+exports.getRoomsByResidence = async (req, res) => {
+    try {
+        const { residenceId } = req.params;
+        
+        if (!residenceId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Residence ID is required'
+            });
+        }
+
+        const residence = await Residence.findById(residenceId)
+            .select('name rooms')
+            .lean();
+
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        // Format rooms for response
+        const formattedRooms = residence.rooms.map(room => ({
+            roomNumber: room.roomNumber,
+            type: room.type,
+            capacity: room.capacity,
+            currentOccupancy: room.currentOccupancy || 0,
+            status: room.status,
+            price: room.price,
+            floor: room.floor,
+            area: room.area,
+            features: room.features || [],
+            isAvailable: room.status === 'available' || room.status === 'reserved'
+        }));
+
+        res.json({
+            success: true,
+            residence: {
+                id: residence._id,
+                name: residence.name
+            },
+            rooms: formattedRooms,
+            totalRooms: formattedRooms.length,
+            availableRooms: formattedRooms.filter(room => room.isAvailable).length
+        });
+    } catch (error) {
+        console.error('Error in getRoomsByResidence:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching rooms for residence',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
 }; 

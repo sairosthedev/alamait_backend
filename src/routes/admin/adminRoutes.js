@@ -23,7 +23,9 @@ const {
     assignMaintenanceRequest,
     getMaintenanceStaff,
     addMaintenanceStaff,
-    removeMaintenanceStaff
+    removeMaintenanceStaff,
+    createMaintenanceRequest,
+    getResidencesForMaintenance
 } = require('../../controllers/admin/maintenanceController');
 
 const {
@@ -87,6 +89,18 @@ const maintenanceUpdateValidation = [
         .withMessage('Invalid scheduled date format')
 ];
 
+const maintenanceCreateValidation = [
+    check('issue', 'Issue is required').notEmpty().trim(),
+    check('description', 'Description is required').notEmpty().trim(),
+    check('room', 'Room is required').notEmpty().trim(),
+    check('requestedBy', 'Requested by is required').notEmpty().trim(),
+    check('residence', 'Residence ID is required').notEmpty().isMongoId().withMessage('Invalid residence ID format'),
+    check('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Invalid priority level'),
+    check('status').optional().isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed']).withMessage('Invalid status'),
+    check('amount').optional().isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
+    check('assignedTo').optional().isMongoId().withMessage('Invalid assigned user ID')
+];
+
 const applicationStatusValidation = [
     check('status').isIn(['pending', 'approved', 'rejected']),
     check('comment').optional().trim().notEmpty()
@@ -119,8 +133,10 @@ router.get('/students', getStudentsWithLocation);
 // Maintenance routes
 router.get('/maintenance', getAllMaintenanceRequests);
 router.get('/maintenance/:requestId', getMaintenanceRequest);
+router.post('/maintenance', maintenanceCreateValidation, createMaintenanceRequest);
 router.put('/maintenance/:requestId', maintenanceUpdateValidation, updateMaintenanceRequest);
 router.post('/maintenance/:requestId/assign', assignMaintenanceRequest);
+router.get('/maintenance/residences', getResidencesForMaintenance);
 router.get('/maintenance/maintenance_staff', getMaintenanceStaff);
 router.post('/maintenance/maintenance_staff', addMaintenanceStaff);
 router.delete('/maintenance/maintenance_staff/:staffId', removeMaintenanceStaff);

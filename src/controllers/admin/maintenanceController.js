@@ -201,20 +201,40 @@ exports.createMaintenanceRequest = async (req, res) => {
         });
 
         // Validate required fields
-        if (!issue || !description || !room) {
+        if (!issue || !description || !room || !residence) {
             return res.status(400).json({
                 success: false,
                 error: 'Missing required fields',
-                message: 'Issue, description, and room are required'
+                message: 'Issue, description, room, and residence are required'
             });
         }
 
-        // Find the student by name
+        // Validate that the residence exists and contains the specified room
+        const residenceDoc = await mongoose.model('Residence').findById(residence);
+        if (!residenceDoc) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid residence',
+                message: 'The selected residence does not exist'
+            });
+        }
+
+        // Check if the room exists in the selected residence
+        const roomExists = residenceDoc.rooms.some(r => r.roomNumber === room);
+        if (!roomExists) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid room',
+                message: `Room ${room} does not exist in residence ${residenceDoc.name}`
+            });
+        }
+
+        // Find the student by name and residence
         const student = await mongoose.model('User').findOne({
             firstName: requestedBy.split(' ')[0],
             lastName: requestedBy.split(' ')[1],
             role: 'student',
-            'residence.roomNumber': room
+            residence: residence
         });
 
         if (!student) {
@@ -223,19 +243,6 @@ exports.createMaintenanceRequest = async (req, res) => {
                 error: 'Invalid student',
                 message: 'The selected student is not assigned to the specified room'
             });
-        }
-
-        // Get residence ID from request body or student's residence
-        let residenceId = residence;
-        if (!residenceId) {
-            if (!student.residence) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Residence ID is required',
-                    message: 'Student does not have an assigned residence'
-                });
-            }
-            residenceId = student.residence;
         }
 
         // If assignedTo is provided, validate the staff member
@@ -257,7 +264,7 @@ exports.createMaintenanceRequest = async (req, res) => {
             description,
             room,
             student: student._id,
-            residence: residenceId,
+            residence: residence,
             status: status?.toLowerCase() || 'pending',
             priority: priority?.toLowerCase() || 'low',
             category: 'other',
