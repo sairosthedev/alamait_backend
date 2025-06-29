@@ -11,4 +11,7 @@ router.get('/status/:email', getApplicationStatus);
 // Check email usage
 router.get('/check-email', checkEmailUsage);
 
+// Check email usage with email in path (for frontend compatibility)
+router.get('/check-email/:email', checkEmailUsage);
+
 module.exports = router; 

@@ -110,7 +110,8 @@ exports.getApplicationStatus = async (req, res) => {
 // Check if email has been used before and if eligible for renewal
 exports.checkEmailUsage = async (req, res) => {
     try {
-        const { email } = req.query;
+        // Handle both query parameter and path parameter
+        const email = req.query.email || req.params.email;
         if (!email) return res.status(400).json({ error: 'Email is required' });
 
         // Check active user

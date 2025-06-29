@@ -22,6 +22,7 @@ if (process.env.NODE_ENV === 'production') {
 const authRoutes = require('./routes/auth');
 const publicApplicationRoutes = require('./routes/public/applicationRoutes');
 const publicResidenceRoutes = require('./routes/public/residenceRoutes');
+const residenceRoutes = require('./routes/residenceRoutes');
 const maintenanceRoutes = require('./routes/maintenanceRoutes');
 const maintenanceStaffRoutes = require('./routes/maintenanceStaffRoutes');
 const maintenanceCategoryRoutes = require('./routes/maintenanceCategoryRoutes');
@@ -146,6 +147,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOp
 // Public routes
 app.use('/api/applications', publicApplicationRoutes);
 app.use('/api/residences', publicResidenceRoutes);
+app.use('/api/residences', residenceRoutes);
 
 // Maintenance routes with debugging
 // Define specific routes first
