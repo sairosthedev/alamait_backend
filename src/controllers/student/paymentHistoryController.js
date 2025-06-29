@@ -476,7 +476,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 ACL: s3Configs.proofOfPayment.acl,
                 Metadata: {
                     fieldName: req.file.fieldname,
-                    uploadedBy: req.user._id,
+                    uploadedBy: req.user._id.toString(), // Convert ObjectId to string
                     uploadDate: new Date().toISOString()
                 }
             };

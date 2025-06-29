@@ -37,7 +37,7 @@ exports.uploadLease = async (req, res) => {
       ACL: s3Configs.leases.acl,
       Metadata: {
         fieldName: req.file.fieldname,
-        uploadedBy: req.user.id,
+        uploadedBy: req.user.id.toString(),
         uploadDate: new Date().toISOString()
       }
     };
