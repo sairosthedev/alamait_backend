@@ -616,14 +616,23 @@ exports.uploadNewProofOfPayment = (req, res) => {
             const adminFee = parseFloat(req.body.adminFee) || 0;
             const deposit = parseFloat(req.body.deposit) || 0;
             const totalAmount = rentAmount + adminFee + deposit;
-            const { paymentMonth } = req.body;
+            
+            // Auto-generate payment month if not provided
+            let paymentMonth = req.body.paymentMonth;
+            if (!paymentMonth) {
+                const currentDate = new Date();
+                const year = currentDate.getFullYear();
+                const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+                paymentMonth = `${year}-${month}`;
+                console.log('Auto-generated payment month:', paymentMonth);
+            }
 
             console.log('Payment amounts:', { rentAmount, adminFee, deposit, totalAmount, paymentMonth });
 
-            // Validate paymentMonth
-            if (!paymentMonth || !/^\d{4}-\d{2}$/.test(paymentMonth)) {
-                console.log('Invalid payment month format');
-                return res.status(400).json({ error: 'Payment month is required in YYYY-MM format.' });
+            // Validate paymentMonth format
+            if (!/^\d{4}-\d{2}$/.test(paymentMonth)) {
+                console.log('Invalid payment month format:', paymentMonth);
+                return res.status(400).json({ error: 'Payment month must be in YYYY-MM format.' });
             }
 
             // Create a new payment record
