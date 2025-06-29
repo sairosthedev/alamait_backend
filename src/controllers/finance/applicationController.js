@@ -26,6 +26,9 @@ exports.getAllApplications = async (req, res) => {
             filter.requestType = type;
         }
 
+        // Debug log
+        console.log('Finance: Applications filter:', filter);
+
         // Sorting
         const sortOptions = {};
         sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
@@ -42,6 +45,9 @@ exports.getAllApplications = async (req, res) => {
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
+
+        // Debug log
+        console.log('Finance: Applications found:', applications.length);
 
         // Get all residences to check room status
         const residences = await Residence.find({}, 'name rooms');
