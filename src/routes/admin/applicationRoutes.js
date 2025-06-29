@@ -8,7 +8,8 @@ const {
     updatePaymentStatus,
     deleteApplication,
     updateRoomValidity,
-    syncRoomOccupancy
+    syncRoomOccupancy,
+    getExpiredStudents
 } = require('../../controllers/admin/applicationController');
 
 // Validation middleware for specific routes if needed in future
@@ -18,6 +19,9 @@ const updateStatusValidation = [
 
 // Get all applications with room status
 router.get('/', auth, checkAdminOrFinance, getApplications);
+
+// Get expired students
+router.get('/expired', auth, checkAdminOrFinance, getExpiredStudents);
 
 // Update application status (approve/reject/waitlist)
 router.put('/:applicationId', auth, checkAdminOrFinance, updateApplicationStatus);

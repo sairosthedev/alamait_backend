@@ -8,6 +8,7 @@ const fs = require('fs');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateService');
+const ExpiredStudent = require('../../models/ExpiredStudent');
 
 // Get all applications with room status
 exports.getApplications = async (req, res) => {
@@ -717,5 +718,30 @@ exports.syncRoomOccupancy = async (req, res) => {
     } catch (error) {
         console.error('Error in syncRoomOccupancy:', error);
         res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Get expired students (for applications route)
+exports.getExpiredStudents = async (req, res) => {
+    try {
+        const { page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const total = await ExpiredStudent.countDocuments();
+        const expiredStudents = await ExpiredStudent.find()
+            .sort({ archivedAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+        res.json({
+            success: true,
+            expiredStudents,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / limit),
+                total,
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
     }
 }; 
