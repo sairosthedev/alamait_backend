@@ -222,7 +222,8 @@ exports.deleteStudent = async (req, res) => {
             student: student.toObject(),
             application: application ? application.toObject() : null,
             previousApplicationCode: application ? application.applicationCode : null,
-            archivedAt: new Date()
+            archivedAt: new Date(),
+            reason: 'deleted_by_admin'
         });
 
         // Before removing the student, update room status in residence

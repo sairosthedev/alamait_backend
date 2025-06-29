@@ -5,6 +5,9 @@ const { auth, checkRole } = require('../../middleware/auth');
 const path = require('path');
 const fs = require('fs');
 const Lease = require('../../models/Lease');
+const Application = require('../../models/Application');
+const ExpiredStudent = require('../../models/ExpiredStudent');
+const Residence = require('../../models/Residence');
 
 const {
     getStudents,
@@ -88,7 +91,48 @@ router.post('/', studentValidation, createStudent);
 router.get('/expired', getExpiredStudents);
 router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);
-router.delete('/:studentId', deleteStudent);
+router.delete('/:studentId', async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const student = await User.findById(studentId);
+
+        if (!student) {
+            return res.status(404).json({ message: 'Student not found' });
+        }
+
+        const application = await Application.findOne({ student: student._id }).sort({ createdAt: -1 });
+        await ExpiredStudent.create({
+            student: student.toObject(),
+            application: application ? application.toObject() : null,
+            previousApplicationCode: application ? application.applicationCode : null,
+            archivedAt: new Date()
+        });
+
+        if (student.residence && student.currentRoom) {
+            const residence = await Residence.findById(student.residence);
+            if (residence) {
+                const room = residence.rooms.find(r => r.roomNumber === student.currentRoom);
+                if (room) {
+                    room.currentOccupancy = Math.max(0, (room.currentOccupancy || 1) - 1);
+                    if (room.currentOccupancy === 0) {
+                        room.status = 'available';
+                    } else if (room.currentOccupancy < room.capacity) {
+                        room.status = 'reserved';
+                    } else {
+                        room.status = 'occupied';
+                    }
+                    await residence.save();
+                }
+            }
+        }
+
+        await student.remove();
+        res.status(200).json({ message: 'Student archived successfully' });
+    } catch (error) {
+        console.error('Error archiving student:', error);
+        res.status(500).json({ error: 'Error archiving student' });
+    }
+});
 router.get('/:studentId/payments', getStudentPayments);
 router.get('/lease-agreement/:studentId', downloadSignedLease);
 

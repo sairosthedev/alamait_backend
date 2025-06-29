@@ -32,7 +32,8 @@ const handleExpiredApplications = async () => {
                         student: application.student,
                         application: application.toObject(),
                         previousApplicationCode: application.applicationCode,
-                        archivedAt: new Date()
+                        archivedAt: new Date(),
+                        reason: 'revoked'
                     });
                 }
                 // Send revocation email
@@ -86,7 +87,8 @@ const handleExpiredApplications = async () => {
                         student: application.student,
                         application: application.toObject(),
                         previousApplicationCode: application.applicationCode,
-                        archivedAt: new Date()
+                        archivedAt: new Date(),
+                        reason: 'lease_expired'
                     });
                     // Update room status in residence
                     if (application.residence && application.allocatedRoom) {
