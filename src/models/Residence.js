@@ -54,7 +54,7 @@ const residenceSchema = new mongoose.Schema({
         },
         type: {
             type: String,
-            enum: ['single', 'double', 'studio', 'apartment', 'triple', 'quad'],
+            enum: ['single', 'double', 'studio', 'apartment', 'triple', 'quad', 'Six-person room', 'six', 'fife'],
             required: true
         },
         capacity: {

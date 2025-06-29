@@ -3,6 +3,8 @@ const Application = require('../models/Application');
 const { sendEmail } = require('./email');
 const Residence = require('../models/Residence');
 const ExpiredStudent = require('../models/ExpiredStudent');
+const Booking = require('../models/Booking');
+const Lease = require('../models/Lease');
 
 /**
  * Check and handle expired unpaid applications
@@ -28,12 +30,19 @@ const handleExpiredApplications = async () => {
             try {
                 // Archive before deleting
                 if (application.student) {
+                    // Fetch payment history
+                    const bookings = await Booking.find({ student: application.student._id }).lean();
+                    const paymentHistory = bookings.flatMap(booking => booking.payments || []);
+                    // Fetch leases
+                    const leases = await Lease.find({ studentId: application.student._id }).lean();
                     await ExpiredStudent.create({
                         student: application.student,
                         application: application.toObject(),
                         previousApplicationCode: application.applicationCode,
                         archivedAt: new Date(),
-                        reason: 'revoked'
+                        reason: 'revoked',
+                        paymentHistory,
+                        leases
                     });
                 }
                 // Send revocation email
@@ -83,12 +92,19 @@ const handleExpiredApplications = async () => {
         for (const application of endedApplications) {
             try {
                 if (application.student) {
+                    // Fetch payment history
+                    const bookings = await Booking.find({ student: application.student._id }).lean();
+                    const paymentHistory = bookings.flatMap(booking => booking.payments || []);
+                    // Fetch leases
+                    const leases = await Lease.find({ studentId: application.student._id }).lean();
                     await ExpiredStudent.create({
                         student: application.student,
                         application: application.toObject(),
                         previousApplicationCode: application.applicationCode,
                         archivedAt: new Date(),
-                        reason: 'lease_expired'
+                        reason: 'lease_expired',
+                        paymentHistory,
+                        leases
                     });
                     // Update room status in residence
                     if (application.residence && application.allocatedRoom) {

@@ -8,6 +8,7 @@ const Residence = require('../../models/Residence');
 const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateService');
 const ExpiredStudent = require('../../models/ExpiredStudent');
 const Application = require('../../models/Application');
+const Lease = require('../../models/Lease');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -218,12 +219,19 @@ exports.deleteStudent = async (req, res) => {
 
         // Archive before removing the student
         const application = await Application.findOne({ student: student._id }).sort({ createdAt: -1 });
+        // Fetch payment history
+        const bookings = await Booking.find({ student: student._id }).lean();
+        const paymentHistory = bookings.flatMap(booking => booking.payments || []);
+        // Fetch leases
+        const leases = await Lease.find({ studentId: student._id }).lean();
         await ExpiredStudent.create({
             student: student.toObject(),
             application: application ? application.toObject() : null,
             previousApplicationCode: application ? application.applicationCode : null,
             archivedAt: new Date(),
-            reason: 'deleted_by_admin'
+            reason: 'deleted_by_admin',
+            paymentHistory,
+            leases
         });
 
         // Before removing the student, update room status in residence
