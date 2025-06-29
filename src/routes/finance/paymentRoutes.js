@@ -21,6 +21,9 @@ const requestClarificationValidation = [
 router.use(auth);
 router.use(financeAccess);
 
+// Get all payments (alias for student payments)
+router.get('/', getStudentPayments);
+
 // Get all student payments with pagination and filtering
 router.get('/students', getStudentPayments);
 
