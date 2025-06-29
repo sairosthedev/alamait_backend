@@ -184,14 +184,38 @@ router.post('/reset-password-by-email', [
     try {
         const { email, newPassword } = req.body;
         
-        const user = await User.findOne({ email });
+        let user = await User.findOne({ email });
+        
         if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+            // Check if there's an approved application for this email
+            const application = await Application.findOne({ 
+                email: email.toLowerCase(), 
+                status: 'approved' 
+            });
+            
+            if (application) {
+                // Create a new user account from the approved application
+                user = new User({
+                    email: application.email,
+                    firstName: application.firstName,
+                    lastName: application.lastName,
+                    phone: application.phone,
+                    password: newPassword, // Pre-save hook will hash it
+                    applicationCode: application.applicationCode,
+                    role: 'student',
+                    isVerified: true
+                });
+                
+                await user.save();
+                console.log('User account created from approved application for:', email);
+            } else {
+                return res.status(404).json({ error: 'User not found and no approved application exists' });
+            }
+        } else {
+            // Reset the password for existing user
+            user.password = newPassword; // Pre-save hook will hash it
+            await user.save();
         }
-
-        // Reset the password directly
-        user.password = newPassword; // Pre-save hook will hash it
-        await user.save();
         
         console.log('Password reset successfully for:', email);
         

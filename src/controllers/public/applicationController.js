@@ -123,6 +123,11 @@ exports.checkEmailUsage = async (req, res) => {
         // Check active or pending application
         const activeApp = await Application.findOne({ email: email.toLowerCase(), status: { $in: ['pending', 'approved', 'waitlisted'] } });
         if (activeApp) {
+            // If there's an approved application but no user account, allow registration
+            // This means the application was approved but user never completed registration
+            if (activeApp.status === 'approved' && !user) {
+                return res.json({ used: false, isRenewal: false, hasApprovedApplication: true });
+            }
             return res.json({ used: true, isRenewal: false });
         }
 
