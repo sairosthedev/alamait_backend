@@ -9,7 +9,7 @@
    - Admin downloads → S3 URL redirect
    - Database stores S3 URLs
 
-2. **✅ Proof of Payment** → `proof_of_payment/` folder
+2. **✅ Proof of Payment** → `pop/` folder
    - Student uploads → S3
    - Admin uploads → S3
    - Database stores S3 URLs

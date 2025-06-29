@@ -116,7 +116,7 @@ const updatePaymentRecords = async () => {
         
         if (payment.proofOfPayment && payment.proofOfPayment.fileUrl) {
           // Create S3 key
-          const s3Key = `proof_of_payment/${payment.student}_${Date.now()}_${payment.proofOfPayment.fileName || 'proof.pdf'}`;
+          const s3Key = `pop/${payment.student}_${Date.now()}_${payment.proofOfPayment.fileName || 'proof.pdf'}`;
           
           // Upload to S3
           const s3Url = await uploadFileToS3(payment.proofOfPayment.fileUrl, s3Key);

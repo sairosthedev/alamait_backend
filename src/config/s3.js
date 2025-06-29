@@ -21,7 +21,7 @@ const s3Configs = {
   // For proof of payment files
   proofOfPayment: {
     bucket: bucketName,
-    key: (req, file) => `proof_of_payment/${req.user._id}_${Date.now()}_${file.originalname}`,
+    key: (req, file) => `pop/${req.user._id}_${Date.now()}_${file.originalname}`,
     acl: 'private'
   },
   

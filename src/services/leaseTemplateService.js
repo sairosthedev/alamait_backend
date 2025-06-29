@@ -2,9 +2,10 @@ const { s3, bucketName } = require('../config/s3');
 
 // Map residence names to their S3 template keys
 const residenceTemplateMap = {
-  'st kilda': 'lease_templates/st_kilda_boarding_agreement.docx',
-  'belvedere': 'lease_templates/belvedere_agreement.docx', 
-  'newlands': 'lease_templates/newlands_agreement.docx',
+  'st kilda': 'ST Kilda Boarding Agreement1 - Copy.docx',
+  'belvedere': 'Belvedere.docx', 
+  'newlands': 'Lease_Agreement_Template.docx',
+  'greendale': 'Alamait lease agreement Greendale.pdf',
   'office': 'lease_templates/alamait_office_agreement.docx'
 };
 
@@ -60,7 +61,8 @@ const getLeaseTemplateAttachment = async (residenceName) => {
     for (const [key, value] of Object.entries(residenceTemplateMap)) {
       if (normalizedName.includes(key)) {
         templateKey = value;
-        fileName = value.split('/').pop(); // Get filename from key
+        // Handle both files in root and files in subfolders
+        fileName = value.includes('/') ? value.split('/').pop() : value;
         break;
       }
     }
