@@ -27,6 +27,7 @@ function uploadFileToS3(filePath, s3Key) {
     Key: s3Key,
     Body: fileContent,
   
+    
   }).promise();
 }
 

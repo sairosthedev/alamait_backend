@@ -92,6 +92,11 @@ exports.getMessages = async (req, res) => {
                     select: 'firstName lastName role',
                     model: 'User'
                 })
+                .populate({
+                    path: 'residence',
+                    select: 'name _id',
+                    model: 'Residence'
+                })
                 .lean()
                 .exec();
 
@@ -108,6 +113,10 @@ exports.getMessages = async (req, res) => {
                         content: message.content,
                         timestamp: message.createdAt,
                         pinned: message.pinned,
+                        residence: message.residence ? {
+                            id: message.residence._id,
+                            name: message.residence.name
+                        } : null,
                         recipients: (message.recipients || []).map(r => ({
                             id: r._id,
                             name: `${r.firstName} ${r.lastName}`,

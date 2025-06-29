@@ -55,6 +55,7 @@ exports.getMessages = async (req, res) => {
             .populate('author', 'firstName lastName role')
             .populate('recipients', 'firstName lastName role')
             .populate('replies.author', 'firstName lastName role')
+            .populate('residence', 'name _id')
             .lean();
 
         console.log('Messages retrieved:', messages.length);
@@ -82,6 +83,10 @@ exports.getMessages = async (req, res) => {
                 time: message.createdAt ? new Date(message.createdAt).toLocaleString() : 'Date not available',
                 pinned: message.pinned,
                 avatar: message.author?.role === 'admin' ? '🏛️' : '👨‍🎓',
+                residence: message.residence ? {
+                    id: message.residence._id,
+                    name: message.residence.name
+                } : null,
                 recipients: recipientNames,
                 recipientName: firstRecipient,
                 preview: message.content.substring(0, 100) + (message.content.length > 100 ? '...' : ''),
