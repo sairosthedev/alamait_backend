@@ -7,7 +7,7 @@ const multer = require('multer');
 const multerS3 = require('multer-s3');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 
-// Configure multer for S3 file uploads
+// Configure multer for S3 file uploads with optimized settings
 const upload = multer({
     storage: multerS3({
         s3: s3,
@@ -16,11 +16,17 @@ const upload = multer({
         key: s3Configs.proofOfPayment.key,
         metadata: function (req, file, cb) {
             cb(null, { fieldName: file.fieldname });
-        }
+        },
+        // Add S3 upload timeout and retry settings
+        s3UploadTimeout: 25000, // 25 seconds timeout
+        s3RetryCount: 3,
+        s3RetryDelay: 1000
     }),
     fileFilter: fileFilter([...fileTypes.images, 'application/pdf']),
     limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit
+        fileSize: 3 * 1024 * 1024, // Reduced to 3MB limit for faster uploads
+        files: 1,
+        fieldSize: 1024 * 1024 // 1MB for other fields
     }
 }).single('proofOfPayment');
 

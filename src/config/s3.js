@@ -5,6 +5,14 @@ const s3 = new AWS.S3({
   accessKeyId: process.env.AWS_ACCESS_KEY,
   secretAccessKey: process.env.AWS_SECRET_KEY,
   region: process.env.AWS_REGION,
+  httpOptions: {
+    timeout: 30000, // 30 seconds timeout
+    connectTimeout: 10000 // 10 seconds connection timeout
+  },
+  maxRetries: 3,
+  retryDelayOptions: {
+    base: 1000 // 1 second base delay
+  }
 });
 
 const bucketName = process.env.AWS_BUCKET_NAME;

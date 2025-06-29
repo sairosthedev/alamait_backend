@@ -1,12 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
+const timeoutMiddleware = require('../../middleware/timeout');
 const { getPaymentHistory, uploadProofOfPayment, uploadNewProofOfPayment } = require('../../controllers/student/paymentHistoryController');
 const { s3, bucketName } = require('../../config/s3');
 
 // Apply authentication and role middleware
 router.use(auth);
 router.use(checkRole('student'));
+
+// Apply timeout middleware for file uploads
+router.use(timeoutMiddleware(60000)); // 60 seconds timeout for uploads
 
 // Test S3 configuration endpoint
 router.get('/test-s3', async (req, res) => {

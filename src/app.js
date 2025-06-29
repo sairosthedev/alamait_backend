@@ -116,6 +116,25 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Add timeout middleware for file upload routes
+app.use('/api/student/payments', (req, res, next) => {
+  // Set longer timeout for file upload routes
+  if (req.method === 'POST' && (req.path.includes('upload-pop') || req.path.includes('upload'))) {
+    req.setTimeout(60000); // 60 seconds for file uploads
+    res.setTimeout(60000);
+  }
+  next();
+});
+
+app.use('/api/student/lease', (req, res, next) => {
+  // Set longer timeout for lease upload routes
+  if (req.method === 'POST' && req.path.includes('upload')) {
+    req.setTimeout(60000); // 60 seconds for file uploads
+    res.setTimeout(60000);
+  }
+  next();
+});
+
 // Basic route for root path
 app.get('/', (req, res) => {
     res.json({ 
