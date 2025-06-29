@@ -85,11 +85,11 @@ router.all('/:studentId/download-lease', async (req, res) => {
 });
 
 router.post('/', studentValidation, createStudent);
+router.get('/expired', getExpiredStudents);
 router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);
 router.delete('/:studentId', deleteStudent);
 router.get('/:studentId/payments', getStudentPayments);
 router.get('/lease-agreement/:studentId', downloadSignedLease);
-router.get('/expired', getExpiredStudents);
 
 module.exports = router; 
