@@ -4,27 +4,14 @@ const Booking = require('../../models/Booking');
 const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const multer = require('multer');
-const multerS3 = require('multer-s3');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 
-// Configure multer for S3 file uploads with optimized settings
+// Configure multer for temporary file storage (we'll upload to S3 manually)
 const upload = multer({
-    storage: multerS3({
-        s3: s3,
-        bucket: s3Configs.proofOfPayment.bucket,
-        acl: s3Configs.proofOfPayment.acl,
-        key: s3Configs.proofOfPayment.key,
-        metadata: function (req, file, cb) {
-            cb(null, { fieldName: file.fieldname });
-        },
-        // Add S3 upload timeout and retry settings
-        s3UploadTimeout: 25000, // 25 seconds timeout
-        s3RetryCount: 3,
-        s3RetryDelay: 1000
-    }),
+    storage: multer.memoryStorage(), // Store in memory temporarily
     fileFilter: fileFilter([...fileTypes.images, 'application/pdf']),
     limits: {
-        fileSize: 3 * 1024 * 1024, // Reduced to 3MB limit for faster uploads
+        fileSize: 5 * 1024 * 1024, // 5MB limit
         files: 1,
         fieldSize: 1024 * 1024 // 1MB for other fields
     }
@@ -437,12 +424,6 @@ exports.uploadProofOfPayment = (req, res) => {
 exports.uploadNewProofOfPayment = (req, res) => {
     console.log('=== Starting uploadNewProofOfPayment ===');
     console.log('Request body:', req.body);
-    console.log('Request file:', req.file ? {
-        originalname: req.file.originalname,
-        size: req.file.size,
-        mimetype: req.file.mimetype,
-        location: req.file.location
-    } : 'No file');
     
     // Add timeout to prevent hanging
     const timeout = setTimeout(() => {
@@ -450,7 +431,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
         if (!res.headersSent) {
             res.status(408).json({ error: 'Upload timeout - request took too long' });
         }
-    }, 30000); // 30 second timeout
+    }, 45000); // 45 second timeout
     
     upload(req, res, async function(err) {
         console.log('=== Inside upload callback ===');
@@ -467,7 +448,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
         }
 
         try {
-            console.log('Uploading new proof of payment without specific payment ID');
+            console.log('Processing file upload...');
             
             if (!req.file) {
                 console.log('No file uploaded');
@@ -477,7 +458,31 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 return;
             }
 
-            console.log('File uploaded successfully to S3:', req.file.location);
+            console.log('File received:', {
+                originalname: req.file.originalname,
+                size: req.file.size,
+                mimetype: req.file.mimetype
+            });
+
+            // Manually upload to S3
+            console.log('Uploading file to S3...');
+            const s3Key = `pop/${req.user._id}_${Date.now()}_${req.file.originalname}`;
+            
+            const s3UploadParams = {
+                Bucket: s3Configs.proofOfPayment.bucket,
+                Key: s3Key,
+                Body: req.file.buffer,
+                ContentType: req.file.mimetype,
+                ACL: s3Configs.proofOfPayment.acl,
+                Metadata: {
+                    fieldName: req.file.fieldname,
+                    uploadedBy: req.user._id,
+                    uploadDate: new Date().toISOString()
+                }
+            };
+
+            const s3Result = await s3.upload(s3UploadParams).promise();
+            console.log('File uploaded successfully to S3:', s3Result.Location);
 
             // Get student info including room
             const student = await User.findById(req.user._id)
@@ -637,57 +642,36 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 status: 'Pending',
                 method: 'Bank Transfer',
                 proofOfPayment: {
-                    fileUrl: req.file.location, // S3 URL
+                    fileUrl: s3Result.Location, // Use the S3 URL from manual upload
                     fileName: req.file.originalname,
                     uploadDate: new Date(),
-                    verificationStatus: 'Pending'
-                },
-                createdBy: req.user._id
+                    fileSize: req.file.size,
+                    fileType: req.file.mimetype
+                }
             });
 
-            console.log('Saving payment to database...');
             await payment.save();
-            console.log('Payment saved successfully');
+            console.log('Payment record created successfully:', payment._id);
 
-            // Populate the payment with residence info for response
-            await payment.populate([
-                { path: 'residence', select: 'name' },
-                { path: 'student', select: 'firstName lastName email' }
-            ]);
-
-            console.log('New payment record created:', {
-                id: payment.paymentId,
-                student: `${payment.student.firstName} ${payment.student.lastName}`,
-                residence: payment.residence?.name || 'Not Assigned',
-                room: payment.room,
-                totalAmount: payment.totalAmount
-            });
-
-            console.log('Sending success response...');
             res.status(200).json({
                 message: 'Proof of payment uploaded successfully',
                 payment: {
-                    id: payment.paymentId,
-                    student: `${payment.student.firstName} ${payment.student.lastName}`,
-                    residence: payment.residence?.name === 'St Kilda Student House' ? 'St. Kilda' :
-                             payment.residence?.name === 'Belvedere Student House' ? 'Belvedere' :
-                             payment.residence?.name || 'Not Assigned',
-                    room: payment.room,
-                    roomType: payment.roomType,
-                    rentAmount: payment.rentAmount,
-                    adminFee: payment.adminFee,
-                    deposit: payment.deposit,
+                    id: payment._id,
+                    paymentId: payment.paymentId,
                     totalAmount: payment.totalAmount,
-                    date: payment.date,
-                    paymentMonth: payment.paymentMonth,
                     status: payment.status,
                     proofOfPayment: payment.proofOfPayment
                 }
             });
-            console.log('=== uploadNewProofOfPayment completed successfully ===');
+
         } catch (error) {
-            console.error('Error uploading proof of payment:', error);
-            res.status(500).json({ error: 'Error uploading proof of payment' });
+            console.error('Error in uploadNewProofOfPayment:', error);
+            if (!res.headersSent) {
+                res.status(500).json({ 
+                    error: 'Failed to upload proof of payment',
+                    message: error.message 
+                });
+            }
         }
     });
 }; 

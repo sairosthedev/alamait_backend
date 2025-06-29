@@ -3,19 +3,47 @@ const User = require('../../models/User');
 const Application = require('../../models/Application');
 const Residence = require('../../models/Residence');
 const Lease = require('../../models/Lease');
-const { generateSignedUrl, getKeyFromUrl } = require('../../config/s3');
+const { s3, s3Configs, generateSignedUrl, getKeyFromUrl } = require('../../config/s3');
 
-// Handles file upload (multer middleware will save the file to S3)
+// Handles file upload with manual S3 upload
 exports.uploadLease = async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ message: 'No file uploaded' });
   }
+  
   try {
+    console.log('=== Starting lease upload ===');
+    console.log('File received:', {
+      originalname: req.file.originalname,
+      size: req.file.size,
+      mimetype: req.file.mimetype
+    });
+
     // Find the current user (assumes req.user is set by auth middleware)
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    // Manually upload to S3
+    console.log('Uploading file to S3...');
+    const s3Key = `leases/${req.user.id}_${Date.now()}_${req.file.originalname}`;
+    
+    const s3UploadParams = {
+      Bucket: s3Configs.leases.bucket,
+      Key: s3Key,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype,
+      ACL: s3Configs.leases.acl,
+      Metadata: {
+        fieldName: req.file.fieldname,
+        uploadedBy: req.user.id,
+        uploadDate: new Date().toISOString()
+      }
+    };
+
+    const s3Result = await s3.upload(s3UploadParams).promise();
+    console.log('File uploaded successfully to S3:', s3Result.Location);
 
     // Find the latest approved or waitlisted application for this user
     const application = await Application.findOne({
@@ -70,11 +98,13 @@ exports.uploadLease = async (req, res) => {
       endDate: endDate,
       filename: req.file.originalname,
       originalname: req.file.originalname,
-      path: req.file.location, // S3 URL
+      path: s3Result.Location, // Use the S3 URL from manual upload
       mimetype: req.file.mimetype,
       size: req.file.size,
       uploadedAt: new Date()
     });
+
+    console.log('Lease document created successfully:', leaseDoc._id);
 
     res.status(200).json({
       message: 'Lease uploaded successfully',
@@ -82,7 +112,7 @@ exports.uploadLease = async (req, res) => {
     });
   } catch (error) {
     console.error('Error uploading lease:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
