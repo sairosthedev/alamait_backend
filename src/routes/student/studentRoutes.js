@@ -3,6 +3,7 @@ const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const { check } = require('express-validator');
 const leaseRoutes = require('./leaseRoutes');
+const Lease = require('../../models/Lease');
 
 // Import controllers (you'll need to create these)
 const {
@@ -61,6 +62,18 @@ router.get('/signed-leases', getSignedLeases);
 
 // Add payment history route
 router.get('/paymenthistory', getPaymentHistory);
+
+// Get all leases for the current student
+router.get('/leases', async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const leases = await Lease.find({ studentId: userId }).sort({ uploadedAt: -1 });
+    res.json({ success: true, leases });
+  } catch (error) {
+    console.error('Error fetching student leases:', error);
+    res.status(500).json({ error: 'Failed to fetch student leases' });
+  }
+});
 
 router.use('/lease', leaseRoutes);
 
