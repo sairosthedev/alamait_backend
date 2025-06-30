@@ -623,7 +623,7 @@ const uploadSignedLeaseHandler = async (req, res) => {
         // Create a Lease document for admin visibility
         const Lease = require('../../models/Lease');
         await Lease.create({
-          studentId: application.student, // User ID
+          studentId: req.user._id, // Use the authenticated user's ID
           studentName: `${application.firstName} ${application.lastName}`,
           email: application.email,
           filename: req.file.filename || req.file.originalname,
