@@ -12,14 +12,15 @@ const User = require('../../models/User');
 const Booking = require('../../models/Booking');
 
 const {
-    getStudents,
+    getAllStudents,
     getStudentById,
     createStudent,
     updateStudent,
     deleteStudent,
     getStudentPayments,
     downloadSignedLease,
-    getExpiredStudents
+    getExpiredStudents,
+    getAllSignedLeases
 } = require('../../controllers/admin/studentController');
 
 // Validation middleware
@@ -51,7 +52,7 @@ router.get('/', async (req, res) => {
             return res.json(students);
         }
         // Otherwise, use the original getStudents controller
-        return getStudents(req, res);
+        return getAllStudents(req, res);
     } catch (error) {
         console.error('Error fetching students:', error);
         res.status(500).json({ error: 'Error fetching students' });
@@ -170,5 +171,6 @@ router.delete('/:studentId', async (req, res) => {
 });
 router.get('/:studentId/payments', getStudentPayments);
 router.get('/lease-agreement/:studentId', downloadSignedLease);
+router.get('/all-signed-leases', getAllSignedLeases);
 
 module.exports = router; 

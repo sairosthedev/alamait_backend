@@ -368,6 +368,49 @@ const getAllUsersForMessaging = async (req, res) => {
   }
 };
 
+// Get signed leases for the current student
+const getSignedLeases = async (req, res) => {
+  try {
+    console.log('=== Getting signed leases for student:', req.user._id);
+    
+    // Find the current user
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if user has a signed lease
+    if (!user.signedLeasePath) {
+      return res.json({
+        message: 'No signed lease found',
+        signedLeases: []
+      });
+    }
+
+    // Return the signed lease information
+    const signedLease = {
+      id: user._id,
+      studentName: `${user.firstName} ${user.lastName}`,
+      email: user.email,
+      fileUrl: user.signedLeasePath,
+      uploadDate: user.signedLeaseUploadDate,
+      fileName: user.signedLeasePath ? user.signedLeasePath.split('/').pop() : null
+    };
+
+    res.json({
+      message: 'Signed lease found',
+      signedLeases: [signedLease]
+    });
+
+  } catch (error) {
+    console.error('Error getting signed leases:', error);
+    res.status(500).json({ 
+      error: 'Failed to get signed leases',
+      message: error.message 
+    });
+  }
+};
+
 // Download lease agreement as PDF
 const downloadLeaseAgreement = async (req, res) => {
     try {
@@ -585,5 +628,6 @@ module.exports = {
     getCurrentResidence,
     getAllUsersForMessaging,
     downloadLeaseAgreement,
-    uploadSignedLeaseHandler
+    uploadSignedLeaseHandler,
+    getSignedLeases
 }; 

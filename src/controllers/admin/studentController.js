@@ -338,4 +338,48 @@ exports.getExpiredStudents = async (req, res) => {
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
-}; 
+};
+
+// Get all signed leases from all students (admin only)
+const getAllSignedLeases = async (req, res) => {
+  try {
+    console.log('=== Getting all signed leases for admin ===');
+    
+    // Find all users who have signed leases
+    const usersWithSignedLeases = await User.find({
+      signedLeasePath: { $exists: true, $ne: null }
+    })
+    .select('_id firstName lastName email signedLeasePath signedLeaseUploadDate currentRoom')
+    .populate('residence', 'name')
+    .lean();
+
+    console.log(`Found ${usersWithSignedLeases.length} users with signed leases`);
+
+    // Format the response
+    const signedLeases = usersWithSignedLeases.map(user => ({
+      id: user._id,
+      studentName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+      email: user.email,
+      currentRoom: user.currentRoom,
+      residence: user.residence?.name || 'Not Assigned',
+      fileUrl: user.signedLeasePath,
+      uploadDate: user.signedLeaseUploadDate,
+      fileName: user.signedLeasePath ? user.signedLeasePath.split('/').pop() : null
+    }));
+
+    res.json({
+      message: `Found ${signedLeases.length} signed leases`,
+      signedLeases: signedLeases
+    });
+
+  } catch (error) {
+    console.error('Error getting all signed leases:', error);
+    res.status(500).json({ 
+      error: 'Failed to get signed leases',
+      message: error.message 
+    });
+  }
+};
+
+// Export the new function
+exports.getAllSignedLeases = getAllSignedLeases; 
