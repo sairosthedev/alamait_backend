@@ -372,46 +372,106 @@ const getAllUsersForMessaging = async (req, res) => {
 // Download lease agreement as PDF
 const downloadLeaseAgreement = async (req, res) => {
     try {
+        console.log('=== Starting downloadLeaseAgreement ===');
+        
         // 1. Find the student's residenceId
         let residenceId = req.user.residence;
         let firstName = req.user.firstName || 'Student';
         let lastName = req.user.lastName || '';
+        
+        console.log('User residence:', residenceId);
+        console.log('User name:', firstName, lastName);
+        
         // If not in user, try latest approved application
         if (!residenceId) {
             const application = await Application.findOne({
                 email: req.user.email,
                 status: 'approved'
             }).sort({ updatedAt: -1 });
+            
             if (application && application.residence) {
                 residenceId = application.residence;
                 firstName = application.firstName || firstName;
                 lastName = application.lastName || lastName;
+                console.log('Found residence from application:', residenceId);
             }
         }
+        
         if (!residenceId) {
+            console.log('No residence found for student');
             return res.status(404).json({ error: 'Residence not found for student.' });
         }
-        // 2. Locate the correct lease agreement DOCX
-        const templateName = `lease_agreement_${residenceId}.docx`;
-        const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', templateName));
-        if (!fs.existsSync(templatePath)) {
-            return res.status(404).json({ error: 'Lease agreement template not found for your property.' });
+
+        // 2. Try to find lease template in S3 first
+        const templateKey = `lease_templates/${residenceId}_lease_template.docx`;
+        console.log('Looking for S3 template:', templateKey);
+        
+        try {
+            // Check if template exists in S3
+            await s3.headObject({
+                Bucket: s3Configs.leaseTemplates.bucket,
+                Key: templateKey
+            }).promise();
+            
+            console.log('Found template in S3');
+            
+            // Get the template from S3
+            const s3Object = await s3.getObject({
+                Bucket: s3Configs.leaseTemplates.bucket,
+                Key: templateKey
+            }).promise();
+            
+            // 3. Convert DOCX to HTML using mammoth
+            const { value: html } = await mammoth.convertToHtml({ buffer: s3Object.Body });
+            
+            // 4. Convert HTML to PDF using pdfkit
+            const doc = new PDFDocument();
+            let filename = `Lease_Agreement_${firstName}_${lastName}.pdf`;
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            doc.pipe(res);
+            
+            // Simple HTML to PDF rendering
+            doc.fontSize(12).text(html.replace(/<[^>]+>/g, ''), { align: 'left' });
+            doc.end();
+            
+        } catch (s3Error) {
+            console.log('S3 template not found, checking local uploads');
+            
+            // Fallback to local uploads directory
+            const templateName = `lease_agreement_${residenceId}.docx`;
+            const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', templateName));
+            
+            if (!fs.existsSync(templatePath)) {
+                console.log('Local template not found either');
+                return res.status(404).json({ 
+                    error: 'Lease agreement template not found for your property.',
+                    message: 'Please contact the administrator to upload a lease template for your residence.'
+                });
+            }
+            
+            // 3. Convert DOCX to HTML using mammoth
+            const docxBuffer = fs.readFileSync(templatePath);
+            const { value: html } = await mammoth.convertToHtml({ buffer: docxBuffer });
+            
+            // 4. Convert HTML to PDF using pdfkit
+            const doc = new PDFDocument();
+            let filename = `Lease_Agreement_${firstName}_${lastName}.pdf`;
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            doc.pipe(res);
+            
+            // Simple HTML to PDF rendering
+            doc.fontSize(12).text(html.replace(/<[^>]+>/g, ''), { align: 'left' });
+            doc.end();
         }
-        // 3. Convert DOCX to HTML using mammoth
-        const docxBuffer = fs.readFileSync(templatePath);
-        const { value: html } = await mammoth.convertToHtml({ buffer: docxBuffer });
-        // 4. Convert HTML to PDF using pdfkit
-        const doc = new PDFDocument();
-        let filename = `Lease_Agreement_${firstName}_${lastName}.pdf`;
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        doc.pipe(res);
-        // Simple HTML to PDF rendering (for more complex, use pdfmake or puppeteer)
-        doc.fontSize(12).text(html.replace(/<[^>]+>/g, ''), { align: 'left' });
-        doc.end();
+        
     } catch (error) {
         console.error('Error downloading lease agreement:', error);
-        res.status(500).json({ error: 'Failed to generate lease agreement PDF.' });
+        res.status(500).json({ 
+            error: 'Failed to generate lease agreement PDF.',
+            message: error.message 
+        });
     }
 };
 
