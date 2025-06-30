@@ -585,7 +585,7 @@ const uploadSignedLeaseHandler = async (req, res) => {
 
       // Manually upload to S3
       console.log('Uploading signed lease to S3...');
-      const s3Key = `signed_leases/${req.user._id}_${Date.now()}_${req.file.originalname}`;
+      const s3Key = `leases/${req.user._id}_${Date.now()}_${req.file.originalname}`;
       
       const s3UploadParams = {
         Bucket: s3Configs.signedLeases.bucket,
