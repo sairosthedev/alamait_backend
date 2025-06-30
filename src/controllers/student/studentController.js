@@ -622,22 +622,27 @@ const uploadSignedLeaseHandler = async (req, res) => {
 
         // Create a Lease document for admin visibility
         const Lease = require('../../models/Lease');
+        const fileName = req.file.filename || req.file.originalname;
+        const s3Url = s3Result.Location;
+        // Compose backend download/view URLs
+        const downloadUrl = `/api/leases/download/${fileName}`;
+        const viewUrl = `/api/leases/view/${fileName}`;
         await Lease.create({
-          studentId: req.user._id, // Use the authenticated user's ID
+          studentId: req.user._id,
           studentName: `${application.firstName} ${application.lastName}`,
           email: application.email,
-          filename: req.file.filename || req.file.originalname,
+          residence: application.residence,
+          residenceName: application.allocatedRoomDetails?.residenceName || application.residenceName || '',
+          startDate: application.allocatedRoomDetails?.startDate || application.startDate || null,
+          endDate: application.allocatedRoomDetails?.endDate || application.endDate || null,
+          filename: fileName,
           originalname: req.file.originalname,
-          path: s3Result.Location,
+          path: s3Url,
           mimetype: req.file.mimetype,
           size: req.file.size,
           uploadedAt: new Date(),
-          residence: application.residence,
-          residenceName: application.allocatedRoomDetails?.residenceName || application.residence,
-          startDate: application.allocatedRoomDetails?.startDate || application.startDate,
-          endDate: application.allocatedRoomDetails?.endDate || application.endDate,
-          downloadUrl: s3Result.Location,
-          viewUrl: s3Result.Location
+          downloadUrl,
+          viewUrl
         });
         console.log('Lease document created for admin visibility');
       } else {
