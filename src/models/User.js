@@ -119,6 +119,15 @@ const userSchema = new mongoose.Schema({
     enum: ['active', 'inactive', 'suspended'],
     default: 'active'
   },
+  // Signed lease fields
+  signedLeasePath: {
+    type: String,
+    default: null
+  },
+  signedLeaseUploadDate: {
+    type: Date,
+    default: null
+  },
   leases: [{
     filename: String,
     originalname: String,

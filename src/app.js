@@ -70,6 +70,8 @@ const financeLeaseRoutes = require('./routes/finance/leaseRoutes');
 const financeApplicationRoutes = require('./routes/finance/applicationRoutes');
 const financeRoomPriceRoutes = require('./routes/finance/roomPriceRoutes');
 
+const monitoringRoutes = require('./routes/monitoring');
+
 const app = express();
 
 // Initialize cron jobs
@@ -253,6 +255,9 @@ app.use('/api/finance/residences', financeResidenceRoutes);
 app.use('/api/finance/leases', financeLeaseRoutes);
 app.use('/api/finance/applications', financeApplicationRoutes);
 app.use('/api/finance/room-prices', financeRoomPriceRoutes);
+
+// Monitoring routes
+app.use('/api/monitoring', monitoringRoutes);
 
 // 404 handler
 app.use((req, res) => {
