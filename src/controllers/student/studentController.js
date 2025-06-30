@@ -379,22 +379,34 @@ const getSignedLeases = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Check if user has a signed lease
-    if (!user.signedLeasePath) {
+    // Find the latest application for this student
+    const application = await Application.findOne({ 
+      student: req.user._id 
+    }).sort({ createdAt: -1 });
+
+    console.log('User signedLeasePath:', user.signedLeasePath);
+    console.log('Application signedLeasePath:', application?.signedLeasePath);
+
+    // Check if user has a signed lease (either in User or Application)
+    const userHasLease = user.signedLeasePath;
+    const applicationHasLease = application?.signedLeasePath;
+    
+    if (!userHasLease && !applicationHasLease) {
       return res.json({
         message: 'No signed lease found',
         signedLeases: []
       });
     }
 
-    // Return the signed lease information
+    // Return the signed lease information (prioritize Application over User)
     const signedLease = {
       id: user._id,
       studentName: `${user.firstName} ${user.lastName}`,
       email: user.email,
-      fileUrl: user.signedLeasePath,
-      uploadDate: user.signedLeaseUploadDate,
-      fileName: user.signedLeasePath ? user.signedLeasePath.split('/').pop() : null
+      fileUrl: applicationHasLease || userHasLease,
+      uploadDate: application?.signedLeaseUploadDate || user.signedLeaseUploadDate,
+      fileName: application?.signedLeaseFileName || (user.signedLeasePath ? user.signedLeasePath.split('/').pop() : null),
+      source: applicationHasLease ? 'application' : 'user'
     };
 
     res.json({
@@ -481,10 +493,10 @@ const downloadLeaseAgreement = async (req, res) => {
             console.log('S3 template not found, checking local uploads');
             
             // Fallback to local uploads directory
-            const templateName = `lease_agreement_${residenceId}.docx`;
-            const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', templateName));
+        const templateName = `lease_agreement_${residenceId}.docx`;
+        const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', templateName));
             
-            if (!fs.existsSync(templatePath)) {
+        if (!fs.existsSync(templatePath)) {
                 console.log('Local template not found either');
                 return res.status(404).json({ 
                     error: 'Lease agreement template not found for your property.',
@@ -492,20 +504,20 @@ const downloadLeaseAgreement = async (req, res) => {
                 });
             }
             
-            // 3. Convert DOCX to HTML using mammoth
-            const docxBuffer = fs.readFileSync(templatePath);
-            const { value: html } = await mammoth.convertToHtml({ buffer: docxBuffer });
+        // 3. Convert DOCX to HTML using mammoth
+        const docxBuffer = fs.readFileSync(templatePath);
+        const { value: html } = await mammoth.convertToHtml({ buffer: docxBuffer });
             
-            // 4. Convert HTML to PDF using pdfkit
-            const doc = new PDFDocument();
-            let filename = `Lease_Agreement_${firstName}_${lastName}.pdf`;
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-            doc.pipe(res);
+        // 4. Convert HTML to PDF using pdfkit
+        const doc = new PDFDocument();
+        let filename = `Lease_Agreement_${firstName}_${lastName}.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        doc.pipe(res);
             
             // Simple HTML to PDF rendering
-            doc.fontSize(12).text(html.replace(/<[^>]+>/g, ''), { align: 'left' });
-            doc.end();
+        doc.fontSize(12).text(html.replace(/<[^>]+>/g, ''), { align: 'left' });
+        doc.end();
         }
         
     } catch (error) {
@@ -549,7 +561,7 @@ const uploadSignedLeaseHandler = async (req, res) => {
     if (err) {
       console.error('Upload error:', err);
       if (!res.headersSent) {
-        return res.status(400).json({ error: err.message });
+      return res.status(400).json({ error: err.message });
       }
       return;
     }
@@ -591,7 +603,7 @@ const uploadSignedLeaseHandler = async (req, res) => {
       const s3Result = await s3.upload(s3UploadParams).promise();
       console.log('Signed lease uploaded successfully to S3:', s3Result.Location);
 
-      // Save S3 file URL in user model
+    // Save S3 file URL in user model
       await User.findByIdAndUpdate(req.user._id, { 
         signedLeasePath: s3Result.Location,
         signedLeaseUploadDate: new Date()
