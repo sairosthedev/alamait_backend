@@ -608,8 +608,41 @@ const uploadSignedLeaseHandler = async (req, res) => {
         signedLeasePath: s3Result.Location,
         signedLeaseUploadDate: new Date()
       });
-      
       console.log('User record updated with signed lease path');
+
+      // Update the latest Application document for this student
+      const application = await Application.findOne({ student: req.user._id }).sort({ createdAt: -1 });
+      if (application) {
+        application.signedLeasePath = s3Result.Location;
+        application.signedLeaseUploadDate = new Date();
+        application.signedLeaseFileName = req.file.originalname;
+        application.signedLeaseSize = req.file.size;
+        await application.save();
+        console.log('Application updated with signed lease:', application._id);
+
+        // Create a Lease document for admin visibility
+        const Lease = require('../../models/Lease');
+        await Lease.create({
+          studentId: application.student, // User ID
+          studentName: `${application.firstName} ${application.lastName}`,
+          email: application.email,
+          filename: req.file.filename || req.file.originalname,
+          originalname: req.file.originalname,
+          path: s3Result.Location,
+          mimetype: req.file.mimetype,
+          size: req.file.size,
+          uploadedAt: new Date(),
+          residence: application.residence,
+          residenceName: application.allocatedRoomDetails?.residenceName || application.residence,
+          startDate: application.allocatedRoomDetails?.startDate || application.startDate,
+          endDate: application.allocatedRoomDetails?.endDate || application.endDate,
+          downloadUrl: s3Result.Location,
+          viewUrl: s3Result.Location
+        });
+        console.log('Lease document created for admin visibility');
+      } else {
+        console.log('No application found for student, only updated user record');
+      }
 
       res.json({ 
         message: 'Signed lease uploaded successfully', 
