@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const monitoringService = require('../services/monitoringService');
 const auth = require('../middleware/auth');
-const admin = require('../middleware/admin');
 const s3 = require('../config/s3');
 
 // S3 connectivity test endpoint
@@ -78,7 +77,7 @@ router.get('/test-s3-connection', async (req, res) => {
 });
 
 // Prometheus metrics endpoint
-router.get('/metrics', [auth, admin], async (req, res) => {
+router.get('/metrics', async (req, res) => {
     try {
         res.set('Content-Type', monitoringService.register.contentType);
         res.end(await monitoringService.getMetrics());
@@ -88,7 +87,7 @@ router.get('/metrics', [auth, admin], async (req, res) => {
 });
 
 // Performance check endpoint
-router.get('/performance', [auth, admin], async (req, res) => {
+router.get('/performance', async (req, res) => {
     try {
         const performance = await monitoringService.checkPerformance();
         res.json(performance);

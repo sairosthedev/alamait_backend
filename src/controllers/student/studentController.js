@@ -502,7 +502,7 @@ const downloadLeaseAgreement = async (req, res) => {
                     error: 'Lease agreement template not found for your property.',
                     message: 'Please contact the administrator to upload a lease template for your residence.'
                 });
-            }
+        }
             
         // 3. Convert DOCX to HTML using mammoth
         const docxBuffer = fs.readFileSync(templatePath);
@@ -562,7 +562,7 @@ const uploadSignedLeaseHandler = async (req, res) => {
       console.error('Upload error:', err);
       if (!res.headersSent) {
       return res.status(400).json({ error: err.message });
-      }
+    }
       return;
     }
 
