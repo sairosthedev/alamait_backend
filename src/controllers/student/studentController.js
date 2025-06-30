@@ -10,7 +10,6 @@ const fs = require('fs');
 const mammoth = require('mammoth');
 const PDFDocument = require('pdfkit');
 const multer = require('multer');
-const multerS3 = require('multer-s3');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 
 // Get all students
@@ -475,28 +474,102 @@ const downloadLeaseAgreement = async (req, res) => {
     }
 };
 
-// Set up multer to use S3 for signed leases
+// Set up multer for temporary file storage (we'll upload to S3 manually)
 const uploadSignedLease = multer({
-  storage: multerS3({
-    s3: s3,
-    bucket: s3Configs.signedLeases.bucket,
-    acl: s3Configs.signedLeases.acl,
-    key: s3Configs.signedLeases.key
-  }),
+  storage: multer.memoryStorage(), // Store in memory temporarily
   fileFilter: fileFilter([...fileTypes.documents, ...fileTypes.images]),
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { 
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 1,
+    fieldSize: 1024 * 1024 // 1MB for other fields
+  }
 }).single('signedLease');
 
 // Student uploads signed lease (to S3)
 const uploadSignedLeaseHandler = async (req, res) => {
-  uploadSignedLease(req, res, async function (err) {
-    if (err) {
-      return res.status(400).json({ error: err.message });
+  console.log('=== Starting uploadSignedLeaseHandler ===');
+  
+  // Add timeout to prevent hanging
+  const timeout = setTimeout(() => {
+    console.error('Upload timeout - request took too long');
+    if (!res.headersSent) {
+      res.status(408).json({ error: 'Upload timeout - request took too long' });
     }
-    // Save S3 file URL in user model
-    const fileUrl = req.file.location;
-    await User.findByIdAndUpdate(req.user._id, { signedLeasePath: fileUrl });
-    res.json({ message: 'Signed lease uploaded successfully', fileUrl });
+  }, 45000); // 45 second timeout
+  
+  uploadSignedLease(req, res, async function (err) {
+    console.log('=== Inside uploadSignedLease callback ===');
+    
+    // Clear timeout since we got a response
+    clearTimeout(timeout);
+    
+    if (err) {
+      console.error('Upload error:', err);
+      if (!res.headersSent) {
+        return res.status(400).json({ error: err.message });
+      }
+      return;
+    }
+
+    try {
+      console.log('Processing signed lease upload...');
+      
+      if (!req.file) {
+        console.log('No file uploaded');
+        if (!res.headersSent) {
+          return res.status(400).json({ error: 'No file uploaded' });
+        }
+        return;
+      }
+
+      console.log('File received:', {
+        originalname: req.file.originalname,
+        size: req.file.size,
+        mimetype: req.file.mimetype
+      });
+
+      // Manually upload to S3
+      console.log('Uploading signed lease to S3...');
+      const s3Key = `signed_leases/${req.user._id}_${Date.now()}_${req.file.originalname}`;
+      
+      const s3UploadParams = {
+        Bucket: s3Configs.signedLeases.bucket,
+        Key: s3Key,
+        Body: req.file.buffer,
+        ContentType: req.file.mimetype,
+        ACL: s3Configs.signedLeases.acl,
+        Metadata: {
+          fieldName: req.file.fieldname,
+          uploadedBy: req.user._id.toString(),
+          uploadDate: new Date().toISOString()
+        }
+      };
+
+      const s3Result = await s3.upload(s3UploadParams).promise();
+      console.log('Signed lease uploaded successfully to S3:', s3Result.Location);
+
+      // Save S3 file URL in user model
+      await User.findByIdAndUpdate(req.user._id, { 
+        signedLeasePath: s3Result.Location,
+        signedLeaseUploadDate: new Date()
+      });
+      
+      console.log('User record updated with signed lease path');
+
+      res.json({ 
+        message: 'Signed lease uploaded successfully', 
+        fileUrl: s3Result.Location 
+      });
+
+    } catch (error) {
+      console.error('Error in uploadSignedLeaseHandler:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ 
+          error: 'Failed to upload signed lease',
+          message: error.message 
+        });
+      }
+    }
   });
 };
 
