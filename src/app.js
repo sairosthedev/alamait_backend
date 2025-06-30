@@ -135,6 +135,16 @@ app.use('/api/student/lease', (req, res, next) => {
   next();
 });
 
+// Add timeout middleware for lease-agreement endpoint
+app.use('/api/student/lease-agreement', (req, res, next) => {
+  // Set longer timeout for lease agreement routes
+  if (req.method === 'POST' && req.path.includes('upload')) {
+    req.setTimeout(60000); // 60 seconds for file uploads
+    res.setTimeout(60000);
+  }
+  next();
+});
+
 // Basic route for root path
 app.get('/', (req, res) => {
     res.json({ 
@@ -216,8 +226,7 @@ app.use('/api/admin', adminRoutes);
 const leaseRoutes = require('./routes/leaseRoutes');
 app.use('/api/leases', leaseRoutes);
 
-// Student routes
-app.use('/api/student', studentRoutes);
+// Student routes - specific routes first
 app.use('/api/student/dashboard', studentDashboardRoutes);
 app.use('/api/student/residences', studentResidenceRoutes);
 app.use('/api/student/messages', studentMessageRoutes);
@@ -226,6 +235,8 @@ app.use('/api/student/events', studentEventRoutes);
 app.use('/api/student/payments', paymentHistoryRoutes);
 app.use('/api/student/bookings', studentBookingRoutes);
 app.use('/api/student/bookingdetails', bookingDetailsRoutes);
+// General student routes last
+app.use('/api/student', studentRoutes);
 
 // Property Manager routes
 app.use('/api/property-manager/residences', propertyManagerResidenceRoutes);
