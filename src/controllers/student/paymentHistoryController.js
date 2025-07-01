@@ -573,38 +573,57 @@ exports.uploadNewProofOfPayment = (req, res) => {
 
             console.log('Residence found:', residenceRef.name);
 
-            // --- Prevent Overpayment Logic ---
-            // Find all payments for this student
-            const allPayments = await Payment.find({ student: req.user._id });
-            // Find all months with confirmed rent payments
-            const paidMonths = allPayments
-                .filter(p => p.status === 'Confirmed' && p.rentAmount > 0)
-                .map(p => new Date(p.date));
-            const currentDate = new Date();
-            const currentMonth = currentDate.getMonth();
-            const currentYear = currentDate.getFullYear();
-            let nextDueMonth;
-            if (paidMonths.length > 0) {
-                const latestPaid = new Date(Math.max(...paidMonths));
-                nextDueMonth = new Date(latestPaid.getFullYear(), latestPaid.getMonth() + 1, 1);
-            } else {
-                nextDueMonth = new Date(currentYear, currentMonth, 1);
+            // --- Prevent Overpayment Logic (Lease Month Enforcement) ---
+            // 1. Fetch the student's latest approved/active application
+            const application = await Application.findOne({
+                $or: [
+                    { student: req.user._id },
+                    { email: req.user.email }
+                ],
+                status: { $in: ['approved', 'active'] }
+            }).sort({ updatedAt: -1 });
+
+            if (!application) {
+                return res.status(400).json({ error: 'No active application found.' });
             }
-            // Check if payment already exists for nextDueMonth
-            const hasPaidNextMonth = allPayments.some(p => {
-                const d = new Date(p.date);
-                return (
-                    p.status === 'Confirmed' &&
-                    d.getMonth() === nextDueMonth.getMonth() &&
-                    d.getFullYear() === nextDueMonth.getFullYear() &&
-                    p.rentAmount > 0
-                );
+
+            // 2. Generate all months in the lease period
+            function getMonthList(startDate, endDate) {
+                const months = [];
+                let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+                const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+                while (current <= end) {
+                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`);
+                    current.setMonth(current.getMonth() + 1);
+                }
+                return months;
+            }
+            const months = getMonthList(new Date(application.startDate), new Date(application.endDate));
+
+            // 3. Find all paid months
+            const payments = await Payment.find({
+                student: req.user._id,
+                status: { $in: ['Confirmed', 'Verified'] }
             });
-            if (hasPaidNextMonth) {
-                console.log('Payment for next month already exists');
-                return res.status(400).json({ error: 'Rent for the next due month has already been paid.' });
+            const paidMonths = payments.map(p => p.paymentMonth);
+
+            // 4. Find unpaid months
+            const unpaidMonths = months.filter(m => !paidMonths.includes(m));
+
+            // 5. Only allow payment for the oldest unpaid month
+            let requestedMonth = req.body.paymentMonth;
+            if (!requestedMonth) {
+                // Auto-generate payment month if not provided
+                const currentDate = new Date();
+                requestedMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
             }
-            // --- End Prevent Overpayment Logic ---
+            if (unpaidMonths.length > 0 && requestedMonth !== unpaidMonths[0]) {
+                return res.status(400).json({
+                    error: `You must pay for the oldest unpaid month first: ${unpaidMonths[0]}`,
+                    unpaidMonths
+                });
+            }
+            // --- End Prevent Overpayment Logic (Lease Month Enforcement) ---
 
             console.log('Creating new payment record...');
 
