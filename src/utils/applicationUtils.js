@@ -5,6 +5,7 @@ const Residence = require('../models/Residence');
 const ExpiredStudent = require('../models/ExpiredStudent');
 const Booking = require('../models/Booking');
 const Lease = require('../models/Lease');
+const PaymentModel = require('../models/Payment');
 
 /**
  * Check and handle expired unpaid applications
@@ -33,6 +34,9 @@ const handleExpiredApplications = async () => {
                     // Fetch payment history
                     const bookings = await Booking.find({ student: application.student._id }).lean();
                     const paymentHistory = bookings.flatMap(booking => booking.payments || []);
+                    // Fetch standalone payments from Payment collection
+                    const standalonePayments = await PaymentModel.find({ student: application.student._id }).lean();
+                    paymentHistory = paymentHistory.concat(standalonePayments);
                     // Fetch leases
                     const leases = await Lease.find({ studentId: application.student._id }).lean();
                     await ExpiredStudent.create({
@@ -76,6 +80,14 @@ const handleExpiredApplications = async () => {
                 application.rejectionReason = 'Payment not received within 7 days';
                 await application.save();
 
+                // Set applicationStatus: 'expired' for all payments of this student
+                if (application.student) {
+                    await PaymentModel.updateMany(
+                        { student: application.student._id },
+                        { $set: { applicationStatus: 'expired' } }
+                    );
+                }
+
                 console.log(`Revoked application ${application.applicationCode} for ${application.email}`);
             } catch (error) {
                 console.error(`Error processing expired application ${application.applicationCode}:`, error);
@@ -99,45 +111,52 @@ const handleExpiredApplications = async () => {
                     console.log(`Application ${application.applicationCode} already archived.`);
                     continue;
                 }
+                let paymentHistory = [];
+                let leases = [];
                 if (application.student) {
-                    // Fetch payment history
+                    // Fetch payment history from bookings
                     const bookings = await Booking.find({ student: application.student._id }).lean();
-                    const paymentHistory = bookings.flatMap(booking => booking.payments || []);
+                    paymentHistory = bookings.flatMap(booking => booking.payments || []);
+                    // Fetch standalone payments from Payment collection
+                    const standalonePayments = await PaymentModel.find({ student: application.student._id }).lean();
+                    paymentHistory = paymentHistory.concat(standalonePayments);
                     // Fetch leases
-                    const leases = await Lease.find({ studentId: application.student._id }).lean();
-                    await ExpiredStudent.create({
-                        student: application.student,
-                        application: application.toObject(),
-                        previousApplicationCode: application.applicationCode,
-                        archivedAt: new Date(),
-                        reason: 'lease_expired',
-                        paymentHistory,
-                        leases
-                    });
-                    // Update room status in residence and decrement occupancy
-                    if (application.residence && application.allocatedRoom) {
-                        const residence = await Residence.findById(application.residence);
-                        if (residence) {
-                            const room = residence.rooms.find(r => r.roomNumber === application.allocatedRoom);
-                            if (room) {
-                                room.currentOccupancy = Math.max(0, (room.currentOccupancy || 1) - 1);
-                                if (room.currentOccupancy === 0) {
-                                    room.status = 'available';
-                                } else if (room.currentOccupancy < room.capacity) {
-                                    room.status = 'reserved';
-                                } else {
-                                    room.status = 'occupied';
-                                }
-                                await residence.save();
+                    leases = await Lease.find({ studentId: application.student._id }).lean();
+                }
+                await ExpiredStudent.create({
+                    student: application.student || null,
+                    application: application.toObject(),
+                    previousApplicationCode: application.applicationCode,
+                    archivedAt: new Date(),
+                    reason: 'lease_expired',
+                    paymentHistory,
+                    leases
+                });
+                // Update room status in residence and decrement occupancy if possible
+                if (application.student && application.residence && application.allocatedRoom) {
+                    const residence = await Residence.findById(application.residence);
+                    if (residence) {
+                        const room = residence.rooms.find(r => r.roomNumber === application.allocatedRoom);
+                        if (room) {
+                            room.currentOccupancy = Math.max(0, (room.currentOccupancy || 1) - 1);
+                            if (room.currentOccupancy === 0) {
+                                room.status = 'available';
+                            } else if (room.currentOccupancy < room.capacity) {
+                                room.status = 'reserved';
+                            } else {
+                                room.status = 'occupied';
                             }
+                            await residence.save();
                         }
                     }
+                }
+                if (application.student) {
                     await User.findByIdAndDelete(application.student._id);
                 }
                 application.status = 'expired';
                 application.rejectionReason = 'Lease end date reached';
                 await application.save();
-                console.log(`Deleted student for expired lease: ${application.email}`);
+                console.log(`Archived application for expired lease: ${application.email}`);
             } catch (error) {
                 console.error(`Error processing ended application ${application.applicationCode}:`, error);
             }

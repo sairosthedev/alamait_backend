@@ -59,6 +59,11 @@ const paymentSchema = new mongoose.Schema({
         enum: ['Pending', 'Confirmed', 'Failed', 'Verified', 'Rejected', 'Clarification Requested'],
         default: 'Pending'
     },
+    applicationStatus: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected', 'waitlisted', 'expired'],
+        default: 'pending'
+    },
     description: String,
     proofOfPayment: {
         fileUrl: String,
