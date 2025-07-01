@@ -8,6 +8,8 @@ const expiredStudentSchema = new mongoose.Schema({
   reason: String,          // Why the student was archived
   paymentHistory: Array,   // Array of payment records
   leases: Array            // Array of lease records
+}, {
+  collection: 'expiredstudents'
 });
 
 module.exports = mongoose.model('ExpiredStudent', expiredStudentSchema);

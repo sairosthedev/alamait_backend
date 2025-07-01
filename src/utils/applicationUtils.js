@@ -86,11 +86,19 @@ const handleExpiredApplications = async () => {
         const today = new Date();
         const endedApplications = await Application.find({
             endDate: { $lt: today },
-            status: 'approved'
+            status: { $in: ['approved', 'expired'] }
         }).populate('student');
 
         for (const application of endedApplications) {
             try {
+                // Avoid duplicate archiving
+                const alreadyArchived = await ExpiredStudent.findOne({
+                    'application._id': application._id
+                });
+                if (alreadyArchived) {
+                    console.log(`Application ${application.applicationCode} already archived.`);
+                    continue;
+                }
                 if (application.student) {
                     // Fetch payment history
                     const bookings = await Booking.find({ student: application.student._id }).lean();
@@ -106,7 +114,7 @@ const handleExpiredApplications = async () => {
                         paymentHistory,
                         leases
                     });
-                    // Update room status in residence
+                    // Update room status in residence and decrement occupancy
                     if (application.residence && application.allocatedRoom) {
                         const residence = await Residence.findById(application.residence);
                         if (residence) {
