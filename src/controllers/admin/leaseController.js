@@ -1,5 +1,6 @@
 const Lease = require('../../models/Lease');
 const Residence = require('../../models/Residence');
+const { generateSignedUrl, getKeyFromUrl } = require('../../config/s3');
 
 // GET /api/admin/leases - fetch all leases from all students
 exports.getAllLeases = async (req, res) => {
@@ -13,20 +14,32 @@ exports.getAllLeases = async (req, res) => {
     const residenceMap = {};
     residences.forEach(r => { residenceMap[r._id.toString()] = r.name; });
 
-    // Format leases to include residence name and download/view URLs
-    const formattedLeases = leases.map(lease => {
+    // Format leases to include residence name and signed S3 URLs
+    const formattedLeases = await Promise.all(leases.map(async lease => {
       const leaseObject = lease.toObject();
       let residenceName = leaseObject.residenceName;
       if (!residenceName && leaseObject.residence) {
         residenceName = residenceMap[leaseObject.residence.toString()] || null;
       }
+      let signedUrl = leaseObject.path;
+      if (leaseObject.path) {
+        try {
+          const key = getKeyFromUrl(leaseObject.path);
+          if (key) {
+            signedUrl = await generateSignedUrl(key);
+          }
+        } catch (err) {
+          // If signed URL generation fails, fallback to original path
+        }
+      }
       return {
         ...leaseObject,
         residenceName,
-        downloadUrl: `/api/leases/download/${leaseObject.filename}`,
-        viewUrl: `/api/leases/view/${leaseObject.filename}`
+        path: signedUrl,
+        downloadUrl: signedUrl,
+        viewUrl: signedUrl
       };
-    });
+    }));
     res.json(formattedLeases);
   } catch (err) {
     console.error('Error fetching all leases:', err);

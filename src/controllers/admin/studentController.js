@@ -349,11 +349,14 @@ const getAllSignedLeases = async (req, res) => {
     const usersWithSignedLeases = await User.find({
       signedLeasePath: { $exists: true, $ne: null }
     })
-    .select('_id firstName lastName email signedLeasePath signedLeaseUploadDate currentRoom')
+    .select('_id firstName lastName email signedLeasePath signedLeaseUploadDate currentRoom residence')
     .populate('residence', 'name')
     .lean();
 
     console.log(`Found ${usersWithSignedLeases.length} users with signed leases`);
+    if (usersWithSignedLeases.length > 0) {
+      console.log('Sample user:', usersWithSignedLeases[0]);
+    }
 
     // Format the response
     const signedLeases = usersWithSignedLeases.map(user => ({
@@ -361,7 +364,7 @@ const getAllSignedLeases = async (req, res) => {
       studentName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
       email: user.email,
       currentRoom: user.currentRoom,
-      residence: user.residence?.name || 'Not Assigned',
+      residence: (user.residence && typeof user.residence === 'object' && user.residence.name) ? user.residence.name : 'Not Assigned',
       fileUrl: user.signedLeasePath,
       uploadDate: user.signedLeaseUploadDate,
       fileName: user.signedLeasePath ? user.signedLeasePath.split('/').pop() : null
@@ -374,9 +377,11 @@ const getAllSignedLeases = async (req, res) => {
 
   } catch (error) {
     console.error('Error getting all signed leases:', error);
+    if (error.stack) console.error(error.stack);
     res.status(500).json({ 
       error: 'Failed to get signed leases',
-      message: error.message 
+      message: error.message,
+      stack: error.stack
     });
   }
 };

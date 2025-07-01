@@ -40,6 +40,10 @@ const studentValidation = [
 router.use(auth);
 router.use(checkRole('admin'));
 
+// Place fixed routes BEFORE any :studentId routes
+router.get('/all-signed-leases', getAllSignedLeases);
+router.get('/expired', getExpiredStudents);
+
 // Modified GET students route to handle both list and detailed views
 router.get('/', async (req, res) => {
     try {
@@ -99,7 +103,7 @@ router.post('/residence/:residenceId', [
     check('emergencyContact.relationship', 'Emergency contact relationship is required').optional().notEmpty(),
     check('emergencyContact.phone', 'Emergency contact phone is required').optional().notEmpty()
 ], createStudent);
-router.get('/expired', getExpiredStudents);
+
 router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);
 router.delete('/:studentId', async (req, res) => {
@@ -171,6 +175,5 @@ router.delete('/:studentId', async (req, res) => {
 });
 router.get('/:studentId/payments', getStudentPayments);
 router.get('/lease-agreement/:studentId', downloadSignedLease);
-router.get('/all-signed-leases', getAllSignedLeases);
 
 module.exports = router; 
