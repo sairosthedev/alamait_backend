@@ -654,57 +654,65 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 return res.status(400).json({ error: 'Payment month must be in YYYY-MM format.' });
             }
 
-            // --- St Kilda Payment Logic ---
+            // --- Admin and Deposit Logic (All Properties) ---
+            let roomPrice = 0;
+            if (roomInfo && roomInfo.number && roomInfo.number !== 'Not Assigned') {
+                const room = residenceRef.rooms.find(r => r.roomNumber === roomInfo.number);
+                if (room) roomPrice = room.price;
+            }
+            if (!roomPrice && residenceRef.rooms.length > 0) {
+                roomPrice = residenceRef.rooms[0].price;
+            }
             const isStKilda = residenceRef.name && residenceRef.name.toLowerCase().includes('st kilda');
-            let expectedRent = 0;
-            let expectedAdmin = 0;
-            let expectedDepositPortion = 0;
-            let depositRequired = 0;
-            let depositPaid = 0;
-            let depositOwing = 0;
-            let adminPaid = 0;
-            let monthsRemaining = 1;
+            const adminFeeTotal = 20;
+            let expectedRent = roomPrice;
+            let depositRequired = roomPrice;
+            // Calculate how much admin and deposit have been paid so far
+            const adminPaid = payments.reduce((sum, p) => sum + (p.adminFee || 0), 0);
+            const depositPaid = payments.reduce((sum, p) => sum + (p.deposit || 0), 0);
+            // Calculate how much is still owing
+            const adminOwing = Math.max(adminFeeTotal - adminPaid, 0);
+            const depositOwing = Math.max(depositRequired - depositPaid, 0);
+            // Calculate months remaining (including this one)
+            const monthsRemaining = unpaidMonths.length > 0 ? unpaidMonths.length : 1;
+            // Calculate deposit portion for this month (if any owing)
+            const expectedDepositPortion = monthsRemaining > 0 ? depositOwing / monthsRemaining : 0;
+            // --- Validation ---
             if (isStKilda) {
-                let roomPrice = 0;
-                if (roomInfo && roomInfo.number && roomInfo.number !== 'Not Assigned') {
-                    const room = residenceRef.rooms.find(r => r.roomNumber === roomInfo.number);
-                    if (room) roomPrice = room.price;
+                // Admin fee validation
+                if (adminFee > adminOwing) {
+                    return res.status(400).json({ error: `Admin fee overpayment. Only $${adminOwing.toFixed(2)} remaining.` });
                 }
-                if (!roomPrice && residenceRef.rooms.length > 0) {
-                    roomPrice = residenceRef.rooms[0].price;
-                }
-                expectedRent = roomPrice;
-                depositRequired = roomPrice;
-                // Calculate deposit paid so far
-                depositPaid = payments.reduce((sum, p) => sum + (p.deposit || 0), 0);
-                depositOwing = Math.max(depositRequired - depositPaid, 0);
-                // Calculate months remaining (including this one)
-                const unpaidMonthsIncludingThis = unpaidMonths.length > 0 ? unpaidMonths.length : 1;
-                monthsRemaining = unpaidMonthsIncludingThis;
-                // Calculate deposit portion for this month
-                expectedDepositPortion = monthsRemaining > 0 ? depositOwing / monthsRemaining : 0;
-                // Calculate admin paid so far
-                adminPaid = payments.reduce((sum, p) => sum + (p.adminFee || 0), 0);
-                expectedAdmin = adminPaid >= 20 ? 0 : 20 - adminPaid;
-                // Validate admin fee in this payment
-                if (adminFee > expectedAdmin) {
-                    return res.status(400).json({ error: `Admin fee overpayment. Only $${expectedAdmin.toFixed(2)} remaining.` });
-                }
-                // Validate deposit in this payment
+                // Deposit validation
                 if (deposit > expectedDepositPortion) {
                     return res.status(400).json({ error: `Deposit overpayment. Only $${expectedDepositPortion.toFixed(2)} allowed for this month.` });
                 }
-                // Validate rent in this payment
+                // Rent validation
                 if (rentAmount !== roomPrice) {
                     return res.status(400).json({ error: `Rent for St Kilda must be $${roomPrice.toFixed(2)}.` });
                 }
-                // Validate total amount
-                const expectedTotal = roomPrice + expectedAdmin + expectedDepositPortion;
+                // Total validation
+                const expectedTotal = roomPrice + adminOwing + expectedDepositPortion;
+                if (Math.abs(totalAmount - (roomPrice + adminFee + deposit)) > 0.01) {
+                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)} + Admin $${adminOwing.toFixed(2)} + Deposit $${expectedDepositPortion.toFixed(2)}).` });
+                }
+            } else {
+                // For non-St Kilda, only rent is required
+                if (adminFee > 0) {
+                    return res.status(400).json({ error: `Admin fee is not required for this property.` });
+                }
+                if (deposit > 0) {
+                    return res.status(400).json({ error: `Deposit is not required for this property.` });
+                }
+                if (rentAmount !== roomPrice) {
+                    return res.status(400).json({ error: `Rent for this property must be $${roomPrice.toFixed(2)}.` });
+                }
+                const expectedTotal = roomPrice;
                 if (Math.abs(totalAmount - expectedTotal) > 0.01) {
-                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)} + Admin $${expectedAdmin.toFixed(2)} + Deposit $${expectedDepositPortion.toFixed(2)}).` });
+                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)}).` });
                 }
             }
-            // --- End St Kilda Payment Logic ---
+            // --- End Admin and Deposit Logic ---
 
             // Create a new payment record
             const payment = new Payment({
