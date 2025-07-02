@@ -79,7 +79,6 @@ exports.getPaymentHistory = async (req, res) => {
         const currentMonthPaid = currentMonthPayments.reduce((sum, payment) => sum + payment.totalAmount, 0);
 
         // --- Owing Calculation using Application Lease Period ---
-        let pastDue = 0;
         let totalDue = 0;
         let unpaidMonths = [];
         if (approvedApplication && approvedApplication.residence && approvedApplication.residence !== 'No residence') {
@@ -101,22 +100,20 @@ exports.getPaymentHistory = async (req, res) => {
                 .map(p => p.paymentMonth);
             // 3. Find unpaid months
             unpaidMonths = months.filter(m => !paidMonths.includes(m));
-            // 4. Calculate pastDue and totalDue with admin fee in first month and deposit spread
+            // 4. Calculate totalDue: rentDue + adminDue + depositOwing
             const rent = approvedApplication.price || 0;
             const adminFee = 20; // Or fetch from config/application if dynamic
             const deposit = rent; // Or fetch from config/application if dynamic
-            const depositPerMonth = deposit / months.length;
-            pastDue = 0;
-            unpaidMonths.forEach((month, idx) => {
-                if (months.indexOf(month) === 0) {
-                    // First month: rent + admin + deposit portion
-                    pastDue += rent + adminFee + depositPerMonth;
-                } else {
-                    // Other months: rent + deposit portion
-                    pastDue += rent + depositPerMonth;
-                }
-            });
-            totalDue = pastDue;
+            // Check if admin fee has been paid (assume paid if any payment has adminFee > 0 and status confirmed)
+            const adminPaid = payments.some(p => ['Confirmed', 'Verified'].includes(p.status) && p.adminFee > 0);
+            const adminDue = adminPaid ? 0 : adminFee;
+            // Calculate deposit owing: deposit minus sum of deposit paid in confirmed/verified payments
+            const depositPaid = payments
+                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                .reduce((sum, p) => sum + (p.deposit || 0), 0);
+            const depositOwing = Math.max(0, deposit - depositPaid);
+            const rentDue = unpaidMonths.length * rent;
+            totalDue = rentDue + adminDue + depositOwing;
         }
 
         // Calculate past overdue (unpaid amounts older than 3 months)
@@ -244,9 +241,6 @@ exports.getPaymentHistory = async (req, res) => {
             institution: "University of Zimbabwe",
             residence: roomInfo.location,
             residenceId: residenceId, // Include residence ID
-            currentDue: currentMonthPaid.toFixed(2) || '0.00',
-            pastDue: pastDue.toFixed(2) || '0.00',
-            pastOverDue: pastOverDue.toFixed(2) || '0.00',
             applicationCode: approvedApplication ? approvedApplication.applicationCode : null,
             totalDue: totalDue.toFixed(2) || '0.00',
             allocatedRoomDetails,
