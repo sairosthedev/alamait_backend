@@ -78,22 +78,51 @@ exports.getPaymentHistory = async (req, res) => {
         // Calculate current month's total confirmed payments
         const currentMonthPaid = currentMonthPayments.reduce((sum, payment) => sum + payment.totalAmount, 0);
 
-        // Calculate past due (unpaid amounts from previous months)
-        const threeMonthsAgo = new Date(currentDate.setMonth(currentDate.getMonth() - 3));
-        const pastDue = payments.reduce((acc, payment) => {
-            const paymentDate = new Date(payment.date);
-            if (paymentDate > threeMonthsAgo && 
-                paymentDate < new Date(currentYear, currentMonth, 1) && 
-                payment.status !== 'Confirmed') {
-                return acc + payment.totalAmount;
+        // --- Owing Calculation using Application Lease Period ---
+        let pastDue = 0;
+        let totalDue = 0;
+        let unpaidMonths = [];
+        if (approvedApplication && approvedApplication.residence && approvedApplication.residence !== 'No residence') {
+            // 1. Generate all months in the lease period
+            function getMonthList(startDate, endDate) {
+                const months = [];
+                let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+                const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+                while (current <= end) {
+                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`);
+                    current.setMonth(current.getMonth() + 1);
+                }
+                return months;
             }
-            return acc;
-        }, 0);
+            const months = getMonthList(new Date(approvedApplication.startDate), new Date(approvedApplication.endDate));
+            // 2. Find all paid months
+            const paidMonths = payments
+                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                .map(p => p.paymentMonth);
+            // 3. Find unpaid months
+            unpaidMonths = months.filter(m => !paidMonths.includes(m));
+            // 4. Calculate pastDue and totalDue with admin fee in first month and deposit spread
+            const rent = approvedApplication.price || 0;
+            const adminFee = 20; // Or fetch from config/application if dynamic
+            const deposit = rent; // Or fetch from config/application if dynamic
+            const depositPerMonth = deposit / months.length;
+            pastDue = 0;
+            unpaidMonths.forEach((month, idx) => {
+                if (months.indexOf(month) === 0) {
+                    // First month: rent + admin + deposit portion
+                    pastDue += rent + adminFee + depositPerMonth;
+                } else {
+                    // Other months: rent + deposit portion
+                    pastDue += rent + depositPerMonth;
+                }
+            });
+            totalDue = pastDue;
+        }
 
         // Calculate past overdue (unpaid amounts older than 3 months)
         const pastOverDue = payments.reduce((acc, payment) => {
             const paymentDate = new Date(payment.date);
-            if (paymentDate <= threeMonthsAgo && payment.status !== 'Confirmed') {
+            if (paymentDate <= currentDate && payment.status !== 'Confirmed') {
                 return acc + payment.totalAmount;
             }
             return acc;
@@ -219,8 +248,9 @@ exports.getPaymentHistory = async (req, res) => {
             pastDue: pastDue.toFixed(2) || '0.00',
             pastOverDue: pastOverDue.toFixed(2) || '0.00',
             applicationCode: approvedApplication ? approvedApplication.applicationCode : null,
-            totalDue: (currentMonthPaid + pastDue + pastOverDue).toFixed(2) || '0.00',
-            allocatedRoomDetails
+            totalDue: totalDue.toFixed(2) || '0.00',
+            allocatedRoomDetails,
+            unpaidMonths // Optionally include for frontend
         };
 
         // Calculate the next unpaid month and set currentDue
