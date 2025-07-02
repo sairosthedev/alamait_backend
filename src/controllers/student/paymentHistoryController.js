@@ -602,9 +602,14 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 requestedMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
             }
             if (unpaidMonths.length > 0 && requestedMonth !== unpaidMonths[0]) {
+                // Convert unpaidMonths to 'YYYY,MM,01' format
+                const unpaidMonthsFormatted = unpaidMonths.map(m => {
+                    const [year, month] = m.split('-');
+                    return `${year},${month},01`;
+                });
                 return res.status(400).json({
-                    error: `You must pay for the oldest unpaid month first: ${unpaidMonths[0]}`,
-                    unpaidMonths
+                    error: `You must pay for the oldest unpaid month first: ${unpaidMonthsFormatted[0]}`,
+                    unpaidMonths: unpaidMonthsFormatted
                 });
             }
             // --- End Prevent Overpayment Logic (Lease Month Enforcement) ---
