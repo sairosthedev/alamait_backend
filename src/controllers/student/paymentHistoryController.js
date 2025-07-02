@@ -597,6 +597,17 @@ exports.uploadNewProofOfPayment = (req, res) => {
             // 5. Only allow payment for the oldest unpaid month
             let requestedMonth = req.body.paymentMonth;
             if (!requestedMonth) {
+                if (req.body.paymentDate) {
+                    // Extract year and month from paymentDate (format: YYYY-MM-DD)
+                    const date = new Date(req.body.paymentDate);
+                    if (!isNaN(date)) {
+                        const year = date.getFullYear();
+                        const month = String(date.getMonth() + 1).padStart(2, '0');
+                        requestedMonth = `${year}-${month}`;
+                    }
+                }
+            }
+            if (!requestedMonth) {
                 // Auto-generate payment month if not provided
                 const currentDate = new Date();
                 requestedMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
