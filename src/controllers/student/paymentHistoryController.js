@@ -88,7 +88,8 @@ exports.getPaymentHistory = async (req, res) => {
                 let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
                 const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
                 while (current <= end) {
-                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`);
+                    // Use YYYY-MM-01 for valid date parsing
+                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-01`);
                     current.setMonth(current.getMonth() + 1);
                 }
                 return months;
@@ -97,20 +98,31 @@ exports.getPaymentHistory = async (req, res) => {
             // 2. Find all paid months
             const paidMonths = payments
                 .filter(p => ['Confirmed', 'Verified'].includes(p.status))
-                .map(p => p.paymentMonth);
+                .map(p => {
+                    // Accept both YYYY-MM and YYYY-MM-01
+                    if (p.paymentMonth && /^\d{4}-\d{2}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth;
+                    if (p.paymentMonth && /^\d{4}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth + '-01';
+                    return null;
+                })
+                .filter(Boolean);
             // 3. Find unpaid months
             unpaidMonths = months.filter(m => !paidMonths.includes(m));
             // 4. Calculate totalDue: rentDue + adminDue + depositOwing
-            const rent = approvedApplication.price || 0;
-            const adminFee = 20; // Or fetch from config/application if dynamic
-            const deposit = rent; // Or fetch from config/application if dynamic
+            let rent = 0;
+            if (typeof approvedApplication.price === 'number' && approvedApplication.price > 0) {
+                rent = approvedApplication.price;
+            } else if (allocatedRoomDetails && typeof allocatedRoomDetails.price === 'number' && allocatedRoomDetails.price > 0) {
+                rent = allocatedRoomDetails.price;
+            }
+            const adminFee = 20;
+            const deposit = rent;
             // Check if admin fee has been paid (assume paid if any payment has adminFee > 0 and status confirmed)
             const adminPaid = payments.some(p => ['Confirmed', 'Verified'].includes(p.status) && p.adminFee > 0);
             const adminDue = adminPaid ? 0 : adminFee;
             // Calculate deposit owing: deposit minus sum of deposit paid in confirmed/verified payments
             const depositPaid = payments
                 .filter(p => ['Confirmed', 'Verified'].includes(p.status))
-                .reduce((sum, p) => sum + (p.deposit || 0), 0);
+                .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
             const depositOwing = Math.max(0, deposit - depositPaid);
             const rentDue = unpaidMonths.length * rent;
             totalDue = rentDue + adminDue + depositOwing;
@@ -242,9 +254,9 @@ exports.getPaymentHistory = async (req, res) => {
             residence: roomInfo.location,
             residenceId: residenceId, // Include residence ID
             applicationCode: approvedApplication ? approvedApplication.applicationCode : null,
-            totalDue: totalDue.toFixed(2) || '0.00',
+            totalDue: Number(totalDue).toFixed(2) || '0.00',
             allocatedRoomDetails,
-            unpaidMonths // Optionally include for frontend
+            unpaidMonths // now formatted as YYYY-MM-01
         };
 
         // Format payment history
