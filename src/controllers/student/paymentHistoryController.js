@@ -222,26 +222,43 @@ exports.getPaymentHistory = async (req, res) => {
             } else if (allocatedRoomDetails && typeof allocatedRoomDetails.price === 'number' && allocatedRoomDetails.price > 0) {
                 rent = allocatedRoomDetails.price;
             }
-            const adminFee = 20;
-            const deposit = rent;
-            // Check if admin fee has been paid (assume paid if any payment has adminFee > 0 and status confirmed)
-            const adminPaid = payments.some(p => ['Confirmed', 'Verified'].includes(p.status) && p.adminFee > 0);
-            const adminDue = adminPaid ? 0 : adminFee;
-            // Calculate deposit owing: deposit minus sum of deposit paid in confirmed/verified payments
-            const depositPaid = payments
-                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
-                .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
-            const depositOwing = Math.max(0, deposit - depositPaid);
+            
+            // Check if this is St Kilda property
+            const isStKilda = approvedApplication.residence && 
+                             typeof approvedApplication.residence === 'object' && 
+                             approvedApplication.residence.name && 
+                             approvedApplication.residence.name.toLowerCase().includes('st kilda');
+            
+            let adminDue = 0;
+            let depositOwing = 0;
+            
+            if (isStKilda) {
+                // Admin fee logic for St Kilda only
+                const adminFeeTotal = 20;
+                const adminPaid = payments
+                    .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                    .reduce((sum, p) => sum + (Number(p.adminFee) || 0), 0);
+                adminDue = Math.max(0, adminFeeTotal - adminPaid);
+                
+                // Deposit logic for St Kilda only
+                const depositRequired = rent;
+                const depositPaid = payments
+                    .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                    .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
+                depositOwing = Math.max(0, depositRequired - depositPaid);
+            }
+            
             const rentDue = unpaidMonths.length * rent;
             totalDue = rentDue + adminDue + depositOwing;
             breakdown = {
                 rent: rent,
                 rentDue: rentDue,
-                adminFee: adminFee,
+                adminFee: isStKilda ? 20 : 0,
                 adminDue: adminDue,
-                deposit: deposit,
+                deposit: isStKilda ? rent : 0,
                 depositOwing: depositOwing,
-                unpaidMonths: unpaidMonths.length
+                unpaidMonths: unpaidMonths.length,
+                isStKilda: isStKilda
             };
         }
 
