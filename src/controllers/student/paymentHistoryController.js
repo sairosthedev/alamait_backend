@@ -247,69 +247,6 @@ exports.getPaymentHistory = async (req, res) => {
             unpaidMonths // Optionally include for frontend
         };
 
-        // Calculate the next unpaid month and set currentDue
-        let currentDue = 0;
-        if (allocatedRoomDetails && allocatedRoomDetails.price) {
-            // Find all months with confirmed rent payments
-            const paidMonths = payments
-                .filter(p => p.status === 'Confirmed' && p.rentAmount > 0)
-                .map(p => {
-                    const d = new Date(p.date);
-                    return d.getFullYear() + '-' + (d.getMonth() + 1); // e.g., '2025-7'
-                });
-            // Find the latest paid month
-            let nextDueMonth;
-            if (paidMonths.length > 0) {
-                // Get the latest paid month
-                const latestPaid = payments
-                    .filter(p => p.status === 'Confirmed' && p.rentAmount > 0)
-                    .map(p => new Date(p.date))
-                    .sort((a, b) => b - a)[0];
-                nextDueMonth = new Date(latestPaid.getFullYear(), latestPaid.getMonth() + 1, 1);
-            } else {
-                // If never paid, due is current month
-                nextDueMonth = new Date(currentYear, currentMonth, 1);
-            }
-            // Check if payment exists for nextDueMonth
-            const hasPaidNextMonth = payments.some(p => {
-                const d = new Date(p.date);
-                return (
-                    p.status === 'Confirmed' &&
-                    d.getMonth() === nextDueMonth.getMonth() &&
-                    d.getFullYear() === nextDueMonth.getFullYear() &&
-                    p.rentAmount > 0
-                );
-            });
-            if (!hasPaidNextMonth) {
-                currentDue = allocatedRoomDetails.price;
-            }
-        }
-        studentInfo.currentDue = currentDue.toFixed(2);
-
-        // Debug logs
-        console.log('Room Info:', {
-            number: roomInfo.number,
-            type: roomInfo.type,
-            location: roomInfo.location
-        });
-        console.log('Student Info being sent:', {
-            course: studentInfo.course,
-            residence: studentInfo.residence,
-            roomInfo: roomInfo
-        });
-
-        console.log('Sending student info:', {
-            name: studentInfo.name,
-            roll: studentInfo.roll,
-            room: studentInfo.course,
-            residence: studentInfo.residence,
-            applicationCode: studentInfo.applicationCode,
-            currentDue: studentInfo.currentDue,
-            pastDue: studentInfo.pastDue,
-            pastOverDue: studentInfo.pastOverDue,
-            totalDue: studentInfo.totalDue
-        });
-
         // Format payment history
         const paymentHistory = payments.map(payment => {
             const date = new Date(payment.date);
