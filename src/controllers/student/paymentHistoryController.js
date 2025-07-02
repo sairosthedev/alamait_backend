@@ -280,6 +280,7 @@ exports.getPaymentHistory = async (req, res) => {
                     month: '2-digit', 
                     year: '2-digit' 
                 }),
+                paymentMonth: payment.paymentMonth || (payment.startDate ? new Date(payment.startDate).toISOString().slice(0, 7) : null),
                 amount: payment.totalAmount.toFixed(2) || '0.00',
                 type: payment.rentAmount > 0 ? 'Rent' : (payment.deposit > 0 ? 'Initial' : 'Admin'),
                 ref: payment.paymentId,
