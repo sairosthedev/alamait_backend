@@ -259,7 +259,7 @@ exports.getPaymentHistory = async (req, res) => {
             name: `${student.firstName} ${student.lastName}`,
             roll: student.email.split('@')[0], // Use email prefix as student ID
             course: `Room ${roomInfo.number}${roomInfo.type ? ' (' + roomInfo.type + ')' : ''}`,
-            year: student.roomValidUntil ? new Date(student.roomValidUntil).getFullYear() : null,
+            year: student.roomValidUntil ? new Date(student.roomValidUntil).getFullYear() : new Date().getFullYear(),
             institution: "University of Zimbabwe",
             residence: roomInfo.location,
             residenceId: residenceId, // Include residence ID
