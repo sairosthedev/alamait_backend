@@ -14,7 +14,8 @@ const {
     getAllUsersForMessaging,
     downloadLeaseAgreement,
     uploadSignedLeaseHandler,
-    getSignedLeases
+    getSignedLeases,
+    getStudentApplication
 } = require('../../controllers/student/studentController');
 
 // Import payment history controller
@@ -62,6 +63,9 @@ router.get('/signed-leases', getSignedLeases);
 
 // Add payment history route
 router.get('/paymenthistory', getPaymentHistory);
+
+// Add the new route
+router.get('/application', getStudentApplication);
 
 // Get all leases for the current student
 router.get('/leases', async (req, res) => {

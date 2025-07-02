@@ -666,6 +666,43 @@ const uploadSignedLeaseHandler = async (req, res) => {
   });
 };
 
+// @route   GET /api/student/application
+// @desc    Get the latest application for the logged-in student
+// @access  Private (Student only)
+const getStudentApplication = async (req, res) => {
+    try {
+        const userId = req.user?._id;
+        const email = req.user?.email;
+        if (!userId && !email) {
+            return res.status(401).json({ error: 'User not authenticated' });
+        }
+        // Find the latest application by user ID or email
+        const application = await require('../../models/Application').findOne({
+            $or: [
+                { student: userId },
+                { email: email }
+            ]
+        }).sort({ updatedAt: -1 });
+        if (!application) {
+            return res.status(404).json({ error: 'No application found for this student.' });
+        }
+        res.json({
+            id: application._id,
+            startDate: application.startDate,
+            endDate: application.endDate,
+            status: application.status,
+            applicationCode: application.applicationCode,
+            preferredRoom: application.preferredRoom,
+            allocatedRoom: application.allocatedRoom,
+            residence: application.residence,
+            paymentStatus: application.paymentStatus
+        });
+    } catch (error) {
+        console.error('Error fetching student application:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
 module.exports = {
     getAllStudents,
     getStudentById,
@@ -679,5 +716,6 @@ module.exports = {
     getAllUsersForMessaging,
     downloadLeaseAgreement,
     uploadSignedLeaseHandler,
-    getSignedLeases
+    getSignedLeases,
+    getStudentApplication
 }; 
