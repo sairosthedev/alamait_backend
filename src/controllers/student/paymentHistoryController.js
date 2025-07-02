@@ -78,65 +78,6 @@ exports.getPaymentHistory = async (req, res) => {
         // Calculate current month's total confirmed payments
         const currentMonthPaid = currentMonthPayments.reduce((sum, payment) => sum + payment.totalAmount, 0);
 
-        // --- Owing Calculation using Application Lease Period ---
-        let totalDue = 0;
-        let unpaidMonths = [];
-        if (approvedApplication && approvedApplication.residence && approvedApplication.residence !== 'No residence') {
-            // 1. Generate all months in the lease period
-            function getMonthList(startDate, endDate) {
-                const months = [];
-                let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-                const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
-                while (current <= end) {
-                    // Use YYYY-MM-01 for valid date parsing
-                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-01`);
-                    current.setMonth(current.getMonth() + 1);
-                }
-                return months;
-            }
-            const months = getMonthList(new Date(approvedApplication.startDate), new Date(approvedApplication.endDate));
-            // 2. Find all paid months
-            const paidMonths = payments
-                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
-                .map(p => {
-                    // Accept both YYYY-MM and YYYY-MM-01
-                    if (p.paymentMonth && /^\d{4}-\d{2}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth;
-                    if (p.paymentMonth && /^\d{4}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth + '-01';
-                    return null;
-                })
-                .filter(Boolean);
-            // 3. Find unpaid months
-            unpaidMonths = months.filter(m => !paidMonths.includes(m));
-            // 4. Calculate totalDue: rentDue + adminDue + depositOwing
-            let rent = 0;
-            if (typeof approvedApplication.price === 'number' && approvedApplication.price > 0) {
-                rent = approvedApplication.price;
-            } else if (allocatedRoomDetails && typeof allocatedRoomDetails.price === 'number' && allocatedRoomDetails.price > 0) {
-                rent = allocatedRoomDetails.price;
-            }
-            const adminFee = 20;
-            const deposit = rent;
-            // Check if admin fee has been paid (assume paid if any payment has adminFee > 0 and status confirmed)
-            const adminPaid = payments.some(p => ['Confirmed', 'Verified'].includes(p.status) && p.adminFee > 0);
-            const adminDue = adminPaid ? 0 : adminFee;
-            // Calculate deposit owing: deposit minus sum of deposit paid in confirmed/verified payments
-            const depositPaid = payments
-                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
-                .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
-            const depositOwing = Math.max(0, deposit - depositPaid);
-            const rentDue = unpaidMonths.length * rent;
-            totalDue = rentDue + adminDue + depositOwing;
-        }
-
-        // Calculate past overdue (unpaid amounts older than 3 months)
-        const pastOverDue = payments.reduce((acc, payment) => {
-            const paymentDate = new Date(payment.date);
-            if (paymentDate <= currentDate && payment.status !== 'Confirmed') {
-                return acc + payment.totalAmount;
-            }
-            return acc;
-        }, 0);
-
         // Get room and residence information with priority order:
         // 1. Approved Application
         // 2. Active Booking
@@ -243,6 +184,65 @@ exports.getPaymentHistory = async (req, res) => {
             allocatedRoomDetails = null;
             console.log('No room information found in any source');
         }
+
+        // --- Owing Calculation using Application Lease Period ---
+        let totalDue = 0;
+        let unpaidMonths = [];
+        if (approvedApplication && approvedApplication.residence && approvedApplication.residence !== 'No residence') {
+            // 1. Generate all months in the lease period
+            function getMonthList(startDate, endDate) {
+                const months = [];
+                let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+                const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+                while (current <= end) {
+                    // Use YYYY-MM-01 for valid date parsing
+                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-01`);
+                    current.setMonth(current.getMonth() + 1);
+                }
+                return months;
+            }
+            const months = getMonthList(new Date(approvedApplication.startDate), new Date(approvedApplication.endDate));
+            // 2. Find all paid months
+            const paidMonths = payments
+                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                .map(p => {
+                    // Accept both YYYY-MM and YYYY-MM-01
+                    if (p.paymentMonth && /^\d{4}-\d{2}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth;
+                    if (p.paymentMonth && /^\d{4}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth + '-01';
+                    return null;
+                })
+                .filter(Boolean);
+            // 3. Find unpaid months
+            unpaidMonths = months.filter(m => !paidMonths.includes(m));
+            // 4. Calculate totalDue: rentDue + adminDue + depositOwing
+            let rent = 0;
+            if (typeof approvedApplication.price === 'number' && approvedApplication.price > 0) {
+                rent = approvedApplication.price;
+            } else if (allocatedRoomDetails && typeof allocatedRoomDetails.price === 'number' && allocatedRoomDetails.price > 0) {
+                rent = allocatedRoomDetails.price;
+            }
+            const adminFee = 20;
+            const deposit = rent;
+            // Check if admin fee has been paid (assume paid if any payment has adminFee > 0 and status confirmed)
+            const adminPaid = payments.some(p => ['Confirmed', 'Verified'].includes(p.status) && p.adminFee > 0);
+            const adminDue = adminPaid ? 0 : adminFee;
+            // Calculate deposit owing: deposit minus sum of deposit paid in confirmed/verified payments
+            const depositPaid = payments
+                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
+            const depositOwing = Math.max(0, deposit - depositPaid);
+            const rentDue = unpaidMonths.length * rent;
+            totalDue = rentDue + adminDue + depositOwing;
+        }
+
+        // Calculate past overdue (unpaid amounts older than 3 months)
+        const pastOverDue = payments.reduce((acc, payment) => {
+            const paymentDate = new Date(payment.date);
+            if (paymentDate <= currentDate && payment.status !== 'Confirmed') {
+                return acc + payment.totalAmount;
+            }
+            return acc;
+        }, 0);
 
         // Format student info
         const studentInfo = {
