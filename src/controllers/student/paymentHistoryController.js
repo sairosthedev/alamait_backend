@@ -188,6 +188,7 @@ exports.getPaymentHistory = async (req, res) => {
         // --- Owing Calculation using Application Lease Period ---
         let totalDue = 0;
         let unpaidMonths = [];
+        let breakdown = {};
         if (approvedApplication && approvedApplication.residence && approvedApplication.residence !== 'No residence') {
             // 1. Generate all months in the lease period
             function getMonthList(startDate, endDate) {
@@ -233,6 +234,15 @@ exports.getPaymentHistory = async (req, res) => {
             const depositOwing = Math.max(0, deposit - depositPaid);
             const rentDue = unpaidMonths.length * rent;
             totalDue = rentDue + adminDue + depositOwing;
+            breakdown = {
+                rent: rent,
+                rentDue: rentDue,
+                adminFee: adminFee,
+                adminDue: adminDue,
+                deposit: deposit,
+                depositOwing: depositOwing,
+                unpaidMonths: unpaidMonths.length
+            };
         }
 
         // Calculate past overdue (unpaid amounts older than 3 months)
@@ -256,7 +266,8 @@ exports.getPaymentHistory = async (req, res) => {
             applicationCode: approvedApplication ? approvedApplication.applicationCode : null,
             totalDue: Number(totalDue).toFixed(2) || '0.00',
             allocatedRoomDetails,
-            unpaidMonths // now formatted as YYYY-MM-01
+            unpaidMonths, // now formatted as YYYY-MM-01
+            breakdown // add breakdown for frontend
         };
 
         // Format payment history
