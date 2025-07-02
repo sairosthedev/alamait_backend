@@ -601,14 +601,9 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 return res.status(400).json({ error: 'paymentMonth is required.' });
             }
             if (unpaidMonths.length > 0 && requestedMonth !== unpaidMonths[0]) {
-                // Convert unpaidMonths to 'YYYY,MM,01' format
-                const unpaidMonthsFormatted = unpaidMonths.map(m => {
-                    const [year, month] = m.split('-');
-                    return `${year},${month},01`;
-                });
                 return res.status(400).json({
-                    error: `You must pay for the oldest unpaid month first: ${unpaidMonthsFormatted[0]}`,
-                    unpaidMonths: unpaidMonthsFormatted
+                    error: `You must pay for the oldest unpaid month first: ${unpaidMonths[0]}`,
+                    unpaidMonths
                 });
             }
             // --- End Prevent Overpayment Logic (Lease Month Enforcement) ---
@@ -661,28 +656,24 @@ exports.uploadNewProofOfPayment = (req, res) => {
             // Calculate how much is still owing
             const adminOwing = Math.max(adminFeeTotal - adminPaid, 0);
             const depositOwing = Math.max(depositRequired - depositPaid, 0);
-            // Calculate months remaining (including this one)
-            const monthsRemaining = unpaidMonths.length > 0 ? unpaidMonths.length : 1;
-            // Calculate deposit portion for this month (if any owing)
-            const expectedDepositPortion = monthsRemaining > 0 ? depositOwing / monthsRemaining : 0;
             // --- Validation ---
             if (isStKilda) {
                 // Admin fee validation
                 if (adminFee > adminOwing) {
                     return res.status(400).json({ error: `Admin fee overpayment. Only $${adminOwing.toFixed(2)} remaining.` });
                 }
-                // Deposit validation
-                if (deposit > expectedDepositPortion) {
-                    return res.status(400).json({ error: `Deposit overpayment. Only $${expectedDepositPortion.toFixed(2)} allowed for this month.` });
+                // Deposit validation - allow any amount as long as total doesn't exceed deposit amount
+                if (depositPaid + deposit > depositRequired) {
+                    return res.status(400).json({ error: `Deposit overpayment. Total deposit paid cannot exceed $${depositRequired.toFixed(2)}.` });
                 }
                 // Rent validation
                 if (rentAmount !== roomPrice) {
                     return res.status(400).json({ error: `Rent for St Kilda must be $${roomPrice.toFixed(2)}.` });
                 }
                 // Total validation
-                const expectedTotal = roomPrice + adminOwing + expectedDepositPortion;
-                if (Math.abs(totalAmount - (roomPrice + adminFee + deposit)) > 0.01) {
-                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)} + Admin $${adminOwing.toFixed(2)} + Deposit $${expectedDepositPortion.toFixed(2)}).` });
+                const expectedTotal = roomPrice + adminFee + deposit;
+                if (Math.abs(totalAmount - expectedTotal) > 0.01) {
+                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)} + Admin $${adminFee.toFixed(2)} + Deposit $${deposit.toFixed(2)}).` });
                 }
             } else {
                 // For non-St Kilda, only rent is required
