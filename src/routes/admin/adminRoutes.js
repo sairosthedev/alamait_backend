@@ -93,7 +93,6 @@ const maintenanceCreateValidation = [
     check('issue', 'Issue is required').notEmpty().trim(),
     check('description', 'Description is required').notEmpty().trim(),
     check('room', 'Room is required').notEmpty().trim(),
-    check('requestedBy', 'Requested by is required').notEmpty().trim(),
     check('residence', 'Residence ID is required').notEmpty().isMongoId().withMessage('Invalid residence ID format'),
     check('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Invalid priority level'),
     check('status').optional().isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed']).withMessage('Invalid status'),
