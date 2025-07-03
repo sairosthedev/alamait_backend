@@ -2,7 +2,7 @@ const { validationResult } = require('express-validator');
 const Maintenance = require('../../models/Maintenance');
 const User = require('../../models/User');
 const mongoose = require('mongoose');
-const { authenticate } = require('../middleware/authMiddleware');
+const authMiddleware = require('../../middleware/authMiddleware');
 
 // Get maintenance dashboard stats
 exports.getMaintenanceStats = async (req, res) => {
