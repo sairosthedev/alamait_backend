@@ -30,7 +30,7 @@ exports.getMaintenanceById = async (req, res) => {
 // Create new maintenance request
 exports.createMaintenance = async (req, res) => {
     try {
-        const { issue, description, room, category, priority, residence, assignedTo } = req.body;
+        const { issue, description, room, category, priority, residence, assignedTo, amount, laborCost } = req.body;
 
         // Validate residence ID
         if (!residence) {
@@ -50,7 +50,9 @@ exports.createMaintenance = async (req, res) => {
             residence,
             status: 'pending',
             requestDate: new Date(),
-            requestedBy
+            requestedBy,
+            amount: amount ? parseFloat(amount) : 0,
+            laborCost: laborCost ? parseFloat(laborCost) : 0
         };
 
         // If assignedTo is provided, set it
