@@ -112,8 +112,10 @@ const paymentValidation = [
     check('description').optional().trim().notEmpty()
 ];
 
-// All routes require admin role
-// The 'auth' middleware sets req.user and must be used for all admin routes
+// Application routes - public fetch
+router.get('/applications', getApplications);
+
+// All routes below require admin/finance roles
 router.use(auth);
 router.use(checkRole(['admin', 'finance', 'finance_admin', 'finance_user']));
 
@@ -141,11 +143,6 @@ router.get('/maintenance/maintenance_staff', getMaintenanceStaff);
 router.post('/maintenance/maintenance_staff', addMaintenanceStaff);
 router.delete('/maintenance/maintenance_staff/:staffId', removeMaintenanceStaff);
 
-// Application routes
-router.get('/applications', getApplications);
-router.put('/applications/:applicationId', applicationStatusValidation, updateApplicationStatus);
-router.delete('/applications/:applicationId', deleteApplication);
-
 // Payment routes
 router.get('/payments', getPayments);
 router.put('/payments/:paymentId', updatePaymentStatus);
@@ -153,5 +150,9 @@ router.post('/payments', paymentValidation, createPayment);
 
 // Add route for fetching all leases from all students (unified logic)
 router.get('/leases2', leaseController.listAllLeases);
+
+// Application routes - protected edit/delete
+router.put('/applications/:applicationId', applicationStatusValidation, updateApplicationStatus);
+router.delete('/applications/:applicationId', deleteApplication);
 
 module.exports = router; 

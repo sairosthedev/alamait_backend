@@ -45,4 +45,19 @@ exports.getAllLeases = async (req, res) => {
     console.error('Error fetching all leases:', err);
     res.status(500).json({ message: 'Failed to fetch leases' });
   }
+};
+
+// GET /api/admin/leases/student/:studentId - fetch leases for a specific student
+exports.getLeasesByStudentId = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    if (!studentId) {
+      return res.status(400).json({ message: 'Student ID is required' });
+    }
+    const leases = await Lease.find({ studentId });
+    res.json(leases);
+  } catch (err) {
+    console.error('Error fetching leases by student ID:', err);
+    res.status(500).json({ message: 'Failed to fetch leases for student' });
+  }
 }; 
