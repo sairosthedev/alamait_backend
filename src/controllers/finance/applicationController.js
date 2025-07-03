@@ -36,9 +36,6 @@ exports.getAllApplications = async (req, res) => {
         // Pagination
         const skip = (parseInt(page) - 1) * parseInt(limit);
         
-        // Get total count for pagination
-        const total = await Application.countDocuments(filter);
-        
         // Get applications with pagination
         const applications = await Application.find(filter)
             .sort(sortOptions)
@@ -46,11 +43,8 @@ exports.getAllApplications = async (req, res) => {
             .limit(parseInt(limit))
             .lean();
 
-        // Debug log
-        console.log('Finance: Applications found:', applications.length);
-
         // Get all residences to check room status
-        const residences = await Residence.find({}, 'name rooms');
+        const residences = await Residence.find({}, 'name rooms address manager');
         
         // Create a map of room statuses
         const roomStatusMap = {};
@@ -58,6 +52,7 @@ exports.getAllApplications = async (req, res) => {
             residence.rooms.forEach(room => {
                 roomStatusMap[room.roomNumber] = {
                     residence: residence.name,
+                    residenceId: residence._id,
                     status: room.status,
                     currentOccupancy: room.currentOccupancy,
                     capacity: room.capacity,
@@ -67,12 +62,13 @@ exports.getAllApplications = async (req, res) => {
             });
         });
 
-        // Format applications for response
-        const formattedApplications = applications.map(app => {
+        // Transform applications to match admin format
+        const transformedApplications = applications.map(app => {
             // Get room details for current and requested rooms
             const currentRoomDetails = app.currentRoom ? roomStatusMap[app.currentRoom] : null;
             const requestedRoomDetails = app.requestedRoom ? roomStatusMap[app.requestedRoom] : null;
             const allocatedRoomDetails = app.allocatedRoom ? roomStatusMap[app.allocatedRoom] : null;
+            const waitlistedRoomDetails = app.waitlistedRoom ? roomStatusMap[app.waitlistedRoom] : null;
             
             // Calculate price difference for upgrades
             let priceDifference = null;
@@ -82,7 +78,7 @@ exports.getAllApplications = async (req, res) => {
             
             return {
                 id: app._id,
-                studentName: app.firstName && app.lastName ? `${app.firstName} ${app.lastName}` : 'N/A',
+                studentName: `${app.firstName || ''} ${app.lastName || ''}`.trim(),
                 email: app.email,
                 contact: app.phone,
                 requestType: app.requestType,
@@ -100,21 +96,36 @@ exports.getAllApplications = async (req, res) => {
                 reason: app.reason,
                 allocatedRoom: app.allocatedRoom,
                 allocatedRoomDetails: allocatedRoomDetails,
+                waitlistedRoom: app.waitlistedRoom,
+                waitlistedRoomDetails: waitlistedRoomDetails,
+                roomOccupancy: app.roomOccupancy || { current: 0, capacity: 0 },
                 applicationCode: app.applicationCode,
-                priceDifference: priceDifference
+                priceDifference: priceDifference,
+                residence: app.residence,
+                residenceId: app.residence
             };
         });
 
-        // Return all DB fields for each application
+        // Return response in the format expected by frontend (similar to admin endpoint)
         res.json({
             success: true,
-            applications: applications,
-            pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / limit),
-                total,
-                limit: parseInt(limit)
-            }
+            count: transformedApplications.length,
+            applications: transformedApplications,
+            rooms: Object.entries(roomStatusMap).map(([roomNumber, details]) => ({
+                name: roomNumber,
+                ...details,
+                occupancyDisplay: `${details.currentOccupancy}/${details.capacity}`
+            })),
+            residences: residences.map(residence => ({
+                id: residence._id,
+                name: residence.name,
+                address: residence.address,
+                manager: residence.manager,
+                totalRooms: residence.rooms.length,
+                availableRooms: residence.rooms.filter(room => room.status === 'available').length,
+                occupiedRooms: residence.rooms.filter(room => room.status === 'occupied').length,
+                reservedRooms: residence.rooms.filter(room => room.status === 'reserved').length
+            }))
         });
     } catch (error) {
         console.error('Finance: Error in getAllApplications:', error);

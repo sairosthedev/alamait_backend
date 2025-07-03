@@ -112,9 +112,6 @@ const paymentValidation = [
     check('description').optional().trim().notEmpty()
 ];
 
-// Application routes - public fetch
-router.get('/applications', getApplications);
-
 // All routes below require admin/finance roles
 router.use(auth);
 router.use(checkRole(['admin', 'finance', 'finance_admin', 'finance_user']));
@@ -151,7 +148,8 @@ router.post('/payments', paymentValidation, createPayment);
 // Add route for fetching all leases from all students (unified logic)
 router.get('/leases2', leaseController.listAllLeases);
 
-// Application routes - protected edit/delete
+// Application routes - protected fetch/edit/delete
+router.get('/applications', getApplications);
 router.put('/applications/:applicationId', applicationStatusValidation, updateApplicationStatus);
 router.delete('/applications/:applicationId', deleteApplication);
 
