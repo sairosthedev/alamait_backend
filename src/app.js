@@ -107,6 +107,14 @@ app.use(cors({
 // Handle preflight requests
 app.options('*', cors());
 
+// CORS DEBUG: Allow all origins (for debugging only; restrict in production)
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*'); // TODO: Replace '*' with your frontend URL in production
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  next();
+});
+
 // Log all incoming requests
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
