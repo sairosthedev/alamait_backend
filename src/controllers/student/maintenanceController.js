@@ -83,19 +83,19 @@ exports.createMaintenanceRequest = async (req, res) => {
             });
         }
 
-        // Determine residence ID - prioritize user's residence, fallback to sent residenceId
-        let finalResidenceId = user.residence;
-        
-        if (!finalResidenceId && residenceId) {
-            // If user doesn't have a residence but frontend sent one, use it
+        // Determine residence ID - prioritize residenceId from request body, fallback to user's residence
+        let finalResidenceId = null;
+        if (residenceId) {
             finalResidenceId = residenceId;
+            console.log('Using residenceId from request body:', finalResidenceId);
+        } else if (user && user.residence) {
+            finalResidenceId = user.residence;
+            console.log('Using residence from user profile:', finalResidenceId);
         }
-        
-        console.log('Final residence ID:', finalResidenceId);
         
         if (!finalResidenceId) {
             return res.status(400).json({ 
-                error: 'Student not assigned to any residence. Please contact administrator.' 
+                error: 'Residence information is missing. Please contact administrator.' 
             });
         }
 
