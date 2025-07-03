@@ -71,7 +71,7 @@ exports.createMaintenanceRequest = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const { issue, description, category, priority, location, images, residenceId, room, studentResponse } = req.body;
+        const { title, description, category, priority, location, images, residenceId, room, studentResponse } = req.body;
 
         // Get user's residence automatically
         const user = await User.findById(req.user._id);
@@ -112,7 +112,7 @@ exports.createMaintenanceRequest = async (req, res) => {
         const newRequest = new Maintenance({
             student: req.user._id, // Automatically set student ID
             residence: finalResidenceId, // Use determined residence ID
-            issue,
+            issue: title, // Use title for the issue field
             description,
             category,
             priority: priority || 'low',
