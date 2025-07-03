@@ -8,12 +8,14 @@ router.use(auth);
 
 // Validation middleware
 const maintenanceValidation = [
-    check('issue', 'Issue is required').notEmpty(),
+    check('issue').optional().notEmpty(),
+    check('title').optional().notEmpty(),
     check('description', 'Description is required').notEmpty(),
     check('room', 'Room is required').notEmpty(),
     check('category').optional().isIn(['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other']),
     check('priority').optional().isIn(['low', 'medium', 'high']),
-    check('residence', 'Residence ID is required').notEmpty().isMongoId().withMessage('Invalid residence ID format')
+    check('residence').optional().isMongoId().withMessage('Invalid residence ID format'),
+    check('residenceId').optional().isMongoId().withMessage('Invalid residence ID format')
 ];
 
 // Get all maintenance requests
