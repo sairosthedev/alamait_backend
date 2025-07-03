@@ -9,7 +9,7 @@ const maintenanceSchema = new mongoose.Schema({
     requestedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: false
     },
     residence: {
         type: mongoose.Schema.Types.ObjectId,

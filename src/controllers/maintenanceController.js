@@ -3,7 +3,9 @@ const Maintenance = require('../models/Maintenance');
 // Get all maintenance requests
 exports.getAllMaintenance = async (req, res) => {
     try {
-        const maintenance = await Maintenance.find().sort({ dateAssigned: -1 });
+        const maintenance = await Maintenance.find().sort({ dateAssigned: -1 })
+            .populate('requestedBy', 'firstName lastName email role')
+            .populate('student', 'firstName lastName email role');
         res.status(200).json(maintenance);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -13,7 +15,9 @@ exports.getAllMaintenance = async (req, res) => {
 // Get maintenance request by ID
 exports.getMaintenanceById = async (req, res) => {
     try {
-        const maintenance = await Maintenance.findById(req.params.id);
+        const maintenance = await Maintenance.findById(req.params.id)
+            .populate('requestedBy', 'firstName lastName email role')
+            .populate('student', 'firstName lastName email role');
         if (!maintenance) {
             return res.status(404).json({ message: 'Maintenance request not found' });
         }
@@ -85,7 +89,9 @@ exports.deleteMaintenance = async (req, res) => {
 exports.getMaintenanceByStatus = async (req, res) => {
     try {
         const maintenance = await Maintenance.find({ status: req.params.status })
-            .sort({ dateAssigned: -1 });
+            .sort({ dateAssigned: -1 })
+            .populate('requestedBy', 'firstName lastName email role')
+            .populate('student', 'firstName lastName email role');
         res.status(200).json(maintenance);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -96,7 +102,9 @@ exports.getMaintenanceByStatus = async (req, res) => {
 exports.getMaintenanceByRoom = async (req, res) => {
     try {
         const maintenance = await Maintenance.find({ room: req.params.room })
-            .sort({ dateAssigned: -1 });
+            .sort({ dateAssigned: -1 })
+            .populate('requestedBy', 'firstName lastName email role')
+            .populate('student', 'firstName lastName email role');
         res.status(200).json(maintenance);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -107,7 +115,9 @@ exports.getMaintenanceByRoom = async (req, res) => {
 exports.getMaintenanceByPriority = async (req, res) => {
     try {
         const maintenance = await Maintenance.find({ priority: req.params.priority })
-            .sort({ dateAssigned: -1 });
+            .sort({ dateAssigned: -1 })
+            .populate('requestedBy', 'firstName lastName email role')
+            .populate('student', 'firstName lastName email role');
         res.status(200).json(maintenance);
     } catch (error) {
         res.status(500).json({ message: error.message });
