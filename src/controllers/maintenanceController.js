@@ -31,7 +31,7 @@ exports.getMaintenanceById = async (req, res) => {
 exports.createMaintenance = async (req, res) => {
     try {
         // Accept both 'issue' and 'title' (map 'title' to 'issue' if 'issue' is missing)
-        let { issue, title, description, room, category, priority, residence, residenceId, assignedTo, amount, laborCost } = req.body;
+        let { issue, title, description, room, category, priority, residence, residenceId, assignedTo, amount, laborCost, paymentMethod, paymentIcon } = req.body;
 
         // Map 'title' to 'issue' if 'issue' is not provided
         if (!issue && title) {
@@ -46,6 +46,17 @@ exports.createMaintenance = async (req, res) => {
         // Validate required fields
         if (!issue || !description || !room || !residence) {
             return res.status(400).json({ message: 'Missing required fields: issue, description, room, or residence' });
+        }
+
+        // Validate payment method if provided
+        if (paymentMethod) {
+            const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'];
+            if (!validPaymentMethods.includes(paymentMethod)) {
+                return res.status(400).json({ 
+                    message: 'Invalid payment method',
+                    validPaymentMethods: validPaymentMethods
+                });
+            }
         }
 
         // Always set requestedBy from the authenticated user
@@ -63,7 +74,9 @@ exports.createMaintenance = async (req, res) => {
             requestDate: new Date(),
             requestedBy,
             amount: amount ? parseFloat(amount) : 0,
-            laborCost: laborCost ? parseFloat(laborCost) : 0
+            laborCost: laborCost ? parseFloat(laborCost) : 0,
+            paymentMethod,
+            paymentIcon
         };
 
         // If assignedTo is provided, set it

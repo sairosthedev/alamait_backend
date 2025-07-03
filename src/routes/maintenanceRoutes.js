@@ -15,7 +15,9 @@ const maintenanceValidation = [
     check('category').optional().isIn(['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other']),
     check('priority').optional().isIn(['low', 'medium', 'high']),
     check('residence').optional().isMongoId().withMessage('Invalid residence ID format'),
-    check('residenceId').optional().isMongoId().withMessage('Invalid residence ID format')
+    check('residenceId').optional().isMongoId().withMessage('Invalid residence ID format'),
+    check('paymentMethod').optional().isIn(['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks']).withMessage('Invalid payment method'),
+    check('paymentIcon').optional().isString().withMessage('Payment icon must be a string')
 ];
 
 // Get all maintenance requests

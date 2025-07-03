@@ -106,6 +106,15 @@ const maintenanceSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    paymentMethod: {
+        type: String,
+        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'],
+        required: false
+    },
+    paymentIcon: {
+        type: String,
+        required: false
+    },
     images: [{
         url: {
             type: String,
