@@ -30,14 +30,18 @@ exports.getMaintenanceById = async (req, res) => {
 // Create new maintenance request
 exports.createMaintenance = async (req, res) => {
     try {
-        const { issue, description, room, category, priority, residence } = req.body;
+        const { issue, description, room, category, priority, residence, assignedTo } = req.body;
 
         // Validate residence ID
         if (!residence) {
             return res.status(400).json({ message: 'Residence ID is required' });
         }
 
-        const maintenance = new Maintenance({
+        // Always set requestedBy from the authenticated user
+        const requestedBy = req.user ? req.user._id : undefined;
+
+        // Build the maintenance request data
+        const maintenanceData = {
             issue,
             description,
             room,
@@ -45,10 +49,25 @@ exports.createMaintenance = async (req, res) => {
             priority,
             residence,
             status: 'pending',
-            requestDate: new Date()
-        });
-        
+            requestDate: new Date(),
+            requestedBy
+        };
+
+        // If assignedTo is provided, set it
+        if (assignedTo && assignedTo._id) {
+            maintenanceData.assignedTo = {
+                _id: assignedTo._id,
+                name: assignedTo.name,
+                surname: assignedTo.surname,
+                role: assignedTo.role
+            };
+        }
+
+        const maintenance = new Maintenance(maintenanceData);
         const savedMaintenance = await maintenance.save();
+
+        // Populate requestedBy for the response
+        await savedMaintenance.populate('requestedBy', 'firstName lastName email role');
         res.status(201).json(savedMaintenance);
     } catch (error) {
         res.status(400).json({ message: error.message });
