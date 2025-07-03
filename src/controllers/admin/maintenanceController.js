@@ -42,7 +42,7 @@ exports.getMaintenanceStats = async (req, res) => {
 // Get all maintenance requests
 exports.getAllMaintenanceRequests = async (req, res) => {
     try {
-        const { status, priority, search, page = 1, limit = 10 } = req.query;
+        const { status, priority, search, page = 1, limit = 10, financeStatus } = req.query;
         const query = {};
 
         if (status && status !== 'all') {
@@ -50,6 +50,9 @@ exports.getAllMaintenanceRequests = async (req, res) => {
         }
         if (priority) {
             query.priority = priority;
+        }
+        if (financeStatus) {
+            query.financeStatus = financeStatus;
         }
         if (search) {
             query.$or = [
