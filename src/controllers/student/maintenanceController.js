@@ -71,7 +71,7 @@ exports.createMaintenanceRequest = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const { title, description, category, priority, location, images, residenceId, room, studentResponse } = req.body;
+        const { issue, description, category, priority, location, images, residenceId, room, studentResponse } = req.body;
 
         // Get user's residence automatically
         const user = await User.findById(req.user._id);
@@ -112,7 +112,7 @@ exports.createMaintenanceRequest = async (req, res) => {
         const newRequest = new Maintenance({
             student: req.user._id, // Automatically set student ID
             residence: finalResidenceId, // Use determined residence ID
-            title,
+            issue,
             description,
             category,
             priority: priority || 'low',
@@ -132,7 +132,7 @@ exports.createMaintenanceRequest = async (req, res) => {
         console.log('Creating maintenance request with data:', {
             student: newRequest.student,
             residence: newRequest.residence,
-            title: newRequest.title,
+            issue: newRequest.issue,
             category: newRequest.category,
             priority: newRequest.priority
         });
@@ -198,10 +198,10 @@ exports.updateMaintenanceRequest = async (req, res) => {
             return res.status(404).json({ error: 'Maintenance request not found or cannot be updated' });
         }
 
-        const { title, description, category, priority, status, amount, comment } = req.body;
+        const { issue, description, category, priority, status, amount, comment } = req.body;
 
         // Update allowed fields
-        if (title) request.title = title;
+        if (issue) request.issue = issue;
         if (description) request.description = description;
         if (category) request.category = category;
         if (priority) request.priority = priority;
