@@ -2,6 +2,7 @@ const { validationResult } = require('express-validator');
 const Maintenance = require('../../models/Maintenance');
 const User = require('../../models/User');
 const mongoose = require('mongoose');
+const { authenticate } = require('../middleware/authMiddleware');
 
 // Get maintenance dashboard stats
 exports.getMaintenanceStats = async (req, res) => {
@@ -162,6 +163,7 @@ exports.getAllMaintenanceRequests = async (req, res) => {
 
 // Create maintenance request
 exports.createMaintenanceRequest = async (req, res) => {
+    console.log('req.user:', req.user);
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
