@@ -115,7 +115,7 @@ const paymentValidation = [
 // All routes require admin role
 // The 'auth' middleware sets req.user and must be used for all admin routes
 router.use(auth);
-router.use(checkRole(['admin', 'finance']));
+router.use(checkRole(['admin', 'finance', 'finance_admin', 'finance_user']));
 
 // Dashboard routes
 router.get('/dashboard/stats', getDashboardStats);
