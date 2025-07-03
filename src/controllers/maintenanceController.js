@@ -51,12 +51,25 @@ exports.createMaintenance = async (req, res) => {
         // Validate payment method if provided
         if (paymentMethod) {
             const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'];
-            if (!validPaymentMethods.includes(paymentMethod)) {
+            const normalizedPaymentMethod = paymentMethod.toLowerCase();
+            const validLowercaseMethods = validPaymentMethods.map(method => method.toLowerCase());
+            
+            if (!validLowercaseMethods.includes(normalizedPaymentMethod)) {
                 return res.status(400).json({ 
                     message: 'Invalid payment method',
                     validPaymentMethods: validPaymentMethods
                 });
             }
+            
+            // Normalize to title case
+            const mapping = {
+                'bank transfer': 'Bank Transfer',
+                'cash': 'Cash',
+                'online payment': 'Online Payment',
+                'ecocash': 'Ecocash',
+                'innbucks': 'Innbucks'
+            };
+            paymentMethod = mapping[normalizedPaymentMethod];
         }
 
         // Always set requestedBy from the authenticated user

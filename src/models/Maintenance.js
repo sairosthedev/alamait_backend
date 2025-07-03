@@ -108,8 +108,23 @@ const maintenanceSchema = new mongoose.Schema({
     },
     paymentMethod: {
         type: String,
-        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'],
-        required: false
+        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'bank transfer', 'cash', 'online payment', 'ecocash', 'innbucks'],
+        required: false,
+        set: function(value) {
+            if (value) {
+                // Normalize to title case
+                const normalized = value.toLowerCase();
+                const mapping = {
+                    'bank transfer': 'Bank Transfer',
+                    'cash': 'Cash',
+                    'online payment': 'Online Payment',
+                    'ecocash': 'Ecocash',
+                    'innbucks': 'Innbucks'
+                };
+                return mapping[normalized] || value;
+            }
+            return value;
+        }
     },
     paymentIcon: {
         type: String,

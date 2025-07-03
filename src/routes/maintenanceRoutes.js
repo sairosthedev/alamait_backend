@@ -16,7 +16,18 @@ const maintenanceValidation = [
     check('priority').optional().isIn(['low', 'medium', 'high']),
     check('residence').optional().isMongoId().withMessage('Invalid residence ID format'),
     check('residenceId').optional().isMongoId().withMessage('Invalid residence ID format'),
-    check('paymentMethod').optional().isIn(['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks']).withMessage('Invalid payment method'),
+    check('paymentMethod').optional().custom((value) => {
+        if (value) {
+            const validMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'];
+            const validLowercaseMethods = validMethods.map(method => method.toLowerCase());
+            const normalizedValue = value.toLowerCase();
+            
+            if (!validLowercaseMethods.includes(normalizedValue)) {
+                throw new Error('Invalid payment method');
+            }
+        }
+        return true;
+    }).withMessage('Invalid payment method'),
     check('paymentIcon').optional().isString().withMessage('Payment icon must be a string')
 ];
 
