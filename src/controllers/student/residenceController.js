@@ -162,6 +162,7 @@ exports.createLease = async (req, res) => {
             // Existing student: allow new application/lease
             await Application.create({
                 student: user._id,
+                user: user._id,
                 startDate: req.body.startDate,
                 endDate: req.body.endDate,
                 // ...other fields
@@ -171,6 +172,7 @@ exports.createLease = async (req, res) => {
             const newUser = await User.create({ ...req.body });
             await Application.create({
                 student: newUser._id,
+                user: newUser._id,
                 startDate: req.body.startDate,
                 endDate: req.body.endDate,
                 // ...other fields
