@@ -173,7 +173,7 @@ exports.createMaintenanceRequest = async (req, res) => {
             room,
             issue,
             description,
-            requestedBy,
+            requestedBy: requestedByName,
             status,
             dateAssigned,
             expectedCompletion,
@@ -192,7 +192,7 @@ exports.createMaintenanceRequest = async (req, res) => {
             room,
             issue,
             description,
-            requestedBy,
+            requestedBy: requestedByName,
             dateAssigned,
             expectedCompletion,
             amount,
@@ -229,20 +229,31 @@ exports.createMaintenanceRequest = async (req, res) => {
             });
         }
 
-        // Find the student by name and residence
-        const student = await mongoose.model('User').findOne({
-            firstName: requestedBy.split(' ')[0],
-            lastName: requestedBy.split(' ')[1],
-            role: 'student',
-            residence: residence
-        });
+        let student = null;
+        let requestedBy = req.user._id;
 
-        if (!student) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid student',
-                message: 'The selected student is not assigned to the specified room'
+        if (req.user.role === 'student') {
+            // If the requester is a student, set student and requestedBy to the student's ID
+            student = req.user._id;
+        } else if (req.user.role === 'admin') {
+            // If admin, do not set student
+            student = undefined;
+        } else if (requestedByName) {
+            // Fallback: if requestedByName is provided, try to find the student
+            student = await mongoose.model('User').findOne({
+                firstName: requestedByName.split(' ')[0],
+                lastName: requestedByName.split(' ')[1],
+                role: 'student',
+                residence: residence
             });
+            if (!student) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid student',
+                    message: 'The selected student is not assigned to the specified room'
+                });
+            }
+            student = student._id;
         }
 
         // If assignedTo is provided, validate the staff member
@@ -263,7 +274,6 @@ exports.createMaintenanceRequest = async (req, res) => {
             issue,
             description,
             room,
-            student: student._id,
             residence: residence,
             status: status?.toLowerCase() || 'pending',
             priority: priority?.toLowerCase() || 'low',
@@ -272,11 +282,9 @@ exports.createMaintenanceRequest = async (req, res) => {
             financeStatus: financeStatus || 'pending',
             financeNotes: financeNotes || '',
             adminNotes: adminNotes || '',
-            // Map date fields
             requestDate: dateAssigned ? new Date(dateAssigned) : new Date(),
             scheduledDate: dateAssigned ? new Date(dateAssigned) : undefined,
             estimatedCompletion: expectedCompletion ? new Date(expectedCompletion) : undefined,
-            // Handle assignedTo with staff details
             assignedTo: staffMember ? {
                 _id: staffMember._id,
                 name: staffMember.firstName,
@@ -298,8 +306,10 @@ exports.createMaintenanceRequest = async (req, res) => {
                 action: 'Request created',
                 user: req.user._id,
                 changes: ['created']
-            }]
+            }],
+            requestedBy
         };
+        if (student) maintenanceData.student = student;
 
         console.log('Creating maintenance request with data:', {
             ...maintenanceData,
