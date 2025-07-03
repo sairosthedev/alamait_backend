@@ -293,14 +293,8 @@ exports.createMaintenanceRequest = async (req, res) => {
         };
         if (student) maintenanceData.student = student;
 
-        console.log('Creating maintenance request with data:', {
-            ...maintenanceData,
-            amount: maintenanceData.amount,
-            requestDate: maintenanceData.requestDate,
-            scheduledDate: maintenanceData.scheduledDate,
-            estimatedCompletion: maintenanceData.estimatedCompletion,
-            assignedTo: maintenanceData.assignedTo
-        });
+        // Debug: log the maintenanceData before saving
+        console.log('Maintenance data to be saved:', maintenanceData);
 
         // Create the maintenance request
         const request = new Maintenance(maintenanceData);
