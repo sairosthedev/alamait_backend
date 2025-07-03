@@ -48,7 +48,10 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
   const room = residence.rooms.find(r => r.name === (rental.room || student.room));
   if (!room) throw new Error('Room not found');
 
-  const isStKilda = residence.name.trim().toLowerCase() === 'st kilda';
+  // Determine residence type for payment requirements
+  const residenceName = residence.name.trim().toLowerCase();
+  const isStKilda = residenceName.includes('st kilda');
+  const isBelvedere = residenceName.includes('belvedere');
 
   // 5. Calculate stay duration (months)
   const stayMonths = monthsBetween(new Date(rental.startDate), new Date(rental.endDate));
@@ -70,19 +73,26 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
   // 7. Calculate what is due this month
   const rentDue = room.price;
   let adminFeeDue = 0, depositDue = 0;
+  
   if (isStKilda) {
-    // Admin fee: $20 one-time
+    // St Kilda: Admin fee + Deposit required
     adminFeeDue = Math.max(20 - adminFeePaid, 0);
-    // Deposit: rent, spread over stay, but can pay more/faster
     const totalDeposit = room.price;
     const depositLeft = Math.max(totalDeposit - depositPaid, 0);
-    // Spread: minimum required this month
     const monthsElapsed = monthsBetween(new Date(rental.startDate), currentDate);
     const minDepositShouldHavePaid = Math.min(Math.ceil((monthsElapsed / stayMonths) * totalDeposit), totalDeposit);
     const minDepositThisMonth = Math.max(minDepositShouldHavePaid - depositPaid, 0);
-    // But allow paying more if they want
+    depositDue = depositLeft > 0 ? Math.min(depositLeft, minDepositThisMonth) : 0;
+  } else if (!isBelvedere) {
+    // Other residences (not St Kilda, not Belvedere): Deposit required, no admin fee
+    const totalDeposit = room.price;
+    const depositLeft = Math.max(totalDeposit - depositPaid, 0);
+    const monthsElapsed = monthsBetween(new Date(rental.startDate), currentDate);
+    const minDepositShouldHavePaid = Math.min(Math.ceil((monthsElapsed / stayMonths) * totalDeposit), totalDeposit);
+    const minDepositThisMonth = Math.max(minDepositShouldHavePaid - depositPaid, 0);
     depositDue = depositLeft > 0 ? Math.min(depositLeft, minDepositThisMonth) : 0;
   }
+  // Belvedere: No deposit, no admin fee (both remain 0)
 
   // 8. Total due
   const totalDue = rentDue + adminFeeDue + depositDue;
@@ -108,6 +118,7 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
       alreadyPaid: { rentPaid, adminFeePaid, depositPaid },
       stayMonths,
       isStKilda,
+      isBelvedere,
       room: room.name,
       residence: residence.name
     }

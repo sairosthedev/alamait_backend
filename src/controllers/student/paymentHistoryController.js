@@ -223,11 +223,13 @@ exports.getPaymentHistory = async (req, res) => {
                 rent = allocatedRoomDetails.price;
             }
             
-            // Check if this is St Kilda property
-            const isStKilda = approvedApplication.residence && 
-                             typeof approvedApplication.residence === 'object' && 
-                             approvedApplication.residence.name && 
-                             approvedApplication.residence.name.toLowerCase().includes('st kilda');
+            // Determine residence type for payment requirements
+            const residenceName = approvedApplication.residence && 
+                                typeof approvedApplication.residence === 'object' && 
+                                approvedApplication.residence.name ? 
+                                approvedApplication.residence.name.toLowerCase() : '';
+            const isStKilda = residenceName.includes('st kilda');
+            const isBelvedere = residenceName.includes('belvedere');
             
             let adminDue = 0;
             let depositOwing = 0;
@@ -246,7 +248,15 @@ exports.getPaymentHistory = async (req, res) => {
                     .filter(p => ['Confirmed', 'Verified'].includes(p.status))
                     .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
                 depositOwing = Math.max(0, depositRequired - depositPaid);
+            } else if (!isBelvedere) {
+                // Other residences (not St Kilda, not Belvedere): Deposit required, no admin fee
+                const depositRequired = rent;
+                const depositPaid = payments
+                    .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                    .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
+                depositOwing = Math.max(0, depositRequired - depositPaid);
             }
+            // Belvedere: No deposit, no admin fee (both remain 0)
             
             const rentDue = unpaidMonths.length * rent;
             totalDue = rentDue + adminDue + depositOwing;
@@ -255,10 +265,11 @@ exports.getPaymentHistory = async (req, res) => {
                 rentDue: rentDue,
                 adminFee: isStKilda ? 20 : 0,
                 adminDue: adminDue,
-                deposit: isStKilda ? rent : 0,
+                deposit: isStKilda || (!isBelvedere) ? rent : 0,
                 depositOwing: depositOwing,
                 unpaidMonths: unpaidMonths.length,
-                isStKilda: isStKilda
+                isStKilda: isStKilda,
+                isBelvedere: isBelvedere
             };
         }
 
@@ -663,49 +674,79 @@ exports.uploadNewProofOfPayment = (req, res) => {
             if (!roomPrice && residenceRef.rooms.length > 0) {
                 roomPrice = residenceRef.rooms[0].price;
             }
-            const isStKilda = residenceRef.name && residenceRef.name.toLowerCase().includes('st kilda');
+            
+            // Determine residence type for payment requirements
+            const residenceName = residenceRef.name.toLowerCase();
+            const isStKilda = residenceName.includes('st kilda');
+            const isBelvedere = residenceName.includes('belvedere');
+            
             const adminFeeTotal = 20;
             let expectedRent = roomPrice;
-            let depositRequired = roomPrice;
+            let depositRequired = 0;
+            
+            // Set deposit requirements based on residence
+            if (isStKilda) {
+                // St Kilda: Admin fee + Deposit required
+                depositRequired = roomPrice;
+            } else if (!isBelvedere) {
+                // Other residences (not St Kilda, not Belvedere): Deposit required, no admin fee
+                depositRequired = roomPrice;
+            }
+            // Belvedere: No deposit, no admin fee (depositRequired remains 0)
+            
             // Calculate how much admin and deposit have been paid so far
             const adminPaid = payments.reduce((sum, p) => sum + (p.adminFee || 0), 0);
             const depositPaid = payments.reduce((sum, p) => sum + (p.deposit || 0), 0);
+            
             // Calculate how much is still owing
             const adminOwing = Math.max(adminFeeTotal - adminPaid, 0);
             const depositOwing = Math.max(depositRequired - depositPaid, 0);
+            
             // --- Validation ---
             if (isStKilda) {
-                // Admin fee validation
+                // St Kilda: Admin fee + Deposit + Rent required
                 if (adminFee > adminOwing) {
                     return res.status(400).json({ error: `Admin fee overpayment. Only $${adminOwing.toFixed(2)} remaining.` });
                 }
-                // Deposit validation - allow any amount as long as total doesn't exceed deposit amount
                 if (depositPaid + deposit > depositRequired) {
                     return res.status(400).json({ error: `Deposit overpayment. Total deposit paid cannot exceed $${depositRequired.toFixed(2)}.` });
                 }
-                // Rent validation
                 if (rentAmount !== roomPrice) {
                     return res.status(400).json({ error: `Rent for St Kilda must be $${roomPrice.toFixed(2)}.` });
                 }
-                // Total validation
                 const expectedTotal = roomPrice + adminFee + deposit;
                 if (Math.abs(totalAmount - expectedTotal) > 0.01) {
                     return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)} + Admin $${adminFee.toFixed(2)} + Deposit $${deposit.toFixed(2)}).` });
                 }
-            } else {
-                // For non-St Kilda, only rent is required
+            } else if (isBelvedere) {
+                // Belvedere: Only rent required, no admin fee, no deposit
                 if (adminFee > 0) {
-                    return res.status(400).json({ error: `Admin fee is not required for this property.` });
+                    return res.status(400).json({ error: `Admin fee is not required for Belvedere.` });
                 }
                 if (deposit > 0) {
-                    return res.status(400).json({ error: `Deposit is not required for this property.` });
+                    return res.status(400).json({ error: `Deposit is not required for Belvedere.` });
                 }
                 if (rentAmount !== roomPrice) {
-                    return res.status(400).json({ error: `Rent for this property must be $${roomPrice.toFixed(2)}.` });
+                    return res.status(400).json({ error: `Rent for Belvedere must be $${roomPrice.toFixed(2)}.` });
                 }
                 const expectedTotal = roomPrice;
                 if (Math.abs(totalAmount - expectedTotal) > 0.01) {
                     return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)}).` });
+                }
+            } else {
+                // Other residences: Deposit + Rent required, no admin fee
+                if (adminFee > 0) {
+                    return res.status(400).json({ error: `Admin fee is not required for this property.` });
+                }
+                if (depositPaid + deposit > depositRequired) {
+                    return res.status(400).json({ error: `Deposit overpayment. Total deposit paid cannot exceed $${depositRequired.toFixed(2)}.` });
+                }
+                if (rentAmount !== roomPrice) {
+                    return res.status(400).json({ error: `Rent for this property must be $${roomPrice.toFixed(2)}.` });
+                }
+                const expectedTotal = roomPrice + deposit;
+                if (Math.abs(totalAmount - expectedTotal) > 0.01) {
+                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)} + Deposit $${deposit.toFixed(2)}).` });
                 }
             }
             // --- End Admin and Deposit Logic ---
