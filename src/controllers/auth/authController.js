@@ -260,31 +260,4 @@ exports.adminResetPassword = async (req, res) => {
         console.error('Error in adminResetPassword:', error);
         res.status(500).json({ error: 'Server error' });
     }
-};
-
-async function fixUserResidenceReferences() {
-  try {
-    const students = await User.find({ role: 'student' });
-    let updated = 0;
-    for (const user of students) {
-      // Find application by email
-      const app = await Application.findOne({ email: user.email });
-      if (app && app.roomOccupancy && app.roomOccupancy.residence) {
-        const update = {
-          residence: app.roomOccupancy.residence,
-        };
-        if (app.allocatedRoom) update.currentRoom = app.allocatedRoom;
-        await User.updateOne({ _id: user._id }, { $set: update });
-        console.log(`Updated user ${user.email} with residence ${app.roomOccupancy.residence} and room ${app.allocatedRoom}`);
-        updated++;
-      } else {
-        console.log(`No application or residence found for user ${user.email}`);
-      }
-    }
-    console.log(`Done. Updated ${updated} users.`);
-  } catch (err) {
-    console.error('Error updating users:', err);
-  } finally {
-    await mongoose.disconnect();
-  }
-}
+}; 

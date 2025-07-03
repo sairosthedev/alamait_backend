@@ -194,9 +194,8 @@ exports.updateApplicationStatus = async (req, res) => {
                     await residence.save();
 
                     // Update student's current room and validity
-                    const userId = application.user || application.student;
                     await User.findByIdAndUpdate(
-                        userId,
+                        application.student,
                         {
                             $set: {
                                 currentRoom: roomNumber,
@@ -406,17 +405,6 @@ exports.updateApplicationStatus = async (req, res) => {
             default:
                 return res.status(400).json({ error: 'Invalid action' });
         }
-
-        // After saving/updating application
-        await User.updateOne(
-            { email: application.email },
-            {
-                $set: {
-                    residence: application.roomOccupancy.residence,
-                    currentRoom: application.allocatedRoom
-                }
-            }
-        );
     } catch (error) {
         console.error('Error in updateApplicationStatus:', error);
         res.status(500).json({ error: 'Server error' });
@@ -499,8 +487,8 @@ exports.updatePaymentStatus = async (req, res) => {
         validUntil.setMonth(approvalDate.getMonth() + 4);
 
         // Update student's current room
-        await User.findOneAndUpdate(
-            { email: application.email },
+        await User.findByIdAndUpdate(
+            application.student,
             {
                 $set: {
                     currentRoom: roomNumber,
