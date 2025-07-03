@@ -58,10 +58,10 @@ router.get('/total-income', checkRole('admin'), async (req, res) => {
 });
 
 // Admin-only routes
-router.get('/', checkRole('admin'), getPayments);
-router.post('/', checkRole('admin'), createPaymentValidation, createPayment);
-router.put('/:paymentId/status', checkRole('admin'), updateStatusValidation, updatePaymentStatus);
-router.get('/total', checkRole('admin'), getPaymentTotals);
+router.get('/', checkRole('admin', 'finance_admin', 'finance_user'), getPayments);
+router.post('/', checkRole('admin', 'finance_admin', 'finance_user'), createPaymentValidation, createPayment);
+router.put('/:paymentId/status', checkRole('admin', 'finance_admin', 'finance_user'), updateStatusValidation, updatePaymentStatus);
+router.get('/total', checkRole('admin', 'finance_admin', 'finance_user'), getPaymentTotals);
 
 // Routes accessible to all authenticated users (POP related)
 router.post('/:paymentId/upload-pop', uploadProofOfPayment);
