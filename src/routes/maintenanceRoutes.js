@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { check } = require('express-validator');
+const { auth } = require('../middleware/auth');
 const maintenanceController = require('../controllers/maintenanceController');
+
+router.use(auth);
 
 // Validation middleware
 const maintenanceValidation = [
