@@ -216,7 +216,7 @@ exports.createExpense = async (req, res) => {
 
         // Add optional fields if provided
         if (paymentMethod) {
-            const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'];
+            const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal'];
             if (!validPaymentMethods.includes(paymentMethod)) {
                 return res.status(400).json({ 
                     error: 'Invalid payment method',
@@ -251,6 +251,11 @@ exports.createExpense = async (req, res) => {
 
         if (receiptImage) {
             newExpense.receiptImage = receiptImage;
+        }
+
+        // Add maintenance request ID if provided
+        if (req.body.maintenanceRequestId && validateMongoId(req.body.maintenanceRequestId)) {
+            newExpense.maintenanceRequestId = req.body.maintenanceRequestId;
         }
 
         // Save expense

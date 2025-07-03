@@ -1,4 +1,6 @@
 const Maintenance = require('../models/Maintenance');
+const Expense = require('../models/finance/Expense');
+const { generateUniqueId } = require('../utils/idGenerator');
 
 // Get all maintenance requests
 exports.getAllMaintenance = async (req, res) => {
@@ -119,16 +121,56 @@ exports.createMaintenance = async (req, res) => {
 // Update maintenance request
 exports.updateMaintenance = async (req, res) => {
     try {
-        const maintenance = await Maintenance.findByIdAndUpdate(
+        const { financeStatus, amount, paymentMethod, paymentIcon } = req.body;
+        
+        // Check if financeStatus is being updated to 'approved'
+        const maintenance = await Maintenance.findById(req.params.id);
+        if (!maintenance) {
+            return res.status(404).json({ message: 'Maintenance request not found' });
+        }
+
+        // If financeStatus is being set to 'approved' and amount is provided, create an expense
+        if (financeStatus === 'approved' && amount && amount > 0) {
+            try {
+                // Generate unique expense ID
+                const expenseId = await generateUniqueId('EXP');
+
+                // Create expense data
+                const expenseData = {
+                    expenseId,
+                    residence: maintenance.residence,
+                    category: 'Maintenance',
+                    amount: parseFloat(amount),
+                    description: `Maintenance: ${maintenance.issue} - ${maintenance.description}`,
+                    expenseDate: new Date(),
+                    paymentStatus: 'Pending',
+                    createdBy: req.user._id,
+                    period: 'monthly',
+                    paymentMethod: paymentMethod || 'Bank Transfer',
+                    maintenanceRequestId: maintenance._id
+                };
+
+                // Create the expense
+                const newExpense = new Expense(expenseData);
+                await newExpense.save();
+
+                console.log(`Expense created for maintenance request ${maintenance._id}: ${expenseId}`);
+            } catch (expenseError) {
+                console.error('Error creating expense for maintenance:', expenseError);
+                // Continue with maintenance update even if expense creation fails
+            }
+        }
+
+        // Update the maintenance request
+        const updatedMaintenance = await Maintenance.findByIdAndUpdate(
             req.params.id,
             req.body,
             { new: true, runValidators: true }
         );
-        if (!maintenance) {
-            return res.status(404).json({ message: 'Maintenance request not found' });
-        }
-        res.status(200).json(maintenance);
+
+        res.status(200).json(updatedMaintenance);
     } catch (error) {
+        console.error('Error updating maintenance:', error);
         res.status(400).json({ message: error.message });
     }
 };
