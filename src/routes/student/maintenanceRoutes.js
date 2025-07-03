@@ -58,8 +58,28 @@ const validateMaintenanceRequest = [
     check('description').trim().notEmpty().withMessage('Description is required'),
     check('category').isIn(['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other'])
         .withMessage('Invalid category'),
-    check('priority').optional().isIn(['low', 'medium', 'high'])
-        .withMessage('Invalid priority level'),
+    // Only validate priority from the body, not headers
+    (req, res, next) => {
+        if (req.body.priority !== undefined) {
+            const allowed = ['low', 'medium', 'high'];
+            if (!allowed.includes(req.body.priority)) {
+                return res.status(400).json({
+                    errors: [{
+                        type: 'field',
+                        value: req.body.priority,
+                        msg: 'Invalid priority level',
+                        path: 'priority',
+                        location: 'body'
+                    }],
+                    debug: {
+                        bodyPriority: req.body.priority,
+                        message: 'Priority must be one of low, medium, high if provided.'
+                    }
+                });
+            }
+        }
+        next();
+    },
     check('location').trim().notEmpty().withMessage('Location is required'),
     // Debug middleware to log validation results
     (req, res, next) => {
@@ -70,25 +90,11 @@ const validateMaintenanceRequest = [
         console.log('Issue in body:', req.body.issue);
         console.log('Priority in body:', req.body.priority);
         console.log('Priority in headers:', req.headers.priority);
-        
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
             console.log('=== VALIDATION ERRORS ===');
             console.log('Validation errors:', errors.array());
             console.log('Request body received:', req.body);
-            
-            // Check if priority is being sent in headers instead of body
-            if (req.headers.priority && !req.body.priority) {
-                console.log('WARNING: Priority found in headers instead of body!');
-                console.log('Headers priority:', req.headers.priority);
-                console.log('Body priority:', req.body.priority);
-            }
-            
-            // Check if issue is present but title is missing
-            if (req.body.issue && !req.body.title) {
-                console.log('WARNING: Issue field present but title is missing!');
-            }
-            
             return res.status(400).json({ 
                 errors: errors.array(),
                 debug: {
