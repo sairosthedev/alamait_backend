@@ -258,8 +258,17 @@ exports.getPaymentHistory = async (req, res) => {
             }
             // Belvedere: No deposit, no admin fee (both remain 0)
             
+            // Calculate rent due for unpaid months
             const rentDue = unpaidMonths.length * rent;
+            
+            // Calculate total due including admin and deposit
             totalDue = rentDue + adminDue + depositOwing;
+            
+            // Get current month for advance payment info
+            const currentDate = new Date();
+            const currentMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+            const currentMonthPaid = paidMonths.includes(currentMonth);
+            
             breakdown = {
                 rent: rent,
                 rentDue: rentDue,
@@ -269,7 +278,11 @@ exports.getPaymentHistory = async (req, res) => {
                 depositOwing: depositOwing,
                 unpaidMonths: unpaidMonths.length,
                 isStKilda: isStKilda,
-                isBelvedere: isBelvedere
+                isBelvedere: isBelvedere,
+                currentMonth: currentMonth,
+                currentMonthPaid: currentMonthPaid,
+                canPayAdvance: currentMonthPaid && unpaidMonths.length === 0,
+                nextDueMonth: unpaidMonths.length > 0 ? unpaidMonths[0] : null
             };
         }
 
@@ -586,7 +599,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
 
             console.log('Residence found:', residenceRef.name);
 
-            // --- Prevent Overpayment Logic (Lease Month Enforcement) ---
+            // --- Enhanced Payment Logic with Advance Payment Support ---
             // 1. Fetch the student's latest approved/active application
             const application = await Application.findOne({
                 $or: [
@@ -623,18 +636,79 @@ exports.uploadNewProofOfPayment = (req, res) => {
             // 4. Find unpaid months
             const unpaidMonths = months.filter(m => !paidMonths.includes(m));
 
-            // 5. Only allow payment for the oldest unpaid month
+            // 5. Get current month and requested month
             let requestedMonth = req.body.paymentMonth;
             if (!requestedMonth) {
                 return res.status(400).json({ error: 'paymentMonth is required.' });
             }
-            if (unpaidMonths.length > 0 && requestedMonth !== unpaidMonths[0]) {
+
+            const currentDate = new Date();
+            const currentMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+            const nextMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+            const nextMonthStr = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
+
+            // 6. Enhanced validation logic with strict chronological priority
+            if (unpaidMonths.length > 0) {
+                // Priority: Previous months → Current month → Future months
+                const oldestUnpaidMonth = unpaidMonths[0];
+                
+                // Check if requested month is before the oldest unpaid month
+                if (requestedMonth < oldestUnpaidMonth) {
+                    return res.status(400).json({
+                        error: `You must pay for the oldest unpaid month first: ${oldestUnpaidMonth}`,
+                        oldestUnpaidMonth: oldestUnpaidMonth,
+                        requestedMonth: requestedMonth,
+                        unpaidMonths: unpaidMonths,
+                        priority: 'Previous months must be paid first'
+                    });
+                }
+                
+                // Check if requested month is a future month when there are unpaid months
+                if (requestedMonth > currentMonth) {
+                    return res.status(400).json({
+                        error: `You must pay for all unpaid months before paying for future months. Oldest unpaid month: ${oldestUnpaidMonth}`,
+                        oldestUnpaidMonth: oldestUnpaidMonth,
+                        requestedMonth: requestedMonth,
+                        currentMonth: currentMonth,
+                        unpaidMonths: unpaidMonths,
+                        priority: 'Previous months → Current month → Future months'
+                    });
+                }
+                
+                // Allow payment for current month or unpaid months in chronological order
+                console.log(`Payment allowed for ${requestedMonth} - following chronological priority`);
+            } else {
+                // All months up to current are paid - can pay for future months
+                if (requestedMonth <= currentMonth) {
+                    return res.status(400).json({
+                        error: `All months up to ${currentMonth} are already paid. You can only pay for future months.`,
+                        currentMonth: currentMonth,
+                        requestedMonth: requestedMonth
+                    });
+                }
+                
+                // Allow advance payment for future months
+                console.log(`Advance payment allowed for ${requestedMonth} - all previous months are paid`);
+            }
+
+            // 7. Check if payment for requested month already exists
+            const existingPayment = await Payment.findOne({
+                student: req.user._id,
+                paymentMonth: requestedMonth,
+                status: { $in: ['Confirmed', 'Verified'] }
+            });
+
+            if (existingPayment) {
                 return res.status(400).json({
-                    error: `You must pay for the oldest unpaid month first: ${unpaidMonths[0]}`,
-                    unpaidMonths
+                    error: `Payment for ${requestedMonth} has already been made.`,
+                    existingPayment: {
+                        amount: existingPayment.totalAmount,
+                        date: existingPayment.date,
+                        status: existingPayment.status
+                    }
                 });
             }
-            // --- End Prevent Overpayment Logic (Lease Month Enforcement) ---
+            // --- End Enhanced Payment Logic with Advance Payment Support ---
 
             console.log('Creating new payment record...');
 
@@ -665,7 +739,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 return res.status(400).json({ error: 'Payment month must be in YYYY-MM format.' });
             }
 
-            // --- Admin and Deposit Logic (All Properties) ---
+            // --- Enhanced Payment Logic with Partial Payment Support ---
             let roomPrice = 0;
             if (roomInfo && roomInfo.number && roomInfo.number !== 'Not Assigned') {
                 const room = residenceRef.rooms.find(r => r.roomNumber === roomInfo.number);
@@ -702,7 +776,24 @@ exports.uploadNewProofOfPayment = (req, res) => {
             const adminOwing = Math.max(adminFeeTotal - adminPaid, 0);
             const depositOwing = Math.max(depositRequired - depositPaid, 0);
             
-            // --- Validation ---
+            // Check if this is a partial payment for the requested month
+            const requestedMonthPayments = payments.filter(p => 
+                p.paymentMonth === requestedMonth && 
+                ['Confirmed', 'Verified'].includes(p.status)
+            );
+            
+            const alreadyPaidForMonth = requestedMonthPayments.reduce((sum, p) => sum + (p.rentAmount || 0), 0);
+            const remainingRentForMonth = Math.max(roomPrice - alreadyPaidForMonth, 0);
+            
+            console.log(`Payment analysis for ${requestedMonth}:`, {
+                roomPrice,
+                alreadyPaidForMonth,
+                remainingRentForMonth,
+                requestedAmount: rentAmount,
+                isPartialPayment: rentAmount < roomPrice && alreadyPaidForMonth > 0
+            });
+            
+            // --- Enhanced Validation with Partial Payment Support ---
             if (isStKilda) {
                 // St Kilda: Admin fee + Deposit + Rent required
                 if (adminFee > adminOwing) {
@@ -711,12 +802,21 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 if (depositPaid + deposit > depositRequired) {
                     return res.status(400).json({ error: `Deposit overpayment. Total deposit paid cannot exceed $${depositRequired.toFixed(2)}.` });
                 }
-                if (rentAmount !== roomPrice) {
-                    return res.status(400).json({ error: `Rent for St Kilda must be $${roomPrice.toFixed(2)}.` });
+                
+                // Handle partial rent payments for St Kilda
+                if (rentAmount > remainingRentForMonth) {
+                    return res.status(400).json({ 
+                        error: `Rent overpayment for ${requestedMonth}. Only $${remainingRentForMonth.toFixed(2)} remaining for this month.`,
+                        alreadyPaid: alreadyPaidForMonth,
+                        remaining: remainingRentForMonth
+                    });
                 }
-                const expectedTotal = roomPrice + adminFee + deposit;
+                
+                // For St Kilda, admin fee and deposit are one-time payments
+                // Rent can be paid partially
+                const expectedTotal = rentAmount + adminFee + deposit;
                 if (Math.abs(totalAmount - expectedTotal) > 0.01) {
-                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)} + Admin $${adminFee.toFixed(2)} + Deposit $${deposit.toFixed(2)}).` });
+                    return res.status(400).json({ error: `Total payment must be $${expectedTotal.toFixed(2)} (Rent $${rentAmount.toFixed(2)} + Admin $${adminFee.toFixed(2)} + Deposit $${deposit.toFixed(2)}).` });
                 }
             } else if (isBelvedere) {
                 // Belvedere: Only rent required, no admin fee, no deposit
@@ -726,12 +826,19 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 if (deposit > 0) {
                     return res.status(400).json({ error: `Deposit is not required for Belvedere.` });
                 }
-                if (rentAmount !== roomPrice) {
-                    return res.status(400).json({ error: `Rent for Belvedere must be $${roomPrice.toFixed(2)}.` });
+                
+                // Handle partial rent payments for Belvedere
+                if (rentAmount > remainingRentForMonth) {
+                    return res.status(400).json({ 
+                        error: `Rent overpayment for ${requestedMonth}. Only $${remainingRentForMonth.toFixed(2)} remaining for this month.`,
+                        alreadyPaid: alreadyPaidForMonth,
+                        remaining: remainingRentForMonth
+                    });
                 }
-                const expectedTotal = roomPrice;
+                
+                const expectedTotal = rentAmount;
                 if (Math.abs(totalAmount - expectedTotal) > 0.01) {
-                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)}).` });
+                    return res.status(400).json({ error: `Total payment must be $${expectedTotal.toFixed(2)} (Rent $${rentAmount.toFixed(2)}).` });
                 }
             } else {
                 // Other residences: Deposit + Rent required, no admin fee
@@ -741,15 +848,22 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 if (depositPaid + deposit > depositRequired) {
                     return res.status(400).json({ error: `Deposit overpayment. Total deposit paid cannot exceed $${depositRequired.toFixed(2)}.` });
                 }
-                if (rentAmount !== roomPrice) {
-                    return res.status(400).json({ error: `Rent for this property must be $${roomPrice.toFixed(2)}.` });
+                
+                // Handle partial rent payments for other residences
+                if (rentAmount > remainingRentForMonth) {
+                    return res.status(400).json({ 
+                        error: `Rent overpayment for ${requestedMonth}. Only $${remainingRentForMonth.toFixed(2)} remaining for this month.`,
+                        alreadyPaid: alreadyPaidForMonth,
+                        remaining: remainingRentForMonth
+                    });
                 }
-                const expectedTotal = roomPrice + deposit;
+                
+                const expectedTotal = rentAmount + deposit;
                 if (Math.abs(totalAmount - expectedTotal) > 0.01) {
-                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)} + Deposit $${deposit.toFixed(2)}).` });
+                    return res.status(400).json({ error: `Total payment must be $${expectedTotal.toFixed(2)} (Rent $${rentAmount.toFixed(2)} + Deposit $${deposit.toFixed(2)}).` });
                 }
             }
-            // --- End Admin and Deposit Logic ---
+            // --- End Enhanced Payment Logic with Partial Payment Support ---
 
             // Create a new payment record
             const payment = new Payment({
