@@ -18,7 +18,7 @@ const maintenanceValidation = [
     check('residenceId').optional().isMongoId().withMessage('Invalid residence ID format'),
     check('paymentMethod').optional().custom((value) => {
         if (value) {
-            const validMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'];
+            const validMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal'];
             const validLowercaseMethods = validMethods.map(method => method.toLowerCase());
             const normalizedValue = value.toLowerCase();
             

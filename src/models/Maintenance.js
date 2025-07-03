@@ -108,7 +108,7 @@ const maintenanceSchema = new mongoose.Schema({
     },
     paymentMethod: {
         type: String,
-        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'bank transfer', 'cash', 'online payment', 'ecocash', 'innbucks'],
+        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal', 'bank transfer', 'cash', 'online payment', 'ecocash', 'innbucks', 'mastercard', 'visa', 'paypal'],
         required: false,
         set: function(value) {
             if (value) {
@@ -119,7 +119,10 @@ const maintenanceSchema = new mongoose.Schema({
                     'cash': 'Cash',
                     'online payment': 'Online Payment',
                     'ecocash': 'Ecocash',
-                    'innbucks': 'Innbucks'
+                    'innbucks': 'Innbucks',
+                    'mastercard': 'MasterCard',
+                    'visa': 'Visa',
+                    'paypal': 'PayPal'
                 };
                 return mapping[normalized] || value;
             }
