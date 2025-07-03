@@ -30,11 +30,22 @@ exports.getMaintenanceById = async (req, res) => {
 // Create new maintenance request
 exports.createMaintenance = async (req, res) => {
     try {
-        const { issue, description, room, category, priority, residence, assignedTo, amount, laborCost } = req.body;
+        // Accept both 'issue' and 'title' (map 'title' to 'issue' if 'issue' is missing)
+        let { issue, title, description, room, category, priority, residence, residenceId, assignedTo, amount, laborCost } = req.body;
 
-        // Validate residence ID
-        if (!residence) {
-            return res.status(400).json({ message: 'Residence ID is required' });
+        // Map 'title' to 'issue' if 'issue' is not provided
+        if (!issue && title) {
+            issue = title;
+        }
+
+        // Accept 'residenceId' as an alias for 'residence'
+        if (!residence && residenceId) {
+            residence = residenceId;
+        }
+
+        // Validate required fields
+        if (!issue || !description || !room || !residence) {
+            return res.status(400).json({ message: 'Missing required fields: issue, description, room, or residence' });
         }
 
         // Always set requestedBy from the authenticated user

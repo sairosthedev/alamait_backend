@@ -109,34 +109,48 @@ exports.createMaintenanceRequest = async (req, res) => {
             });
         }
 
-        const newRequest = new Maintenance({
-            student: req.user._id, // Automatically set student ID
-            residence: finalResidenceId, // Use determined residence ID
-            issue: title, // Use title for the issue field
+        // Validate that the room exists in the residence
+        if (!room) {
+            return res.status(400).json({ 
+                error: 'Room is required.' 
+            });
+        }
+        const roomExists = residence.rooms && residence.rooms.some(r => r.roomNumber === room);
+        if (!roomExists) {
+            return res.status(400).json({ 
+                error: `Room ${room} does not exist in residence ${residence.name}` 
+            });
+        }
+
+        // Build the maintenance request data similar to admin
+        const maintenanceData = {
+            student: req.user._id,
+            residence: finalResidenceId,
+            issue: title,
             description,
-            category,
-            priority: priority || 'low',
+            room,
+            category: category ? category.toLowerCase() : 'other',
+            priority: priority ? priority.toLowerCase() : 'low',
+            status: 'pending',
             location,
-            room: room || null, // Include room if provided
-            status: 'pending', // Always start as pending
             requestDate: new Date(),
             images: images || [],
-            studentResponse: studentResponse || 'Waiting for response', // Include student response if provided
+            studentResponse: studentResponse || 'Waiting for response',
             updates: [{
                 date: new Date(),
                 message: 'Maintenance request submitted',
                 author: 'System'
+            }],
+            requestHistory: [{
+                date: new Date(),
+                action: 'Request created',
+                user: req.user._id,
+                changes: ['created']
             }]
-        });
+        };
 
-        console.log('Creating maintenance request with data:', {
-            student: newRequest.student,
-            residence: newRequest.residence,
-            issue: newRequest.issue,
-            category: newRequest.category,
-            priority: newRequest.priority
-        });
-
+        const newRequest = new Maintenance(maintenanceData);
+        console.log('Creating maintenance request with data:', maintenanceData);
         await newRequest.save();
         console.log('Maintenance request saved successfully');
 
@@ -145,10 +159,35 @@ exports.createMaintenanceRequest = async (req, res) => {
             .populate('student', 'firstName lastName email')
             .populate('residence', 'name');
 
+        // Format dates to ISO string for response
+        const formatDate = (date) => {
+            return date ? new Date(date).toISOString().split('T')[0] : null;
+        };
+
+        const response = {
+            ...populatedRequest.toObject(),
+            id: populatedRequest._id,
+            studentId: populatedRequest.student?._id,
+            studentName: populatedRequest.student ? `${populatedRequest.student.firstName} ${populatedRequest.student.lastName}` : undefined,
+            residenceName: populatedRequest.residence ? populatedRequest.residence.name : undefined,
+            dateRequested: formatDate(populatedRequest.requestDate),
+            expectedCompletion: formatDate(populatedRequest.estimatedCompletion),
+            status: populatedRequest.status,
+            priority: populatedRequest.priority,
+            issue: populatedRequest.issue,
+            description: populatedRequest.description,
+            room: populatedRequest.room,
+            category: populatedRequest.category,
+            location: populatedRequest.location,
+            images: populatedRequest.images,
+            updates: populatedRequest.updates,
+            requestHistory: populatedRequest.requestHistory
+        };
+
         console.log('=== CREATE MAINTENANCE REQUEST SUCCESS ===');
         res.status(201).json({
             message: 'Maintenance request created successfully',
-            request: populatedRequest
+            request: response
         });
     } catch (error) {
         console.error('=== CREATE MAINTENANCE REQUEST ERROR ===');
