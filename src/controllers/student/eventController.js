@@ -1,15 +1,85 @@
 const Event = require('../../models/Event');
+const User = require('../../models/User');
+const Booking = require('../../models/Booking');
+const Application = require('../../models/Application');
+const Residence = require('../../models/Residence');
 const { validationResult } = require('express-validator');
+
+// Helper function to get student's residence ID
+const getStudentResidenceId = async (userId) => {
+    try {
+        // Get current active booking first
+        const currentBooking = await Booking.findOne({
+            student: userId,
+            status: 'active'
+        }).populate('residence', '_id name');
+
+        if (currentBooking?.residence?._id) {
+            console.log('Found residence from current booking:', currentBooking.residence.name);
+            return currentBooking.residence._id;
+        }
+
+        // Get approved application
+        const approvedApplication = await Application.findOne({
+            student: userId,
+            status: { $in: ['approved', 'waitlisted'] }
+        }).populate('residence', '_id name').sort({ applicationDate: -1 });
+
+        if (approvedApplication?.residence?._id) {
+            console.log('Found residence from approved application:', approvedApplication.residence.name);
+            return approvedApplication.residence._id;
+        }
+
+        // Get student's current room and find residence
+        const student = await User.findById(userId).select('currentRoom');
+        if (student?.currentRoom) {
+            const residence = await Residence.findOne({
+                'rooms.roomNumber': student.currentRoom
+            }).select('_id name');
+            
+            if (residence?._id) {
+                console.log('Found residence from current room:', residence.name);
+                return residence._id;
+            }
+        }
+
+        // Fallback to student's direct residence field
+        const studentWithResidence = await User.findById(userId).populate('residence', '_id name');
+        if (studentWithResidence?.residence?._id) {
+            console.log('Found residence from student field:', studentWithResidence.residence.name);
+            return studentWithResidence.residence._id;
+        }
+
+        console.log('No residence found for student');
+        return null;
+    } catch (error) {
+        console.error('Error getting student residence:', error);
+        return null;
+    }
+};
 
 // Get all events
 exports.getEvents = async (req, res) => {
     try {
         console.log('Starting getEvents...');
         
-        // First, get ALL events without any filters
-        const allEvents = await Event.find({});
-        console.log('Total events in database:', allEvents.length);
-        console.log('All events:', JSON.stringify(allEvents, null, 2));
+        // Get student's residence ID
+        const studentResidenceId = await getStudentResidenceId(req.user._id);
+        console.log('Student residence ID:', studentResidenceId);
+        
+        // Build query to filter events by student's residence
+        let query = {};
+        if (studentResidenceId) {
+            query.residence = studentResidenceId;
+            console.log('Filtering events by residence:', studentResidenceId);
+        } else {
+            console.log('No residence found for student, returning all events');
+        }
+        
+        // Get events filtered by residence
+        const allEvents = await Event.find(query).populate('residence', 'name location');
+        console.log('Total events found for student residence:', allEvents.length);
+        console.log('Events found:', allEvents.map(e => ({ title: e.title, residence: e.residence?.name || 'Unknown' })));
 
         // Transform events to match frontend format
         const formatEvent = (event) => {
@@ -27,6 +97,11 @@ exports.getEvents = async (req, res) => {
                 timeDisplay = event.endTime;
             }
 
+            // Check if student is registered for this event
+            const isRegistered = event.participants && event.participants.some(p => 
+                p.student && p.student.toString() === req.user._id.toString()
+            );
+
             return {
                 id: event._id,
                 title: event.title,
@@ -34,7 +109,7 @@ exports.getEvents = async (req, res) => {
                 time: timeDisplay,
                 location: event.location,
                 category: event.category,
-                status: event.participants.some(p => p.student.toString() === req.user._id.toString()) ? 'Registered' : 
+                status: isRegistered ? 'Registered' : 
                        event.status === 'Required' ? 'Required' : 'Open',
                 description: event.description,
                 visibility: event.visibility,
@@ -43,13 +118,34 @@ exports.getEvents = async (req, res) => {
             };
         };
 
-        // For now, return all events in both upcoming and past
+        // Separate events into upcoming and past
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Set to start of day
+        
+        const upcoming = [];
+        const past = [];
+        
+        allEvents.forEach(event => {
+            const eventDate = new Date(event.date);
+            eventDate.setHours(0, 0, 0, 0);
+            
+            const formattedEvent = formatEvent(event);
+            
+            if (eventDate >= today) {
+                upcoming.push(formattedEvent);
+            } else {
+                past.push(formattedEvent);
+            }
+        });
+        
         const response = {
-            upcoming: allEvents.map(formatEvent),
-            past: []
+            upcoming,
+            past
         };
         
-        console.log('Formatted response:', JSON.stringify(response, null, 2));
+        console.log('Formatted response - Upcoming:', upcoming.length, 'Past:', past.length);
+        console.log('Upcoming events:', upcoming.map(e => e.title));
+        console.log('Past events:', past.map(e => e.title));
         res.json(response);
     } catch (error) {
         console.error('Error in getEvents:', error);
