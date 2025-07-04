@@ -103,7 +103,7 @@ const checkRole = (...roles) => {
 };
 
 const checkAdminOrFinance = (req, res, next) => {
-    const allowedRoles = ['admin', 'finance'];
+    const allowedRoles = ['admin', 'finance_admin', 'finance_user'];
     console.log('Admin/Finance role check - User:', {
         id: req.user?._id,
         email: req.user?.email,
@@ -126,7 +126,7 @@ const checkAdminOrFinance = (req, res, next) => {
         });
         return res.status(403).json({ 
             success: false,
-            message: 'Access denied. Required role: admin or finance'
+            message: 'Access denied. Required role: admin, finance_admin, or finance_user'
         });
     }
 

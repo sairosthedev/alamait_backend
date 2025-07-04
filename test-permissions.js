@@ -24,7 +24,7 @@ async function testPermissions() {
 
         // Test 2: Check if finance users exist
         console.log('\n2. Checking finance users...');
-        const financeUsers = await User.find({ role: { $in: ['finance', 'finance_admin', 'finance_user'] } }).select('_id email firstName lastName role');
+        const financeUsers = await User.find({ role: { $in: ['finance_admin', 'finance_user'] } }).select('_id email firstName lastName role');
         console.log(`Found ${financeUsers.length} finance users:`);
         financeUsers.forEach(user => {
             console.log(`  - ${user.email} (${user.firstName} ${user.lastName}) - Role: ${user.role}`);

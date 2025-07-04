@@ -57,7 +57,7 @@ async function seedTestData() {
             lastName: 'User',
             email: 'finance@alamait.com',
             password: hashedPassword,
-            role: 'finance',
+            role: 'finance_admin',
             phone: '1234567891',
             status: 'active'
         });

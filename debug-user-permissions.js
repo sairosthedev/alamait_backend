@@ -25,8 +25,8 @@ async function debugUserPermissions() {
         // Test 2: Check users by different roles
         console.log('\n2. Checking users by role...');
         const adminUsers = await User.find({ role: 'admin' });
-        const financeUsers = await User.find({ role: { $in: ['finance', 'finance_admin', 'finance_user'] } });
-        const otherUsers = await User.find({ role: { $nin: ['admin', 'finance', 'finance_admin', 'finance_user'] } });
+        const financeUsers = await User.find({ role: { $in: ['finance_admin', 'finance_user'] } });
+        const otherUsers = await User.find({ role: { $nin: ['admin', 'finance_admin', 'finance_user'] } });
         
         console.log(`Admin users: ${adminUsers.length}`);
         console.log(`Finance users: ${financeUsers.length}`);

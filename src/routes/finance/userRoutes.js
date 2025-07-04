@@ -8,7 +8,7 @@ const Residence = require('../../models/Residence');
 router.get('/admins', auth, async (req, res) => {
     try {
         const adminUsers = await User.find({
-            role: { $in: ['admin', 'finance', 'property_manager'] }
+            role: { $in: ['admin', 'finance_admin', 'finance_user', 'property_manager'] }
         })
         .select('firstName lastName role')
         .sort('firstName');
@@ -21,7 +21,7 @@ router.get('/admins', auth, async (req, res) => {
 });
 
 // Get all students with residence information (for finance)
-router.get('/students', auth, checkRole('finance'), async (req, res) => {
+router.get('/students', auth, checkRole('finance_admin', 'finance_user'), async (req, res) => {
     try {
         const { page = 1, limit = 10, search, status } = req.query;
         const query = { role: 'student' };
@@ -64,7 +64,7 @@ router.get('/students', auth, checkRole('finance'), async (req, res) => {
 });
 
 // Get student details by ID (for finance)
-router.get('/students/:studentId', auth, checkRole('finance'), async (req, res) => {
+router.get('/students/:studentId', auth, checkRole('finance_admin', 'finance_user'), async (req, res) => {
     try {
         const student = await User.findOne({
             _id: req.params.studentId,

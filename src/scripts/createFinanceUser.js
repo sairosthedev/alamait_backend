@@ -28,12 +28,12 @@ console.log('Arguments received:', {
 // Validate arguments
 if (!email || !role || !password) {
   console.error('Usage: node src/scripts/createFinanceUser.js [email] [role] [password]');
-  console.error('Roles: finance_admin, finance_user');
+  console.error('Roles: admin, finance_admin, finance_user');
   process.exit(1);
 }
 
 // Validate role
-const validRoles = ['finance_admin', 'finance_user'];
+const validRoles = ['admin', 'finance_admin', 'finance_user'];
 if (!validRoles.includes(role)) {
   console.error(`Error: Role must be one of ${validRoles.join(', ')}`);
   process.exit(1);

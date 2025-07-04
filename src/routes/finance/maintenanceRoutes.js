@@ -7,7 +7,7 @@ const maintenanceController = require('../../controllers/finance/maintenanceCont
 router.use(auth);
 
 // Allow admin, finance, and finance_admin roles for all finance maintenance routes
-const allowedRoles = ['admin', 'finance', 'finance_admin', 'finance_user'];
+const allowedRoles = ['admin', 'finance_admin', 'finance_user'];
 router.use(checkRole(...allowedRoles));
 
 // Get all maintenance requests with financial details
