@@ -109,23 +109,22 @@ exports.createMaintenanceRequest = async (req, res) => {
             });
         }
 
+        // Map title to issue, and ensure room and priority are set
         const newRequest = new Maintenance({
             student: req.user._id, // Automatically set student ID
             residence: finalResidenceId, // Use determined residence ID
-            title,
+            issue: title, // <-- Map title to issue
             description,
+            room: room || 'General', // <-- Provide a default if missing
             category,
-            priority: priority || 'low',
-            location,
-            room: room || null, // Include room if provided
+            priority: priority || 'low', // <-- Provide a default if missing
             status: 'pending', // Always start as pending
             requestDate: new Date(),
             images: images || [],
             studentResponse: studentResponse || 'Waiting for response', // Include student response if provided
             updates: [{
                 date: new Date(),
-                message: 'Maintenance request submitted',
-                author: 'System'
+                message: 'Maintenance request submitted'
             }]
         });
 
@@ -153,7 +152,11 @@ exports.createMaintenanceRequest = async (req, res) => {
     } catch (error) {
         console.error('=== CREATE MAINTENANCE REQUEST ERROR ===');
         console.error('Error in createMaintenanceRequest:', error);
-        res.status(500).json({ error: 'Error creating maintenance request' });
+        res.status(500).json({ 
+            error: 'Error creating maintenance request',
+            details: error.message,
+            stack: error.stack
+        });
     }
 };
 
