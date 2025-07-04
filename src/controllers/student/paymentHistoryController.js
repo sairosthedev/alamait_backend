@@ -189,6 +189,7 @@ exports.getPaymentHistory = async (req, res) => {
         let totalDue = 0;
         let unpaidMonths = [];
         let breakdown = {};
+        let monthlySummary = [];
         if (approvedApplication && approvedApplication.residence && approvedApplication.residence !== 'No residence') {
             // 1. Generate all months in the lease period
             function getMonthList(startDate, endDate) {
@@ -196,32 +197,54 @@ exports.getPaymentHistory = async (req, res) => {
                 let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
                 const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
                 while (current <= end) {
-                    // Use YYYY-MM-01 for valid date parsing
-                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-01`);
+                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`);
                     current.setMonth(current.getMonth() + 1);
                 }
                 return months;
             }
             const months = getMonthList(new Date(approvedApplication.startDate), new Date(approvedApplication.endDate));
-            // 2. Find all paid months
-            const paidMonths = payments
-                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
-                .map(p => {
-                    // Accept both YYYY-MM and YYYY-MM-01
-                    if (p.paymentMonth && /^\d{4}-\d{2}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth;
-                    if (p.paymentMonth && /^\d{4}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth + '-01';
-                    return null;
-                })
-                .filter(Boolean);
-            // 3. Find unpaid months
-            unpaidMonths = months.filter(m => !paidMonths.includes(m));
-            // 4. Calculate totalDue: rentDue + adminDue + depositOwing
+            // 2. Group and sum payments by month
+            const paymentsByMonth = {};
+            payments.forEach(p => {
+                if (!p.paymentMonth) return;
+                const key = p.paymentMonth.length === 7 ? p.paymentMonth : p.paymentMonth.slice(0, 7);
+                if (!paymentsByMonth[key]) paymentsByMonth[key] = [];
+                if (["Confirmed", "Verified"].includes(p.status)) {
+                    paymentsByMonth[key].push(Number(p.totalAmount) || 0);
+                }
+            });
+            // 3. Calculate monthly summary
             let rent = 0;
             if (typeof approvedApplication.price === 'number' && approvedApplication.price > 0) {
                 rent = approvedApplication.price;
             } else if (allocatedRoomDetails && typeof allocatedRoomDetails.price === 'number' && allocatedRoomDetails.price > 0) {
                 rent = allocatedRoomDetails.price;
             }
+            monthlySummary = months.map(month => {
+                const paid = (paymentsByMonth[month] || []).reduce((a, b) => a + b, 0);
+                let status = 'Unpaid';
+                let outstanding = rent - paid;
+                if (paid >= rent) {
+                    status = 'Paid';
+                    outstanding = 0;
+                } else if (paid > 0) {
+                    status = 'Partially Paid';
+                }
+                return {
+                    month,
+                    expected: rent,
+                    paid,
+                    outstanding: outstanding > 0 ? outstanding : 0,
+                    status
+                };
+            });
+            // 4. Find unpaid months (for legacy logic)
+            unpaidMonths = months.filter(m => {
+                const paid = (paymentsByMonth[m] || []).reduce((a, b) => a + b, 0);
+                return paid < rent;
+            });
+            // 4. Calculate totalDue: rentDue + adminDue + depositOwing
+            let rentDue = unpaidMonths.length * rent;
             
             // Determine residence type for payment requirements
             const residenceName = approvedApplication.residence && 
@@ -259,7 +282,7 @@ exports.getPaymentHistory = async (req, res) => {
             // Belvedere: No deposit, no admin fee (both remain 0)
             
             // Calculate rent due for unpaid months
-            const rentDue = unpaidMonths.length * rent;
+            rentDue = unpaidMonths.length * rent;
             
             // Calculate total due including admin and deposit
             totalDue = rentDue + adminDue + depositOwing;
@@ -267,7 +290,7 @@ exports.getPaymentHistory = async (req, res) => {
             // Get current month for advance payment info
             const currentDate = new Date();
             const currentMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
-            const currentMonthPaid = paidMonths.includes(currentMonth);
+            const currentMonthPaid = monthlySummary.some(m => m.month === currentMonth && m.status === 'Paid');
             
             breakdown = {
                 rent: rent,
@@ -308,7 +331,8 @@ exports.getPaymentHistory = async (req, res) => {
             totalDue: Number(totalDue).toFixed(2) || '0.00',
             allocatedRoomDetails,
             unpaidMonths, // now formatted as YYYY-MM-01
-            breakdown // add breakdown for frontend
+            breakdown, // add breakdown for frontend
+            monthlySummary // <-- new field for frontend
         };
 
         // Format payment history
@@ -344,7 +368,8 @@ exports.getPaymentHistory = async (req, res) => {
 
         res.json({
             studentInfo,
-            paymentHistory
+            paymentHistory,
+            monthlySummary // <-- new field for frontend
         });
     } catch (error) {
         console.error('Error in getPaymentHistory:', error);
