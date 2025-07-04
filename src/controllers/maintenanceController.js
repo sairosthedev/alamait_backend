@@ -147,7 +147,8 @@ exports.updateMaintenance = async (req, res) => {
                     paymentStatus: 'Pending',
                     createdBy: req.user._id,
                     period: 'monthly',
-                    paymentMethod: paymentMethod || 'Bank Transfer',
+                    paymentMethod: paymentMethod || maintenance.paymentMethod || 'Bank Transfer',
+                    paymentIcon: paymentIcon || maintenance.paymentIcon,
                     maintenanceRequestId: maintenance._id
                 };
 

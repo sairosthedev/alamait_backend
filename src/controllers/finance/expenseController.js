@@ -132,6 +132,7 @@ exports.createExpense = async (req, res) => {
             expenseDate,
             paymentStatus,
             paymentMethod,
+            paymentIcon,
             paidBy,
             paidDate,
             receiptImage,
@@ -225,6 +226,10 @@ exports.createExpense = async (req, res) => {
                 });
             }
             newExpense.paymentMethod = paymentMethod;
+        }
+
+        if (paymentIcon) {
+            newExpense.paymentIcon = paymentIcon;
         }
 
         if (paidBy && validateMongoId(paidBy)) {

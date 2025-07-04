@@ -43,6 +43,10 @@ const expenseSchema = new mongoose.Schema({
         enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal'],
         required: function() { return this.paymentStatus === 'Paid'; }
     },
+    paymentIcon: {
+        type: String,
+        required: false
+    },
     maintenanceRequestId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Maintenance',
