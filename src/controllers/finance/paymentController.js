@@ -96,12 +96,21 @@ exports.getStudentPayments = async (req, res) => {
         const formattedPayments = payments.map(payment => {
             let paymentType = 'Other';
             
+            // Improved payment type detection
             if (payment.rentAmount > 0 && payment.adminFee === 0 && payment.deposit === 0) {
                 paymentType = 'Rent';
             } else if (payment.deposit > 0 && payment.rentAmount === 0 && payment.adminFee === 0) {
                 paymentType = 'Deposit';
             } else if (payment.adminFee > 0 && payment.rentAmount === 0 && payment.deposit === 0) {
                 paymentType = 'Admin Fee';
+            } else if (payment.rentAmount > 0 && payment.adminFee > 0 && payment.deposit === 0) {
+                paymentType = 'Rent + Admin Fee';
+            } else if (payment.rentAmount > 0 && payment.deposit > 0 && payment.adminFee === 0) {
+                paymentType = 'Rent + Deposit';
+            } else if (payment.rentAmount > 0 && payment.adminFee > 0 && payment.deposit > 0) {
+                paymentType = 'Rent + Admin Fee + Deposit';
+            } else if (payment.adminFee > 0 && payment.deposit > 0 && payment.rentAmount === 0) {
+                paymentType = 'Admin Fee + Deposit';
             }
             
             const admin = payment.createdBy ? 
@@ -127,7 +136,9 @@ exports.getStudentPayments = async (req, res) => {
                 method: payment.method || '',
                 description: payment.description || '',
                 studentId: payment.student ? payment.student._id : null,
-                residenceId: payment.residence ? payment.residence._id : null
+                residenceId: payment.residence ? payment.residence._id : null,
+                applicationStatus: payment.applicationStatus || null,
+                clarificationRequests: payment.clarificationRequests || []
             };
         });
         
@@ -283,12 +294,21 @@ exports.getPaymentsByStudent = async (req, res) => {
         const formattedPayments = payments.map(payment => {
             let paymentType = 'Other';
             
+            // Improved payment type detection
             if (payment.rentAmount > 0 && payment.adminFee === 0 && payment.deposit === 0) {
                 paymentType = 'Rent';
             } else if (payment.deposit > 0 && payment.rentAmount === 0 && payment.adminFee === 0) {
                 paymentType = 'Deposit';
             } else if (payment.adminFee > 0 && payment.rentAmount === 0 && payment.deposit === 0) {
                 paymentType = 'Admin Fee';
+            } else if (payment.rentAmount > 0 && payment.adminFee > 0 && payment.deposit === 0) {
+                paymentType = 'Rent + Admin Fee';
+            } else if (payment.rentAmount > 0 && payment.deposit > 0 && payment.adminFee === 0) {
+                paymentType = 'Rent + Deposit';
+            } else if (payment.rentAmount > 0 && payment.adminFee > 0 && payment.deposit > 0) {
+                paymentType = 'Rent + Admin Fee + Deposit';
+            } else if (payment.adminFee > 0 && payment.deposit > 0 && payment.rentAmount === 0) {
+                paymentType = 'Admin Fee + Deposit';
             }
             
             const admin = payment.createdBy ? 
@@ -314,7 +334,9 @@ exports.getPaymentsByStudent = async (req, res) => {
                 method: payment.method || '',
                 description: payment.description || '',
                 studentId: student._id,
-                residenceId: payment.residence ? payment.residence._id : null
+                residenceId: payment.residence ? payment.residence._id : null,
+                applicationStatus: payment.applicationStatus || null,
+                clarificationRequests: payment.clarificationRequests || []
             };
         });
 
