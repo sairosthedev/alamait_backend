@@ -37,7 +37,9 @@ exports.getEvents = async (req, res) => {
                 status: event.participants.some(p => p.student.toString() === req.user._id.toString()) ? 'Registered' : 
                        event.status === 'Required' ? 'Required' : 'Open',
                 description: event.description,
-                visibility: event.visibility
+                visibility: event.visibility,
+                residence: event.residence?._id ? event.residence._id : (event.residence || null),
+                residenceName: event.residence?.name || null
             };
         };
 
