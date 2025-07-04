@@ -672,48 +672,29 @@ exports.uploadNewProofOfPayment = (req, res) => {
             const nextMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
             const nextMonthStr = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
 
-            // 6. Enhanced validation logic with strict chronological priority
+            // 6. Strict sequential payment logic
             if (unpaidMonths.length > 0) {
-                // Priority: Previous months → Current month → Future months
                 const oldestUnpaidMonth = unpaidMonths[0];
-                
-                // Check if requested month is before the oldest unpaid month
-                if (requestedMonth < oldestUnpaidMonth) {
+                // Block payment if requestedMonth is after the oldest unpaid month
+                if (requestedMonth !== oldestUnpaidMonth) {
                     return res.status(400).json({
                         error: `You must pay for the oldest unpaid month first: ${oldestUnpaidMonth}`,
                         oldestUnpaidMonth: oldestUnpaidMonth,
                         requestedMonth: requestedMonth,
                         unpaidMonths: unpaidMonths,
-                        priority: 'Previous months must be paid first'
+                        priority: 'You must pay for previous unpaid months before paying for later months.'
                     });
                 }
-                
-                // Check if requested month is a future month when there are unpaid months
-                if (requestedMonth > currentMonth) {
-                    return res.status(400).json({
-                        error: `You must pay for all unpaid months before paying for future months. Oldest unpaid month: ${oldestUnpaidMonth}`,
-                        oldestUnpaidMonth: oldestUnpaidMonth,
-                        requestedMonth: requestedMonth,
-                        currentMonth: currentMonth,
-                        unpaidMonths: unpaidMonths,
-                        priority: 'Previous months → Current month → Future months'
-                    });
-                }
-                
-                // Allow payment for current month or unpaid months in chronological order
-                console.log(`Payment allowed for ${requestedMonth} - following chronological priority`);
+                // Allow payment for the oldest unpaid month
             } else {
                 // All months up to current are paid - can pay for future months
-                if (requestedMonth <= currentMonth) {
+                if (requestedMonth < months[0] || requestedMonth > months[months.length - 1]) {
                     return res.status(400).json({
-                        error: `All months up to ${currentMonth} are already paid. You can only pay for future months.`,
-                        currentMonth: currentMonth,
-                        requestedMonth: requestedMonth
+                        error: `Requested month ${requestedMonth} is outside your lease period.`,
+                        leasePeriod: { start: months[0], end: months[months.length - 1] }
                     });
                 }
-                
-                // Allow advance payment for future months
-                console.log(`Advance payment allowed for ${requestedMonth} - all previous months are paid`);
+                // No unpaid months, allow payment for any valid month
             }
 
             // 7. Check if payment for requested month already exists
@@ -918,16 +899,22 @@ exports.uploadNewProofOfPayment = (req, res) => {
             await payment.save();
             console.log('Payment record created successfully:', payment._id);
 
-            res.status(200).json({
+            const response = {
                 message: 'Proof of payment uploaded successfully',
                 payment: {
-                    id: payment._id,
-                    paymentId: payment.paymentId,
-                    totalAmount: payment.totalAmount,
+                    id: payment.paymentId,
                     status: payment.status,
-                    proofOfPayment: payment.proofOfPayment
-                }
-            });
+                    rentAmount,
+                    adminFee,
+                    deposit,
+                    totalAmount
+                },
+                proofOfPayment: payment.proofOfPayment
+            };
+            if (res.locals.paymentWarning) {
+                response.warning = res.locals.paymentWarning;
+            }
+            res.json(response);
 
         } catch (error) {
             console.error('Error in uploadNewProofOfPayment:', error);
