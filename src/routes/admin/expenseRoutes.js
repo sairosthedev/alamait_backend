@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getExpenses, addExpense, updateExpenseStatus, approveExpense } = require('../../controllers/admin/expenseController');
+const { getExpenses, addExpense, updateExpenseStatus, approveExpense, updateExpense } = require('../../controllers/admin/expenseController');
 const { auth, checkRole } = require('../../middleware/auth');
 
 // Apply authentication middleware to all routes
@@ -17,6 +17,9 @@ router
     .route('/')
     .get(checkRole('admin', 'finance_admin', 'finance_user'), getExpenses) // Allow finance roles to view
     .post(checkRole('admin','finance_admin', 'finance_user'), addExpense); // Only admins and financecan add expenses
+
+// Route to handle expense updates
+router.put('/:expenseId', checkRole('admin', 'finance_admin', 'finance_user'), updateExpense);
 
 // Route to handle expense status updates
 router.put('/:expenseId/status', checkRole('admin', 'finance_admin', 'finance_user'), updateExpenseStatus);

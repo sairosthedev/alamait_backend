@@ -447,11 +447,84 @@ const approveExpense = async (req, res) => {
     }
 };
 
+// Update expense
+const updateExpense = async (req, res) => {
+    try {
+        const { expenseId } = req.params;
+        const updateData = req.body;
+
+        // Validate expense ID
+        if (!mongoose.Types.ObjectId.isValid(expenseId)) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Invalid expense ID format' 
+            });
+        }
+
+        // Find expense
+        const expense = await Expense.findById(expenseId);
+        if (!expense) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Expense not found' 
+            });
+        }
+
+        // Validate residence ID if provided
+        if (updateData.residence && !mongoose.Types.ObjectId.isValid(updateData.residence)) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Invalid residence ID format' 
+            });
+        }
+
+        // Validate amount if provided
+        if (updateData.amount && (isNaN(updateData.amount) || updateData.amount <= 0)) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Amount must be a positive number' 
+            });
+        }
+
+        // Format dates if provided
+        if (updateData.expenseDate) updateData.expenseDate = new Date(updateData.expenseDate);
+        if (updateData.paidDate) updateData.paidDate = new Date(updateData.paidDate);
+
+        // Add updatedBy field
+        updateData.updatedBy = req.user._id;
+        updateData.updatedAt = new Date();
+
+        // Update expense
+        const updatedExpense = await Expense.findByIdAndUpdate(
+            expenseId,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        ).populate('residence', 'name')
+         .populate('createdBy', 'firstName lastName email')
+         .populate('updatedBy', 'firstName lastName email')
+         .populate('paidBy', 'firstName lastName email');
+
+        res.status(200).json({
+            success: true,
+            message: 'Expense updated successfully',
+            expense: updatedExpense
+        });
+    } catch (error) {
+        console.error('Error updating expense:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to update expense',
+            message: error.message 
+        });
+    }
+};
+
 module.exports = {
     getExpenses,
     addExpense,
     sendToFinance,
     updateExpenseStatus,
     getExpenseTotals,
-    approveExpense
+    approveExpense,
+    updateExpense
 };
