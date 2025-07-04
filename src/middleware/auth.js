@@ -71,12 +71,15 @@ const isAdmin = async (req, res, next) => {
 };
 
 const checkRole = (...roles) => {
+    // Flatten roles in case someone passes an array
+    const allowedRoles = roles.flat();
+    
     return (req, res, next) => {
         console.log('Role check middleware - User:', {
             id: req.user?._id,
             email: req.user?.email,
             role: req.user?.role,
-            allowedRoles: roles
+            allowedRoles: allowedRoles
         });
 
         if (!req.user) {
@@ -87,14 +90,14 @@ const checkRole = (...roles) => {
             });
         }
 
-        if (!roles.includes(req.user.role)) {
+        if (!allowedRoles.includes(req.user.role)) {
             console.error('Role check middleware - Invalid role:', {
                 userRole: req.user.role,
-                allowedRoles: roles
+                allowedRoles: allowedRoles
             });
             return res.status(403).json({ 
                 success: false,
-                message: 'Access denied. Required role: ' + roles.join(', ') 
+                message: 'Access denied. Required role: ' + allowedRoles.join(', ') 
             });
         }
 
