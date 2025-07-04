@@ -133,6 +133,9 @@ exports.updateMaintenance = async (req, res) => {
         // If financeStatus is being set to 'approved' and amount is provided, create an expense
         if (financeStatus === 'approved' && amount && amount > 0) {
             try {
+                // Delete any existing expense for this maintenance request
+                await Expense.deleteMany({ maintenanceRequestId: maintenance._id });
+
                 // Generate unique expense ID
                 const expenseId = await generateUniqueId('EXP');
 
