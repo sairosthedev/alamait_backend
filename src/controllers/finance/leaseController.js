@@ -150,4 +150,76 @@ exports.getLeaseStats = async (req, res) => {
         console.error('Finance: Error in getLeaseStats:', error);
         res.status(500).json({ error: 'Server error' });
     }
+};
+
+// Get leases for a specific student (for finance)
+exports.getLeasesByStudent = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const { page = 1, limit = 10, status } = req.query;
+        
+        // Validate student ID
+        if (!studentId) {
+            return res.status(400).json({ error: 'Student ID is required' });
+        }
+
+        // Check if student exists
+        const student = await User.findById(studentId).select('firstName lastName email');
+        if (!student) {
+            return res.status(404).json({ error: 'Student not found' });
+        }
+
+        // Build query
+        const filter = { studentId };
+        if (status) filter.status = status;
+        
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const total = await Lease.countDocuments(filter);
+        
+        const leases = await Lease.find(filter)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .populate('residence', 'name address')
+            .lean();
+
+        const formattedLeases = leases.map(lease => ({
+            id: lease._id,
+            filename: lease.filename,
+            originalname: lease.originalname,
+            status: lease.status,
+            createdAt: lease.createdAt,
+            uploadedAt: lease.uploadedAt,
+            residence: lease.residence ? {
+                id: lease.residence._id,
+                name: lease.residence.name
+            } : null,
+            student: {
+                id: student._id,
+                name: `${student.firstName} ${student.lastName}`,
+                email: student.email
+            },
+            downloadUrl: lease.path,
+            viewUrl: lease.path
+        }));
+
+        res.json({
+            student: {
+                id: student._id,
+                name: `${student.firstName} ${student.lastName}`,
+                email: student.email
+            },
+            leases: formattedLeases,
+            totalLeases: total,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / parseInt(limit)),
+                total,
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) {
+        console.error('Finance: Error in getLeasesByStudent:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
 }; 

@@ -83,6 +83,28 @@ router.get('/students/:studentId', async (req, res) => {
     }
 });
 
+// Get student payments by ID (for finance)
+router.get('/students/:studentId/payments', async (req, res) => {
+    try {
+        const { getPaymentsByStudent } = require('../../controllers/finance/paymentController');
+        return getPaymentsByStudent(req, res);
+    } catch (error) {
+        console.error('Error fetching student payments for finance:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Get student leases by ID (for finance)
+router.get('/students/:studentId/leases', async (req, res) => {
+    try {
+        const { getLeasesByStudent } = require('../../controllers/finance/leaseController');
+        return getLeasesByStudent(req, res);
+    } catch (error) {
+        console.error('Error fetching student leases for finance:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // Mount routes
 router.use('/balance-sheets', balanceSheetRoutes);
 router.use('/maintenance', maintenanceRoutes);

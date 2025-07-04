@@ -4,6 +4,7 @@ const { check } = require('express-validator');
 const { auth, checkRole, financeAccess } = require('../../middleware/auth');
 const {
     getStudentPayments,
+    getPaymentsByStudent,
     updatePaymentStatus,
     requestClarification
 } = require('../../controllers/finance/paymentController');
@@ -26,6 +27,9 @@ router.get('/', getStudentPayments);
 
 // Get all student payments with pagination and filtering
 router.get('/students', getStudentPayments);
+
+// Get payments for a specific student
+router.get('/students/:studentId', getPaymentsByStudent);
 
 // Update payment status
 router.put('/students/:paymentId/status', updateStatusValidation, updatePaymentStatus);

@@ -18,6 +18,7 @@ const {
     updateStudent,
     deleteStudent,
     getStudentPayments,
+    getStudentLeases,
     downloadSignedLease,
     getExpiredStudents,
     getAllSignedLeases
@@ -174,6 +175,7 @@ router.delete('/:studentId', async (req, res) => {
     }
 });
 router.get('/:studentId/payments', getStudentPayments);
+router.get('/:studentId/leases', getStudentLeases);
 router.get('/lease-agreement/:studentId', downloadSignedLease);
 
 module.exports = router; 

@@ -232,4 +232,128 @@ exports.requestClarification = async (req, res) => {
         console.error('Error in requestClarification:', error);
         res.status(500).json({ error: 'Server error' });
     }
+};
+
+/**
+ * Get payments for a specific student (for finance)
+ */
+exports.getPaymentsByStudent = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const { page = 1, limit = 10, status, startDate, endDate } = req.query;
+        
+        // Validate student ID
+        if (!studentId) {
+            return res.status(400).json({ error: 'Student ID is required' });
+        }
+
+        // Check if student exists
+        const student = await User.findById(studentId).select('firstName lastName email');
+        if (!student) {
+            return res.status(404).json({ error: 'Student not found' });
+        }
+
+        // Build query
+        const query = { student: studentId };
+        
+        if (status) {
+            query.status = status;
+        }
+        
+        if (startDate || endDate) {
+            query.date = {};
+            if (startDate) query.date.$gte = new Date(startDate);
+            if (endDate) query.date.$lte = new Date(endDate);
+        }
+
+        // Get payments with pagination
+        const skip = (page - 1) * limit;
+        const total = await Payment.countDocuments(query);
+        
+        const payments = await Payment.find(query)
+            .populate('residence', 'name location')
+            .populate('createdBy', 'firstName lastName')
+            .populate('updatedBy', 'firstName lastName')
+            .populate('proofOfPayment.verifiedBy', 'firstName lastName')
+            .sort({ date: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+            
+        // Transform payments data
+        const formattedPayments = payments.map(payment => {
+            let paymentType = 'Other';
+            
+            if (payment.rentAmount > 0 && payment.adminFee === 0 && payment.deposit === 0) {
+                paymentType = 'Rent';
+            } else if (payment.deposit > 0 && payment.rentAmount === 0 && payment.adminFee === 0) {
+                paymentType = 'Deposit';
+            } else if (payment.adminFee > 0 && payment.rentAmount === 0 && payment.deposit === 0) {
+                paymentType = 'Admin Fee';
+            }
+            
+            const admin = payment.createdBy ? 
+                `${payment.createdBy.firstName} ${payment.createdBy.lastName}` : 
+                'System';
+                
+            return {
+                id: payment.paymentId,
+                student: `${student.firstName} ${student.lastName}`,
+                admin: admin,
+                residence: payment.residence ? payment.residence.name : 'Unknown',
+                room: payment.room || 'Not Assigned',
+                roomType: payment.roomType || '',
+                paymentMonth: payment.paymentMonth || '',
+                rentAmount: payment.rentAmount || 0,
+                adminFee: payment.adminFee || 0,
+                deposit: payment.deposit || 0,
+                amount: payment.totalAmount,
+                datePaid: payment.date.toISOString().split('T')[0],
+                paymentType: paymentType,
+                status: payment.status,
+                proof: payment.proofOfPayment?.fileUrl || null,
+                method: payment.method || '',
+                description: payment.description || '',
+                studentId: student._id,
+                residenceId: payment.residence ? payment.residence._id : null
+            };
+        });
+
+        // Calculate summary statistics
+        const totalPaid = payments
+            .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+            .reduce((sum, p) => sum + p.totalAmount, 0);
+        
+        const totalPending = payments
+            .filter(p => p.status === 'Pending')
+            .reduce((sum, p) => sum + p.totalAmount, 0);
+
+        const totalRejected = payments
+            .filter(p => p.status === 'Rejected')
+            .reduce((sum, p) => sum + p.totalAmount, 0);
+        
+        res.json({
+            student: {
+                id: student._id,
+                name: `${student.firstName} ${student.lastName}`,
+                email: student.email
+            },
+            payments: formattedPayments,
+            summary: {
+                totalPayments: total,
+                totalPaid,
+                totalPending,
+                totalRejected,
+                totalAmount: totalPaid + totalPending + totalRejected
+            },
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / parseInt(limit)),
+                total,
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) {
+        console.error('Error in getPaymentsByStudent:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
 }; 

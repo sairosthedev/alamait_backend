@@ -9,6 +9,7 @@ const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateServ
 const ExpiredStudent = require('../../models/ExpiredStudent');
 const Application = require('../../models/Application');
 const Lease = require('../../models/Lease');
+const Payment = require('../../models/Payment');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -268,24 +269,94 @@ exports.deleteStudent = async (req, res) => {
 // Get student payment history
 exports.getStudentPayments = async (req, res) => {
     try {
-        const bookings = await Booking.find({
-            student: req.params.studentId
-        })
-        .select('payments totalAmount paymentStatus startDate endDate')
-        .sort({ createdAt: -1 });
+        const { studentId } = req.params;
+        
+        // Validate student ID
+        if (!studentId) {
+            return res.status(400).json({ error: 'Student ID is required' });
+        }
 
-        const payments = bookings.flatMap(booking => {
-            return booking.payments.map(payment => ({
-                ...payment.toObject(),
-                bookingId: booking._id,
-                totalAmount: booking.totalAmount,
-                paymentStatus: booking.paymentStatus,
-                startDate: booking.startDate,
-                endDate: booking.endDate
-            }));
+        // Check if student exists
+        const student = await User.findById(studentId).select('firstName lastName email');
+        if (!student) {
+            return res.status(404).json({ error: 'Student not found' });
+        }
+
+        // Get all payments for the student using the Payment model
+        const payments = await Payment.find({ student: studentId })
+            .populate('residence', 'name')
+            .populate('createdBy', 'firstName lastName')
+            .populate('updatedBy', 'firstName lastName')
+            .populate('proofOfPayment.verifiedBy', 'firstName lastName')
+            .sort({ date: -1 });
+
+        // Format payments for response
+        const formattedPayments = payments.map(payment => {
+            let paymentType = 'Other';
+            
+            if (payment.rentAmount > 0 && payment.adminFee === 0 && payment.deposit === 0) {
+                paymentType = 'Rent';
+            } else if (payment.deposit > 0 && payment.rentAmount === 0 && payment.adminFee === 0) {
+                paymentType = 'Deposit';
+            } else if (payment.adminFee > 0 && payment.rentAmount === 0 && payment.deposit === 0) {
+                paymentType = 'Admin Fee';
+            }
+            
+            const admin = payment.createdBy ? 
+                `${payment.createdBy.firstName} ${payment.createdBy.lastName}` : 
+                'System';
+                
+            return {
+                id: payment.paymentId,
+                student: `${student.firstName} ${student.lastName}`,
+                admin: admin,
+                residence: payment.residence ? payment.residence.name : 'Unknown',
+                room: payment.room || 'Not Assigned',
+                roomType: payment.roomType || '',
+                paymentMonth: payment.paymentMonth || '',
+                rentAmount: payment.rentAmount || 0,
+                adminFee: payment.adminFee || 0,
+                deposit: payment.deposit || 0,
+                amount: payment.totalAmount,
+                datePaid: payment.date.toISOString().split('T')[0],
+                paymentType: paymentType,
+                status: payment.status,
+                proof: payment.proofOfPayment?.fileUrl || null,
+                method: payment.method || '',
+                description: payment.description || '',
+                studentId: student._id,
+                residenceId: payment.residence ? payment.residence._id : null
+            };
         });
 
-        res.json(payments);
+        // Calculate summary statistics
+        const totalPaid = payments
+            .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+            .reduce((sum, p) => sum + p.totalAmount, 0);
+        
+        const totalPending = payments
+            .filter(p => p.status === 'Pending')
+            .reduce((sum, p) => sum + p.totalAmount, 0);
+
+        const totalRejected = payments
+            .filter(p => p.status === 'Rejected')
+            .reduce((sum, p) => sum + p.totalAmount, 0);
+
+        res.json({
+            student: {
+                id: student._id,
+                name: `${student.firstName} ${student.lastName}`,
+                email: student.email
+            },
+            payments: formattedPayments,
+            summary: {
+                totalPayments: payments.length,
+                totalPaid,
+                totalPending,
+                totalRejected,
+                totalAmount: totalPaid + totalPending + totalRejected
+            }
+        });
     } catch (error) {
         console.error('Error in getStudentPayments:', error);
         res.status(500).json({ error: 'Server error' });
@@ -387,4 +458,57 @@ const getAllSignedLeases = async (req, res) => {
 };
 
 // Export the new function
-exports.getAllSignedLeases = getAllSignedLeases; 
+exports.getAllSignedLeases = getAllSignedLeases;
+
+// Get student leases
+exports.getStudentLeases = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        
+        // Validate student ID
+        if (!studentId) {
+            return res.status(400).json({ error: 'Student ID is required' });
+        }
+
+        // Check if student exists
+        const student = await User.findById(studentId).select('firstName lastName email');
+        if (!student) {
+            return res.status(404).json({ error: 'Student not found' });
+        }
+
+        // Get all leases for the student
+        const leases = await Lease.find({ studentId })
+            .populate('residence', 'name')
+            .sort({ uploadedAt: -1 });
+
+        // Format leases for response
+        const formattedLeases = leases.map(lease => ({
+            id: lease._id,
+            filename: lease.filename,
+            originalname: lease.originalname,
+            mimetype: lease.mimetype,
+            size: lease.size,
+            status: lease.status,
+            uploadedAt: lease.uploadedAt,
+            residence: lease.residence ? {
+                id: lease.residence._id,
+                name: lease.residence.name
+            } : null,
+            downloadUrl: lease.path,
+            viewUrl: lease.path
+        }));
+
+        res.json({
+            student: {
+                id: student._id,
+                name: `${student.firstName} ${student.lastName}`,
+                email: student.email
+            },
+            leases: formattedLeases,
+            totalLeases: leases.length
+        });
+    } catch (error) {
+        console.error('Error in getStudentLeases:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+}; 
