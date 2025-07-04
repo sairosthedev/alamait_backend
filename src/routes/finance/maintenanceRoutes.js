@@ -36,4 +36,10 @@ router.get('/statistics',
     maintenanceController.getMaintenanceFinancialStats
 );
 
+// Add root GET endpoint for consistency with admin
+router.get('/',
+    checkRole('admin', 'finance_admin'),
+    maintenanceController.getAllMaintenanceRequests
+);
+
 module.exports = router; 

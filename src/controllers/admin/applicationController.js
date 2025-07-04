@@ -405,6 +405,17 @@ exports.updateApplicationStatus = async (req, res) => {
             default:
                 return res.status(400).json({ error: 'Invalid action' });
         }
+
+        // After saving/updating application
+        await User.updateOne(
+            { email: application.email },
+            {
+                $set: {
+                    residence: application.roomOccupancy.residence,
+                    currentRoom: application.allocatedRoom
+                }
+            }
+        );
     } catch (error) {
         console.error('Error in updateApplicationStatus:', error);
         res.status(500).json({ error: 'Server error' });

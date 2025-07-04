@@ -189,6 +189,7 @@ exports.getPaymentHistory = async (req, res) => {
         let totalDue = 0;
         let unpaidMonths = [];
         let breakdown = {};
+        let monthlySummary = [];
         if (approvedApplication && approvedApplication.residence && approvedApplication.residence !== 'No residence') {
             // 1. Generate all months in the lease period
             function getMonthList(startDate, endDate) {
@@ -196,52 +197,115 @@ exports.getPaymentHistory = async (req, res) => {
                 let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
                 const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
                 while (current <= end) {
-                    // Use YYYY-MM-01 for valid date parsing
-                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-01`);
+                    months.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`);
                     current.setMonth(current.getMonth() + 1);
                 }
                 return months;
             }
             const months = getMonthList(new Date(approvedApplication.startDate), new Date(approvedApplication.endDate));
-            // 2. Find all paid months
-            const paidMonths = payments
-                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
-                .map(p => {
-                    // Accept both YYYY-MM and YYYY-MM-01
-                    if (p.paymentMonth && /^\d{4}-\d{2}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth;
-                    if (p.paymentMonth && /^\d{4}-\d{2}$/.test(p.paymentMonth)) return p.paymentMonth + '-01';
-                    return null;
-                })
-                .filter(Boolean);
-            // 3. Find unpaid months
-            unpaidMonths = months.filter(m => !paidMonths.includes(m));
-            // 4. Calculate totalDue: rentDue + adminDue + depositOwing
+            // 2. Group and sum payments by month
+            const paymentsByMonth = {};
+            payments.forEach(p => {
+                if (!p.paymentMonth) return;
+                const key = p.paymentMonth.length === 7 ? p.paymentMonth : p.paymentMonth.slice(0, 7);
+                if (!paymentsByMonth[key]) paymentsByMonth[key] = [];
+                if (["Confirmed", "Verified"].includes(p.status)) {
+                    paymentsByMonth[key].push(Number(p.totalAmount) || 0);
+                }
+            });
+            // 3. Calculate monthly summary
             let rent = 0;
             if (typeof approvedApplication.price === 'number' && approvedApplication.price > 0) {
                 rent = approvedApplication.price;
             } else if (allocatedRoomDetails && typeof allocatedRoomDetails.price === 'number' && allocatedRoomDetails.price > 0) {
                 rent = allocatedRoomDetails.price;
             }
-            const adminFee = 20;
-            const deposit = rent;
-            // Check if admin fee has been paid (assume paid if any payment has adminFee > 0 and status confirmed)
-            const adminPaid = payments.some(p => ['Confirmed', 'Verified'].includes(p.status) && p.adminFee > 0);
-            const adminDue = adminPaid ? 0 : adminFee;
-            // Calculate deposit owing: deposit minus sum of deposit paid in confirmed/verified payments
-            const depositPaid = payments
-                .filter(p => ['Confirmed', 'Verified'].includes(p.status))
-                .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
-            const depositOwing = Math.max(0, deposit - depositPaid);
-            const rentDue = unpaidMonths.length * rent;
+            monthlySummary = months.map(month => {
+                const paid = (paymentsByMonth[month] || []).reduce((a, b) => a + b, 0);
+                let status = 'Unpaid';
+                let outstanding = rent - paid;
+                if (paid >= rent) {
+                    status = 'Paid';
+                    outstanding = 0;
+                } else if (paid > 0) {
+                    status = 'Partially Paid';
+                }
+                return {
+                    month,
+                    expected: rent,
+                    paid,
+                    outstanding: outstanding > 0 ? outstanding : 0,
+                    status
+                };
+            });
+            // 4. Find unpaid months (for legacy logic)
+            unpaidMonths = months.filter(m => {
+                const paid = (paymentsByMonth[m] || []).reduce((a, b) => a + b, 0);
+                return paid < rent;
+            });
+            // 4. Calculate totalDue: rentDue + adminDue + depositOwing
+            let rentDue = unpaidMonths.length * rent;
+            
+            // Determine residence type for payment requirements
+            const residenceName = approvedApplication.residence && 
+                                typeof approvedApplication.residence === 'object' && 
+                                approvedApplication.residence.name ? 
+                                approvedApplication.residence.name.toLowerCase() : '';
+            const isStKilda = residenceName.includes('st kilda');
+            const isBelvedere = residenceName.includes('belvedere');
+            
+            let adminDue = 0;
+            let depositOwing = 0;
+            
+            if (isStKilda) {
+                // Admin fee logic for St Kilda only
+                const adminFeeTotal = 20;
+                const adminPaid = payments
+                    .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                    .reduce((sum, p) => sum + (Number(p.adminFee) || 0), 0);
+                adminDue = Math.max(0, adminFeeTotal - adminPaid);
+                
+                // Deposit logic for St Kilda only
+                const depositRequired = rent;
+                const depositPaid = payments
+                    .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                    .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
+                depositOwing = Math.max(0, depositRequired - depositPaid);
+            } else if (!isBelvedere) {
+                // Other residences (not St Kilda, not Belvedere): Deposit required, no admin fee
+                const depositRequired = rent;
+                const depositPaid = payments
+                    .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+                    .reduce((sum, p) => sum + (Number(p.deposit) || 0), 0);
+                depositOwing = Math.max(0, depositRequired - depositPaid);
+            }
+            // Belvedere: No deposit, no admin fee (both remain 0)
+            
+            // Calculate rent due for unpaid months
+            rentDue = unpaidMonths.length * rent;
+            
+            // Calculate total due including admin and deposit
             totalDue = rentDue + adminDue + depositOwing;
+            
+            // Get current month for advance payment info
+            const currentDate = new Date();
+            const currentMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+            const currentMonthPaid = monthlySummary.some(m => m.month === currentMonth && m.status === 'Paid');
+            
             breakdown = {
                 rent: rent,
                 rentDue: rentDue,
-                adminFee: adminFee,
+                adminFee: isStKilda ? 20 : 0,
                 adminDue: adminDue,
-                deposit: deposit,
+                deposit: isStKilda || (!isBelvedere) ? rent : 0,
                 depositOwing: depositOwing,
-                unpaidMonths: unpaidMonths.length
+                unpaidMonths: unpaidMonths.length,
+                isStKilda: isStKilda,
+                isBelvedere: isBelvedere,
+                currentMonth: currentMonth,
+                currentMonthPaid: currentMonthPaid,
+                canPayAdvance: currentMonthPaid && unpaidMonths.length === 0,
+                nextDueMonth: unpaidMonths.length > 0 ? unpaidMonths[0] : null
             };
         }
 
@@ -267,7 +331,8 @@ exports.getPaymentHistory = async (req, res) => {
             totalDue: Number(totalDue).toFixed(2) || '0.00',
             allocatedRoomDetails,
             unpaidMonths, // now formatted as YYYY-MM-01
-            breakdown // add breakdown for frontend
+            breakdown, // add breakdown for frontend
+            monthlySummary // <-- new field for frontend
         };
 
         // Format payment history
@@ -280,6 +345,7 @@ exports.getPaymentHistory = async (req, res) => {
                     month: '2-digit', 
                     year: '2-digit' 
                 }),
+                paymentMonth: payment.paymentMonth || (payment.startDate ? new Date(payment.startDate).toISOString().slice(0, 7) : null),
                 amount: payment.totalAmount.toFixed(2) || '0.00',
                 type: payment.rentAmount > 0 ? 'Rent' : (payment.deposit > 0 ? 'Initial' : 'Admin'),
                 ref: payment.paymentId,
@@ -302,7 +368,8 @@ exports.getPaymentHistory = async (req, res) => {
 
         res.json({
             studentInfo,
-            paymentHistory
+            paymentHistory,
+            monthlySummary // <-- new field for frontend
         });
     } catch (error) {
         console.error('Error in getPaymentHistory:', error);
@@ -557,7 +624,7 @@ exports.uploadNewProofOfPayment = (req, res) => {
 
             console.log('Residence found:', residenceRef.name);
 
-            // --- Prevent Overpayment Logic (Lease Month Enforcement) ---
+            // --- Enhanced Payment Logic with Advance Payment Support ---
             // 1. Fetch the student's latest approved/active application
             const application = await Application.findOne({
                 $or: [
@@ -594,20 +661,60 @@ exports.uploadNewProofOfPayment = (req, res) => {
             // 4. Find unpaid months
             const unpaidMonths = months.filter(m => !paidMonths.includes(m));
 
-            // 5. Only allow payment for the oldest unpaid month
+            // 5. Get current month and requested month
             let requestedMonth = req.body.paymentMonth;
             if (!requestedMonth) {
-                // Auto-generate payment month if not provided
-                const currentDate = new Date();
-                requestedMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+                return res.status(400).json({ error: 'paymentMonth is required.' });
             }
-            if (unpaidMonths.length > 0 && requestedMonth !== unpaidMonths[0]) {
+
+            const currentDate = new Date();
+            const currentMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+            const nextMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+            const nextMonthStr = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
+
+            // 6. Strict sequential payment logic
+            if (unpaidMonths.length > 0) {
+                const oldestUnpaidMonth = unpaidMonths[0];
+                // Block payment if requestedMonth is after the oldest unpaid month
+                if (requestedMonth !== oldestUnpaidMonth) {
+                    return res.status(400).json({
+                        error: `You must pay for the oldest unpaid month first: ${oldestUnpaidMonth}`,
+                        oldestUnpaidMonth: oldestUnpaidMonth,
+                        requestedMonth: requestedMonth,
+                        unpaidMonths: unpaidMonths,
+                        priority: 'You must pay for previous unpaid months before paying for later months.'
+                    });
+                }
+                // Allow payment for the oldest unpaid month
+            } else {
+                // All months up to current are paid - can pay for future months
+                if (requestedMonth < months[0] || requestedMonth > months[months.length - 1]) {
+                    return res.status(400).json({
+                        error: `Requested month ${requestedMonth} is outside your lease period.`,
+                        leasePeriod: { start: months[0], end: months[months.length - 1] }
+                    });
+                }
+                // No unpaid months, allow payment for any valid month
+            }
+
+            // 7. Check if payment for requested month already exists
+            const existingPayment = await Payment.findOne({
+                student: req.user._id,
+                paymentMonth: requestedMonth,
+                status: { $in: ['Confirmed', 'Verified'] }
+            });
+
+            if (existingPayment) {
                 return res.status(400).json({
-                    error: `You must pay for the oldest unpaid month first: ${unpaidMonths[0]}`,
-                    unpaidMonths
+                    error: `Payment for ${requestedMonth} has already been made.`,
+                    existingPayment: {
+                        amount: existingPayment.totalAmount,
+                        date: existingPayment.date,
+                        status: existingPayment.status
+                    }
                 });
             }
-            // --- End Prevent Overpayment Logic (Lease Month Enforcement) ---
+            // --- End Enhanced Payment Logic with Advance Payment Support ---
 
             console.log('Creating new payment record...');
 
@@ -638,57 +745,131 @@ exports.uploadNewProofOfPayment = (req, res) => {
                 return res.status(400).json({ error: 'Payment month must be in YYYY-MM format.' });
             }
 
-            // --- St Kilda Payment Logic ---
-            const isStKilda = residenceRef.name && residenceRef.name.toLowerCase().includes('st kilda');
-            let expectedRent = 0;
-            let expectedAdmin = 0;
-            let expectedDepositPortion = 0;
+            // --- Enhanced Payment Logic with Partial Payment Support ---
+            let roomPrice = 0;
+            if (roomInfo && roomInfo.number && roomInfo.number !== 'Not Assigned') {
+                const room = residenceRef.rooms.find(r => r.roomNumber === roomInfo.number);
+                if (room) roomPrice = room.price;
+            }
+            if (!roomPrice && residenceRef.rooms.length > 0) {
+                roomPrice = residenceRef.rooms[0].price;
+            }
+            
+            // Determine residence type for payment requirements
+            const residenceName = residenceRef.name.toLowerCase();
+            const isStKilda = residenceName.includes('st kilda');
+            const isBelvedere = residenceName.includes('belvedere');
+            
+            const adminFeeTotal = 20;
+            let expectedRent = roomPrice;
             let depositRequired = 0;
-            let depositPaid = 0;
-            let depositOwing = 0;
-            let adminPaid = 0;
-            let monthsRemaining = 1;
+            
+            // Set deposit requirements based on residence
             if (isStKilda) {
-                let roomPrice = 0;
-                if (roomInfo && roomInfo.number && roomInfo.number !== 'Not Assigned') {
-                    const room = residenceRef.rooms.find(r => r.roomNumber === roomInfo.number);
-                    if (room) roomPrice = room.price;
-                }
-                if (!roomPrice && residenceRef.rooms.length > 0) {
-                    roomPrice = residenceRef.rooms[0].price;
-                }
-                expectedRent = roomPrice;
+                // St Kilda: Admin fee + Deposit required
                 depositRequired = roomPrice;
-                // Calculate deposit paid so far
-                depositPaid = payments.reduce((sum, p) => sum + (p.deposit || 0), 0);
-                depositOwing = Math.max(depositRequired - depositPaid, 0);
-                // Calculate months remaining (including this one)
-                const unpaidMonthsIncludingThis = unpaidMonths.length > 0 ? unpaidMonths.length : 1;
-                monthsRemaining = unpaidMonthsIncludingThis;
-                // Calculate deposit portion for this month
-                expectedDepositPortion = monthsRemaining > 0 ? depositOwing / monthsRemaining : 0;
-                // Calculate admin paid so far
-                adminPaid = payments.reduce((sum, p) => sum + (p.adminFee || 0), 0);
-                expectedAdmin = adminPaid >= 20 ? 0 : 20 - adminPaid;
-                // Validate admin fee in this payment
-                if (adminFee > expectedAdmin) {
-                    return res.status(400).json({ error: `Admin fee overpayment. Only $${expectedAdmin.toFixed(2)} remaining.` });
+            } else if (!isBelvedere) {
+                // Other residences (not St Kilda, not Belvedere): Deposit required, no admin fee
+                depositRequired = roomPrice;
+            }
+            // Belvedere: No deposit, no admin fee (depositRequired remains 0)
+            
+            // Calculate how much admin and deposit have been paid so far
+            const adminPaid = payments.reduce((sum, p) => sum + (p.adminFee || 0), 0);
+            const depositPaid = payments.reduce((sum, p) => sum + (p.deposit || 0), 0);
+            
+            // Calculate how much is still owing
+            const adminOwing = Math.max(adminFeeTotal - adminPaid, 0);
+            const depositOwing = Math.max(depositRequired - depositPaid, 0);
+            
+            // Check if this is a partial payment for the requested month
+            const requestedMonthPayments = payments.filter(p => 
+                p.paymentMonth === requestedMonth && 
+                ['Confirmed', 'Verified'].includes(p.status)
+            );
+            
+            const alreadyPaidForMonth = requestedMonthPayments.reduce((sum, p) => sum + (p.rentAmount || 0), 0);
+            const remainingRentForMonth = Math.max(roomPrice - alreadyPaidForMonth, 0);
+            
+            console.log(`Payment analysis for ${requestedMonth}:`, {
+                roomPrice,
+                alreadyPaidForMonth,
+                remainingRentForMonth,
+                requestedAmount: rentAmount,
+                isPartialPayment: rentAmount < roomPrice && alreadyPaidForMonth > 0
+            });
+            
+            // --- Enhanced Validation with Partial Payment Support ---
+            if (isStKilda) {
+                // St Kilda: Admin fee + Deposit + Rent required
+                if (adminFee > adminOwing) {
+                    return res.status(400).json({ error: `Admin fee overpayment. Only $${adminOwing.toFixed(2)} remaining.` });
                 }
-                // Validate deposit in this payment
-                if (deposit > expectedDepositPortion) {
-                    return res.status(400).json({ error: `Deposit overpayment. Only $${expectedDepositPortion.toFixed(2)} allowed for this month.` });
+                if (depositPaid + deposit > depositRequired) {
+                    return res.status(400).json({ error: `Deposit overpayment. Total deposit paid cannot exceed $${depositRequired.toFixed(2)}.` });
                 }
-                // Validate rent in this payment
-                if (rentAmount !== roomPrice) {
-                    return res.status(400).json({ error: `Rent for St Kilda must be $${roomPrice.toFixed(2)}.` });
+                
+                // Handle partial rent payments for St Kilda
+                if (rentAmount > remainingRentForMonth) {
+                    return res.status(400).json({ 
+                        error: `Rent overpayment for ${requestedMonth}. Only $${remainingRentForMonth.toFixed(2)} remaining for this month.`,
+                        alreadyPaid: alreadyPaidForMonth,
+                        remaining: remainingRentForMonth
+                    });
                 }
-                // Validate total amount
-                const expectedTotal = roomPrice + expectedAdmin + expectedDepositPortion;
+                
+                // For St Kilda, admin fee and deposit are one-time payments
+                // Rent can be paid partially
+                const expectedTotal = rentAmount + adminFee + deposit;
                 if (Math.abs(totalAmount - expectedTotal) > 0.01) {
-                    return res.status(400).json({ error: `Total payment for this month must be $${expectedTotal.toFixed(2)} (Rent $${roomPrice.toFixed(2)} + Admin $${expectedAdmin.toFixed(2)} + Deposit $${expectedDepositPortion.toFixed(2)}).` });
+                    return res.status(400).json({ error: `Total payment must be $${expectedTotal.toFixed(2)} (Rent $${rentAmount.toFixed(2)} + Admin $${adminFee.toFixed(2)} + Deposit $${deposit.toFixed(2)}).` });
+                }
+            } else if (isBelvedere) {
+                // Belvedere: Only rent required, no admin fee, no deposit
+                if (adminFee > 0) {
+                    return res.status(400).json({ error: `Admin fee is not required for Belvedere.` });
+                }
+                if (deposit > 0) {
+                    return res.status(400).json({ error: `Deposit is not required for Belvedere.` });
+                }
+                
+                // Handle partial rent payments for Belvedere
+                if (rentAmount > remainingRentForMonth) {
+                    return res.status(400).json({ 
+                        error: `Rent overpayment for ${requestedMonth}. Only $${remainingRentForMonth.toFixed(2)} remaining for this month.`,
+                        alreadyPaid: alreadyPaidForMonth,
+                        remaining: remainingRentForMonth
+                    });
+                }
+                
+                const expectedTotal = rentAmount;
+                if (Math.abs(totalAmount - expectedTotal) > 0.01) {
+                    return res.status(400).json({ error: `Total payment must be $${expectedTotal.toFixed(2)} (Rent $${rentAmount.toFixed(2)}).` });
+                }
+            } else {
+                // Other residences: Deposit + Rent required, no admin fee
+                if (adminFee > 0) {
+                    return res.status(400).json({ error: `Admin fee is not required for this property.` });
+                }
+                if (depositPaid + deposit > depositRequired) {
+                    return res.status(400).json({ error: `Deposit overpayment. Total deposit paid cannot exceed $${depositRequired.toFixed(2)}.` });
+                }
+                
+                // Handle partial rent payments for other residences
+                if (rentAmount > remainingRentForMonth) {
+                    return res.status(400).json({ 
+                        error: `Rent overpayment for ${requestedMonth}. Only $${remainingRentForMonth.toFixed(2)} remaining for this month.`,
+                        alreadyPaid: alreadyPaidForMonth,
+                        remaining: remainingRentForMonth
+                    });
+                }
+                
+                const expectedTotal = rentAmount + deposit;
+                if (Math.abs(totalAmount - expectedTotal) > 0.01) {
+                    return res.status(400).json({ error: `Total payment must be $${expectedTotal.toFixed(2)} (Rent $${rentAmount.toFixed(2)} + Deposit $${deposit.toFixed(2)}).` });
                 }
             }
-            // --- End St Kilda Payment Logic ---
+            // --- End Enhanced Payment Logic with Partial Payment Support ---
 
             // Create a new payment record
             const payment = new Payment({
@@ -718,16 +899,22 @@ exports.uploadNewProofOfPayment = (req, res) => {
             await payment.save();
             console.log('Payment record created successfully:', payment._id);
 
-            res.status(200).json({
+            const response = {
                 message: 'Proof of payment uploaded successfully',
                 payment: {
-                    id: payment._id,
-                    paymentId: payment.paymentId,
-                    totalAmount: payment.totalAmount,
+                    id: payment.paymentId,
                     status: payment.status,
-                    proofOfPayment: payment.proofOfPayment
-                }
-            });
+                    rentAmount,
+                    adminFee,
+                    deposit,
+                    totalAmount
+                },
+                proofOfPayment: payment.proofOfPayment
+            };
+            if (res.locals.paymentWarning) {
+                response.warning = res.locals.paymentWarning;
+            }
+            res.json(response);
 
         } catch (error) {
             console.error('Error in uploadNewProofOfPayment:', error);

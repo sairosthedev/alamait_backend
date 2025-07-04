@@ -4,7 +4,12 @@ const maintenanceSchema = new mongoose.Schema({
     student: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: false
+    },
+    requestedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: false
     },
     residence: {
         type: mongoose.Schema.Types.ObjectId,
@@ -100,6 +105,33 @@ const maintenanceSchema = new mongoose.Schema({
     financeNotes: {
         type: String,
         trim: true
+    },
+    paymentMethod: {
+        type: String,
+        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal', 'bank transfer', 'cash', 'online payment', 'ecocash', 'innbucks', 'mastercard', 'visa', 'paypal'],
+        required: false,
+        set: function(value) {
+            if (value) {
+                // Normalize to title case
+                const normalized = value.toLowerCase();
+                const mapping = {
+                    'bank transfer': 'Bank Transfer',
+                    'cash': 'Cash',
+                    'online payment': 'Online Payment',
+                    'ecocash': 'Ecocash',
+                    'innbucks': 'Innbucks',
+                    'mastercard': 'MasterCard',
+                    'visa': 'Visa',
+                    'paypal': 'PayPal'
+                };
+                return mapping[normalized] || value;
+            }
+            return value;
+        }
+    },
+    paymentIcon: {
+        type: String,
+        required: false
     },
     images: [{
         url: {

@@ -42,7 +42,7 @@ exports.getMaintenanceStats = async (req, res) => {
 // Get all maintenance requests
 exports.getAllMaintenanceRequests = async (req, res) => {
     try {
-        const { status, priority, search, page = 1, limit = 10 } = req.query;
+        const { status, priority, search, page = 1, limit = 10, financeStatus } = req.query;
         const query = {};
 
         if (status && status !== 'all') {
@@ -50,6 +50,9 @@ exports.getAllMaintenanceRequests = async (req, res) => {
         }
         if (priority) {
             query.priority = priority;
+        }
+        if (financeStatus) {
+            query.financeStatus = financeStatus;
         }
         if (search) {
             query.$or = [
@@ -162,6 +165,12 @@ exports.getAllMaintenanceRequests = async (req, res) => {
 
 // Create maintenance request
 exports.createMaintenanceRequest = async (req, res) => {
+    // Always set requestedBy from the authenticated user
+    const requestedBy = req.user._id;
+    let student = null;
+    if (req.user.role === 'student') {
+        student = req.user._id;
+    }
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
@@ -169,36 +178,23 @@ exports.createMaintenanceRequest = async (req, res) => {
 
     try {
         const {
-            id,
-            room,
             issue,
             description,
-            requestedBy,
+            room,
+            residence,
             status,
-            dateAssigned,
-            expectedCompletion,
-            amount,
             priority,
-            studentResponse,
+            category,
+            amount,
             financeStatus,
             financeNotes,
             adminNotes,
-            requestHistory,
-            assignedTo,
-            residence
-        } = req.body;
-
-        console.log('Received request data:', {
-            room,
-            issue,
-            description,
-            requestedBy,
             dateAssigned,
             expectedCompletion,
-            amount,
             assignedTo,
-            residence
-        });
+            updates,
+            requestHistory
+        } = req.body;
 
         // Validate required fields
         if (!issue || !description || !room || !residence) {
@@ -229,26 +225,10 @@ exports.createMaintenanceRequest = async (req, res) => {
             });
         }
 
-        // Find the student by name and residence
-        const student = await mongoose.model('User').findOne({
-            firstName: requestedBy.split(' ')[0],
-            lastName: requestedBy.split(' ')[1],
-            role: 'student',
-            residence: residence
-        });
-
-        if (!student) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid student',
-                message: 'The selected student is not assigned to the specified room'
-            });
-        }
-
         // If assignedTo is provided, validate the staff member
         let staffMember = null;
         if (assignedTo) {
-            staffMember = await User.findById(assignedTo);
+            staffMember = await User.findById(assignedTo._id || assignedTo);
             if (!staffMember || staffMember.role !== 'maintenance_staff') {
                 return res.status(400).json({
                     success: false,
@@ -258,25 +238,22 @@ exports.createMaintenanceRequest = async (req, res) => {
             }
         }
 
-        // Create maintenance request data
+        // Build the maintenance request data
         const maintenanceData = {
             issue,
             description,
             room,
-            student: student._id,
-            residence: residence,
+            residence,
             status: status?.toLowerCase() || 'pending',
             priority: priority?.toLowerCase() || 'low',
-            category: 'other',
+            category: category?.toLowerCase() || 'other',
             amount: amount ? parseFloat(amount) : 0,
             financeStatus: financeStatus || 'pending',
             financeNotes: financeNotes || '',
             adminNotes: adminNotes || '',
-            // Map date fields
             requestDate: dateAssigned ? new Date(dateAssigned) : new Date(),
             scheduledDate: dateAssigned ? new Date(dateAssigned) : undefined,
             estimatedCompletion: expectedCompletion ? new Date(expectedCompletion) : undefined,
-            // Handle assignedTo with staff details
             assignedTo: staffMember ? {
                 _id: staffMember._id,
                 name: staffMember.firstName,
@@ -298,33 +275,16 @@ exports.createMaintenanceRequest = async (req, res) => {
                 action: 'Request created',
                 user: req.user._id,
                 changes: ['created']
-            }]
+            }],
+            requestedBy
         };
+        if (student) maintenanceData.student = student;
 
-        console.log('Creating maintenance request with data:', {
-            ...maintenanceData,
-            amount: maintenanceData.amount,
-            requestDate: maintenanceData.requestDate,
-            scheduledDate: maintenanceData.scheduledDate,
-            estimatedCompletion: maintenanceData.estimatedCompletion,
-            assignedTo: maintenanceData.assignedTo
-        });
+        // Debug: log the maintenanceData before saving
+        console.log('Maintenance data to be saved:', maintenanceData);
 
         // Create the maintenance request
         const request = new Maintenance(maintenanceData);
-
-        // Log the request object before saving
-        console.log('Maintenance request object before save:', {
-            room: request.room,
-            issue: request.issue,
-            description: request.description,
-            amount: request.amount,
-            requestDate: request.requestDate,
-            scheduledDate: request.scheduledDate,
-            estimatedCompletion: request.estimatedCompletion,
-            assignedTo: request.assignedTo
-        });
-
         await request.save();
 
         // Populate the created request with student details and add additional fields
@@ -342,9 +302,9 @@ exports.createMaintenanceRequest = async (req, res) => {
             ...populatedRequest.toObject(),
             id: populatedRequest._id,
             room: populatedRequest.room,
-            requestedBy: `${populatedRequest.student.firstName} ${populatedRequest.student.lastName}`,
-            studentId: populatedRequest.student._id,
-            studentName: `${populatedRequest.student.firstName} ${populatedRequest.student.lastName}`,
+            requestedBy: populatedRequest.requestedBy,
+            studentId: populatedRequest.student?._id,
+            studentName: populatedRequest.student ? `${populatedRequest.student.firstName} ${populatedRequest.student.lastName}` : undefined,
             roomNumber: populatedRequest.room,
             issue: populatedRequest.issue,
             status: populatedRequest.status,
@@ -376,14 +336,10 @@ exports.createMaintenanceRequest = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in createMaintenanceRequest:', error);
-        console.error('Error details:', {
-            message: error.message,
-            stack: error.stack
-        });
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
             error: 'Server error',
-            message: error.message 
+            message: error.message
         });
     }
 };

@@ -216,7 +216,7 @@ exports.createExpense = async (req, res) => {
 
         // Add optional fields if provided
         if (paymentMethod) {
-            const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'];
+            const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal'];
             if (!validPaymentMethods.includes(paymentMethod)) {
                 return res.status(400).json({ 
                     error: 'Invalid payment method',
@@ -253,6 +253,11 @@ exports.createExpense = async (req, res) => {
             newExpense.receiptImage = receiptImage;
         }
 
+        // Add maintenance request ID if provided
+        if (req.body.maintenanceRequestId && validateMongoId(req.body.maintenanceRequestId)) {
+            newExpense.maintenanceRequestId = req.body.maintenanceRequestId;
+        }
+
         // Save expense
         await newExpense.save();
 
@@ -285,23 +290,23 @@ exports.updateExpense = async (req, res) => {
         const updateData = req.body;
 
         if (!validateMongoId(id)) {
-            return res.status(400).json({ error: 'Invalid expense ID format' });
+            return res.status(400).json({ error: 'Invalid expense ID format', id });
         }
 
         // Find expense
         const expense = await Expense.findById(id);
         if (!expense) {
-            return res.status(404).json({ error: 'Expense not found' });
+            return res.status(404).json({ error: 'Expense not found', id });
         }
 
         // Validate residence ID if provided
         if (updateData.residence && !validateMongoId(updateData.residence)) {
-            return res.status(400).json({ error: 'Invalid residence ID format' });
+            return res.status(400).json({ error: 'Invalid residence ID format', id });
         }
 
         // Validate amount if provided
         if (updateData.amount && (isNaN(updateData.amount) || updateData.amount <= 0)) {
-            return res.status(400).json({ error: 'Amount must be a positive number' });
+            return res.status(400).json({ error: 'Amount must be a positive number', id });
         }
 
         // Format dates if provided
@@ -332,11 +337,12 @@ exports.updateExpense = async (req, res) => {
 
         res.status(200).json({
             message: 'Expense updated successfully',
-            expense: updatedExpense
+            expense: updatedExpense,
+            id: updatedExpense._id
         });
     } catch (error) {
         console.error('Error updating expense:', error);
-        res.status(500).json({ error: 'Failed to update expense' });
+        res.status(500).json({ error: 'Failed to update expense', id: req.params.id });
     }
 };
 

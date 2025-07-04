@@ -1,10 +1,13 @@
 const Maintenance = require('../models/Maintenance');
+const Expense = require('../models/finance/Expense');
+const { generateUniqueId } = require('../utils/idGenerator');
 
 // Get all maintenance requests
 exports.getAllMaintenance = async (req, res) => {
     try {
         const maintenance = await Maintenance.find()
             .sort({ dateAssigned: -1 })
+            .populate('requestedBy', 'firstName lastName email role')
             .populate('student', 'firstName lastName email');
         res.status(200).json(maintenance);
     } catch (error) {
@@ -16,6 +19,7 @@ exports.getAllMaintenance = async (req, res) => {
 exports.getMaintenanceById = async (req, res) => {
     try {
         const maintenance = await Maintenance.findById(req.params.id)
+            .populate('requestedBy', 'firstName lastName email role')
             .populate('student', 'firstName lastName email');
         if (!maintenance) {
             return res.status(404).json({ message: 'Maintenance request not found' });
@@ -29,14 +33,56 @@ exports.getMaintenanceById = async (req, res) => {
 // Create new maintenance request
 exports.createMaintenance = async (req, res) => {
     try {
-        const { issue, description, room, category, priority, residence } = req.body;
+        // Accept both 'issue' and 'title' (map 'title' to 'issue' if 'issue' is missing)
+        let { issue, title, description, room, category, priority, residence, residenceId, assignedTo, amount, laborCost, paymentMethod, paymentIcon } = req.body;
 
-        // Validate residence ID
-        if (!residence) {
-            return res.status(400).json({ message: 'Residence ID is required' });
+        // Map 'title' to 'issue' if 'issue' is not provided
+        if (!issue && title) {
+            issue = title;
         }
 
-        const maintenance = new Maintenance({
+        // Accept 'residenceId' as an alias for 'residence'
+        if (!residence && residenceId) {
+            residence = residenceId;
+        }
+
+        // Validate required fields
+        if (!issue || !description || !room || !residence) {
+            return res.status(400).json({ message: 'Missing required fields: issue, description, room, or residence' });
+        }
+
+        // Validate payment method if provided
+        if (paymentMethod) {
+            const validPaymentMethods = ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal'];
+            const normalizedPaymentMethod = paymentMethod.toLowerCase();
+            const validLowercaseMethods = validPaymentMethods.map(method => method.toLowerCase());
+            
+            if (!validLowercaseMethods.includes(normalizedPaymentMethod)) {
+                return res.status(400).json({ 
+                    message: 'Invalid payment method',
+                    validPaymentMethods: validPaymentMethods
+                });
+            }
+            
+            // Normalize to title case
+            const mapping = {
+                'bank transfer': 'Bank Transfer',
+                'cash': 'Cash',
+                'online payment': 'Online Payment',
+                'ecocash': 'Ecocash',
+                'innbucks': 'Innbucks',
+                'mastercard': 'MasterCard',
+                'visa': 'Visa',
+                'paypal': 'PayPal'
+            };
+            paymentMethod = mapping[normalizedPaymentMethod];
+        }
+
+        // Always set requestedBy from the authenticated user
+        const requestedBy = req.user ? req.user._id : undefined;
+
+        // Build the maintenance request data
+        const maintenanceData = {
             issue,
             description,
             room,
@@ -44,10 +90,29 @@ exports.createMaintenance = async (req, res) => {
             priority,
             residence,
             status: 'pending',
-            requestDate: new Date()
-        });
-        
+            requestDate: new Date(),
+            requestedBy,
+            amount: amount ? parseFloat(amount) : 0,
+            laborCost: laborCost ? parseFloat(laborCost) : 0,
+            paymentMethod,
+            paymentIcon
+        };
+
+        // If assignedTo is provided, set it
+        if (assignedTo && assignedTo._id) {
+            maintenanceData.assignedTo = {
+                _id: assignedTo._id,
+                name: assignedTo.name,
+                surname: assignedTo.surname,
+                role: assignedTo.role
+            };
+        }
+
+        const maintenance = new Maintenance(maintenanceData);
         const savedMaintenance = await maintenance.save();
+
+        // Populate requestedBy for the response
+        await savedMaintenance.populate('requestedBy', 'firstName lastName email role');
         res.status(201).json(savedMaintenance);
     } catch (error) {
         res.status(400).json({ message: error.message });
@@ -57,16 +122,56 @@ exports.createMaintenance = async (req, res) => {
 // Update maintenance request
 exports.updateMaintenance = async (req, res) => {
     try {
-        const maintenance = await Maintenance.findByIdAndUpdate(
+        const { financeStatus, amount, paymentMethod, paymentIcon } = req.body;
+        
+        // Check if financeStatus is being updated to 'approved'
+        const maintenance = await Maintenance.findById(req.params.id);
+        if (!maintenance) {
+            return res.status(404).json({ message: 'Maintenance request not found' });
+        }
+
+        // If financeStatus is being set to 'approved' and amount is provided, create an expense
+        if (financeStatus === 'approved' && amount && amount > 0) {
+            try {
+                // Generate unique expense ID
+                const expenseId = await generateUniqueId('EXP');
+
+                // Create expense data
+                const expenseData = {
+                    expenseId,
+                    residence: maintenance.residence,
+                    category: 'Maintenance',
+                    amount: parseFloat(amount),
+                    description: `Maintenance: ${maintenance.issue} - ${maintenance.description}`,
+                    expenseDate: new Date(),
+                    paymentStatus: 'Pending',
+                    createdBy: req.user._id,
+                    period: 'monthly',
+                    paymentMethod: paymentMethod || 'Bank Transfer',
+                    maintenanceRequestId: maintenance._id
+                };
+
+                // Create the expense
+                const newExpense = new Expense(expenseData);
+                await newExpense.save();
+
+                console.log(`Expense created for maintenance request ${maintenance._id}: ${expenseId}`);
+            } catch (expenseError) {
+                console.error('Error creating expense for maintenance:', expenseError);
+                // Continue with maintenance update even if expense creation fails
+            }
+        }
+
+        // Update the maintenance request
+        const updatedMaintenance = await Maintenance.findByIdAndUpdate(
             req.params.id,
             req.body,
             { new: true, runValidators: true }
         );
-        if (!maintenance) {
-            return res.status(404).json({ message: 'Maintenance request not found' });
-        }
-        res.status(200).json(maintenance);
+
+        res.status(200).json(updatedMaintenance);
     } catch (error) {
+        console.error('Error updating maintenance:', error);
         res.status(400).json({ message: error.message });
     }
 };
@@ -89,6 +194,7 @@ exports.getMaintenanceByStatus = async (req, res) => {
     try {
         const maintenance = await Maintenance.find({ status: req.params.status })
             .sort({ dateAssigned: -1 })
+            .populate('requestedBy', 'firstName lastName email role')
             .populate('student', 'firstName lastName email');
         res.status(200).json(maintenance);
     } catch (error) {
@@ -101,6 +207,7 @@ exports.getMaintenanceByRoom = async (req, res) => {
     try {
         const maintenance = await Maintenance.find({ room: req.params.room })
             .sort({ dateAssigned: -1 })
+            .populate('requestedBy', 'firstName lastName email role')
             .populate('student', 'firstName lastName email');
         res.status(200).json(maintenance);
     } catch (error) {
@@ -113,6 +220,7 @@ exports.getMaintenanceByPriority = async (req, res) => {
     try {
         const maintenance = await Maintenance.find({ priority: req.params.priority })
             .sort({ dateAssigned: -1 })
+            .populate('requestedBy', 'firstName lastName email role')
             .populate('student', 'firstName lastName email');
         res.status(200).json(maintenance);
     } catch (error) {

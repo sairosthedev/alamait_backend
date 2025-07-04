@@ -93,7 +93,6 @@ const maintenanceCreateValidation = [
     check('issue', 'Issue is required').notEmpty().trim(),
     check('description', 'Description is required').notEmpty().trim(),
     check('room', 'Room is required').notEmpty().trim(),
-    check('requestedBy', 'Requested by is required').notEmpty().trim(),
     check('residence', 'Residence ID is required').notEmpty().isMongoId().withMessage('Invalid residence ID format'),
     check('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Invalid priority level'),
     check('status').optional().isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed']).withMessage('Invalid status'),
@@ -113,9 +112,9 @@ const paymentValidation = [
     check('description').optional().trim().notEmpty()
 ];
 
-// All routes require admin role
+// All routes below require admin/finance roles
 router.use(auth);
-router.use(checkRole('admin'));
+router.use(checkRole(['admin', 'finance', 'finance_admin', 'finance_user']));
 
 // Dashboard routes
 router.get('/dashboard/stats', getDashboardStats);
@@ -141,11 +140,6 @@ router.get('/maintenance/maintenance_staff', getMaintenanceStaff);
 router.post('/maintenance/maintenance_staff', addMaintenanceStaff);
 router.delete('/maintenance/maintenance_staff/:staffId', removeMaintenanceStaff);
 
-// Application routes
-router.get('/applications', getApplications);
-router.put('/applications/:applicationId', applicationStatusValidation, updateApplicationStatus);
-router.delete('/applications/:applicationId', deleteApplication);
-
 // Payment routes
 router.get('/payments', getPayments);
 router.put('/payments/:paymentId', updatePaymentStatus);
@@ -153,5 +147,10 @@ router.post('/payments', paymentValidation, createPayment);
 
 // Add route for fetching all leases from all students (unified logic)
 router.get('/leases2', leaseController.listAllLeases);
+
+// Application routes - protected fetch/edit/delete
+router.get('/applications', getApplications);
+router.put('/applications/:applicationId', applicationStatusValidation, updateApplicationStatus);
+router.delete('/applications/:applicationId', deleteApplication);
 
 module.exports = router; 
