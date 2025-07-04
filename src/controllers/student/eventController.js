@@ -63,11 +63,17 @@ exports.getEvents = async (req, res) => {
     try {
         console.log('Starting getEvents...');
         
-        // Get student's residence ID
-        const studentResidenceId = await getStudentResidenceId(req.user._id);
-        console.log('Student residence ID:', studentResidenceId);
+        // Use residence from query if provided, else use student's residence
+        let studentResidenceId = null;
+        if (req.query.residence) {
+            studentResidenceId = req.query.residence;
+            console.log('Residence filter from query:', studentResidenceId);
+        } else {
+            studentResidenceId = await getStudentResidenceId(req.user._id);
+            console.log('Student residence ID:', studentResidenceId);
+        }
         
-        // Build query to filter events by student's residence
+        // Build query to filter events by residence
         let query = {};
         if (studentResidenceId) {
             query.residence = studentResidenceId;

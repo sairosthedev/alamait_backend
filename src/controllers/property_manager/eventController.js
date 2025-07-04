@@ -27,7 +27,63 @@ exports.getEvents = async (req, res) => {
             .populate('organizer', 'firstName lastName')
             .sort('date');
 
-        res.json(events);
+        // Transform events to match frontend format
+        const formatEvent = (event) => {
+            // Format time display
+            let timeDisplay = '';
+            if (event.startTime && event.endTime) {
+                if (event.startTime === event.endTime) {
+                    timeDisplay = event.startTime;
+                } else {
+                    timeDisplay = `${event.startTime} - ${event.endTime}`;
+                }
+            } else if (event.startTime) {
+                timeDisplay = event.startTime;
+            } else if (event.endTime) {
+                timeDisplay = event.endTime;
+            }
+
+            return {
+                id: event._id,
+                title: event.title,
+                date: event.date.toISOString().split('T')[0],
+                time: timeDisplay,
+                location: event.location,
+                category: event.category,
+                status: event.status,
+                description: event.description,
+                visibility: event.visibility,
+                residence: event.residence?._id ? event.residence._id : (event.residence || null),
+                residenceName: event.residence?.name || null
+            };
+        };
+
+        // Separate events into upcoming and past
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Set to start of day
+        
+        const upcoming = [];
+        const past = [];
+        
+        events.forEach(event => {
+            const eventDate = new Date(event.date);
+            eventDate.setHours(0, 0, 0, 0);
+            
+            const formattedEvent = formatEvent(event);
+            
+            if (eventDate >= today) {
+                upcoming.push(formattedEvent);
+            } else {
+                past.push(formattedEvent);
+            }
+        });
+        
+        const response = {
+            upcoming,
+            past
+        };
+
+        res.json(response);
     } catch (error) {
         console.error('Get events error:', error);
         res.status(500).json({ error: 'Error fetching events' });
