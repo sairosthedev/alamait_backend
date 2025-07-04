@@ -52,7 +52,7 @@ exports.getAllMaintenanceRequests = async (req, res) => {
             query.priority = priority;
         }
         if (financeStatus) {
-            query.financeStatus = financeStatus;
+            query.financeStatus = { $regex: new RegExp(`^${financeStatus}$`, 'i') };
         }
         if (search) {
             query.$or = [

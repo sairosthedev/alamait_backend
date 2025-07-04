@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { auth, checkRole } = require('../../middleware/auth');
+const { auth, checkAdminOrFinance } = require('../../middleware/auth');
 const User = require('../../models/User');
 const Residence = require('../../models/Residence');
 
-// Finance middleware - all routes require finance role
+// Finance middleware - allow both admin and finance roles
 router.use(auth);
-router.use(checkRole('finance'));
+router.use(checkAdminOrFinance);
 
 // Get all students with residence information (for finance)
 router.get('/students', async (req, res) => {

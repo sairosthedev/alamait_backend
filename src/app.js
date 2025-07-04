@@ -256,6 +256,11 @@ app.use('/api/finance/residences', financeResidenceRoutes);
 app.use('/api/finance/leases', financeLeaseRoutes);
 app.use('/api/finance/applications', financeApplicationRoutes);
 app.use('/api/finance/room-prices', financeRoomPriceRoutes);
+
+// Finance maintenance routes
+const financeMaintenanceRoutes = require('./routes/finance/maintenanceRoutes');
+app.use('/api/finance/maintenance', financeMaintenanceRoutes);
+
 // Finance index routes (for student-specific endpoints) - last to avoid conflicts
 app.use('/api/finance', financeIndexRoutes);
 

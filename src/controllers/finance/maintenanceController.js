@@ -10,7 +10,7 @@ exports.getAllMaintenanceRequests = async (req, res) => {
         // Build query
         const query = {};
         if (status) query.status = status;
-        if (financeStatus) query.financeStatus = financeStatus;
+        if (financeStatus) query.financeStatus = { $regex: new RegExp(`^${financeStatus}$`, 'i') };
 
         // Get total count for pagination
         const total = await Maintenance.countDocuments(query);
@@ -130,7 +130,7 @@ exports.getMaintenanceRequestsByFinanceStatus = async (req, res) => {
         const { page = 1, limit = 10 } = req.query;
         const skip = (page - 1) * limit;
 
-        const query = { financeStatus: status.toLowerCase() };
+        const query = { financeStatus: { $regex: new RegExp(`^${status}$`, 'i') } };
         const total = await Maintenance.countDocuments(query);
 
         const requests = await Maintenance.find(query)
@@ -175,9 +175,9 @@ exports.getMaintenanceFinancialStats = async (req, res) => {
 
         const totalStats = {
             totalRequests: await Maintenance.countDocuments(),
-            pendingRequests: await Maintenance.countDocuments({ financeStatus: 'pending' }),
-            approvedRequests: await Maintenance.countDocuments({ financeStatus: 'approved' }),
-            rejectedRequests: await Maintenance.countDocuments({ financeStatus: 'rejected' }),
+            pendingRequests: await Maintenance.countDocuments({ financeStatus: { $regex: /^pending$/i } }),
+            approvedRequests: await Maintenance.countDocuments({ financeStatus: { $regex: /^approved$/i } }),
+            rejectedRequests: await Maintenance.countDocuments({ financeStatus: { $regex: /^rejected$/i } }),
             totalAmount: stats.reduce((sum, stat) => sum + (stat.totalAmount || 0), 0)
         };
 
