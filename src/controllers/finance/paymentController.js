@@ -2,6 +2,8 @@ const { validationResult } = require('express-validator');
 const Payment = require('../../models/Payment');
 const User = require('../../models/User');
 const Residence = require('../../models/Residence');
+const Application = require('../../models/Application');
+const Lease = require('../../models/Lease');
 
 /**
  * Get all student payments with pagination and filtering
@@ -258,14 +260,26 @@ exports.getPaymentsByStudent = async (req, res) => {
             return res.status(400).json({ error: 'Student ID is required' });
         }
 
-        // Check if student exists
-        const student = await User.findById(studentId).select('firstName lastName email');
-        if (!student) {
+        console.log('Looking up student with ID:', studentId);
+
+        // Use the robust student lookup
+        const studentResult = await findStudentById(studentId);
+        if (!studentResult) {
+            console.log('Student not found for ID:', studentId);
             return res.status(404).json({ error: 'Student not found' });
         }
 
-        // Build query
-        const query = { student: studentId };
+        const { student, source } = studentResult;
+        console.log('Found student:', student.firstName, student.lastName, 'from source:', source);
+
+        // Build query - try multiple ways to find payments for this student
+        let query = { student: student._id };
+        
+        // If no payments found with student._id, try with the original studentId
+        const paymentsWithStudentId = await Payment.countDocuments({ student: student._id });
+        if (paymentsWithStudentId === 0) {
+            query = { student: studentId };
+        }
         
         if (status) {
             query.status = status;
@@ -377,5 +391,106 @@ exports.getPaymentsByStudent = async (req, res) => {
     } catch (error) {
         console.error('Error in getPaymentsByStudent:', error);
         res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Helper function to find student by ID across multiple collections
+const findStudentById = async (studentId) => {
+    try {
+        // First, try to find in User collection
+        let student = await User.findById(studentId).select('firstName lastName email');
+        if (student) {
+            return { student, source: 'User' };
+        }
+
+        // If not found in User, try Application collection
+        const application = await Application.findById(studentId).select('firstName lastName email');
+        if (application) {
+            return { 
+                student: { 
+                    _id: application._id,
+                    firstName: application.firstName,
+                    lastName: application.lastName,
+                    email: application.email
+                }, 
+                source: 'Application' 
+            };
+        }
+
+        // If not found in Application, try to find by email in User collection
+        if (studentId.includes('@')) {
+            student = await User.findOne({ email: studentId }).select('firstName lastName email');
+            if (student) {
+                return { student, source: 'User (by email)' };
+            }
+        }
+
+        // If not found by email, try to find in Application collection by email
+        if (studentId.includes('@')) {
+            const appByEmail = await Application.findOne({ email: studentId }).select('firstName lastName email');
+            if (appByEmail) {
+                return { 
+                    student: { 
+                        _id: appByEmail._id,
+                        firstName: appByEmail.firstName,
+                        lastName: appByEmail.lastName,
+                        email: appByEmail.email
+                    }, 
+                    source: 'Application (by email)' 
+                };
+            }
+        }
+
+        // If still not found, try to find by looking up payments for this student ID
+        const payment = await Payment.findOne({ student: studentId }).populate('student', 'firstName lastName email');
+        if (payment && payment.student) {
+            return { student: payment.student, source: 'Payment' };
+        }
+
+        // If not found in payments, try to find by looking up leases for this student ID
+        const lease = await Lease.findOne({ studentId }).populate('studentId', 'firstName lastName email');
+        if (lease && lease.studentId) {
+            return { student: lease.studentId, source: 'Lease' };
+        }
+
+        // If still not found, try to find by looking up payments where student field matches
+        const paymentByStudentField = await Payment.findOne({ student: studentId });
+        if (paymentByStudentField) {
+            // Try to find the actual student record
+            const actualStudent = await User.findById(studentId).select('firstName lastName email');
+            if (actualStudent) {
+                return { student: actualStudent, source: 'Payment -> User' };
+            }
+            
+            // If not found in User, try Application
+            const actualApp = await Application.findById(studentId).select('firstName lastName email');
+            if (actualApp) {
+                return { 
+                    student: { 
+                        _id: actualApp._id,
+                        firstName: actualApp.firstName,
+                        lastName: actualApp.lastName,
+                        email: actualApp.email
+                    }, 
+                    source: 'Application' 
+                };
+            }
+            
+            // If we have a payment but no student record, create a minimal student object
+            return { 
+                student: { 
+                    _id: studentId,
+                    firstName: 'Unknown',
+                    lastName: 'Student',
+                    email: 'unknown@student.com'
+                }, 
+                source: 'Payment (no student record)' 
+            };
+        }
+
+        return null;
+    } catch (error) {
+        console.error('Error in findStudentById:', error);
+        return null;
     }
 }; 
