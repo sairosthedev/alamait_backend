@@ -69,6 +69,7 @@ const financePaymentRoutes = require('./routes/finance/paymentRoutes');
 const financeLeaseRoutes = require('./routes/finance/leaseRoutes');
 const financeApplicationRoutes = require('./routes/finance/applicationRoutes');
 const financeRoomPriceRoutes = require('./routes/finance/roomPriceRoutes');
+const financeIndexRoutes = require('./routes/finance/index');
 
 const monitoringRoutes = require('./routes/monitoring');
 
@@ -245,7 +246,7 @@ app.use('/api/property-manager/residences', propertyManagerResidenceRoutes);
 app.use('/api/property-manager/maintenance', propertyManagerMaintenanceRoutes);
 app.use('/api/property-manager/events', propertyManagerEventRoutes);
 
-// Finance routes
+// Finance routes - specific routes first, then index routes
 app.use('/api/finance/expenses', financeExpenseRoutes);
 app.use('/api/finance/balance-sheets', financeBalanceSheetRoutes);
 app.use('/api/finance/income-statements', financeIncomeStatementRoutes);
@@ -255,6 +256,8 @@ app.use('/api/finance/residences', financeResidenceRoutes);
 app.use('/api/finance/leases', financeLeaseRoutes);
 app.use('/api/finance/applications', financeApplicationRoutes);
 app.use('/api/finance/room-prices', financeRoomPriceRoutes);
+// Finance index routes (for student-specific endpoints) - last to avoid conflicts
+app.use('/api/finance', financeIndexRoutes);
 
 // Monitoring routes
 app.use('/api/monitoring', monitoringRoutes);

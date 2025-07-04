@@ -3,12 +3,6 @@ const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const User = require('../../models/User');
 const Residence = require('../../models/Residence');
-const balanceSheetRoutes = require('./balanceSheetRoutes');
-const maintenanceRoutes = require('./maintenanceRoutes');
-const residenceRoutes = require('./residenceRoutes');
-const leaseRoutes = require('./leaseRoutes');
-const applicationRoutes = require('./applicationRoutes');
-const roomPriceRoutes = require('./roomPriceRoutes');
 
 // Finance middleware - all routes require finance role
 router.use(auth);
@@ -104,13 +98,5 @@ router.get('/students/:studentId/leases', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
-
-// Mount routes
-router.use('/balance-sheets', balanceSheetRoutes);
-router.use('/maintenance', maintenanceRoutes);
-router.use('/residences', residenceRoutes);
-router.use('/leases', leaseRoutes);
-router.use('/applications', applicationRoutes);
-router.use('/room-prices', roomPriceRoutes);
 
 module.exports = router; 
