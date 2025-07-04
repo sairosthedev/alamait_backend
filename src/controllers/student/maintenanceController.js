@@ -109,48 +109,34 @@ exports.createMaintenanceRequest = async (req, res) => {
             });
         }
 
-        // Validate that the room exists in the residence
-        if (!room) {
-            return res.status(400).json({ 
-                error: 'Room is required.' 
-            });
-        }
-        const roomExists = residence.rooms && residence.rooms.some(r => r.roomNumber === room);
-        if (!roomExists) {
-            return res.status(400).json({ 
-                error: `Room ${room} does not exist in residence ${residence.name}` 
-            });
-        }
-
-        // Build the maintenance request data similar to admin
-        const maintenanceData = {
-            student: req.user._id,
-            residence: finalResidenceId,
-            issue: title,
+        const newRequest = new Maintenance({
+            student: req.user._id, // Automatically set student ID
+            residence: finalResidenceId, // Use determined residence ID
+            issue: title, // Map title to issue
             description,
-            room,
-            category: category ? category.toLowerCase() : 'other',
-            priority: priority ? priority.toLowerCase() : 'low',
-            status: 'pending',
+            category,
+            priority: priority || 'low',
             location,
+            room: room || null, // Include room if provided
+            status: 'pending', // Always start as pending
             requestDate: new Date(),
             images: images || [],
             studentResponse: studentResponse || 'Waiting for response',
             updates: [{
                 date: new Date(),
-                message: 'Maintenance request submitted',
-                author: 'System'
-            }],
-            requestHistory: [{
-                date: new Date(),
-                action: 'Request created',
-                user: req.user._id,
-                changes: ['created']
+                message: 'Maintenance request submitted'
+                // author field removed
             }]
-        };
+        });
 
-        const newRequest = new Maintenance(maintenanceData);
-        console.log('Creating maintenance request with data:', maintenanceData);
+        console.log('Creating maintenance request with data:', {
+            student: newRequest.student,
+            residence: newRequest.residence,
+            title: newRequest.title,
+            category: newRequest.category,
+            priority: newRequest.priority
+        });
+
         await newRequest.save();
         console.log('Maintenance request saved successfully');
 
@@ -192,7 +178,11 @@ exports.createMaintenanceRequest = async (req, res) => {
     } catch (error) {
         console.error('=== CREATE MAINTENANCE REQUEST ERROR ===');
         console.error('Error in createMaintenanceRequest:', error);
-        res.status(500).json({ error: 'Error creating maintenance request' });
+        res.status(500).json({ 
+            error: 'Error creating maintenance request',
+            details: error.message,
+            stack: error.stack
+        });
     }
 };
 
