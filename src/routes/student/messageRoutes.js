@@ -102,6 +102,27 @@ router.post('/conversation/:conversationId/read',
     messageController.markConversationAsRead
 );
 
+// Mark individual message as read
+router.post('/:messageId/read',
+    auth,
+    checkRole('student'),
+    messageController.markMessageAsRead
+);
+
+// Update delivery status
+router.post('/:messageId/delivery-status',
+    auth,
+    checkRole('student'),
+    messageController.updateDeliveryStatus
+);
+
+// Get delivery status
+router.get('/:messageId/delivery-status',
+    auth,
+    checkRole('student'),
+    messageController.getDeliveryStatus
+);
+
 // Add route for getting all students for messaging
 router.get('/users/students', auth, checkRole('student'), getAllUsersForMessaging);
 

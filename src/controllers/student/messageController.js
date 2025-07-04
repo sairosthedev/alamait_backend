@@ -941,7 +941,66 @@ exports.toggleConversationPin = async (req, res) => {
     }
 };
 
-// Mark message as viewed
+// Mark message as read (enhanced version with delivery status)
+exports.markMessageAsRead = async (req, res) => {
+    try {
+        const messageId = req.params.messageId;
+        
+        // Find the message
+        const message = await Message.findById(messageId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Check if user is authorized to mark the message as read
+        const isAuthor = message.author.toString() === req.user._id.toString();
+        const isRecipient = message.recipients.some(id => id.toString() === req.user._id.toString());
+        
+        if (!isAuthor && !isRecipient) {
+            return res.status(403).json({ error: 'Not authorized to access this message' });
+        }
+
+        // Add user to readBy if not already there
+        const alreadyRead = message.readBy.some(read => read.user.toString() === req.user._id.toString());
+        if (!alreadyRead) {
+            message.readBy.push({
+                user: req.user._id,
+                readAt: new Date()
+            });
+        }
+
+        // Update delivery status for the current user
+        const deliveryStatusIndex = message.deliveryStatus.findIndex(
+            ds => ds.recipient.toString() === req.user._id.toString()
+        );
+
+        if (deliveryStatusIndex !== -1) {
+            message.deliveryStatus[deliveryStatusIndex].status = 'read';
+            message.deliveryStatus[deliveryStatusIndex].readAt = new Date();
+        } else if (isRecipient) {
+            // If no delivery status exists for this recipient, create one
+            message.deliveryStatus.push({
+                recipient: req.user._id,
+                status: 'read',
+                readAt: new Date()
+            });
+        }
+
+        await message.save();
+
+        res.json({ 
+            success: true,
+            message: 'Message marked as read successfully',
+            readAt: new Date()
+        });
+    } catch (error) {
+        console.error('Error in markMessageAsRead:', error);
+        res.status(500).json({ error: 'Error marking message as read' });
+    }
+};
+
+// Mark message as viewed (legacy function for backward compatibility)
 exports.markMessageAsViewed = async (req, res) => {
     try {
         const message = await Message.findById(req.params.messageId);
@@ -1194,5 +1253,117 @@ exports.deleteReply = async (req, res) => {
     } catch (error) {
         console.error('Error in deleteReply:', error);
         res.status(500).json({ error: 'Error deleting reply' });
+    }
+};
+
+// Update delivery status
+exports.updateDeliveryStatus = async (req, res) => {
+    try {
+        const messageId = req.params.messageId;
+        const { status, recipientId } = req.body; // status: 'sent', 'delivered', 'read'
+        
+        // Find the message
+        const message = await Message.findById(messageId);
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Check if user is authorized (only author can update delivery status)
+        if (message.author.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ error: 'Not authorized to update delivery status' });
+        }
+
+        // Validate status
+        if (!['sent', 'delivered', 'read'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid delivery status' });
+        }
+
+        // Update delivery status for the specified recipient
+        const deliveryStatusIndex = message.deliveryStatus.findIndex(
+            ds => ds.recipient.toString() === recipientId
+        );
+
+        if (deliveryStatusIndex !== -1) {
+            message.deliveryStatus[deliveryStatusIndex].status = status;
+            
+            if (status === 'delivered') {
+                message.deliveryStatus[deliveryStatusIndex].deliveredAt = new Date();
+            } else if (status === 'read') {
+                message.deliveryStatus[deliveryStatusIndex].readAt = new Date();
+            }
+        } else {
+            // Create new delivery status entry
+            const newDeliveryStatus = {
+                recipient: recipientId,
+                status: status
+            };
+            
+            if (status === 'delivered') {
+                newDeliveryStatus.deliveredAt = new Date();
+            } else if (status === 'read') {
+                newDeliveryStatus.readAt = new Date();
+            }
+            
+            message.deliveryStatus.push(newDeliveryStatus);
+        }
+
+        await message.save();
+
+        res.json({ 
+            success: true,
+            message: 'Delivery status updated successfully',
+            status: status,
+            updatedAt: new Date()
+        });
+    } catch (error) {
+        console.error('Error in updateDeliveryStatus:', error);
+        res.status(500).json({ error: 'Error updating delivery status' });
+    }
+};
+
+// Get delivery status for a message
+exports.getDeliveryStatus = async (req, res) => {
+    try {
+        const messageId = req.params.messageId;
+        
+        // Find the message
+        const message = await Message.findById(messageId)
+            .populate('deliveryStatus.recipient', 'firstName lastName role email')
+            .lean();
+        
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Check if user is authorized to view delivery status
+        const isAuthor = message.author.toString() === req.user._id.toString();
+        const isRecipient = message.recipients.some(id => id.toString() === req.user._id.toString());
+        
+        if (!isAuthor && !isRecipient) {
+            return res.status(403).json({ error: 'Not authorized to view delivery status' });
+        }
+
+        // Format delivery status
+        const formattedDeliveryStatus = message.deliveryStatus.map(ds => ({
+            recipient: {
+                _id: ds.recipient._id,
+                firstName: ds.recipient.firstName,
+                lastName: ds.recipient.lastName,
+                role: ds.recipient.role,
+                email: ds.recipient.email
+            },
+            status: ds.status,
+            deliveredAt: ds.deliveredAt,
+            readAt: ds.readAt
+        }));
+
+        res.json({
+            success: true,
+            deliveryStatus: formattedDeliveryStatus
+        });
+    } catch (error) {
+        console.error('Error in getDeliveryStatus:', error);
+        res.status(500).json({ error: 'Error fetching delivery status' });
     }
 }; 

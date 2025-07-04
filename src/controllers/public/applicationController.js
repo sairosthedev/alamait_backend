@@ -3,39 +3,49 @@ const { sendEmail } = require('../../utils/email');
 const whatsappService = require('../../services/whatsappService');
 const User = require('../../models/User');
 const ExpiredStudent = require('../../models/ExpiredStudent');
+const Residence = require('../../models/Residence');
+const { validationResult } = require('express-validator');
 
 // Submit new application
 exports.submitApplication = async (req, res) => {
     try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
         const {
             firstName,
             lastName,
             email,
             phone,
+            requestType,
             preferredRoom,
-            alternateRooms,
-            startDate,
-            endDate,
+            reason,
             residence
         } = req.body;
 
-        // Validate residence ID
-        if (!residence) {
-            return res.status(400).json({ error: 'Residence ID is required' });
+        // Check if email already has an application
+        const existingApplication = await Application.findOne({ email });
+        if (existingApplication) {
+            return res.status(400).json({ error: 'An application with this email already exists' });
         }
 
-        // Create new application
+        // Generate unique application code
+        const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+
         const application = new Application({
             firstName,
             lastName,
             email,
             phone,
-            requestType: 'new',
+            requestType,
             preferredRoom,
-            alternateRooms: alternateRooms || [],
-            startDate,
-            endDate,
-            residence
+            reason,
+            residence,
+            applicationCode,
+            status: 'pending',
+            applicationDate: new Date()
         });
 
         await application.save();
@@ -50,7 +60,7 @@ exports.submitApplication = async (req, res) => {
             
             Application Details:
             - Preferred Room: ${preferredRoom}
-            - Alternative Rooms: ${alternateRooms.join(', ') || 'None'}
+            - Reason: ${reason}
             - Desired Start Date: ${new Date(startDate).toLocaleDateString()}
             - Desired End Date: ${new Date(endDate).toLocaleDateString()}
             
@@ -73,16 +83,12 @@ exports.submitApplication = async (req, res) => {
         );
 
         res.status(201).json({
+            success: true,
             message: 'Application submitted successfully',
-            application: {
-                id: application._id,
-                status: application.status,
-                applicationDate: application.applicationDate
-            }
+            applicationCode: application.applicationCode
         });
-
     } catch (error) {
-        console.error('Error in submitApplication:', error);
+        console.error('Error submitting application:', error);
         res.status(500).json({ error: 'Server error' });
     }
 };
@@ -91,55 +97,197 @@ exports.submitApplication = async (req, res) => {
 exports.getApplicationStatus = async (req, res) => {
     try {
         const { email } = req.params;
-        
+
         const application = await Application.findOne({ email })
-            .select('status applicationDate preferredRoom applicationCode');
+            .populate('residence', 'name address')
+            .lean();
 
         if (!application) {
             return res.status(404).json({ error: 'Application not found' });
         }
 
-        res.json(application);
-
+        res.json({
+            success: true,
+            application: {
+                applicationCode: application.applicationCode,
+                status: application.status,
+                requestType: application.requestType,
+                preferredRoom: application.preferredRoom,
+                allocatedRoom: application.allocatedRoom,
+                waitlistedRoom: application.waitlistedRoom,
+                applicationDate: application.applicationDate,
+                residence: application.residence
+            }
+        });
     } catch (error) {
-        console.error('Error in getApplicationStatus:', error);
+        console.error('Error getting application status:', error);
         res.status(500).json({ error: 'Server error' });
     }
 };
 
-// Check if email has been used before and if eligible for renewal
+// Check email usage
 exports.checkEmailUsage = async (req, res) => {
     try {
-        // Handle both query parameter and path parameter
-        const email = req.query.email || req.params.email;
-        if (!email) return res.status(400).json({ error: 'Email is required' });
+        const email = req.params.email || req.query.email;
 
-        // Check active user
-        const user = await User.findOne({ email: email.toLowerCase() });
-        if (user) {
-            return res.json({ used: true, isRenewal: false });
+        if (!email) {
+            return res.status(400).json({ error: 'Email is required' });
         }
 
-        // Check active or pending application
-        const activeApp = await Application.findOne({ email: email.toLowerCase(), status: { $in: ['pending', 'approved', 'waitlisted'] } });
-        if (activeApp) {
-            // If there's an approved application but no user account, allow registration
-            // This means the application was approved but user never completed registration
-            if (activeApp.status === 'approved' && !user) {
-                return res.json({ used: false, isRenewal: false, hasApprovedApplication: true });
-            }
-            return res.json({ used: true, isRenewal: false });
-        }
+        const application = await Application.findOne({ email });
+        const user = await User.findOne({ email });
 
-        // Check expired/archived students
-        const expired = await ExpiredStudent.findOne({ 'student.email': email.toLowerCase() });
-        if (expired) {
-            return res.json({ used: true, isRenewal: true, previousApplication: expired.application });
-        }
-
-        // Not used
-        return res.json({ used: false, isRenewal: false });
+        res.json({
+            success: true,
+            emailExists: !!(application || user),
+            hasApplication: !!application,
+            hasUser: !!user
+        });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Error checking email usage:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Get public application data with room occupancy status
+exports.getPublicApplicationData = async (req, res) => {
+    try {
+        const { residence, status, type } = req.query;
+
+        // Build query for applications
+        const applicationQuery = {};
+        if (status) applicationQuery.status = status;
+        if (type) applicationQuery.requestType = type;
+
+        // Get applications with basic info (no sensitive data)
+        const applications = await Application.find(applicationQuery)
+            .select('applicationCode status requestType preferredRoom allocatedRoom waitlistedRoom applicationDate residence')
+            .populate('residence', 'name address')
+            .sort({ applicationDate: -1 })
+            .lean();
+
+        // Get all residences with room information
+        const residenceQuery = {};
+        if (residence) residenceQuery.name = { $regex: residence, $options: 'i' };
+
+        const residences = await Residence.find(residenceQuery)
+            .select('name address rooms.roomNumber rooms.type rooms.capacity rooms.price rooms.status rooms.currentOccupancy rooms.features rooms.floor rooms.area')
+            .lean();
+
+        // Create room status map
+        const roomStatusMap = {};
+        const roomDetails = [];
+
+        residences.forEach(residence => {
+            residence.rooms.forEach(room => {
+                const roomKey = `${residence.name}-${room.roomNumber}`;
+                roomStatusMap[roomKey] = {
+                    residenceId: residence._id,
+                    residenceName: residence.name,
+                    residenceAddress: residence.address,
+                    roomNumber: room.roomNumber,
+                    type: room.type,
+                    capacity: room.capacity,
+                    currentOccupancy: room.currentOccupancy,
+                    price: room.price,
+                    status: room.status,
+                    features: room.features,
+                    floor: room.floor,
+                    area: room.area,
+                    occupancyRate: room.capacity > 0 ? (room.currentOccupancy / room.capacity) * 100 : 0,
+                    isAvailable: room.status === 'available',
+                    isOccupied: room.status === 'occupied',
+                    isReserved: room.status === 'reserved',
+                    isMaintenance: room.status === 'maintenance'
+                };
+
+                roomDetails.push({
+                    id: roomKey,
+                    ...roomStatusMap[roomKey]
+                });
+            });
+        });
+
+        // Calculate overall statistics
+        const totalRooms = roomDetails.length;
+        const availableRooms = roomDetails.filter(room => room.isAvailable).length;
+        const occupiedRooms = roomDetails.filter(room => room.isOccupied).length;
+        const reservedRooms = roomDetails.filter(room => room.isReserved).length;
+        const maintenanceRooms = roomDetails.filter(room => room.isMaintenance).length;
+
+        // Calculate occupancy by residence
+        const residenceStats = residences.map(res => {
+            const rooms = res.rooms;
+            const totalRoomsInResidence = rooms.length;
+            const availableRoomsInResidence = rooms.filter(r => r.status === 'available').length;
+            const occupiedRoomsInResidence = rooms.filter(r => r.status === 'occupied').length;
+            const reservedRoomsInResidence = rooms.filter(r => r.status === 'reserved').length;
+            const maintenanceRoomsInResidence = rooms.filter(r => r.status === 'maintenance').length;
+
+            return {
+                id: res._id,
+                name: res.name,
+                address: res.address,
+                totalRooms: totalRoomsInResidence,
+                availableRooms: availableRoomsInResidence,
+                occupiedRooms: occupiedRoomsInResidence,
+                reservedRooms: reservedRoomsInResidence,
+                maintenanceRooms: maintenanceRoomsInResidence,
+                occupancyRate: totalRoomsInResidence > 0 ? 
+                    ((occupiedRoomsInResidence + reservedRoomsInResidence) / totalRoomsInResidence) * 100 : 0
+            };
+        });
+
+        // Get application statistics
+        const totalApplications = applications.length;
+        const pendingApplications = applications.filter(app => app.status === 'pending').length;
+        const approvedApplications = applications.filter(app => app.status === 'approved').length;
+        const waitlistedApplications = applications.filter(app => app.status === 'waitlisted').length;
+        const rejectedApplications = applications.filter(app => app.status === 'rejected').length;
+
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            statistics: {
+                rooms: {
+                    total: totalRooms,
+                    available: availableRooms,
+                    occupied: occupiedRooms,
+                    reserved: reservedRooms,
+                    maintenance: maintenanceRooms,
+                    overallOccupancyRate: totalRooms > 0 ? ((occupiedRooms + reservedRooms) / totalRooms) * 100 : 0
+                },
+                applications: {
+                    total: totalApplications,
+                    pending: pendingApplications,
+                    approved: approvedApplications,
+                    waitlisted: waitlistedApplications,
+                    rejected: rejectedApplications
+                }
+            },
+            residences: residenceStats,
+            rooms: roomDetails,
+            applications: applications.map(app => ({
+                applicationCode: app.applicationCode,
+                status: app.status,
+                requestType: app.requestType,
+                preferredRoom: app.preferredRoom,
+                allocatedRoom: app.allocatedRoom,
+                waitlistedRoom: app.waitlistedRoom,
+                applicationDate: app.applicationDate,
+                residence: app.residence ? {
+                    id: app.residence._id,
+                    name: app.residence.name,
+                    address: app.residence.address
+                } : null
+            }))
+        });
+    } catch (error) {
+        console.error('Error getting public application data:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Server error',
+            message: error.message 
+        });
     }
 }; 
