@@ -13,6 +13,14 @@ const replySchema = new mongoose.Schema({
     timestamp: {
         type: Date,
         default: Date.now
+    },
+    editedAt: {
+        type: Date,
+        default: null
+    },
+    isEdited: {
+        type: Boolean,
+        default: false
     }
 }, {
     timestamps: true
@@ -61,10 +69,33 @@ const messageSchema = new mongoose.Schema({
             default: Date.now
         }
     }],
+    // Delivery status for each recipient
+    deliveryStatus: [{
+        recipient: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        status: {
+            type: String,
+            enum: ['sent', 'delivered', 'read'],
+            default: 'sent'
+        },
+        deliveredAt: Date,
+        readAt: Date
+    }],
     status: {
         type: String,
         enum: ['sent', 'delivered', 'read'],
         default: 'delivered'
+    },
+    // Edit tracking
+    editedAt: {
+        type: Date,
+        default: null
+    },
+    isEdited: {
+        type: Boolean,
+        default: false
     }
 }, {
     timestamps: true
@@ -76,5 +107,6 @@ messageSchema.index({ author: 1 });
 messageSchema.index({ 'recipients': 1 });
 messageSchema.index({ pinned: 1 });
 messageSchema.index({ createdAt: -1 });
+messageSchema.index({ 'deliveryStatus.recipient': 1 });
 
 module.exports = mongoose.model('Message', messageSchema); 

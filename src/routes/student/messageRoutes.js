@@ -14,6 +14,11 @@ const messageValidation = [
     body('residence').optional().isMongoId().withMessage('Invalid residence ID format')
 ];
 
+const editMessageValidation = [
+    body('title').optional().trim().notEmpty().withMessage('Title cannot be empty'),
+    body('content').optional().trim().notEmpty().withMessage('Content cannot be empty')
+];
+
 const replyValidation = [
     body('content').trim().notEmpty().withMessage('Reply content is required')
 ];
@@ -29,12 +34,42 @@ router.post('/',
     messageController.createMessage
 );
 
+// Edit message
+router.put('/:messageId',
+    auth,
+    checkRole('student'),
+    editMessageValidation,
+    messageController.editMessage
+);
+
+// Delete message
+router.delete('/:messageId',
+    auth,
+    checkRole('student'),
+    messageController.deleteMessage
+);
+
 // Add reply to message
 router.post('/:messageId/reply',
     auth,
     checkRole('student'),
     replyValidation,
     messageController.addReply
+);
+
+// Edit reply
+router.put('/:messageId/reply/:replyId',
+    auth,
+    checkRole('student'),
+    replyValidation,
+    messageController.editReply
+);
+
+// Delete reply
+router.delete('/:messageId/reply/:replyId',
+    auth,
+    checkRole('student'),
+    messageController.deleteReply
 );
 
 // New endpoints for conversation functionality

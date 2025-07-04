@@ -55,6 +55,7 @@ exports.getMessages = async (req, res) => {
             .populate('author', 'firstName lastName role')
             .populate('recipients', 'firstName lastName role')
             .populate('replies.author', 'firstName lastName role')
+            .populate('deliveryStatus.recipient', 'firstName lastName role')
             .populate('residence', 'name _id')
             .lean();
 
@@ -62,50 +63,81 @@ exports.getMessages = async (req, res) => {
 
         // Format messages
         const formattedMessages = messages.map(message => {
-            // Get recipient names
-            const recipientNames = message.recipients?.map(r => ({
-                id: r._id,
-                name: `${r.firstName} ${r.lastName}`,
-                role: r.role
+            // Get recipient details
+            const recipientDetails = message.recipients?.map(r => ({
+                _id: r._id,
+                firstName: r.firstName,
+                lastName: r.lastName,
+                role: r.role,
+                email: r.email
             })) || [];
 
             // Get the first recipient's name for display
-            const firstRecipient = recipientNames[0]?.name || 'No recipient';
+            const firstRecipient = recipientDetails[0] ? `${recipientDetails[0].firstName} ${recipientDetails[0].lastName}` : 'No recipient';
+
+            // Get delivery indicators
+            const deliveryIndicators = message.deliveryStatus?.map(ds => ({
+                recipient: {
+                    _id: ds.recipient._id,
+                    firstName: ds.recipient.firstName,
+                    lastName: ds.recipient.lastName,
+                    role: ds.recipient.role,
+                    email: ds.recipient.email
+                },
+                status: ds.status,
+                deliveredAt: ds.deliveredAt,
+                readAt: ds.readAt
+            })) || [];
 
             return {
-                id: message._id,
-                author: message.author ? `${message.author.firstName} ${message.author.lastName}` : 'Unknown',
-                role: message.author?.role || 'unknown',
+                _id: message._id,
+                author: message.author ? {
+                    _id: message.author._id,
+                    firstName: message.author.firstName,
+                    lastName: message.author.lastName,
+                    role: message.author.role,
+                    email: message.author.email
+                } : null,
                 title: message.title,
                 content: message.content,
+                type: message.type,
                 timestamp: message.createdAt,
                 createdAt: message.createdAt,
                 time: message.createdAt ? new Date(message.createdAt).toLocaleString() : 'Date not available',
                 pinned: message.pinned,
-                avatar: message.author?.role === 'admin' ? '🏛️' : '👨‍🎓',
                 residence: message.residence ? {
-                    id: message.residence._id,
+                    _id: message.residence._id,
                     name: message.residence.name
                 } : null,
-                recipients: recipientNames,
+                recipients: recipientDetails,
                 recipientName: firstRecipient,
                 preview: message.content.substring(0, 100) + (message.content.length > 100 ? '...' : ''),
+                deliveryIndicators,
+                // Edit indicators
+                isEdited: message.isEdited || false,
+                editedAt: message.editedAt,
                 replies: message.replies?.map(reply => ({
-                    id: reply._id,
-                    author: reply.author ? `${reply.author.firstName} ${reply.author.lastName}` : 'Unknown',
-                    role: reply.author?.role || 'unknown',
+                    _id: reply._id,
+                    author: reply.author ? {
+                        _id: reply.author._id,
+                        firstName: reply.author.firstName,
+                        lastName: reply.author.lastName,
+                        role: reply.author.role,
+                        email: reply.author.email
+                    } : null,
                     content: reply.content,
                     timestamp: reply.timestamp,
                     createdAt: reply.timestamp,
                     time: reply.timestamp ? new Date(reply.timestamp).toLocaleString() : 'Date not available',
-                    avatar: reply.author?.role === 'admin' ? '🏛️' : '👨‍🎓'
+                    isEdited: reply.isEdited || false,
+                    editedAt: reply.editedAt
                 })) || []
             };
         });
 
         // Group messages by type
-        const announcements = formattedMessages.filter(m => m.role === 'admin');
-        const discussions = formattedMessages.filter(m => m.role === 'student');
+        const announcements = formattedMessages.filter(m => m.type === 'announcement');
+        const discussions = formattedMessages.filter(m => m.type === 'discussion');
 
         console.log('Formatted messages:', {
             total: formattedMessages.length,
@@ -170,36 +202,73 @@ exports.createMessage = async (req, res) => {
             recipients = [student._id];
         }
 
+        // Determine message type: if sent to all-students, it's an announcement
+        const messageType = recipient === 'all-students' ? 'announcement' : 'discussion';
+
+        // Initialize delivery status for all recipients
+        const deliveryStatus = recipients.map(recipientId => ({
+            recipient: recipientId,
+            status: 'sent',
+            deliveredAt: null,
+            readAt: null
+        }));
+
         const newMessage = new Message({
             author: req.user._id,
             residence: residenceId,
             title,
             content,
-            type: 'discussion',
+            type: messageType,
             recipients,
-            pinned: false
+            pinned: false,
+            deliveryStatus
         });
 
         await newMessage.save();
 
-        // Format response
+        // Populate author and recipients for the response
         const populatedMessage = await Message.findById(newMessage._id)
-            .populate('author', 'firstName lastName role')
+            .populate('author', 'firstName lastName role email')
+            .populate('recipients', 'firstName lastName role email')
+            .populate('deliveryStatus.recipient', 'firstName lastName role email')
             .lean();
 
+        // Format the response to include user details and delivery status
         const formattedMessage = {
-            id: populatedMessage._id,
-            author: `${populatedMessage.author.firstName} ${populatedMessage.author.lastName}`,
-            role: populatedMessage.author.role,
-            title: populatedMessage.title,
-            content: populatedMessage.content,
-            timestamp: populatedMessage.createdAt,
-            pinned: populatedMessage.pinned,
-            avatar: populatedMessage.author.role === 'admin' ? '🏛️' : '👨‍🎓',
-            replies: []
+            ...populatedMessage,
+            author: {
+                _id: populatedMessage.author._id,
+                firstName: populatedMessage.author.firstName,
+                lastName: populatedMessage.author.lastName,
+                role: populatedMessage.author.role,
+                email: populatedMessage.author.email
+            },
+            recipients: populatedMessage.recipients.map(recipient => ({
+                _id: recipient._id,
+                firstName: recipient.firstName,
+                lastName: recipient.lastName,
+                role: recipient.role,
+                email: recipient.email
+            })),
+            deliveryStatus: populatedMessage.deliveryStatus.map(ds => ({
+                recipient: {
+                    _id: ds.recipient._id,
+                    firstName: ds.recipient.firstName,
+                    lastName: ds.recipient.lastName,
+                    role: ds.recipient.role,
+                    email: ds.recipient.email
+                },
+                status: ds.status,
+                deliveredAt: ds.deliveredAt,
+                readAt: ds.readAt
+            }))
         };
 
-        res.status(201).json(formattedMessage);
+        res.status(201).json({
+            success: true,
+            message: 'Message created successfully',
+            data: formattedMessage
+        });
     } catch (error) {
         console.error('Error in createMessage:', error);
         res.status(500).json({ error: 'Error creating message' });
@@ -239,17 +308,21 @@ exports.addReply = async (req, res) => {
 
         // Get populated reply
         const populatedMessage = await Message.findById(message._id)
-            .populate('replies.author', 'firstName lastName role')
+            .populate('replies.author', 'firstName lastName role email')
             .lean();
 
         const latestReply = populatedMessage.replies[populatedMessage.replies.length - 1];
         const formattedReply = {
-            id: latestReply._id,
-            author: `${latestReply.author.firstName} ${latestReply.author.lastName}`,
-            role: latestReply.author.role,
+            _id: latestReply._id,
             content: latestReply.content,
             timestamp: latestReply.timestamp,
-            avatar: latestReply.author.role === 'admin' ? '🏛️' : '👨‍🎓'
+            author: {
+                _id: latestReply.author._id,
+                firstName: latestReply.author.firstName,
+                lastName: latestReply.author.lastName,
+                role: latestReply.author.role,
+                email: latestReply.author.email
+            }
         };
 
         res.status(201).json(formattedReply);
@@ -410,16 +483,104 @@ exports.updateMessageStatus = async (req, res) => {
     }
 };
 
-// Delete message
-exports.deleteMessage = async (req, res) => {
+// Edit message
+exports.editMessage = async (req, res) => {
     try {
-        const message = await Message.findById(req.params.messageId);
-        
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { title, content } = req.body;
+        const messageId = req.params.messageId;
+
+        // Find the message
+        const message = await Message.findById(messageId);
         if (!message) {
             return res.status(404).json({ error: 'Message not found' });
         }
 
-        // Check if user is authorized to delete the message
+        // Check if user is authorized to edit the message (only author can edit)
+        if (message.author.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ error: 'Not authorized to edit this message' });
+        }
+
+        // Check if message is too old to edit (e.g., within 24 hours)
+        const messageAge = Date.now() - message.createdAt.getTime();
+        const maxEditTime = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+        if (messageAge > maxEditTime) {
+            return res.status(400).json({ error: 'Message cannot be edited after 24 hours' });
+        }
+
+        // Update message fields
+        if (title !== undefined) message.title = title;
+        if (content !== undefined) message.content = content;
+
+        // Add edit timestamp
+        message.editedAt = new Date();
+        message.isEdited = true;
+
+        await message.save();
+
+        // Populate and return updated message
+        const updatedMessage = await Message.findById(messageId)
+            .populate('author', 'firstName lastName role email')
+            .populate('recipients', 'firstName lastName role email')
+            .populate('deliveryStatus.recipient', 'firstName lastName role email')
+            .lean();
+
+        const formattedMessage = {
+            ...updatedMessage,
+            author: {
+                _id: updatedMessage.author._id,
+                firstName: updatedMessage.author.firstName,
+                lastName: updatedMessage.author.lastName,
+                role: updatedMessage.author.role,
+                email: updatedMessage.author.email
+            },
+            recipients: updatedMessage.recipients.map(recipient => ({
+                _id: recipient._id,
+                firstName: recipient.firstName,
+                lastName: recipient.lastName,
+                role: recipient.role,
+                email: recipient.email
+            })),
+            deliveryStatus: updatedMessage.deliveryStatus?.map(ds => ({
+                recipient: {
+                    _id: ds.recipient._id,
+                    firstName: ds.recipient.firstName,
+                    lastName: ds.recipient.lastName,
+                    role: ds.recipient.role,
+                    email: ds.recipient.email
+                },
+                status: ds.status,
+                deliveredAt: ds.deliveredAt,
+                readAt: ds.readAt
+            })) || []
+        };
+
+        res.json({
+            success: true,
+            message: 'Message updated successfully',
+            data: formattedMessage
+        });
+    } catch (error) {
+        console.error('Error in editMessage:', error);
+        res.status(500).json({ error: 'Error updating message' });
+    }
+};
+
+// Delete message
+exports.deleteMessage = async (req, res) => {
+    try {
+        const messageId = req.params.messageId;
+
+        const message = await Message.findById(messageId);
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Check if user is authorized to delete the message (author or recipient can delete)
         const isAuthor = message.author.toString() === req.user._id.toString();
         const isRecipient = message.recipients.some(id => id.toString() === req.user._id.toString());
         
@@ -427,8 +588,20 @@ exports.deleteMessage = async (req, res) => {
             return res.status(403).json({ error: 'Not authorized to delete this message' });
         }
 
+        // Check if message is too old to delete (e.g., within 24 hours for recipients, no limit for author)
+        if (!isAuthor) {
+            const messageAge = Date.now() - message.createdAt.getTime();
+            const maxDeleteTime = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+            if (messageAge > maxDeleteTime) {
+                return res.status(400).json({ error: 'Message cannot be deleted after 24 hours' });
+            }
+        }
+
         await message.deleteOne();
-        res.json({ message: 'Message deleted successfully' });
+        res.json({ 
+            success: true,
+            message: 'Message deleted successfully' 
+        });
     } catch (error) {
         console.error('Error in deleteMessage:', error);
         res.status(500).json({ error: 'Error deleting message' });
@@ -656,7 +829,7 @@ exports.sendConversationMessage = async (req, res) => {
         
         // Get populated reply
         const populatedMessage = await Message.findById(message._id)
-            .populate('replies.author', 'firstName lastName role')
+            .populate('replies.author', 'firstName lastName role email')
             .lean();
             
         const latestReply = populatedMessage.replies[populatedMessage.replies.length - 1];
@@ -668,7 +841,8 @@ exports.sendConversationMessage = async (req, res) => {
                 _id: latestReply.author._id,
                 firstName: latestReply.author.firstName,
                 lastName: latestReply.author.lastName,
-                role: latestReply.author.role
+                role: latestReply.author.role,
+                email: latestReply.author.email
             },
             createdAt: latestReply.timestamp
         };
@@ -903,5 +1077,122 @@ exports.markConversationAsRead = async (req, res) => {
     } catch (error) {
         console.error('Error marking conversation as read:', error);
         res.status(500).json({ error: 'Error marking conversation as read' });
+    }
+};
+
+// Edit reply
+exports.editReply = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { content } = req.body;
+        const { messageId, replyId } = req.params;
+
+        // Find the message
+        const message = await Message.findById(messageId);
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Find the reply
+        const reply = message.replies.id(replyId);
+        if (!reply) {
+            return res.status(404).json({ error: 'Reply not found' });
+        }
+
+        // Check if user is authorized to edit the reply (only author can edit)
+        if (reply.author.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ error: 'Not authorized to edit this reply' });
+        }
+
+        // Check if reply is too old to edit (e.g., within 24 hours)
+        const replyAge = Date.now() - reply.timestamp.getTime();
+        const maxEditTime = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+        if (replyAge > maxEditTime) {
+            return res.status(400).json({ error: 'Reply cannot be edited after 24 hours' });
+        }
+
+        // Update reply content
+        reply.content = content;
+        reply.editedAt = new Date();
+        reply.isEdited = true;
+
+        await message.save();
+
+        // Get populated reply
+        const updatedMessage = await Message.findById(messageId)
+            .populate('replies.author', 'firstName lastName role email')
+            .lean();
+
+        const updatedReply = updatedMessage.replies.find(r => r._id.toString() === replyId);
+        const formattedReply = {
+            _id: updatedReply._id,
+            content: updatedReply.content,
+            timestamp: updatedReply.timestamp,
+            editedAt: updatedReply.editedAt,
+            isEdited: updatedReply.isEdited,
+            author: {
+                _id: updatedReply.author._id,
+                firstName: updatedReply.author.firstName,
+                lastName: updatedReply.author.lastName,
+                role: updatedReply.author.role,
+                email: updatedReply.author.email
+            }
+        };
+
+        res.json({
+            success: true,
+            message: 'Reply updated successfully',
+            data: formattedReply
+        });
+    } catch (error) {
+        console.error('Error in editReply:', error);
+        res.status(500).json({ error: 'Error updating reply' });
+    }
+};
+
+// Delete reply
+exports.deleteReply = async (req, res) => {
+    try {
+        const { messageId, replyId } = req.params;
+
+        // Find the message
+        const message = await Message.findById(messageId);
+        if (!message) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        // Find the reply
+        const reply = message.replies.id(replyId);
+        if (!reply) {
+            return res.status(404).json({ error: 'Reply not found' });
+        }
+
+        // Check if user is authorized to delete the reply (only author can delete)
+        if (reply.author.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ error: 'Not authorized to delete this reply' });
+        }
+
+        // Check if reply is too old to delete (e.g., within 24 hours)
+        const replyAge = Date.now() - reply.timestamp.getTime();
+        const maxDeleteTime = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+        if (replyAge > maxDeleteTime) {
+            return res.status(400).json({ error: 'Reply cannot be deleted after 24 hours' });
+        }
+
+        // Remove the reply
+        message.replies.pull(replyId);
+        await message.save();
+
+        res.json({
+            success: true,
+            message: 'Reply deleted successfully'
+        });
+    } catch (error) {
+        console.error('Error in deleteReply:', error);
+        res.status(500).json({ error: 'Error deleting reply' });
     }
 }; 
