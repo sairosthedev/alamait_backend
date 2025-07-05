@@ -151,7 +151,7 @@ exports.getBelvedereResidence = async (req, res) => {
         // Save changes if any updates were made
         if (hasUpdates) {
             await residence.save();
-            ('Updated room statuses and occupancy for Belvedere residence');
+            console.log('Updated room statuses and occupancy for Belvedere residence');
         }
 
         res.status(200).json({

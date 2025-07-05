@@ -180,6 +180,11 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOp
 // Public routes
 app.use('/api/public/applications', publicApplicationRoutes);
 app.use('/api/public/residences', publicResidenceRoutes);
+
+// Specific residence routes (must come before generic routes)
+app.use('/api/residences', publicResidenceRoutes);
+
+// Generic residence routes (for ID-based lookups)
 app.use('/api/residences', residenceRoutes);
 
 // Alias route for frontend compatibility
