@@ -105,6 +105,18 @@ const applicationSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Residence',
         required: true
+    },
+    additionalInfo: {
+        dateOfBirth: {
+            type: Date
+        },
+        gender: {
+            type: String,
+            enum: ['male', 'female', 'other']
+        },
+        specialRequirements: {
+            type: String
+        }
     }
 }, {
     timestamps: true

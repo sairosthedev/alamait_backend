@@ -19,16 +19,30 @@ exports.submitApplication = async (req, res) => {
             lastName,
             email,
             phone,
-            requestType,
+            requestType = 'new', // Default to 'new' if not provided
             preferredRoom,
             reason,
-            residence
+            residence,
+            startDate,
+            endDate,
+            alternateRooms,
+            additionalInfo
         } = req.body;
 
         // Check if email already has an application
         const existingApplication = await Application.findOne({ email });
         if (existingApplication) {
             return res.status(400).json({ error: 'An application with this email already exists' });
+        }
+
+        // Handle residence - if not provided, find the first available residence
+        let residenceId = residence;
+        if (!residenceId) {
+            const defaultResidence = await Residence.findOne().select('_id');
+            if (!defaultResidence) {
+                return res.status(400).json({ error: 'No residence available for applications' });
+            }
+            residenceId = defaultResidence._id;
         }
 
         // Generate unique application code
@@ -42,7 +56,11 @@ exports.submitApplication = async (req, res) => {
             requestType,
             preferredRoom,
             reason,
-            residence,
+            residence: residenceId,
+            startDate,
+            endDate,
+            alternateRooms,
+            additionalInfo,
             applicationCode,
             status: 'pending',
             applicationDate: new Date()
@@ -60,9 +78,12 @@ exports.submitApplication = async (req, res) => {
             
             Application Details:
             - Preferred Room: ${preferredRoom}
-            - Reason: ${reason}
-            - Desired Start Date: ${new Date(startDate).toLocaleDateString()}
-            - Desired End Date: ${new Date(endDate).toLocaleDateString()}
+            ${reason ? `- Reason: ${reason}` : ''}
+            ${startDate ? `- Desired Start Date: ${new Date(startDate).toLocaleDateString()}` : ''}
+            ${endDate ? `- Desired End Date: ${new Date(endDate).toLocaleDateString()}` : ''}
+            ${additionalInfo?.gender ? `- Gender: ${additionalInfo.gender}` : ''}
+            ${additionalInfo?.dateOfBirth ? `- Date of Birth: ${new Date(additionalInfo.dateOfBirth).toLocaleDateString()}` : ''}
+            ${additionalInfo?.specialRequirements ? `- Special Requirements: ${additionalInfo.specialRequirements}` : ''}
             
             Please keep this email for your records.
             
