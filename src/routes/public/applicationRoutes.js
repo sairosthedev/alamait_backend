@@ -17,4 +17,7 @@ router.get('/check-email/:email', checkEmailUsage);
 // Get public application data with room occupancy status
 router.get('/public-data', getPublicApplicationData);
 
+// Frontend compatibility route - exact match for /api/applications/public
+router.get('/', getPublicApplicationData);
+
 module.exports = router; 

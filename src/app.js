@@ -182,6 +182,9 @@ app.use('/api/public/applications', publicApplicationRoutes);
 app.use('/api/public/residences', publicResidenceRoutes);
 app.use('/api/residences', residenceRoutes);
 
+// Alias route for frontend compatibility
+app.use('/api/applications/public', publicApplicationRoutes);
+
 // Maintenance routes with debugging
 // Define specific routes first
 app.use('/api/maintenance/staff', (req, res, next) => {
