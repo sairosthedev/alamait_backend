@@ -187,8 +187,9 @@ app.use('/api/residences', publicResidenceRoutes);
 // Generic residence routes (for ID-based lookups)
 app.use('/api/residences', residenceRoutes);
 
-// Alias route for frontend compatibility
+// Alias routes for frontend compatibility
 app.use('/api/applications/public', publicApplicationRoutes);
+app.use('/api/applications', publicApplicationRoutes);
 
 // Maintenance routes with debugging
 // Define specific routes first
