@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { submitApplication, getApplicationStatus, checkEmailUsage } = require('../../controllers/public/applicationController');
+const { submitApplication, getApplicationStatus, checkEmailUsage, getPublicApplicationData } = require('../../controllers/public/applicationController');
 
 // Submit new application
 router.post('/submit', submitApplication);
@@ -13,5 +13,8 @@ router.get('/check-email', checkEmailUsage);
 
 // Check email usage with email in path (for frontend compatibility)
 router.get('/check-email/:email', checkEmailUsage);
+
+// Get public application data with room occupancy status
+router.get('/public-data', getPublicApplicationData);
 
 module.exports = router; 

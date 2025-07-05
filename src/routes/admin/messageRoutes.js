@@ -61,6 +61,36 @@ router.patch('/:messageId/pin',
     messageController.togglePinMessage
 );
 
+// Mark message as read
+router.post('/:messageId/read',
+    auth,
+    checkRole('admin'),
+    messageController.markMessageAsRead
+);
+
+// Update delivery status
+router.post('/:messageId/delivery-status',
+    auth,
+    checkRole('admin'),
+    messageController.updateDeliveryStatus
+);
+
+// Get delivery status
+router.get('/:messageId/delivery-status',
+    auth,
+    checkRole('admin'),
+    messageController.getDeliveryStatus
+);
+
+// Edit message
+router.put('/:messageId',
+    auth,
+    checkRole('admin'),
+    [body('title').optional().trim().notEmpty().withMessage('Title cannot be empty'),
+     body('content').optional().trim().notEmpty().withMessage('Content cannot be empty')],
+    messageController.editMessage
+);
+
 // Delete message
 router.delete('/:messageId',
     auth,
