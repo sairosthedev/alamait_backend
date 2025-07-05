@@ -174,13 +174,47 @@ exports.getPublicApplicationData = async (req, res) => {
             .select('name address rooms.roomNumber rooms.type rooms.capacity rooms.price rooms.status rooms.currentOccupancy rooms.features rooms.floor rooms.area')
             .lean();
 
-        // Create room status map
+        // Calculate occupancy based on approved applications
+        const approvedApplications = applications.filter(app => app.status === 'approved');
+        const allocatedRooms = new Set();
+        const waitlistedRooms = new Set();
+        
+        // Track allocated and waitlisted rooms from applications
+        approvedApplications.forEach(app => {
+            if (app.allocatedRoom) {
+                allocatedRooms.add(app.allocatedRoom);
+            }
+            if (app.waitlistedRoom) {
+                waitlistedRooms.add(app.waitlistedRoom);
+            }
+        });
+
+        // Create room status map based on actual applications
         const roomStatusMap = {};
         const roomDetails = [];
 
         residences.forEach(residence => {
             residence.rooms.forEach(room => {
                 const roomKey = `${residence.name}-${room.roomNumber}`;
+                
+                // Determine room status based on applications
+                let actualStatus = 'available';
+                let isAllocated = false;
+                let isWaitlisted = false;
+                
+                if (allocatedRooms.has(room.roomNumber)) {
+                    actualStatus = 'occupied';
+                    isAllocated = true;
+                } else if (waitlistedRooms.has(room.roomNumber)) {
+                    actualStatus = 'reserved';
+                    isWaitlisted = true;
+                }
+
+                // Get applications for this room
+                const roomApplications = approvedApplications.filter(app => 
+                    app.allocatedRoom === room.roomNumber || app.waitlistedRoom === room.roomNumber
+                );
+
                 roomStatusMap[roomKey] = {
                     residenceId: residence._id,
                     residenceName: residence.name,
@@ -188,17 +222,21 @@ exports.getPublicApplicationData = async (req, res) => {
                     roomNumber: room.roomNumber,
                     type: room.type,
                     capacity: room.capacity,
-                    currentOccupancy: room.currentOccupancy,
+                    currentOccupancy: isAllocated ? 1 : 0,
                     price: room.price,
-                    status: room.status,
+                    status: actualStatus,
                     features: room.features,
                     floor: room.floor,
                     area: room.area,
-                    occupancyRate: room.capacity > 0 ? (room.currentOccupancy / room.capacity) * 100 : 0,
-                    isAvailable: room.status === 'available',
-                    isOccupied: room.status === 'occupied',
-                    isReserved: room.status === 'reserved',
-                    isMaintenance: room.status === 'maintenance'
+                    occupancyRate: room.capacity > 0 ? (isAllocated ? 100 : 0) : 0,
+                    isAvailable: actualStatus === 'available',
+                    isOccupied: isAllocated,
+                    isReserved: isWaitlisted,
+                    isMaintenance: false,
+                    // Application-based data
+                    allocatedApplications: roomApplications.filter(app => app.allocatedRoom === room.roomNumber),
+                    waitlistedApplications: roomApplications.filter(app => app.waitlistedRoom === room.roomNumber),
+                    totalApplications: roomApplications.length
                 };
 
                 roomDetails.push({
@@ -208,21 +246,32 @@ exports.getPublicApplicationData = async (req, res) => {
             });
         });
 
-        // Calculate overall statistics
+        // Calculate overall statistics based on applications
         const totalRooms = roomDetails.length;
         const availableRooms = roomDetails.filter(room => room.isAvailable).length;
         const occupiedRooms = roomDetails.filter(room => room.isOccupied).length;
         const reservedRooms = roomDetails.filter(room => room.isReserved).length;
         const maintenanceRooms = roomDetails.filter(room => room.isMaintenance).length;
 
-        // Calculate occupancy by residence
+        // Calculate occupancy by residence based on applications
         const residenceStats = residences.map(res => {
             const rooms = res.rooms;
             const totalRoomsInResidence = rooms.length;
-            const availableRoomsInResidence = rooms.filter(r => r.status === 'available').length;
-            const occupiedRoomsInResidence = rooms.filter(r => r.status === 'occupied').length;
-            const reservedRoomsInResidence = rooms.filter(r => r.status === 'reserved').length;
-            const maintenanceRoomsInResidence = rooms.filter(r => r.status === 'maintenance').length;
+            
+            // Count rooms based on actual applications
+            const availableRoomsInResidence = rooms.filter(r => 
+                !allocatedRooms.has(r.roomNumber) && !waitlistedRooms.has(r.roomNumber)
+            ).length;
+            
+            const occupiedRoomsInResidence = rooms.filter(r => 
+                allocatedRooms.has(r.roomNumber)
+            ).length;
+            
+            const reservedRoomsInResidence = rooms.filter(r => 
+                waitlistedRooms.has(r.roomNumber)
+            ).length;
+            
+            const maintenanceRoomsInResidence = 0; // No maintenance rooms tracked in applications
 
             return {
                 id: res._id,
@@ -234,14 +283,24 @@ exports.getPublicApplicationData = async (req, res) => {
                 reservedRooms: reservedRoomsInResidence,
                 maintenanceRooms: maintenanceRoomsInResidence,
                 occupancyRate: totalRoomsInResidence > 0 ? 
-                    ((occupiedRoomsInResidence + reservedRoomsInResidence) / totalRoomsInResidence) * 100 : 0
+                    ((occupiedRoomsInResidence + reservedRoomsInResidence) / totalRoomsInResidence) * 100 : 0,
+                // Application-based statistics
+                totalApplications: approvedApplications.filter(app => 
+                    app.residence && app.residence._id.toString() === res._id.toString()
+                ).length,
+                allocatedApplications: approvedApplications.filter(app => 
+                    app.residence && app.residence._id.toString() === res._id.toString() && app.allocatedRoom
+                ).length,
+                waitlistedApplications: approvedApplications.filter(app => 
+                    app.residence && app.residence._id.toString() === res._id.toString() && app.waitlistedRoom
+                ).length
             };
         });
 
         // Get application statistics
         const totalApplications = applications.length;
         const pendingApplications = applications.filter(app => app.status === 'pending').length;
-        const approvedApplications = applications.filter(app => app.status === 'approved').length;
+        const approvedApplicationsCount = approvedApplications.length;
         const waitlistedApplications = applications.filter(app => app.status === 'waitlisted').length;
         const rejectedApplications = applications.filter(app => app.status === 'rejected').length;
 
@@ -260,9 +319,13 @@ exports.getPublicApplicationData = async (req, res) => {
                 applications: {
                     total: totalApplications,
                     pending: pendingApplications,
-                    approved: approvedApplications,
+                    approved: approvedApplicationsCount,
                     waitlisted: waitlistedApplications,
-                    rejected: rejectedApplications
+                    rejected: rejectedApplications,
+                    // Application-based occupancy
+                    allocatedRooms: allocatedRooms.size,
+                    waitlistedRooms: waitlistedRooms.size,
+                    occupancyBasedOnApplications: true
                 }
             },
             residences: residenceStats,

@@ -178,8 +178,8 @@ const swaggerOptions = {
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOptions));
 
 // Public routes
-app.use('/api/applications', publicApplicationRoutes);
-app.use('/api/residences', publicResidenceRoutes);
+app.use('/api/public/applications', publicApplicationRoutes);
+app.use('/api/public/residences', publicResidenceRoutes);
 app.use('/api/residences', residenceRoutes);
 
 // Maintenance routes with debugging
