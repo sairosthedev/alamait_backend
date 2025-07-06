@@ -564,16 +564,67 @@ const getAllSignedLeases = async (req, res) => {
       console.log('Sample user:', usersWithSignedLeases[0]);
     }
 
-    // Format the response
-    const signedLeases = usersWithSignedLeases.map(user => ({
-      id: user._id,
-      studentName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
-      email: user.email,
-      currentRoom: user.currentRoom,
-      residence: (user.residence && typeof user.residence === 'object' && user.residence.name) ? user.residence.name : 'Not Assigned',
-      fileUrl: user.signedLeasePath,
-      uploadDate: user.signedLeaseUploadDate,
-      fileName: user.signedLeasePath ? user.signedLeasePath.split('/').pop() : null
+    // Get all approved applications to cross-reference room and residence info
+    const approvedApplications = await Application.find({ 
+      status: 'approved',
+      student: { $in: usersWithSignedLeases.map(u => u._id) }
+    })
+    .populate('residence', 'name')
+    .lean();
+
+    // Create a map of student ID to application data
+    const applicationMap = {};
+    approvedApplications.forEach(app => {
+      applicationMap[app.student.toString()] = app;
+    });
+
+    // Format the response with enhanced room and residence lookup
+    const signedLeases = await Promise.all(usersWithSignedLeases.map(async user => {
+      let currentRoom = user.currentRoom;
+      let residenceName = 'Not Assigned';
+      let residenceId = null;
+
+      // First check if user has direct room and residence info
+      if (user.currentRoom && user.residence) {
+        currentRoom = user.currentRoom;
+        residenceName = user.residence.name || 'Not Assigned';
+        residenceId = user.residence._id;
+      }
+      // Then check approved application for room and residence info
+      else if (applicationMap[user._id.toString()]) {
+        const app = applicationMap[user._id.toString()];
+        currentRoom = app.allocatedRoom || app.preferredRoom || 'Not Assigned';
+        residenceName = app.residence?.name || 'Not Assigned';
+        residenceId = app.residence?._id || null;
+      }
+      // Finally, if user has currentRoom but no residence, try to find the residence
+      else if (user.currentRoom) {
+        currentRoom = user.currentRoom;
+        try {
+          const residence = await Residence.findOne({
+            'rooms.roomNumber': user.currentRoom
+          }).select('name _id').lean();
+          
+          if (residence) {
+            residenceName = residence.name;
+            residenceId = residence._id;
+          }
+        } catch (err) {
+          console.error('Error finding residence for room:', user.currentRoom, err);
+        }
+      }
+
+      return {
+        id: user._id,
+        studentName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+        email: user.email,
+        currentRoom: currentRoom,
+        residence: residenceName,
+        residenceId: residenceId,
+        fileUrl: user.signedLeasePath,
+        uploadDate: user.signedLeaseUploadDate,
+        fileName: user.signedLeasePath ? user.signedLeasePath.split('/').pop() : null
+      };
     }));
 
     res.json({
