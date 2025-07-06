@@ -278,6 +278,14 @@ const findStudentById = async (studentId) => {
         // If not found in User, try Application collection
         const application = await Application.findById(studentId).select('firstName lastName email');
         if (application) {
+            // Try to find User by email from Application
+            if (application.email) {
+                const userByEmail = await User.findOne({ email: application.email }).select('firstName lastName email');
+                if (userByEmail) {
+                    return { student: userByEmail, source: 'User (from Application email)' };
+                }
+            }
+            // fallback: return application as before
             return { 
                 student: { 
                     _id: application._id,
@@ -401,6 +409,16 @@ exports.getStudentPayments = async (req, res) => {
         // If no payments found with student._id, try with the original studentId
         if (payments.length === 0) {
             payments = await Payment.find({ student: studentId })
+                .populate('residence', 'name')
+                .populate('createdBy', 'firstName lastName')
+                .populate('updatedBy', 'firstName lastName')
+                .populate('proofOfPayment.verifiedBy', 'firstName lastName')
+                .sort({ date: -1 });
+        }
+
+        // If still no payments, try to find by email if available
+        if (payments.length === 0 && student.email) {
+            payments = await Payment.find({ email: student.email })
                 .populate('residence', 'name')
                 .populate('createdBy', 'firstName lastName')
                 .populate('updatedBy', 'firstName lastName')
