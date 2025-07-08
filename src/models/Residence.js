@@ -54,7 +54,7 @@ const residenceSchema = new mongoose.Schema({
         },
         type: {
             type: String,
-            enum: ['single', 'double', 'studio', 'apartment', 'triple', 'quad', 'Six-person room', 'six', 'fife'],
+            enum: ['single', 'double', 'studio', 'apartment', 'triple', 'tripple', 'quad', 'Six-person room', 'six', 'fife'],
             required: true
         },
         capacity: {
@@ -196,6 +196,6 @@ residenceSchema.methods.addMaintenanceRequest = async function(roomNumber, maint
     }
 };
 
-const Residence = mongoose.model('Residence', residenceSchema);
+const Residence = mongoose.model('Residence', residenceSchema, 'residences');
 
 module.exports = Residence; 
