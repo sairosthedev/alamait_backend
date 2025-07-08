@@ -1,5 +1,6 @@
 const { validationResult } = require('express-validator');
 const Residence = require('../../models/Residence');
+const Application = require('../../models/Application');
 
 // Add new residence
 exports.addResidence = async (req, res) => {
@@ -72,10 +73,29 @@ exports.getAllResidences = async (req, res) => {
             .populate('manager', 'firstName lastName email')
             .sort({ createdAt: -1 });
 
+        // For each residence, for each room, add approvedCount
+        const residencesWithCounts = await Promise.all(residences.map(async (residence) => {
+            const roomsWithCounts = await Promise.all((residence.rooms || []).map(async (room) => {
+                const approvedCount = await Application.countDocuments({
+                    status: 'approved',
+                    allocatedRoom: room.roomNumber,
+                    residence: residence._id
+                });
+                return {
+                    ...room.toObject(),
+                    approvedCount
+                };
+            }));
+            return {
+                ...residence.toObject(),
+                rooms: roomsWithCounts
+            };
+        }));
+
         res.status(200).json({
             success: true,
-            count: residences.length,
-            data: residences
+            count: residencesWithCounts.length,
+            data: residencesWithCounts
         });
     } catch (error) {
         console.error('Error in getAllResidences:', error);
