@@ -39,7 +39,7 @@ const studentValidation = [
 
 // All routes require admin role
 router.use(auth);
-router.use(checkRole('admin'));
+router.use(checkRole('admin', 'finance', 'finance_admin', 'finance_user'));
 
 // Place fixed routes BEFORE any :studentId routes
 router.get('/all-signed-leases', getAllSignedLeases);
