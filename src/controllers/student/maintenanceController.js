@@ -109,6 +109,63 @@ exports.createMaintenanceRequest = async (req, res) => {
             });
         }
 
+        // Check for duplicate requests before creating new one
+        const duplicates = await Maintenance.checkForDuplicates(finalResidenceId, room, title);
+        
+        if (duplicates.length > 0) {
+            // Analyze similarity for each duplicate
+            const duplicateInfo = duplicates.map(dup => {
+                const similarity = Maintenance.analyzeIssueSimilarity(title, dup.issue);
+                return {
+                    id: dup._id,
+                    issue: dup.issue,
+                    status: dup.status,
+                    requestDate: dup.requestDate,
+                    studentName: dup.student ? `${dup.student.firstName} ${dup.student.lastName}` : 'Unknown',
+                    studentEmail: dup.student ? dup.student.email : 'Unknown',
+                    residenceName: dup.residence ? dup.residence.name : 'Unknown',
+                    similarity: {
+                        score: similarity.score,
+                        exactMatch: similarity.exactMatch,
+                        keywordMatch: similarity.keywordMatch,
+                        patternMatch: similarity.patternMatch,
+                        commonWords: similarity.commonWords
+                    }
+                };
+            });
+
+            // Sort by similarity score (highest first)
+            duplicateInfo.sort((a, b) => b.similarity.score - a.similarity.score);
+
+            // Generate appropriate message based on similarity
+            let message = 'A similar maintenance request already exists in your room.';
+            let suggestion = 'Please check the existing request or contact maintenance staff if you need to add additional information.';
+            
+            if (duplicateInfo[0].similarity.exactMatch) {
+                message = 'An identical maintenance request already exists in your room.';
+                suggestion = 'This appears to be a duplicate submission. Please check the existing request.';
+            } else if (duplicateInfo[0].similarity.score >= 70) {
+                message = 'A very similar maintenance request already exists in your room.';
+                suggestion = 'This appears to be the same issue described differently. Please check the existing request.';
+            } else if (duplicateInfo[0].similarity.score >= 40) {
+                message = 'A related maintenance request already exists in your room.';
+                suggestion = 'This may be related to an existing issue. Please check if your problem is already being addressed.';
+            }
+
+            return res.status(409).json({
+                error: 'Duplicate maintenance request detected',
+                message: message,
+                suggestion: suggestion,
+                duplicates: duplicateInfo,
+                similarityAnalysis: {
+                    highestScore: duplicateInfo[0].similarity.score,
+                    matchType: duplicateInfo[0].similarity.exactMatch ? 'exact' : 
+                              duplicateInfo[0].similarity.patternMatch ? 'pattern' :
+                              duplicateInfo[0].similarity.keywordMatch ? 'keyword' : 'partial'
+                }
+            });
+        }
+
         const newRequest = new Maintenance({
             student: req.user._id, // Automatically set student ID
             residence: finalResidenceId, // Use determined residence ID
