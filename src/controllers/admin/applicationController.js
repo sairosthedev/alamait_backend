@@ -631,6 +631,30 @@ exports.deleteApplication = async (req, res) => {
             return res.status(500).json({ error: 'Failed to delete application', details: appDeleteError.message });
         }
 
+        // Delete the associated user if it exists
+        if (application.student && application.student._id) {
+            try {
+                await User.findByIdAndDelete(application.student._id);
+                console.log('Deleted user with ID:', application.student._id);
+            } catch (userDeleteError) {
+                console.error('Error deleting user:', userDeleteError);
+                // Don't fail the entire operation if user deletion fails
+            }
+        } else if (application.email) {
+            // If no student reference, try to delete user by email
+            try {
+                const deletedUser = await User.findOneAndDelete({ email: application.email });
+                if (deletedUser) {
+                    console.log('Deleted user by email:', application.email);
+                } else {
+                    console.log('No user found with email:', application.email);
+                }
+            } catch (userDeleteError) {
+                console.error('Error deleting user by email:', userDeleteError);
+                // Don't fail the entire operation if user deletion fails
+            }
+        }
+
         res.json({ message: 'Application and associated user deleted successfully' });
     } catch (error) {
         console.error('Error in deleteApplication:', error, error.stack);
