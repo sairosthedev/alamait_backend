@@ -74,6 +74,9 @@ const financeOtherExpenseRoutes = require('./routes/finance/otherExpenseRoutes')
 const financeIndexRoutes = require('./routes/finance/index');
 
 const monitoringRoutes = require('./routes/monitoring');
+const accountRoutes = require('./routes/accountRoutes');
+const transactionRoutes = require('./routes/transactionRoutes');
+const reportRoutes = require('./routes/reportRoutes');
 
 const app = express();
 
@@ -279,6 +282,12 @@ app.use('/api/finance', financeIndexRoutes);
 
 // Monitoring routes
 app.use('/api/monitoring', monitoringRoutes);
+
+// Accounts routes
+app.use('/api/accounts', accountRoutes);
+
+// Transactions routes
+app.use('/api/transactions', transactionRoutes);
 
 // 404 handler
 app.use((req, res) => {
