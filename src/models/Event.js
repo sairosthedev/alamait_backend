@@ -51,8 +51,36 @@ const eventSchema = new mongoose.Schema({
         type: String
     }],
     participants: [{
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
+        student: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        status: {
+            type: String,
+            enum: ['yes', 'no', 'maybe'],
+            default: 'maybe'
+        },
+        respondedAt: {
+            type: Date,
+            default: Date.now
+        }
+    }],
+    // Poll for alternative date proposals
+    dateProposals: [{
+        date: {
+            type: Date,
+            required: true
+        },
+        proposedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        votes: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        }]
     }],
     residence: {
         type: mongoose.Schema.Types.ObjectId,
