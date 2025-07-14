@@ -62,3 +62,34 @@ exports.sendPasswordResetEmail = async (email, token) => {
         throw error;
     }
 }; 
+
+// Send invoice email with PDF attachment
+exports.sendInvoiceEmail = async (email, invoice, tenant, pdfBuffer) => {
+    const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: `Invoice ${invoice.invoiceNumber} - Alamait Property Management`,
+        html: `
+            <h1>Invoice ${invoice.invoiceNumber}</h1>
+            <p>Dear ${tenant?.name || tenant?.fullName || 'Tenant'},</p>
+            <p>Please find attached your invoice for unit <b>${invoice.unit}</b> for the period <b>${invoice.billingPeriod}</b>.</p>
+            <p>Due Date: <b>${invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : ''}</b></p>
+            <p>Status: <b>${invoice.status}</b></p>
+            <p>If you have any questions, please contact us.</p>
+        `,
+        attachments: [
+            {
+                filename: `Invoice-${invoice.invoiceNumber}.pdf`,
+                content: pdfBuffer,
+                contentType: 'application/pdf'
+            }
+        ]
+    };
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log('Invoice email sent successfully');
+    } catch (error) {
+        console.error('Error sending invoice email:', error);
+        throw error;
+    }
+}; 
