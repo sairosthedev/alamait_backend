@@ -4,10 +4,14 @@ const Transaction = require('../models/Transaction');
 const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
 
-// GET /api/transactions - List all transactions with entries
+// GET /api/transactions - List all transactions with entries, filterable by residence
 router.get('/', async (req, res) => {
   try {
-    const transactions = await Transaction.find().sort({ date: -1 });
+    const filter = {};
+    if (req.query.residence) {
+      filter.residence = req.query.residence;
+    }
+    const transactions = await Transaction.find(filter).sort({ date: -1 });
     const results = await Promise.all(transactions.map(async (txn) => {
       const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account');
       return { ...txn.toObject(), entries };
@@ -18,10 +22,13 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST /api/transactions - Add a new transaction with entries (double-entry validation)
+// POST /api/transactions - Add a new transaction with entries (double-entry validation, require residence)
 router.post('/', async (req, res) => {
   try {
-    const { date, description, reference, entries } = req.body;
+    const { date, description, reference, entries, residence } = req.body;
+    if (!residence) {
+      return res.status(400).json({ error: 'Residence is required' });
+    }
     if (!entries || !Array.isArray(entries) || entries.length < 2) {
       return res.status(400).json({ error: 'At least two entries required (double-entry)' });
     }
@@ -30,7 +37,7 @@ router.post('/', async (req, res) => {
     if (totalDebit !== totalCredit) {
       return res.status(400).json({ error: 'Debits and credits must be equal (double-entry)' });
     }
-    const transaction = await Transaction.create({ date, description, reference });
+    const transaction = await Transaction.create({ date, description, reference, residence });
     const txnEntries = await TransactionEntry.insertMany(
       entries.map(e => ({ ...e, transaction: transaction._id }))
     );
