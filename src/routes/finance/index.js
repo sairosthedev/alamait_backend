@@ -3,6 +3,7 @@ const router = express.Router();
 const { auth, checkAdminOrFinance } = require('../../middleware/auth');
 const User = require('../../models/User');
 const Residence = require('../../models/Residence');
+const Application = require('../../models/Application');
 
 // Finance middleware - allow both admin and finance roles
 router.use(auth);
@@ -41,11 +42,22 @@ router.get('/students', async (req, res) => {
             .limit(parseInt(limit))
             .lean();
 
-        // Add room and residenceName fields
-        const studentsWithRoom = students.map(s => ({
-            ...s,
-            room: s.currentRoom || null,
-            residenceName: s.residence?.name || null
+        // Add room and residenceName fields from application
+        const studentsWithRoom = await Promise.all(students.map(async s => {
+            // Find latest approved application for this student
+            const application = await Application.findOne({ student: s._id, status: 'approved' }).sort({ createdAt: -1 }).lean();
+            // Compute billing period (for now, use application.startDate's month/year if available)
+            let billingPeriod = null;
+            if (application && application.startDate) {
+                const date = new Date(application.startDate);
+                billingPeriod = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+            }
+            return {
+                ...s,
+                room: application?.allocatedRoom || null,
+                residenceName: s.residence?.name || null,
+                billingPeriod
+            };
         }));
 
         const total = await User.countDocuments(query);
