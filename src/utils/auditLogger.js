@@ -16,27 +16,16 @@
  * @param {string} logData.details - Additional details about the action
  * @returns {Promise<void>}
  */
+const AuditLog = require('../models/AuditLog');
 exports.createAuditLog = async (logData) => {
     const { action, resourceType, resourceId, userId, details } = logData;
-    
-    // In a real implementation, you would store this in a database
+    // Log to console
     console.log(`[AUDIT LOG] ${new Date().toISOString()} | ${action} | ${resourceType} | ${resourceId} | User: ${userId} | ${details}`);
-    
-    // For future implementation, we could use a model like this:
-    /*
-    const AuditLog = require('../models/AuditLog');
-    
-    const auditLog = new AuditLog({
-        action,
-        resourceType,
-        resourceId,
-        userId,
-        details,
-        timestamp: new Date()
-    });
-    
-    await auditLog.save();
-    */
-    
+    // Persist to database
+    try {
+        await AuditLog.create({ action, resourceType, resourceId, userId, details });
+    } catch (err) {
+        console.error('Failed to save audit log:', err);
+    }
     return true;
 }; 

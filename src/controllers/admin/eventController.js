@@ -171,9 +171,67 @@ const deleteEvent = async (req, res) => {
     }
 };
 
+// Get RSVP summary for an event
+const getEventRSVPSummary = async (req, res) => {
+    try {
+        const event = await Event.findById(req.params.id).populate('participants.student', 'firstName lastName email');
+        if (!event) return res.status(404).json({ error: 'Event not found' });
+        const summary = { yes: [], no: [], maybe: [] };
+        event.participants.forEach(p => {
+            if (summary[p.status]) {
+                summary[p.status].push({
+                    id: p.student._id,
+                    name: `${p.student.firstName} ${p.student.lastName}`,
+                    email: p.student.email,
+                    respondedAt: p.respondedAt
+                });
+            }
+        });
+        res.json({
+            counts: {
+                yes: summary.yes.length,
+                no: summary.no.length,
+                maybe: summary.maybe.length
+            },
+            participants: summary
+        });
+    } catch (error) {
+        console.error('RSVP summary error:', error);
+        res.status(500).json({ error: 'Error fetching RSVP summary' });
+    }
+};
+
+// Get poll (date proposal) summary for an event
+const getEventPollSummary = async (req, res) => {
+    try {
+        const event = await Event.findById(req.params.id).populate('dateProposals.proposedBy', 'firstName lastName email').populate('dateProposals.votes', 'firstName lastName email');
+        if (!event) return res.status(404).json({ error: 'Event not found' });
+        const poll = event.dateProposals.map(p => ({
+            date: p.date,
+            proposedBy: p.proposedBy ? {
+                id: p.proposedBy._id,
+                name: `${p.proposedBy.firstName} ${p.proposedBy.lastName}`,
+                email: p.proposedBy.email
+            } : null,
+            votes: p.votes.map(v => ({
+                id: v._id,
+                name: `${v.firstName} ${v.lastName}`,
+                email: v.email
+            })),
+            voteCount: p.votes.length
+        }));
+        res.json({ proposals: poll });
+    } catch (error) {
+        console.error('Poll summary error:', error);
+        res.status(500).json({ error: 'Error fetching poll summary' });
+    }
+};
+
 module.exports = {
     getEvents,
     createEvent,
     updateEvent,
-    deleteEvent
+    deleteEvent,
+    getEventRSVPSummary,
+    getEventPollSummary
 }; 

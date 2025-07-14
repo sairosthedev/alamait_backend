@@ -22,5 +22,8 @@ router.use(checkRole('student'));
 router.get('/', getEvents);
 router.post('/:eventId/register', registerForEvent);
 router.post('/:eventId/feedback', feedbackValidation, submitEventFeedback);
+router.post('/:eventId/rsvp', require('../../controllers/student/eventController').rsvpForEvent);
+router.post('/:eventId/propose-date', require('../../controllers/student/eventController').proposeEventDate);
+router.post('/:eventId/vote-date', require('../../controllers/student/eventController').voteEventDate);
 
 module.exports = router; 

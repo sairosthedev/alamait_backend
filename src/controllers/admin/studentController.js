@@ -10,6 +10,10 @@ const ExpiredStudent = require('../../models/ExpiredStudent');
 const Application = require('../../models/Application');
 const Lease = require('../../models/Lease');
 const Payment = require('../../models/Payment');
+const { createAuditLog } = require('../../utils/auditLogger');
+const multer = require('multer');
+const multerS3 = require('multer-s3');
+const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -113,6 +117,14 @@ exports.createStudent = async (req, res) => {
 
         await student.save();
 
+        await createAuditLog({
+            action: 'CREATE',
+            resourceType: 'Student',
+            resourceId: student._id,
+            userId: req.user._id,
+            details: `Created student ${student.email}`
+        });
+
         // Prepare lease agreement attachment if residenceId is provided
         let attachments = [];
         if (residenceId) {
@@ -187,6 +199,14 @@ exports.updateStudent = async (req, res) => {
 
         await student.save();
 
+        await createAuditLog({
+            action: 'UPDATE',
+            resourceType: 'Student',
+            resourceId: student._id,
+            userId: req.user._id,
+            details: `Updated student ${student.email}`
+        });
+
         res.json({
             ...student.toObject(),
             password: undefined
@@ -258,6 +278,14 @@ exports.deleteStudent = async (req, res) => {
         }
 
         await student.remove();
+
+        await createAuditLog({
+            action: 'DELETE',
+            resourceType: 'Student',
+            resourceId: student._id,
+            userId: req.user._id,
+            details: `Deleted student ${student.email}`
+        });
 
         res.json({ message: 'Student deleted successfully' });
     } catch (error) {
@@ -537,6 +565,50 @@ exports.downloadSignedLease = async (req, res) => {
         console.error('Error downloading signed lease:', error);
         res.status(500).json({ error: 'Server error.' });
     }
+};
+
+// Multer config for signed lease uploads
+const upload = multer({
+    storage: multerS3({
+        s3: s3,
+        bucket: s3Configs.signedLeases.bucket,
+        acl: s3Configs.signedLeases.acl,
+        key: s3Configs.signedLeases.key
+    }),
+    fileFilter: fileFilter(['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']),
+    limits: { fileSize: 10 * 1024 * 1024 }
+}).single('signedLease');
+
+// Admin uploads signed lease for student
+exports.adminUploadSignedLease = (req, res) => {
+    upload(req, res, async function(err) {
+        if (err) {
+            return res.status(400).json({ error: err.message });
+        }
+        const { studentId } = req.params;
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+        try {
+            const student = await User.findById(studentId);
+            if (!student) {
+                return res.status(404).json({ error: 'Student not found' });
+            }
+            student.signedLeasePath = req.file.location;
+            student.signedLeaseUploadDate = new Date();
+            await student.save();
+            await createAuditLog({
+                action: 'UPLOAD',
+                resourceType: 'Lease',
+                resourceId: student._id,
+                userId: req.user._id,
+                details: `Admin uploaded signed lease for student ${student.email}`
+            });
+            res.status(200).json({ message: 'Signed lease uploaded successfully', fileUrl: req.file.location });
+        } catch (error) {
+            res.status(500).json({ error: 'Failed to upload signed lease' });
+        }
+    });
 };
 
 // Fetch expired (archived) students

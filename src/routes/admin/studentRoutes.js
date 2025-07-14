@@ -10,6 +10,8 @@ const ExpiredStudent = require('../../models/ExpiredStudent');
 const Residence = require('../../models/Residence');
 const User = require('../../models/User');
 const Booking = require('../../models/Booking');
+const { adminUploadSignedLease } = require('../../controllers/admin/studentController');
+const admin = require('../../middleware/admin');
 
 const {
     getAllStudents,
@@ -177,5 +179,6 @@ router.delete('/:studentId', async (req, res) => {
 router.get('/:studentId/payments', getStudentPayments);
 router.get('/:studentId/leases', getStudentLeases);
 router.get('/lease-agreement/:studentId', downloadSignedLease);
+router.post('/:studentId/lease', admin, adminUploadSignedLease);
 
 module.exports = router; 

@@ -30,4 +30,7 @@ router.put('/:id', eventValidation, eventController.updateEvent);
 // Delete an event
 router.delete('/:id', eventController.deleteEvent);
 
+router.get('/:id/rsvp-summary', eventController.getEventRSVPSummary);
+router.get('/:id/poll-summary', eventController.getEventPollSummary);
+
 module.exports = router; 

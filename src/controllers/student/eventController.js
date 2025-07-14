@@ -336,3 +336,75 @@ exports.submitEventFeedback = async (req, res) => {
         res.status(500).json({ error: 'Error submitting feedback' });
     }
 }; 
+
+// RSVP for event (yes/no/maybe)
+exports.rsvpForEvent = async (req, res) => {
+    try {
+        const { status } = req.body;
+        const validStatuses = ['yes', 'no', 'maybe'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ error: 'Invalid RSVP status' });
+        }
+        const event = await Event.findById(req.params.eventId);
+        if (!event) return res.status(404).json({ error: 'Event not found' });
+        let participant = event.participants.find(p => p.student.toString() === req.user._id.toString());
+        if (participant) {
+            participant.status = status;
+            participant.respondedAt = new Date();
+        } else {
+            event.participants.push({ student: req.user._id, status, respondedAt: new Date() });
+        }
+        await event.save();
+        res.json({ message: 'RSVP updated', status });
+    } catch (error) {
+        console.error('RSVP error:', error);
+        res.status(500).json({ error: 'Error updating RSVP' });
+    }
+};
+
+// Propose alternative date for event
+exports.proposeEventDate = async (req, res) => {
+    try {
+        const { date } = req.body;
+        if (!date) return res.status(400).json({ error: 'Date is required' });
+        const event = await Event.findById(req.params.eventId);
+        if (!event) return res.status(404).json({ error: 'Event not found' });
+        const dateObj = new Date(date);
+        let proposal = event.dateProposals.find(p => p.date.getTime() === dateObj.getTime());
+        if (proposal) {
+            // Already proposed, add vote if not already voted
+            if (!proposal.votes.some(v => v.toString() === req.user._id.toString())) {
+                proposal.votes.push(req.user._id);
+            }
+        } else {
+            // New proposal
+            event.dateProposals.push({ date: dateObj, proposedBy: req.user._id, votes: [req.user._id] });
+        }
+        await event.save();
+        res.json({ message: 'Date proposal submitted', date });
+    } catch (error) {
+        console.error('Propose date error:', error);
+        res.status(500).json({ error: 'Error proposing date' });
+    }
+};
+
+// Vote for a proposed date
+exports.voteEventDate = async (req, res) => {
+    try {
+        const { date } = req.body;
+        if (!date) return res.status(400).json({ error: 'Date is required' });
+        const event = await Event.findById(req.params.eventId);
+        if (!event) return res.status(404).json({ error: 'Event not found' });
+        const dateObj = new Date(date);
+        let proposal = event.dateProposals.find(p => p.date.getTime() === dateObj.getTime());
+        if (!proposal) return res.status(404).json({ error: 'Date proposal not found' });
+        if (!proposal.votes.some(v => v.toString() === req.user._id.toString())) {
+            proposal.votes.push(req.user._id);
+            await event.save();
+        }
+        res.json({ message: 'Voted for date', date });
+    } catch (error) {
+        console.error('Vote date error:', error);
+        res.status(500).json({ error: 'Error voting for date' });
+    }
+}; 
