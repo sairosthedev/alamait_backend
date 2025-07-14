@@ -205,7 +205,7 @@ const uploadProofOfPayment = async (req, res) => {
 const verifyProofOfPayment = async (req, res) => {
     try {
         const { paymentId } = req.params;
-        const { verified, notes } = req.body;
+        const { status, notes } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(paymentId)) {
             return res.status(400).json({
@@ -226,15 +226,19 @@ const verifyProofOfPayment = async (req, res) => {
             });
         }
 
-        payment.proofOfPayment.verified = verified;
+        // Set new PoP status and verification notes
+        payment.proofOfPayment.status = status;
         payment.proofOfPayment.verificationNotes = notes;
         payment.proofOfPayment.verifiedBy = req.user._id;
         payment.proofOfPayment.verificationDate = new Date();
 
-        if (verified) {
+        // Optionally update main payment status for legacy compatibility
+        if (status === 'Accepted') {
             payment.status = 'Verified';
-        } else {
+        } else if (status === 'Rejected') {
             payment.status = 'Rejected';
+        } else {
+            payment.status = 'Pending';
         }
 
         await payment.save();
@@ -243,7 +247,10 @@ const verifyProofOfPayment = async (req, res) => {
             .populate('residence', 'name')
             .populate('student', 'firstName lastName email');
 
-        res.status(200).json(updatedPayment);
+        res.status(200).json({
+            ...updatedPayment.toObject(),
+            studentComment: payment.proofOfPayment.studentComment
+        });
     } catch (error) {
         console.error('Error verifying proof of payment:', error);
         res.status(500).json({ message: error.message });
@@ -333,55 +340,77 @@ const createPayment = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
+        // Accept all required fields from frontend
         const {
+            paymentId,
             student,
             residence,
-            amount,
+            room,
+            roomType,
+            payments,
+            totalAmount,
+            paymentMonth,
+            date,
             method,
             status,
-            description,
-            dueDate
+            description
         } = req.body;
 
-        // Validate student ID
-        if (!mongoose.Types.ObjectId.isValid(student)) {
+        // Validate required fields
+        if (!paymentId || !student || !residence || !totalAmount || !paymentMonth || !date || !method) {
             return res.status(400).json({
-                message: 'Invalid student ID format'
+                message: 'Missing required fields',
+                required: ['paymentId', 'student', 'residence', 'totalAmount', 'paymentMonth', 'date', 'method']
             });
         }
 
-        // Validate residence ID
+        if (!mongoose.Types.ObjectId.isValid(student)) {
+            return res.status(400).json({ message: 'Invalid student ID format' });
+        }
         if (!mongoose.Types.ObjectId.isValid(residence)) {
-            return res.status(400).json({
-                message: 'Invalid residence ID format'
-            });
+            return res.status(400).json({ message: 'Invalid residence ID format' });
         }
 
         // Check if student exists
         const studentExists = await User.findOne({ _id: student, role: 'student' });
         if (!studentExists) {
-            return res.status(404).json({
-                message: 'Student not found'
-            });
+            return res.status(404).json({ message: 'Student not found' });
         }
-
         // Check if residence exists
         const residenceExists = await Residence.findById(residence);
         if (!residenceExists) {
-            return res.status(404).json({
-                message: 'Residence not found'
-            });
+            return res.status(404).json({ message: 'Residence not found' });
+        }
+
+        // Calculate top-level breakdown from payments array if present
+        let rent = 0, admin = 0, deposit = 0;
+        let parsedPayments = payments;
+        if (payments) {
+            if (typeof payments === 'string') {
+                parsedPayments = JSON.parse(payments);
+            }
+            rent = parsedPayments.find(p => p.type === 'rent')?.amount || 0;
+            admin = parsedPayments.find(p => p.type === 'admin')?.amount || 0;
+            deposit = parsedPayments.find(p => p.type === 'deposit')?.amount || 0;
         }
 
         // Create new payment
         const payment = new Payment({
+            paymentId,
             student,
             residence,
-            amount,
+            room,
+            roomType,
+            payments: parsedPayments,
+            totalAmount,
+            paymentMonth,
+            date,
             method,
             status,
             description,
-            dueDate: dueDate ? new Date(dueDate) : undefined,
+            rentAmount: rent,
+            adminFee: admin,
+            deposit: deposit,
             createdBy: req.user._id
         });
 

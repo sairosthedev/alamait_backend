@@ -47,6 +47,6 @@ router.get('/', getPaymentHistory);
 router.post('/:paymentId/upload-pop', uploadProofOfPayment);
 
 // Upload new proof of payment route
-router.post('/upload-pop', uploadNewProofOfPayment);
+// router.post('/upload-pop', uploadNewProofOfPayment);
 
 module.exports = router; 

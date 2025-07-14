@@ -74,7 +74,15 @@ const paymentSchema = new mongoose.Schema({
             ref: 'User'
         },
         verificationDate: Date,
-        verificationNotes: String
+        verificationNotes: String,
+        status: {
+            type: String,
+            enum: ['Under Review', 'Accepted', 'Rejected'],
+            default: 'Under Review'
+        },
+        studentComment: {
+            type: String
+        }
     },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
