@@ -41,10 +41,17 @@ router.get('/students', async (req, res) => {
             .limit(parseInt(limit))
             .lean();
 
+        // Add room and residenceName fields
+        const studentsWithRoom = students.map(s => ({
+            ...s,
+            room: s.currentRoom || null,
+            residenceName: s.residence?.name || null
+        }));
+
         const total = await User.countDocuments(query);
 
         res.json({
-            students,
+            students: studentsWithRoom,
             currentPage: parseInt(page),
             totalPages: Math.ceil(total / limit),
             total
