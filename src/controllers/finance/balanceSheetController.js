@@ -4,6 +4,7 @@ const { createAuditLog } = require('../../utils/auditLogger');
 const Asset = require('../../models/finance/Asset');
 const Liability = require('../../models/finance/Liability');
 const Equity = require('../../models/finance/Equity');
+const AuditLog = require('../../models/AuditLog');
 
 // Get all balance sheets
 exports.getAllBalanceSheets = async (req, res) => {
@@ -148,13 +149,14 @@ exports.createBalanceSheet = async (req, res) => {
         // Save balance sheet
         await newBalanceSheet.save();
 
-        // Create audit log
-        await createAuditLog({
-            action: 'CREATE',
-            resourceType: 'BalanceSheet',
-            resourceId: newBalanceSheet._id,
-            userId: req.user._id,
-            details: `Created balance sheet for residence: ${residence} as of ${asOf}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'create',
+            collection: 'BalanceSheet',
+            recordId: newBalanceSheet._id,
+            before: null,
+            after: newBalanceSheet.toObject()
         });
 
         res.status(201).json({
@@ -182,6 +184,8 @@ exports.updateBalanceSheet = async (req, res) => {
         if (!balanceSheet) {
             return res.status(404).json({ error: 'Balance sheet not found' });
         }
+
+        const before = balanceSheet.toObject();
 
         // Validate residence ID if provided
         if (updateData.residence && !validateMongoId(updateData.residence)) {
@@ -216,13 +220,14 @@ exports.updateBalanceSheet = async (req, res) => {
          .populate('generatedBy', 'firstName lastName email')
          .populate('approvedBy', 'firstName lastName email');
 
-        // Create audit log
-        await createAuditLog({
-            action: 'UPDATE',
-            resourceType: 'BalanceSheet',
-            resourceId: updatedBalanceSheet._id,
-            userId: req.user._id,
-            details: `Updated balance sheet for residence: ${updatedBalanceSheet.residence._id}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'update',
+            collection: 'BalanceSheet',
+            recordId: updatedBalanceSheet._id,
+            before,
+            after: updatedBalanceSheet.toObject()
         });
 
         res.status(200).json({
@@ -250,16 +255,19 @@ exports.deleteBalanceSheet = async (req, res) => {
             return res.status(404).json({ error: 'Balance sheet not found' });
         }
 
+        const before = balanceSheet.toObject();
+
         // Delete balance sheet
         await BalanceSheet.findByIdAndDelete(id);
 
-        // Create audit log
-        await createAuditLog({
-            action: 'DELETE',
-            resourceType: 'BalanceSheet',
-            resourceId: id,
-            userId: req.user._id,
-            details: `Deleted balance sheet for residence: ${balanceSheet.residence}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'delete',
+            collection: 'BalanceSheet',
+            recordId: id,
+            before,
+            after: null
         });
 
         res.status(200).json({
@@ -291,6 +299,8 @@ exports.approveBalanceSheet = async (req, res) => {
             return res.status(400).json({ error: 'Balance sheet is already published' });
         }
 
+        const before = balanceSheet.toObject();
+
         // Update balance sheet status to Published
         const updatedBalanceSheet = await BalanceSheet.findByIdAndUpdate(
             id,
@@ -307,13 +317,14 @@ exports.approveBalanceSheet = async (req, res) => {
          .populate('generatedBy', 'firstName lastName email')
          .populate('approvedBy', 'firstName lastName email');
 
-        // Create audit log
-        await createAuditLog({
-            action: 'APPROVE',
-            resourceType: 'BalanceSheet',
-            resourceId: updatedBalanceSheet._id,
-            userId: req.user._id,
-            details: `Approved balance sheet for residence: ${updatedBalanceSheet.residence._id}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'approve',
+            collection: 'BalanceSheet',
+            recordId: updatedBalanceSheet._id,
+            before,
+            after: updatedBalanceSheet.toObject()
         });
 
         res.status(200).json({
@@ -341,6 +352,8 @@ exports.addBalanceSheetEntry = async (req, res) => {
         if (!balanceSheet) {
             return res.status(404).json({ error: 'Balance sheet not found' });
         }
+
+        const before = balanceSheet.toObject();
 
         // Validate entry type
         if (!['asset', 'liability', 'equity'].includes(type)) {
@@ -373,13 +386,14 @@ exports.addBalanceSheetEntry = async (req, res) => {
         // Save balance sheet
         await balanceSheet.save();
 
-        // Create audit log
-        await createAuditLog({
-            action: 'ADD_ENTRY',
-            resourceType: 'BalanceSheet',
-            resourceId: balanceSheet._id,
-            userId: req.user._id,
-            details: `Added ${type} entry to balance sheet: ${name}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'add_entry',
+            collection: 'BalanceSheet',
+            recordId: balanceSheet._id,
+            before,
+            after: balanceSheet.toObject()
         });
 
         res.status(200).json({
@@ -407,6 +421,8 @@ exports.updateBalanceSheetEntry = async (req, res) => {
         if (!balanceSheet) {
             return res.status(404).json({ error: 'Balance sheet not found' });
         }
+
+        const before = balanceSheet.toObject();
 
         // Find entry in appropriate array
         const entryArray = type === 'asset' ? balanceSheet.assets : 
@@ -436,13 +452,14 @@ exports.updateBalanceSheetEntry = async (req, res) => {
         // Save balance sheet
         await balanceSheet.save();
 
-        // Create audit log
-        await createAuditLog({
-            action: 'UPDATE_ENTRY',
-            resourceType: 'BalanceSheet',
-            resourceId: balanceSheet._id,
-            userId: req.user._id,
-            details: `Updated ${type} entry in balance sheet: ${name}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'update_entry',
+            collection: 'BalanceSheet',
+            recordId: balanceSheet._id,
+            before,
+            after: balanceSheet.toObject()
         });
 
         res.status(200).json({
@@ -471,6 +488,8 @@ exports.deleteBalanceSheetEntry = async (req, res) => {
             return res.status(404).json({ error: 'Balance sheet not found' });
         }
 
+        const before = balanceSheet.toObject();
+
         // Find and remove entry from appropriate array
         const entryArray = type === 'asset' ? balanceSheet.assets : 
                           type === 'liability' ? balanceSheet.liabilities : 
@@ -493,13 +512,14 @@ exports.deleteBalanceSheetEntry = async (req, res) => {
         // Save balance sheet
         await balanceSheet.save();
 
-        // Create audit log
-        await createAuditLog({
-            action: 'DELETE_ENTRY',
-            resourceType: 'BalanceSheet',
-            resourceId: balanceSheet._id,
-            userId: req.user._id,
-            details: `Deleted ${type} entry from balance sheet: ${deletedEntry.name}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'delete_entry',
+            collection: 'BalanceSheet',
+            recordId: balanceSheet._id,
+            before,
+            after: balanceSheet.toObject()
         });
 
         res.status(200).json({

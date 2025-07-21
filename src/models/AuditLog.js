@@ -1,12 +1,13 @@
 const mongoose = require('mongoose');
 
-const auditLogSchema = new mongoose.Schema({
-  action: { type: String, required: true }, // CREATE, UPDATE, DELETE, UPLOAD, etc.
-  resourceType: { type: String, required: true }, // Student, Lease, Profile, etc.
-  resourceId: { type: String, required: false },
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  details: { type: String },
+const AuditLogSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // user who made the change
+  action: { type: String, required: true }, // e.g., 'create', 'update', 'delete'
+  collection: { type: String, required: true }, // e.g., 'Payment', 'Expense', 'BalanceSheet'
+  recordId: { type: mongoose.Schema.Types.ObjectId, required: true }, // affected record
+  before: { type: Object }, // previous state (for update/delete)
+  after: { type: Object },  // new state (for create/update)
   timestamp: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model('AuditLog', auditLogSchema); 
+module.exports = mongoose.model('AuditLog', AuditLogSchema); 

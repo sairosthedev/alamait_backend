@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const { check } = require('express-validator');
+const AuditLog = require('../../models/AuditLog');
 
 // Import controllers
 const {
@@ -152,5 +153,45 @@ router.get('/leases2', leaseController.listAllLeases);
 router.get('/applications', getApplications);
 router.put('/applications/:applicationId', applicationStatusValidation, updateApplicationStatus);
 router.delete('/applications/:applicationId', deleteApplication);
+
+// Admin Audit Report Routes
+// GET /admin/audit-reports - List all audit logs (with optional filters)
+router.get('/audit-reports', async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.action) filter.action = req.query.action;
+    if (req.query.resourceType) filter.resourceType = req.query.resourceType;
+    if (req.query.userId) filter.userId = req.query.userId;
+    const logs = await AuditLog.find(filter).sort({ timestamp: -1 }).limit(500);
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch audit logs' });
+  }
+});
+
+// GET /admin/audit-reports/:id - Get a single audit log by ID
+router.get('/audit-reports/:id', async (req, res) => {
+  try {
+    const log = await AuditLog.findById(req.params.id);
+    if (!log) return res.status(404).json({ error: 'Audit log not found' });
+    res.json(log);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch audit log' });
+  }
+});
+
+// POST /admin/audit-reports - Create a new audit log entry
+router.post('/audit-reports', async (req, res) => {
+  try {
+    const { action, resourceType, resourceId, userId, details } = req.body;
+    if (!action || !resourceType || !userId) {
+      return res.status(400).json({ error: 'action, resourceType, and userId are required' });
+    }
+    const log = await AuditLog.create({ action, resourceType, resourceId, userId, details });
+    res.status(201).json(log);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create audit log' });
+  }
+});
 
 module.exports = router; 

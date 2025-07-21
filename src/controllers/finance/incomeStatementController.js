@@ -1,7 +1,7 @@
 const IncomeStatement = require('../../models/finance/IncomeStatement');
 const { generateUniqueId } = require('../../utils/idGenerator');
 const { validateMongoId } = require('../../utils/validators');
-const { createAuditLog } = require('../../utils/auditLogger');
+const AuditLog = require('../../models/AuditLog');
 
 // Get all income statements
 exports.getAllIncomeStatements = async (req, res) => {
@@ -156,13 +156,14 @@ exports.createIncomeStatement = async (req, res) => {
         // Save income statement
         await newIncomeStatement.save();
 
-        // Create audit log
-        await createAuditLog({
-            action: 'CREATE',
-            resourceType: 'IncomeStatement',
-            resourceId: newIncomeStatement._id,
-            userId: req.user._id,
-            details: `Created income statement for residence: ${residence} (${period})`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'create',
+            collection: 'IncomeStatement',
+            recordId: newIncomeStatement._id,
+            before: null,
+            after: newIncomeStatement.toObject()
         });
 
         res.status(201).json({
@@ -190,6 +191,8 @@ exports.updateIncomeStatement = async (req, res) => {
         if (!incomeStatement) {
             return res.status(404).json({ error: 'Income statement not found' });
         }
+
+        const before = incomeStatement.toObject();
 
         // Validate residence ID if provided
         if (updateData.residence && !validateMongoId(updateData.residence)) {
@@ -225,13 +228,14 @@ exports.updateIncomeStatement = async (req, res) => {
          .populate('generatedBy', 'firstName lastName email')
          .populate('approvedBy', 'firstName lastName email');
 
-        // Create audit log
-        await createAuditLog({
-            action: 'UPDATE',
-            resourceType: 'IncomeStatement',
-            resourceId: updatedIncomeStatement._id,
-            userId: req.user._id,
-            details: `Updated income statement: ${updatedIncomeStatement.reportId}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'update',
+            collection: 'IncomeStatement',
+            recordId: updatedIncomeStatement._id,
+            before,
+            after: updatedIncomeStatement.toObject()
         });
 
         res.status(200).json({
@@ -259,16 +263,19 @@ exports.deleteIncomeStatement = async (req, res) => {
             return res.status(404).json({ error: 'Income statement not found' });
         }
 
+        const before = incomeStatement.toObject();
+
         // Delete income statement
         await IncomeStatement.findByIdAndDelete(id);
 
-        // Create audit log
-        await createAuditLog({
-            action: 'DELETE',
-            resourceType: 'IncomeStatement',
-            resourceId: id,
-            userId: req.user._id,
-            details: `Deleted income statement: ${incomeStatement.reportId}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'delete',
+            collection: 'IncomeStatement',
+            recordId: id,
+            before,
+            after: null
         });
 
         res.status(200).json({
@@ -300,6 +307,8 @@ exports.approveIncomeStatement = async (req, res) => {
             return res.status(400).json({ error: 'Income statement is already published' });
         }
 
+        const before = incomeStatement.toObject();
+
         // Update income statement status to Published
         const updatedIncomeStatement = await IncomeStatement.findByIdAndUpdate(
             id,
@@ -316,13 +325,14 @@ exports.approveIncomeStatement = async (req, res) => {
          .populate('generatedBy', 'firstName lastName email')
          .populate('approvedBy', 'firstName lastName email');
 
-        // Create audit log
-        await createAuditLog({
-            action: 'APPROVE',
-            resourceType: 'IncomeStatement',
-            resourceId: updatedIncomeStatement._id,
-            userId: req.user._id,
-            details: `Approved income statement: ${updatedIncomeStatement.reportId}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'approve',
+            collection: 'IncomeStatement',
+            recordId: updatedIncomeStatement._id,
+            before,
+            after: updatedIncomeStatement.toObject()
         });
 
         res.status(200).json({

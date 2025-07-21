@@ -2,6 +2,7 @@ const OtherIncome = require('../../models/finance/OtherIncome');
 const { generateUniqueId } = require('../../utils/idGenerator');
 const { validateMongoId } = require('../../utils/validators');
 const { createAuditLog } = require('../../utils/auditLogger');
+const AuditLog = require('../../models/AuditLog');
 
 // Get all other income entries
 exports.getAllOtherIncome = async (req, res) => {
@@ -204,13 +205,14 @@ exports.createOtherIncome = async (req, res) => {
         await newOtherIncome.populate('residence', 'name');
         await newOtherIncome.populate('createdBy', 'firstName lastName email');
 
-        // Create audit log
-        await createAuditLog({
-            action: 'CREATE',
-            resourceType: 'OtherIncome',
-            resourceId: newOtherIncome._id,
-            userId: req.user._id,
-            details: `Created other income entry: ${newOtherIncome.incomeId} for residence: ${residence}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'create',
+            collection: 'OtherIncome',
+            recordId: newOtherIncome._id,
+            before: null,
+            after: newOtherIncome.toObject()
         });
 
         res.status(201).json({
@@ -238,6 +240,8 @@ exports.updateOtherIncome = async (req, res) => {
         if (!otherIncome) {
             return res.status(404).json({ error: 'Other income entry not found' });
         }
+
+        const before = otherIncome.toObject();
 
         // Validate residence ID if provided
         if (updateData.residence && !validateMongoId(updateData.residence)) {
@@ -302,13 +306,14 @@ exports.updateOtherIncome = async (req, res) => {
          .populate('updatedBy', 'firstName lastName email')
          .populate('receivedBy', 'firstName lastName email');
 
-        // Create audit log
-        await createAuditLog({
-            action: 'UPDATE',
-            resourceType: 'OtherIncome',
-            resourceId: updatedOtherIncome._id,
-            userId: req.user._id,
-            details: `Updated other income entry: ${updatedOtherIncome.incomeId}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'update',
+            collection: 'OtherIncome',
+            recordId: updatedOtherIncome._id,
+            before,
+            after: updatedOtherIncome.toObject()
         });
 
         res.status(200).json({
@@ -336,16 +341,19 @@ exports.deleteOtherIncome = async (req, res) => {
             return res.status(404).json({ error: 'Other income entry not found' });
         }
 
+        const before = otherIncome.toObject();
+
         // Delete other income entry
         await OtherIncome.findByIdAndDelete(id);
 
-        // Create audit log
-        await createAuditLog({
-            action: 'DELETE',
-            resourceType: 'OtherIncome',
-            resourceId: id,
-            userId: req.user._id,
-            details: `Deleted other income entry: ${otherIncome.incomeId}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'delete',
+            collection: 'OtherIncome',
+            recordId: id,
+            before,
+            after: null
         });
 
         res.status(200).json({

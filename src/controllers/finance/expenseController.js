@@ -2,6 +2,7 @@ const Expense = require('../../models/finance/Expense');
 const { generateUniqueId } = require('../../utils/idGenerator');
 const { validateMongoId } = require('../../utils/validators');
 const { createAuditLog } = require('../../utils/auditLogger');
+const AuditLog = require('../../models/AuditLog');
 
 // Get all expenses
 exports.getAllExpenses = async (req, res) => {
@@ -266,13 +267,14 @@ exports.createExpense = async (req, res) => {
         // Save expense
         await newExpense.save();
 
-        // Create audit log
-        await createAuditLog({
-            action: 'CREATE',
-            resourceType: 'Expense',
-            resourceId: newExpense._id,
-            userId: req.user._id,
-            details: `Created expense: ${expenseId} - ${category} - $${amount}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'create',
+            collection: 'Expense',
+            recordId: newExpense._id,
+            before: null,
+            after: newExpense.toObject()
         });
 
         res.status(201).json({
@@ -304,6 +306,8 @@ exports.updateExpense = async (req, res) => {
             return res.status(404).json({ error: 'Expense not found', id });
         }
 
+        const before = expense.toObject();
+
         // Validate residence ID if provided
         if (updateData.residence && !validateMongoId(updateData.residence)) {
             return res.status(400).json({ error: 'Invalid residence ID format', id });
@@ -331,13 +335,14 @@ exports.updateExpense = async (req, res) => {
          .populate('updatedBy', 'firstName lastName email')
          .populate('paidBy', 'firstName lastName email');
 
-        // Create audit log
-        await createAuditLog({
-            action: 'UPDATE',
-            resourceType: 'Expense',
-            resourceId: updatedExpense._id,
-            userId: req.user._id,
-            details: `Updated expense: ${updatedExpense.expenseId} - ${updatedExpense.category}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'update',
+            collection: 'Expense',
+            recordId: updatedExpense._id,
+            before,
+            after: updatedExpense.toObject()
         });
 
         res.status(200).json({
@@ -366,16 +371,19 @@ exports.deleteExpense = async (req, res) => {
             return res.status(404).json({ error: 'Expense not found' });
         }
 
+        const before = expense.toObject();
+
         // Delete expense
         await Expense.findByIdAndDelete(id);
 
-        // Create audit log
-        await createAuditLog({
-            action: 'DELETE',
-            resourceType: 'Expense',
-            resourceId: id,
-            userId: req.user._id,
-            details: `Deleted expense: ${expense.expenseId} - ${expense.category} - $${expense.amount}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'delete',
+            collection: 'Expense',
+            recordId: id,
+            before,
+            after: null
         });
 
         res.status(200).json({
@@ -476,6 +484,8 @@ exports.approveExpense = async (req, res) => {
             return res.status(400).json({ error: 'Expense is already paid' });
         }
 
+        const before = expense.toObject();
+
         // Update expense status to Paid
         const updatedExpense = await Expense.findByIdAndUpdate(
             id,
@@ -493,13 +503,14 @@ exports.approveExpense = async (req, res) => {
          .populate('updatedBy', 'firstName lastName email')
          .populate('paidBy', 'firstName lastName email');
 
-        // Create audit log
-        await createAuditLog({
-            action: 'APPROVE',
-            resourceType: 'Expense',
-            resourceId: updatedExpense._id,
-            userId: req.user._id,
-            details: `Approved expense: ${updatedExpense.expenseId} - ${updatedExpense.category} - $${updatedExpense.amount}`
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'approve',
+            collection: 'Expense',
+            recordId: updatedExpense._id,
+            before,
+            after: updatedExpense.toObject()
         });
 
         res.status(200).json({

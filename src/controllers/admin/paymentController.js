@@ -8,6 +8,7 @@ const Booking = require('../../models/Booking');
 const Application = require('../../models/Application');
 const Residence = require('../../models/Residence');
 const mongoose = require('mongoose');
+const AuditLog = require('../../models/AuditLog');
 
 // Configure multer for S3 file uploads
 const upload = multer({
@@ -137,6 +138,7 @@ const updatePaymentStatus = async (req, res) => {
             });
         }
 
+        const before = payment.toObject();
         payment.status = status;
         payment.updatedBy = req.user._id;
         await payment.save();
@@ -144,6 +146,16 @@ const updatePaymentStatus = async (req, res) => {
         const updatedPayment = await Payment.findById(id)
             .populate('residence', 'name')
             .populate('student', 'firstName lastName email');
+
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'update',
+            collection: 'Payment',
+            recordId: payment._id,
+            before,
+            after: updatedPayment.toObject()
+        });
 
         res.status(200).json(updatedPayment);
     } catch (error) {
@@ -415,6 +427,16 @@ const createPayment = async (req, res) => {
         });
 
         await payment.save();
+
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'create',
+            collection: 'Payment',
+            recordId: payment._id,
+            before: null,
+            after: payment.toObject()
+        });
 
         // Populate the response
         const populatedPayment = await Payment.findById(payment._id)
