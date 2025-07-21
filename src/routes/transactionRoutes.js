@@ -6,6 +6,7 @@ const Account = require('../models/Account');
 const multer = require('multer');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../config/s3');
 const { Types: { ObjectId } } = require('mongoose');
+const { generateSignedUrl, getKeyFromUrl } = require('../config/s3');
 
 // Multer config for receipt uploads (memory storage)
 const upload = multer({
@@ -122,6 +123,39 @@ router.get('/:id', async (req, res) => {
     res.json({ ...txn.toObject(), entries });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch transaction' });
+  }
+});
+
+// GET /api/transactions/:id/receipt - Get receipt file info and signed URL
+router.get('/:id/receipt', async (req, res) => {
+  const txnId = req.params.id;
+  if (!ObjectId.isValid(txnId)) {
+    return res.status(400).json({ error: 'Invalid transaction ID' });
+  }
+  try {
+    const txn = await Transaction.findById(txnId);
+    if (!txn) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+    if (!txn.receipt || !txn.receipt.fileUrl) {
+      return res.status(404).json({ error: 'No receipt found for this transaction' });
+    }
+    // Generate a signed S3 URL for the file
+    const key = getKeyFromUrl(txn.receipt.fileUrl);
+    let signedUrl = null;
+    if (key) {
+      signedUrl = await generateSignedUrl(key, 60 * 60); // 1 hour expiry
+    }
+    res.json({
+      fileName: txn.receipt.fileName,
+      uploadDate: txn.receipt.uploadDate,
+      uploadedBy: txn.receipt.uploadedBy,
+      fileUrl: txn.receipt.fileUrl,
+      signedUrl
+    });
+  } catch (error) {
+    console.error('Error fetching receipt:', error);
+    res.status(500).json({ error: 'Failed to fetch receipt' });
   }
 });
 
