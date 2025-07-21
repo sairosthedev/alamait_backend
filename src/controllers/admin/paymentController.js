@@ -464,6 +464,22 @@ const createPayment = async (req, res) => {
                     { transaction: txn._id, account: pettyCashAccount._id, debit: rent, credit: 0 },
                     { transaction: txn._id, account: rentAccount._id, debit: 0, credit: rent }
                 ]);
+                // --- Audit log for conversion ---
+                await AuditLog.create({
+                    user: req.user._id,
+                    action: 'convert_to_petty_cash',
+                    collection: 'Transaction',
+                    recordId: txn._id,
+                    before: null,
+                    after: txn.toObject(),
+                    timestamp: new Date(),
+                    details: {
+                        source: 'Payment',
+                        sourceId: payment._id,
+                        description: 'Admin payment converted to petty cash as Rentals Received'
+                    }
+                });
+                // --- End audit log ---
             }
         }
         // --- End Petty Cash Transaction ---
