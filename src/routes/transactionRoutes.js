@@ -37,7 +37,14 @@ router.post('/', async (req, res) => {
     if (totalDebit !== totalCredit) {
       return res.status(400).json({ error: 'Debits and credits must be equal (double-entry)' });
     }
-    const transaction = await Transaction.create({ date, description, reference, residence });
+    // Fetch residence name
+    const Residence = require('../models/Residence');
+    const residenceDoc = await Residence.findById(residence);
+    if (!residenceDoc) {
+      return res.status(400).json({ error: 'Residence not found' });
+    }
+    const residenceName = residenceDoc.name;
+    const transaction = await Transaction.create({ date, description, reference, residence, residenceName });
     const txnEntries = await TransactionEntry.insertMany(
       entries.map(e => ({ ...e, transaction: transaction._id }))
     );
