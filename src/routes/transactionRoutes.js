@@ -8,12 +8,12 @@ const { s3, s3Configs, fileFilter, fileTypes } = require('../config/s3');
 const { Types: { ObjectId } } = require('mongoose');
 const { generateSignedUrl, getKeyFromUrl } = require('../config/s3');
 
-// Multer config for receipt uploads (memory storage)
+// Multer instance for receipt uploads (memory storage)
 const upload = multer({
   storage: multer.memoryStorage(),
   fileFilter: fileFilter([...fileTypes.images, ...fileTypes.documents]),
   limits: { fileSize: 5 * 1024 * 1024 }
-}).single('receipt');
+});
 
 // GET /api/transactions - List all transactions with entries, filterable by residence
 router.get('/', async (req, res) => {
