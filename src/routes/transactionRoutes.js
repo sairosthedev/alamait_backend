@@ -3,6 +3,16 @@ const router = express.Router();
 const Transaction = require('../models/Transaction');
 const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
+const multer = require('multer');
+const { s3, s3Configs, fileFilter, fileTypes } = require('../config/s3');
+const { Types: { ObjectId } } = require('mongoose');
+
+// Multer config for receipt uploads (memory storage)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: fileFilter([...fileTypes.images, ...fileTypes.documents]),
+  limits: { fileSize: 5 * 1024 * 1024 }
+}).single('receipt');
 
 // GET /api/transactions - List all transactions with entries, filterable by residence
 router.get('/', async (req, res) => {
@@ -52,6 +62,55 @@ router.post('/', async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// POST /api/transactions/:id/upload-receipt - Upload a receipt for a transaction
+router.post('/:id/upload-receipt', (req, res) => {
+  upload(req, res, async function(err) {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    const txnId = req.params.id;
+    if (!ObjectId.isValid(txnId)) {
+      return res.status(400).json({ error: 'Invalid transaction ID' });
+    }
+    try {
+      const txn = await Transaction.findById(txnId);
+      if (!txn) {
+        return res.status(404).json({ error: 'Transaction not found' });
+      }
+      // Upload to S3
+      const s3Key = `receipts/${(req.user?._id || 'finance')}_${Date.now()}_${req.file.originalname}`;
+      const s3UploadParams = {
+        Bucket: s3Configs.general.bucket,
+        Key: s3Key,
+        Body: req.file.buffer,
+        ContentType: req.file.mimetype,
+        ACL: s3Configs.general.acl,
+        Metadata: {
+          fieldName: req.file.fieldname,
+          uploadedBy: req.user?._id ? req.user._id.toString() : 'finance',
+          uploadDate: new Date().toISOString()
+        }
+      };
+      const s3Result = await s3.upload(s3UploadParams).promise();
+      // Save receipt info in transaction
+      txn.receipt = {
+        fileUrl: s3Result.Location,
+        fileName: req.file.originalname,
+        uploadDate: new Date(),
+        uploadedBy: req.user?._id || null
+      };
+      await txn.save();
+      res.json({ message: 'Receipt uploaded successfully', receipt: txn.receipt });
+    } catch (error) {
+      console.error('Error uploading receipt:', error);
+      res.status(500).json({ error: 'Failed to upload receipt' });
+    }
+  });
 });
 
 // GET /api/transactions/:id - Get a single transaction with entries
