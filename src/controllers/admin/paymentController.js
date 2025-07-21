@@ -9,6 +9,9 @@ const Application = require('../../models/Application');
 const Residence = require('../../models/Residence');
 const mongoose = require('mongoose');
 const AuditLog = require('../../models/AuditLog');
+const Transaction = require('../../models/Transaction');
+const TransactionEntry = require('../../models/TransactionEntry');
+const Account = require('../../models/Account');
 
 // Configure multer for S3 file uploads
 const upload = multer({
@@ -437,6 +440,33 @@ const createPayment = async (req, res) => {
             before: null,
             after: payment.toObject()
         });
+
+        // --- Petty Cash Transaction for Rentals Received ---
+        if (req.user && req.user.role === 'admin' && rent > 0) {
+            // Find Petty Cash and Rental Income accounts
+            const pettyCashAccount = await Account.findOne({ code: '1010' });
+            // Use '4000' (Rental Income - Residential) as default
+            let rentAccount = await Account.findOne({ code: '4000' });
+            // If residence is a school, use '4001'
+            if (residenceExists && residenceExists.name && residenceExists.name.toLowerCase().includes('school')) {
+                const schoolRent = await Account.findOne({ code: '4001' });
+                if (schoolRent) rentAccount = schoolRent;
+            }
+            if (pettyCashAccount && rentAccount) {
+                const txn = await Transaction.create({
+                    date: payment.date,
+                    description: 'Rentals Received',
+                    reference: payment.paymentId,
+                    residence: payment.residence,
+                    residenceName: residenceExists ? residenceExists.name : undefined
+                });
+                await TransactionEntry.insertMany([
+                    { transaction: txn._id, account: pettyCashAccount._id, debit: rent, credit: 0 },
+                    { transaction: txn._id, account: rentAccount._id, debit: 0, credit: rent }
+                ]);
+            }
+        }
+        // --- End Petty Cash Transaction ---
 
         // Populate the response
         const populatedPayment = await Payment.findById(payment._id)
