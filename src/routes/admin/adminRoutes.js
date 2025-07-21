@@ -163,6 +163,18 @@ router.get('/audit-reports', async (req, res) => {
     if (req.query.resourceType) filter.resourceType = req.query.resourceType;
     if (req.query.userId) filter.userId = req.query.userId;
     const logs = await AuditLog.find(filter).sort({ timestamp: -1 }).limit(500);
+    // Audit log: log that audit logs were listed
+    try {
+      await AuditLog.create({
+        user: req.user ? req.user._id : null,
+        action: 'view',
+        collection: 'AuditLog',
+        recordId: null,
+        before: null,
+        after: null,
+        timestamp: new Date()
+      });
+    } catch (auditErr) { /* ignore audit log errors */ }
     res.json(logs);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch audit logs' });
@@ -174,6 +186,18 @@ router.get('/audit-reports/:id', async (req, res) => {
   try {
     const log = await AuditLog.findById(req.params.id);
     if (!log) return res.status(404).json({ error: 'Audit log not found' });
+    // Audit log: log that a specific audit log was viewed
+    try {
+      await AuditLog.create({
+        user: req.user ? req.user._id : null,
+        action: 'view',
+        collection: 'AuditLog',
+        recordId: log._id,
+        before: null,
+        after: log.toObject(),
+        timestamp: new Date()
+      });
+    } catch (auditErr) { /* ignore audit log errors */ }
     res.json(log);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch audit log' });
@@ -188,6 +212,18 @@ router.post('/audit-reports', async (req, res) => {
       return res.status(400).json({ error: 'action, resourceType, and userId are required' });
     }
     const log = await AuditLog.create({ action, resourceType, resourceId, userId, details });
+    // Audit log: log that an audit log was created
+    try {
+      await AuditLog.create({
+        user: req.user ? req.user._id : null,
+        action: 'create',
+        collection: 'AuditLog',
+        recordId: log._id,
+        before: null,
+        after: log.toObject(),
+        timestamp: new Date()
+      });
+    } catch (auditErr) { /* ignore audit log errors */ }
     res.status(201).json(log);
   } catch (err) {
     res.status(500).json({ error: 'Failed to create audit log' });
