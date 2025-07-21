@@ -65,8 +65,8 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Robust upload endpoint for receipts
-router.post('/:id/upload-receipt', upload, async (req, res) => {
+// Upload endpoint: Save receipt to parent transaction only
+router.post('/:id/upload-receipt', upload.single('receipt'), async (req, res) => {
   try {
     const txn = await Transaction.findById(req.params.id);
     if (!txn) {
@@ -77,7 +77,6 @@ router.post('/:id/upload-receipt', upload, async (req, res) => {
       console.error('No file uploaded');
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    // Save file info to transaction
     txn.receipt = {
       fileUrl: req.file.location || req.file.path, // S3 or local
       fileName: req.file.originalname,
