@@ -65,53 +65,37 @@ router.post('/', async (req, res) => {
   }
 });
 
-// POST /api/transactions/:id/upload-receipt - Upload a receipt for a transaction
-router.post('/:id/upload-receipt', (req, res) => {
-  upload(req, res, async function(err) {
-    if (err) {
-      return res.status(400).json({ error: err.message });
+// Robust upload endpoint for receipts
+router.post('/:id/upload-receipt', upload, async (req, res) => {
+  try {
+    const txn = await Transaction.findById(req.params.id);
+    if (!txn) {
+      console.error('Transaction not found:', req.params.id);
+      return res.status(404).json({ error: 'Transaction not found' });
     }
     if (!req.file) {
+      console.error('No file uploaded');
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    const txnId = req.params.id;
-    if (!ObjectId.isValid(txnId)) {
-      return res.status(400).json({ error: 'Invalid transaction ID' });
-    }
+    // Save file info to transaction
+    txn.receipt = {
+      fileUrl: req.file.location || req.file.path, // S3 or local
+      fileName: req.file.originalname,
+      uploadDate: new Date(),
+      uploadedBy: req.user ? req.user._id : null
+    };
     try {
-      const txn = await Transaction.findById(txnId);
-      if (!txn) {
-        return res.status(404).json({ error: 'Transaction not found' });
-      }
-      // Upload to S3
-      const s3Key = `receipts/${(req.user?._id || 'finance')}_${Date.now()}_${req.file.originalname}`;
-      const s3UploadParams = {
-        Bucket: s3Configs.general.bucket,
-        Key: s3Key,
-        Body: req.file.buffer,
-        ContentType: req.file.mimetype,
-        ACL: s3Configs.general.acl,
-        Metadata: {
-          fieldName: req.file.fieldname,
-          uploadedBy: req.user?._id ? req.user._id.toString() : 'finance',
-          uploadDate: new Date().toISOString()
-        }
-      };
-      const s3Result = await s3.upload(s3UploadParams).promise();
-      // Save receipt info in transaction
-      txn.receipt = {
-        fileUrl: s3Result.Location,
-        fileName: req.file.originalname,
-        uploadDate: new Date(),
-        uploadedBy: req.user?._id || null
-      };
       await txn.save();
-      res.json({ message: 'Receipt uploaded successfully', receipt: txn.receipt });
-    } catch (error) {
-      console.error('Error uploading receipt:', error);
-      res.status(500).json({ error: 'Failed to upload receipt' });
+      console.log('Receipt saved to transaction:', txn._id, txn.receipt);
+    } catch (err) {
+      console.error('Error saving transaction:', err);
+      return res.status(500).json({ error: 'Failed to save receipt to transaction', details: err.message });
     }
-  });
+    res.json({ message: 'Receipt uploaded successfully', receipt: txn.receipt });
+  } catch (err) {
+    console.error('Error uploading or saving receipt:', err);
+    res.status(500).json({ error: 'Failed to upload or save receipt', details: err.message });
+  }
 });
 
 // GET /api/transactions/:id - Get a single transaction with entries
@@ -126,36 +110,27 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// GET /api/transactions/:id/receipt - Get receipt file info and signed URL
+// Robust fetch endpoint for receipts
 router.get('/:id/receipt', async (req, res) => {
-  const txnId = req.params.id;
-  if (!ObjectId.isValid(txnId)) {
-    return res.status(400).json({ error: 'Invalid transaction ID' });
-  }
   try {
-    const txn = await Transaction.findById(txnId);
+    const txn = await Transaction.findById(req.params.id);
     if (!txn) {
+      console.error('Transaction not found:', req.params.id);
       return res.status(404).json({ error: 'Transaction not found' });
     }
     if (!txn.receipt || !txn.receipt.fileUrl) {
+      console.error('No receipt found for transaction:', req.params.id);
       return res.status(404).json({ error: 'No receipt found for this transaction' });
-    }
-    // Generate a signed S3 URL for the file
-    const key = getKeyFromUrl(txn.receipt.fileUrl);
-    let signedUrl = null;
-    if (key) {
-      signedUrl = await generateSignedUrl(key, 60 * 60); // 1 hour expiry
     }
     res.json({
       fileName: txn.receipt.fileName,
-      uploadDate: txn.receipt.uploadDate,
+      uploadedAt: txn.receipt.uploadDate,
       uploadedBy: txn.receipt.uploadedBy,
-      fileUrl: txn.receipt.fileUrl,
-      signedUrl
+      fileUrl: txn.receipt.fileUrl
     });
-  } catch (error) {
-    console.error('Error fetching receipt:', error);
-    res.status(500).json({ error: 'Failed to fetch receipt' });
+  } catch (err) {
+    console.error('Error fetching receipt:', err);
+    res.status(500).json({ error: 'Failed to fetch receipt', details: err.message });
   }
 });
 
