@@ -3,6 +3,7 @@ const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const { check } = require('express-validator');
 const AuditLog = require('../../models/AuditLog');
+const auditLogRoutes = require('./auditLogRoutes'); // Import new audit log routes
 
 // Import controllers
 const {
@@ -154,80 +155,7 @@ router.get('/applications', getApplications);
 router.put('/applications/:applicationId', applicationStatusValidation, updateApplicationStatus);
 router.delete('/applications/:applicationId', deleteApplication);
 
-// Admin Audit Report Routes
-// GET /admin/audit-reports - List all audit logs (with optional filters)
-router.get('/audit-reports', async (req, res) => {
-  try {
-    const filter = {};
-    if (req.query.action) filter.action = req.query.action;
-    if (req.query.resourceType) filter.resourceType = req.query.resourceType;
-    if (req.query.userId) filter.userId = req.query.userId;
-    const logs = await AuditLog.find(filter).sort({ timestamp: -1 }).limit(500);
-    // Audit log: log that audit logs were listed
-    try {
-      await AuditLog.create({
-        user: req.user ? req.user._id : null,
-        action: 'view',
-        collection: 'AuditLog',
-        recordId: null,
-        before: null,
-        after: null,
-        timestamp: new Date()
-      });
-    } catch (auditErr) { /* ignore audit log errors */ }
-    res.json(logs);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch audit logs' });
-  }
-});
-
-// GET /admin/audit-reports/:id - Get a single audit log by ID
-router.get('/audit-reports/:id', async (req, res) => {
-  try {
-    const log = await AuditLog.findById(req.params.id);
-    if (!log) return res.status(404).json({ error: 'Audit log not found' });
-    // Audit log: log that a specific audit log was viewed
-    try {
-      await AuditLog.create({
-        user: req.user ? req.user._id : null,
-        action: 'view',
-        collection: 'AuditLog',
-        recordId: log._id,
-        before: null,
-        after: log.toObject(),
-        timestamp: new Date()
-      });
-    } catch (auditErr) { /* ignore audit log errors */ }
-    res.json(log);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch audit log' });
-  }
-});
-
-// POST /admin/audit-reports - Create a new audit log entry
-router.post('/audit-reports', async (req, res) => {
-  try {
-    const { action, resourceType, resourceId, userId, details } = req.body;
-    if (!action || !resourceType || !userId) {
-      return res.status(400).json({ error: 'action, resourceType, and userId are required' });
-    }
-    const log = await AuditLog.create({ action, resourceType, resourceId, userId, details });
-    // Audit log: log that an audit log was created
-    try {
-      await AuditLog.create({
-        user: req.user ? req.user._id : null,
-        action: 'create',
-        collection: 'AuditLog',
-        recordId: log._id,
-        before: null,
-        after: log.toObject(),
-        timestamp: new Date()
-      });
-    } catch (auditErr) { /* ignore audit log errors */ }
-    res.status(201).json(log);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to create audit log' });
-  }
-});
+// Audit Log Route
+router.use('/audit-log', auth, checkRole('admin'), auditLogRoutes);
 
 module.exports = router; 

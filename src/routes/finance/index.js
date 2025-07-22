@@ -4,10 +4,12 @@ const { auth, checkAdminOrFinance } = require('../../middleware/auth');
 const User = require('../../models/User');
 const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
+const auditLogRoutes = require('./auditLogRoutes');
 
 // Finance middleware - allow both admin and finance roles
 router.use(auth);
 router.use(checkAdminOrFinance);
+router.use('/audit-log', auditLogRoutes);
 
 // Get all students with residence information (for finance)
 router.get('/students', async (req, res) => {
