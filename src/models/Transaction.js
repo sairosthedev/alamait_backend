@@ -11,7 +11,8 @@ const TransactionSchema = new mongoose.Schema({
     fileName: String,
     uploadDate: Date,
     uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
-  }
+  },
+  entries: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TransactionEntry' }]
 });
 
 module.exports = mongoose.model('Transaction', TransactionSchema); 

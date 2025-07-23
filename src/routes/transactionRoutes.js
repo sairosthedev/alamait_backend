@@ -99,6 +99,11 @@ router.post('/', async (req, res) => {
         return { ...e, transaction: transaction._id, type };
       })
     );
+    // Push entry _ids into the transaction's entries array
+    await Transaction.findByIdAndUpdate(
+      transaction._id,
+      { $push: { entries: { $each: txnEntries.map(e => e._id) } } }
+    );
     res.status(201).json({ transaction, entries: txnEntries });
   } catch (err) {
     res.status(400).json({ error: err.message });
