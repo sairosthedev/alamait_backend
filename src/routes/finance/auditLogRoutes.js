@@ -5,8 +5,6 @@ const { auth, checkRole } = require('../../middleware/auth');
 
 router.get(
   '/',
-  auth,
-  checkRole('admin', 'finance_admin', 'finance_user'),
   auditLogController.getAuditLogs
 );
 

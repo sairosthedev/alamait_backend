@@ -2,18 +2,16 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
+dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
 const path = require('path');
 const authRoutes = require('./routes/auth');
-const adminRoutes = require('./routes/admin');
+const adminRoutes = require('./routes/admin/adminRoutes');
 const studentRoutes = require('./routes/student');
 const maintenanceRoutes = require('./routes/maintenanceRoutes');
 const maintenanceStaffRoutes = require('./routes/maintenanceStaffRoutes');
 const maintenanceCategoryRoutes = require('./routes/maintenanceCategoryRoutes');
 const expenseRoutes = require('./routes/admin/expenseRoutes');
 const connectDB = require('./config/database');
-
-// Load environment variables
-dotenv.config();
 
 const app = express();
 

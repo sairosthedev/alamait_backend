@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Application = require('../models/Application');
+const mongoose = require('mongoose');
 
 const auth = async (req, res, next) => {
     try {
@@ -23,20 +24,25 @@ const auth = async (req, res, next) => {
             email: decoded.user?.email
         });
 
-        const userId = decoded.user?.id || decoded.user?._id;
+        let userId = decoded.user?.id || decoded.user?._id;
         if (!userId) {
             console.error('Auth middleware - Invalid token payload:', decoded);
             return res.status(401).json({ error: 'Please authenticate' });
         }
-
-        const user = await User.findOne({ _id: userId });
+        // Try both ObjectId and string for user lookup
+        let user = null;
+        if (mongoose.Types.ObjectId.isValid(userId)) {
+            user = await User.findOne({ _id: new mongoose.Types.ObjectId(userId) });
+        }
+        if (!user) {
+            user = await User.findOne({ _id: userId });
+        }
         console.log('Auth middleware - User found:', {
             found: !!user,
             userId,
             userEmail: user?.email,
             userRole: user?.role
         });
-
         if (!user) {
             console.error('Auth middleware - User not found for ID:', userId);
             return res.status(401).json({ error: 'Please authenticate' });
