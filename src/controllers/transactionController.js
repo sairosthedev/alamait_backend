@@ -41,7 +41,8 @@ exports.updateTransaction = async (req, res) => {
 
     res.json({ message: 'Transaction and entries updated', transaction: updatedTransaction });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update transaction' });
+    console.error('Error in updateTransaction:', error);
+    res.status(500).json({ error: 'Failed to update transaction', details: error.message });
   }
 };
 
