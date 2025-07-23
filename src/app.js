@@ -72,6 +72,7 @@ const financeRoomPriceRoutes = require('./routes/finance/roomPriceRoutes');
 const financeOtherIncomeRoutes = require('./routes/finance/otherIncomeRoutes');
 const financeOtherExpenseRoutes = require('./routes/finance/otherExpenseRoutes');
 const financeIndexRoutes = require('./routes/finance/index');
+const financeUsersRoutes = require('./routes/finance/users');
 
 const monitoringRoutes = require('./routes/monitoring');
 const accountRoutes = require('./routes/accountRoutes');
@@ -273,6 +274,7 @@ app.use('/api/finance/applications', financeApplicationRoutes);
 app.use('/api/finance/room-prices', financeRoomPriceRoutes);
 app.use('/api/finance/other-income', financeOtherIncomeRoutes);
 app.use('/api/finance/other-expenses', financeOtherExpenseRoutes);
+app.use('/api/finance/users', financeUsersRoutes);
 
 // Finance maintenance routes
 const financeMaintenanceRoutes = require('./routes/finance/maintenanceRoutes');
