@@ -7,6 +7,7 @@ const multer = require('multer');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../config/s3');
 const { Types: { ObjectId } } = require('mongoose');
 const { generateSignedUrl, getKeyFromUrl } = require('../config/s3');
+const { updateTransaction, deleteTransaction } = require('../controllers/transactionController');
 
 // Multer instance for receipt uploads (memory storage)
 const upload = multer({
@@ -132,5 +133,8 @@ router.get('/:id/receipt', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch receipt', details: err.message });
   }
 });
+
+router.put('/:id', updateTransaction);
+router.delete('/:id', deleteTransaction);
 
 module.exports = router; 
