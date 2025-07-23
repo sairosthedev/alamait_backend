@@ -53,8 +53,17 @@ exports.deleteTransaction = async (req, res) => {
     if (!transaction) {
       return res.status(404).json({ error: 'Transaction not found' });
     }
+    // Audit log
+    await AuditLog.create({
+      user: req.user?._id,
+      action: 'delete',
+      collection: 'Transaction',
+      recordId: id,
+      before: transaction,
+      after: null
+    });
     res.json({ message: 'Transaction deleted' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete transaction' });
+    res.status(500).json({ error: 'Failed to delete transaction', details: error.message });
   }
 }; 
