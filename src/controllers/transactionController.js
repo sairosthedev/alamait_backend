@@ -7,17 +7,17 @@ exports.updateTransaction = async (req, res) => {
     const { id } = req.params;
     const updateData = req.body;
 
-    // Find the transaction and its entries before update
-    const transaction = await Transaction.findById(id).lean();
-    if (!transaction) {
+    // 1. Fetch and clone before state
+    const beforeTransaction = await Transaction.findById(id).lean();
+    if (!beforeTransaction) {
       return res.status(404).json({ error: 'Transaction not found' });
     }
     const beforeEntries = await TransactionEntry.find({ transaction: id }).lean();
 
-    // Update the main transaction fields
-    const updatedTransaction = await Transaction.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
+    // 2. Update main transaction
+    await Transaction.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
 
-    // Update each entry if provided
+    // 3. Update entries if provided
     if (Array.isArray(updateData.entries)) {
       for (const entry of updateData.entries) {
         if (entry._id) {
@@ -26,20 +26,21 @@ exports.updateTransaction = async (req, res) => {
       }
     }
 
-    // Fetch after state for audit
+    // 4. Fetch and clone after state
+    const afterTransaction = await Transaction.findById(id).lean();
     const afterEntries = await TransactionEntry.find({ transaction: id }).lean();
 
-    // Audit log
+    // 5. Audit log
     await AuditLog.create({
       user: req.user?._id,
       action: 'update',
       collection: 'Transaction',
       recordId: id,
-      before: { transaction, entries: beforeEntries },
-      after: { transaction: updatedTransaction, entries: afterEntries }
+      before: { transaction: beforeTransaction, entries: beforeEntries },
+      after: { transaction: afterTransaction, entries: afterEntries }
     });
 
-    res.json({ message: 'Transaction and entries updated', transaction: updatedTransaction });
+    res.json({ message: 'Transaction and entries updated', transaction: afterTransaction });
   } catch (error) {
     console.error('Error in updateTransaction:', error);
     res.status(500).json({ error: 'Failed to update transaction', details: error.message });
