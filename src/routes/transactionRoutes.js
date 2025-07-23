@@ -28,12 +28,25 @@ router.get('/', async (req, res) => {
     }
     const transactions = await Transaction.find(filter).sort({ date: -1 });
     const results = await Promise.all(transactions.map(async (txn) => {
-      const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account', 'name');
-      return { ...txn.toObject(), entries };
+      const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account', 'name code');
+      // Collect unique account names from entries
+      const accountNames = entries.map(e => e.account?.name).filter(Boolean);
+      return { ...txn.toObject(), entries, accountNames };
     }));
     res.json(results);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch transactions' });
+  }
+});
+
+// Debug endpoint: List entries with orphaned accounts
+router.get('/debug/orphaned-entries', async (req, res) => {
+  try {
+    const entries = await TransactionEntry.find().populate('account', 'name');
+    const orphaned = entries.filter(e => !e.account);
+    res.json(orphaned.map(e => ({ _id: e._id, description: e.description })));
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch orphaned entries' });
   }
 });
 
@@ -106,8 +119,9 @@ router.get('/:id', async (req, res) => {
   try {
     const txn = await Transaction.findById(req.params.id);
     if (!txn) return res.status(404).json({ error: 'Transaction not found' });
-    const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account', 'name');
-    res.json({ ...txn.toObject(), entries });
+    const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account', 'name code');
+    const accountNames = entries.map(e => e.account?.name).filter(Boolean);
+    res.json({ ...txn.toObject(), entries, accountNames });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch transaction' });
   }
