@@ -87,8 +87,17 @@ router.post('/', async (req, res) => {
     }
     const residenceName = residenceDoc.name;
     const transaction = await Transaction.create({ date, description, reference, residence, residenceName });
+    // Set type for each entry based on account if not provided
+    const accounts = await Account.find();
+    const idToType = Object.fromEntries(accounts.map(a => [a._id.toString(), a.type?.toLowerCase()]));
     const txnEntries = await TransactionEntry.insertMany(
-      entries.map(e => ({ ...e, transaction: transaction._id }))
+      entries.map(e => {
+        let type = e.type;
+        if (!type && e.account) {
+          type = idToType[e.account.toString()];
+        }
+        return { ...e, transaction: transaction._id, type };
+      })
     );
     res.status(201).json({ transaction, entries: txnEntries });
   } catch (err) {
