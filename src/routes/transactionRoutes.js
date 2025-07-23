@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
     }
     const transactions = await Transaction.find(filter).sort({ date: -1 });
     const results = await Promise.all(transactions.map(async (txn) => {
-      const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account');
+      const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account', 'name');
       return { ...txn.toObject(), entries };
     }));
     res.json(results);
@@ -106,7 +106,7 @@ router.get('/:id', async (req, res) => {
   try {
     const txn = await Transaction.findById(req.params.id);
     if (!txn) return res.status(404).json({ error: 'Transaction not found' });
-    const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account');
+    const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account', 'name');
     res.json({ ...txn.toObject(), entries });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch transaction' });

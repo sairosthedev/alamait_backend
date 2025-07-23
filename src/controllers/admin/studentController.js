@@ -14,6 +14,7 @@ const { createAuditLog } = require('../../utils/auditLogger');
 const multer = require('multer');
 const multerS3 = require('multer-s3');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
+const AuditLog = require('../../models/AuditLog');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -277,7 +278,19 @@ exports.deleteStudent = async (req, res) => {
             }
         }
 
+        // Save before state for audit
+        const before = student.toObject();
         await student.remove();
+
+        // Audit log for deletion
+        await AuditLog.create({
+            user: req.user?._id,
+            action: 'delete',
+            collection: 'User',
+            recordId: before._id,
+            before,
+            after: null
+        });
 
         await createAuditLog({
             action: 'DELETE',
