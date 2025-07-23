@@ -39,6 +39,20 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/transactions/all - List all transactions with entries and full account info for reporting
+router.get('/all', async (req, res) => {
+  try {
+    const transactions = await Transaction.find().sort({ date: -1 });
+    const results = await Promise.all(transactions.map(async (txn) => {
+      const entries = await TransactionEntry.find({ transaction: txn._id }).populate('account', 'name code type');
+      return { ...txn.toObject(), entries };
+    }));
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch all transactions' });
+  }
+});
+
 // Debug endpoint: List entries with orphaned accounts
 router.get('/debug/orphaned-entries', async (req, res) => {
   try {
