@@ -3,6 +3,20 @@ const { generateUniqueId } = require('../../utils/idGenerator');
 const { validateMongoId } = require('../../utils/validators');
 const { createAuditLog } = require('../../utils/auditLogger');
 const AuditLog = require('../../models/AuditLog');
+const Transaction = require('../../models/Transaction');
+const TransactionEntry = require('../../models/TransactionEntry');
+const Account = require('../../models/Account');
+
+// Category to Account Name mapping for Expense linkage
+const CATEGORY_TO_ACCOUNT = {
+  'Maintenance': 'Repairs and Maintenance',
+  'Utilities': 'Utilities - Electricity', // Default to Electricity, can be improved
+  'Taxes': 'Licenses',
+  'Insurance': 'Medical aid', // Or another insurance-related account
+  'Salaries': 'Staff Salaries & Wages',
+  'Supplies': 'Administrative Expenses',
+  'Other': 'Administrative Expenses' // Fallback
+};
 
 // Get all expenses
 exports.getAllExpenses = async (req, res) => {
@@ -502,6 +516,48 @@ exports.approveExpense = async (req, res) => {
          .populate('createdBy', 'firstName lastName email')
          .populate('updatedBy', 'firstName lastName email')
          .populate('paidBy', 'firstName lastName email');
+
+        // --- Petty Cash Transaction for Paid Expense ---
+        // Find Petty Cash and Expense accounts
+        const pettyCashAccount = await Account.findOne({ code: '1010' });
+        // Use mapping for Expense account
+        let expenseAccount = null;
+        const mappedAccountName = CATEGORY_TO_ACCOUNT[expense.category] || expense.category;
+        expenseAccount = await Account.findOne({ name: new RegExp('^' + mappedAccountName + '$', 'i'), type: 'Expense' });
+        if (!expenseAccount) {
+            // fallback: use first Expense account
+            expenseAccount = await Account.findOne({ type: 'Expense' });
+        }
+        if (pettyCashAccount && expenseAccount) {
+            const txn = await Transaction.create({
+                date: updatedExpense.paidDate || new Date(),
+                description: `Petty Cash Usage: ${updatedExpense.description}`,
+                reference: updatedExpense.expenseId,
+                residence: updatedExpense.residence?._id || updatedExpense.residence,
+                residenceName: updatedExpense.residence?.name || undefined
+            });
+            const entries = await TransactionEntry.insertMany([
+                { transaction: txn._id, account: expenseAccount._id, debit: updatedExpense.amount, credit: 0, type: 'expense' },
+                { transaction: txn._id, account: pettyCashAccount._id, debit: 0, credit: updatedExpense.amount, type: 'asset' }
+            ]);
+            await Transaction.findByIdAndUpdate(txn._id, { $push: { entries: { $each: entries.map(e => e._id) } } });
+            // --- Audit log for conversion ---
+            await AuditLog.create({
+                user: req.user._id,
+                action: 'convert_to_petty_cash',
+                collection: 'Transaction',
+                recordId: txn._id,
+                before: null,
+                after: txn.toObject(),
+                timestamp: new Date(),
+                details: {
+                    source: 'Expense',
+                    sourceId: updatedExpense._id,
+                    description: 'Expense request converted to petty cash'
+                }
+            });
+        }
+        // --- End Petty Cash Transaction ---
 
         // Audit log
         await AuditLog.create({
