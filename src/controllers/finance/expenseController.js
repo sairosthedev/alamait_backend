@@ -518,17 +518,20 @@ exports.approveExpense = async (req, res) => {
          .populate('paidBy', 'firstName lastName email');
 
         // --- Petty Cash Transaction for Paid Expense ---
-        // Find Petty Cash and Expense accounts
-        const pettyCashAccount = await Account.findOne({ code: '1010' });
-        // Use mapping for Expense account
-        let expenseAccount = null;
-        const mappedAccountName = CATEGORY_TO_ACCOUNT[expense.category] || expense.category;
-        expenseAccount = await Account.findOne({ name: new RegExp('^' + mappedAccountName + '$', 'i'), type: 'Expense' });
-        if (!expenseAccount) {
-            // fallback: use first Expense account
-            expenseAccount = await Account.findOne({ type: 'Expense' });
-        }
-        if (pettyCashAccount && expenseAccount) {
+        try {
+            console.log('[PettyCash] Attempting to create petty cash transaction for expense:', updatedExpense._id, 'category:', updatedExpense.category);
+            const pettyCashAccount = await Account.findOne({ code: '1010' });
+            if (!pettyCashAccount) {
+                console.error('[PettyCash] Petty Cash account (code 1010) not found!');
+                throw new Error('Petty Cash account not found');
+            }
+            let expenseAccount = null;
+            const mappedAccountName = CATEGORY_TO_ACCOUNT[expense.category] || expense.category;
+            expenseAccount = await Account.findOne({ name: new RegExp('^' + mappedAccountName + '$', 'i'), type: 'Expense' });
+            if (!expenseAccount) {
+                console.error('[PettyCash] Expense account not found for category:', updatedExpense.category, 'using mapping:', mappedAccountName);
+                throw new Error('Expense account not found for category: ' + updatedExpense.category);
+            }
             const txn = await Transaction.create({
                 date: updatedExpense.paidDate || new Date(),
                 description: `Petty Cash Usage: ${updatedExpense.description}`,
@@ -541,7 +544,6 @@ exports.approveExpense = async (req, res) => {
                 { transaction: txn._id, account: pettyCashAccount._id, debit: 0, credit: updatedExpense.amount, type: 'asset' }
             ]);
             await Transaction.findByIdAndUpdate(txn._id, { $push: { entries: { $each: entries.map(e => e._id) } } });
-            // --- Audit log for conversion ---
             await AuditLog.create({
                 user: req.user._id,
                 action: 'convert_to_petty_cash',
@@ -556,6 +558,10 @@ exports.approveExpense = async (req, res) => {
                     description: 'Expense request converted to petty cash'
                 }
             });
+            console.log('[PettyCash] Petty cash transaction created successfully for expense:', updatedExpense._id, 'txn:', txn._id);
+        } catch (pettyCashError) {
+            console.error('[PettyCash] Failed to create petty cash transaction for expense:', updatedExpense._id, pettyCashError);
+            return res.status(500).json({ error: 'Failed to create petty cash transaction for paid expense', details: pettyCashError.message });
         }
         // --- End Petty Cash Transaction ---
 
