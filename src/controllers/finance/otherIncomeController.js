@@ -3,6 +3,27 @@ const { generateUniqueId } = require('../../utils/idGenerator');
 const { validateMongoId } = require('../../utils/validators');
 const { createAuditLog } = require('../../utils/auditLogger');
 const AuditLog = require('../../models/AuditLog');
+// Payment/receipt method to Account Code mapping (reuse or define as in expenseController)
+const RECEIPT_METHOD_TO_ACCOUNT_CODE = {
+  'Cash': '1000', // Bank - Main Account (assuming cash is handled here)
+  'Bank Transfer': '1000', // Bank - Main Account
+  'Ecocash': '3000', // Owner's Capital (placeholder, update if you have Ecocash account)
+  'Innbucks': '4000', // Rental Income - Residential (placeholder, update if you have Innbucks account)
+  'Petty Cash': '1010', // Petty Cash
+  // Add more as needed
+};
+const CATEGORY_TO_INCOME_ACCOUNT = {
+  'Investment': 'Other Income',
+  'Interest': 'Other Income',
+  'Commission': 'Other Income',
+  'Rental': 'Rental Income - Residential',
+  'Service': 'Other Income',
+  'Other': 'Other Income'
+};
+const Transaction = require('../../models/Transaction');
+const TransactionEntry = require('../../models/TransactionEntry');
+const Account = require('../../models/Account');
+const AuditLog = require('../../models/AuditLog');
 
 // Get all other income entries
 exports.getAllOtherIncome = async (req, res) => {
@@ -200,6 +221,55 @@ exports.createOtherIncome = async (req, res) => {
 
         // Save other income entry
         await newOtherIncome.save();
+
+        // Double-entry transaction for received income
+        if (newOtherIncome.paymentStatus === 'Received') {
+          try {
+            const paymentMethod = newOtherIncome.paymentMethod || 'Petty Cash';
+            const destAccountCode = RECEIPT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1010';
+            const destAccount = await Account.findOne({ code: destAccountCode });
+            if (!destAccount) {
+              console.error('[Income] Destination account not found for payment method:', paymentMethod, 'using code:', destAccountCode);
+              throw new Error('Destination account not found for payment method: ' + paymentMethod);
+            }
+            const mappedIncomeAccountName = CATEGORY_TO_INCOME_ACCOUNT[newOtherIncome.category] || newOtherIncome.category;
+            const incomeAccount = await Account.findOne({ name: new RegExp('^' + mappedIncomeAccountName + '$', 'i'), type: 'Income' });
+            if (!incomeAccount) {
+              console.error('[Income] Income account not found for category:', newOtherIncome.category, 'using mapping:', mappedIncomeAccountName);
+              throw new Error('Income account not found for category: ' + newOtherIncome.category);
+            }
+            const txn = await Transaction.create({
+              date: newOtherIncome.receivedDate || new Date(),
+              description: `Income Received: ${newOtherIncome.description}`,
+              reference: newOtherIncome.incomeId,
+              residence: newOtherIncome.residence?._id || newOtherIncome.residence,
+              residenceName: newOtherIncome.residence?.name || undefined
+            });
+            const entries = await TransactionEntry.insertMany([
+              { transaction: txn._id, account: destAccount._id, debit: newOtherIncome.amount, credit: 0, type: destAccount.type.toLowerCase() },
+              { transaction: txn._id, account: incomeAccount._id, debit: 0, credit: newOtherIncome.amount, type: 'income' }
+            ]);
+            await Transaction.findByIdAndUpdate(txn._id, { $push: { entries: { $each: entries.map(e => e._id) } } });
+            await AuditLog.create({
+              user: req.user._id,
+              action: 'double_entry_income',
+              collection: 'Transaction',
+              recordId: txn._id,
+              before: null,
+              after: txn.toObject(),
+              timestamp: new Date(),
+              details: {
+                source: 'OtherIncome',
+                sourceId: newOtherIncome._id,
+                description: 'Income received and recorded as double-entry transaction'
+              }
+            });
+            console.log('[Income] Double-entry transaction created for income:', newOtherIncome._id, 'txn:', txn._id);
+          } catch (incomeTxnError) {
+            console.error('[Income] Failed to create double-entry transaction for income:', newOtherIncome._id, incomeTxnError);
+            return res.status(500).json({ error: 'Failed to create double-entry transaction for received income', details: incomeTxnError.message });
+          }
+        }
 
         // Populate the saved entry
         await newOtherIncome.populate('residence', 'name');

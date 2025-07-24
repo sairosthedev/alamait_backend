@@ -18,6 +18,16 @@ const CATEGORY_TO_ACCOUNT = {
   'Other': 'Administrative Expenses' // Fallback
 };
 
+// Payment method to Account Code mapping
+const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
+  'Cash': '1000', // Bank - Main Account (assuming cash is handled here)
+  'Bank Transfer': '1000', // Bank - Main Account
+  'Ecocash': '3000', // Owner's Capital (placeholder, update if you have Ecocash account)
+  'Innbucks': '4000', // Rental Income - Residential (placeholder, update if you have Innbucks account)
+  'Petty Cash': '1010', // Petty Cash
+  // Add more as needed
+};
+
 // Get all expenses
 exports.getAllExpenses = async (req, res) => {
     try {
@@ -520,10 +530,13 @@ exports.approveExpense = async (req, res) => {
         // --- Petty Cash Transaction for Paid Expense ---
         try {
             console.log('[PettyCash] Attempting to create petty cash transaction for expense:', updatedExpense._id, 'category:', updatedExpense.category);
-            const pettyCashAccount = await Account.findOne({ code: '1010' });
-            if (!pettyCashAccount) {
-                console.error('[PettyCash] Petty Cash account (code 1010) not found!');
-                throw new Error('Petty Cash account not found');
+            // Determine source account based on payment method
+            const paymentMethod = updatedExpense.paymentMethod || 'Petty Cash';
+            const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1010';
+            const sourceAccount = await Account.findOne({ code: sourceAccountCode });
+            if (!sourceAccount) {
+                console.error('[PettyCash] Source account not found for payment method:', paymentMethod, 'using code:', sourceAccountCode);
+                throw new Error('Source account not found for payment method: ' + paymentMethod);
             }
             let expenseAccount = null;
             const mappedAccountName = CATEGORY_TO_ACCOUNT[expense.category] || expense.category;
@@ -534,14 +547,14 @@ exports.approveExpense = async (req, res) => {
             }
             const txn = await Transaction.create({
                 date: updatedExpense.paidDate || new Date(),
-                description: `Petty Cash Usage: ${updatedExpense.description}`,
+                description: `Expense Payment: ${updatedExpense.description}`,
                 reference: updatedExpense.expenseId,
                 residence: updatedExpense.residence?._id || updatedExpense.residence,
                 residenceName: updatedExpense.residence?.name || undefined
             });
             const entries = await TransactionEntry.insertMany([
                 { transaction: txn._id, account: expenseAccount._id, debit: updatedExpense.amount, credit: 0, type: 'expense' },
-                { transaction: txn._id, account: pettyCashAccount._id, debit: 0, credit: updatedExpense.amount, type: 'asset' }
+                { transaction: txn._id, account: sourceAccount._id, debit: 0, credit: updatedExpense.amount, type: sourceAccount.type.toLowerCase() }
             ]);
             await Transaction.findByIdAndUpdate(txn._id, { $push: { entries: { $each: entries.map(e => e._id) } } });
             await AuditLog.create({
@@ -555,13 +568,13 @@ exports.approveExpense = async (req, res) => {
                 details: {
                     source: 'Expense',
                     sourceId: updatedExpense._id,
-                    description: 'Expense request converted to petty cash'
+                    description: 'Expense request converted to double-entry transaction'
                 }
             });
-            console.log('[PettyCash] Petty cash transaction created successfully for expense:', updatedExpense._id, 'txn:', txn._id);
+            console.log('[PettyCash] Double-entry transaction created for expense:', updatedExpense._id, 'txn:', txn._id);
         } catch (pettyCashError) {
-            console.error('[PettyCash] Failed to create petty cash transaction for expense:', updatedExpense._id, pettyCashError);
-            return res.status(500).json({ error: 'Failed to create petty cash transaction for paid expense', details: pettyCashError.message });
+            console.error('[PettyCash] Failed to create double-entry transaction for expense:', updatedExpense._id, pettyCashError);
+            return res.status(500).json({ error: 'Failed to create double-entry transaction for paid expense', details: pettyCashError.message });
         }
         // --- End Petty Cash Transaction ---
 

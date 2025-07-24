@@ -9,6 +9,7 @@ const { Types: { ObjectId } } = require('mongoose');
 const { generateSignedUrl, getKeyFromUrl } = require('../config/s3');
 const { updateTransaction, deleteTransaction } = require('../controllers/transactionController');
 const { auth } = require('../middleware/auth');
+const AuditLog = require('../models/AuditLog');
 
 // Multer instance for receipt uploads (memory storage)
 const upload = multer({
@@ -79,6 +80,12 @@ router.post('/', async (req, res) => {
     if (totalDebit !== totalCredit) {
       return res.status(400).json({ error: 'Debits and credits must be equal (double-entry)' });
     }
+    // Enforce at least one debit and one credit entry
+    const hasDebit = entries.some(e => e.debit && e.debit > 0);
+    const hasCredit = entries.some(e => e.credit && e.credit > 0);
+    if (!hasDebit || !hasCredit) {
+      return res.status(400).json({ error: 'At least one debit and one credit entry required (double-entry)' });
+    }
     // Fetch residence name
     const Residence = require('../models/Residence');
     const residenceDoc = await Residence.findById(residence);
@@ -104,6 +111,19 @@ router.post('/', async (req, res) => {
       transaction._id,
       { $push: { entries: { $each: txnEntries.map(e => e._id) } } }
     );
+    // Audit log for manual/account report transaction
+    await AuditLog.create({
+      user: req.user._id,
+      action: 'manual_entry',
+      collection: 'Transaction',
+      recordId: transaction._id,
+      before: null,
+      after: { transaction, entries: txnEntries },
+      timestamp: new Date(),
+      details: {
+        description: 'Manual/account report double-entry transaction created'
+      }
+    });
     res.status(201).json({ transaction, entries: txnEntries });
   } catch (err) {
     res.status(400).json({ error: err.message });
