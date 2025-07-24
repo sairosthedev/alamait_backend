@@ -2,7 +2,6 @@ const OtherIncome = require('../../models/finance/OtherIncome');
 const { generateUniqueId } = require('../../utils/idGenerator');
 const { validateMongoId } = require('../../utils/validators');
 const { createAuditLog } = require('../../utils/auditLogger');
-const AuditLog = require('../../models/AuditLog');
 // Payment/receipt method to Account Code mapping (reuse or define as in expenseController)
 const RECEIPT_METHOD_TO_ACCOUNT_CODE = {
   'Cash': '1000', // Bank - Main Account (assuming cash is handled here)
@@ -23,7 +22,6 @@ const CATEGORY_TO_INCOME_ACCOUNT = {
 const Transaction = require('../../models/Transaction');
 const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
-const AuditLog = require('../../models/AuditLog');
 
 // Get all other income entries
 exports.getAllOtherIncome = async (req, res) => {
@@ -250,7 +248,7 @@ exports.createOtherIncome = async (req, res) => {
               { transaction: txn._id, account: incomeAccount._id, debit: 0, credit: newOtherIncome.amount, type: 'income' }
             ]);
             await Transaction.findByIdAndUpdate(txn._id, { $push: { entries: { $each: entries.map(e => e._id) } } });
-            await AuditLog.create({
+            await createAuditLog({
               user: req.user._id,
               action: 'double_entry_income',
               collection: 'Transaction',
@@ -276,7 +274,7 @@ exports.createOtherIncome = async (req, res) => {
         await newOtherIncome.populate('createdBy', 'firstName lastName email');
 
         // Audit log
-        await AuditLog.create({
+        await createAuditLog({
             user: req.user._id,
             action: 'create',
             collection: 'OtherIncome',
@@ -377,7 +375,7 @@ exports.updateOtherIncome = async (req, res) => {
          .populate('receivedBy', 'firstName lastName email');
 
         // Audit log
-        await AuditLog.create({
+        await createAuditLog({
             user: req.user._id,
             action: 'update',
             collection: 'OtherIncome',
@@ -417,7 +415,7 @@ exports.deleteOtherIncome = async (req, res) => {
         await OtherIncome.findByIdAndDelete(id);
 
         // Audit log
-        await AuditLog.create({
+        await createAuditLog({
             user: req.user._id,
             action: 'delete',
             collection: 'OtherIncome',
