@@ -68,7 +68,11 @@ router.get('/debug/orphaned-entries', async (req, res) => {
 // POST /api/transactions - Add a new transaction with entries (double-entry validation, require residence)
 router.post('/', async (req, res) => {
   try {
-    const { date, description, reference, entries, residence } = req.body;
+    let { date, description, reference, entries, residence } = req.body;
+    // Accept residence as string or object
+    if (typeof residence === 'object' && residence !== null) {
+      residence = residence.id || residence._id || '';
+    }
     if (!residence) {
       return res.status(400).json({ error: 'Residence is required' });
     }
