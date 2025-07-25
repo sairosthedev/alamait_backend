@@ -6,6 +6,8 @@ const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const auditLogRoutes = require('./auditLogRoutes');
 const { getAllStudentAccounts } = require('../../controllers/finance/studentAccountController');
+const Lease = require('../../models/Lease');
+const Payment = require('../../models/Payment');
 
 // Finance middleware - allow both admin and finance roles
 router.use(auth);
@@ -39,34 +41,39 @@ router.get('/students', async (req, res) => {
 
         const students = await User.find(query)
             .select('-password')
-            .populate('residence', 'name _id')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
 
-        // Add room and residenceName fields from application
-        const studentsWithRoom = await Promise.all(students.map(async s => {
-            // Find latest approved application for this student
-            const application = await Application.findOne({ student: s._id, status: 'approved' }).sort({ createdAt: -1 }).lean();
-            // Compute billing period (for now, use application.startDate's month/year if available)
-            let billingPeriod = null;
-            if (application && application.startDate) {
-                const date = new Date(application.startDate);
-                billingPeriod = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+        const studentsWithDetails = await Promise.all(students.map(async s => {
+            // Find all leases for this student
+            const leases = await Lease.find({ student: s._id }).populate('residence', 'name').lean();
+            // Find all payments for this student
+            const paymentHistory = await Payment.find({ student: s._id }).lean();
+
+            // Try to get residenceName and room from the latest lease
+            let residenceName = null;
+            let room = null;
+            if (leases.length > 0) {
+                const latestLease = leases[leases.length - 1];
+                residenceName = latestLease.residence?.name || null;
+                room = latestLease.room || null;
             }
+
             return {
                 ...s,
-                room: application?.allocatedRoom || null,
-                residenceName: s.residence?.name || null,
-                billingPeriod
+                leases,
+                paymentHistory,
+                residenceName,
+                room
             };
         }));
 
         const total = await User.countDocuments(query);
 
         res.json({
-            students: studentsWithRoom,
+            students: studentsWithDetails,
             currentPage: parseInt(page),
             totalPages: Math.ceil(total / limit),
             total
