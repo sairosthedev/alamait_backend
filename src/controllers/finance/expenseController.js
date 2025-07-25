@@ -527,22 +527,22 @@ exports.approveExpense = async (req, res) => {
          .populate('updatedBy', 'firstName lastName email')
          .populate('paidBy', 'firstName lastName email');
 
-        // --- Petty Cash Transaction for Paid Expense ---
+        // --- Payment Transaction for Paid Expense ---
         try {
-            console.log('[PettyCash] Attempting to create petty cash transaction for expense:', updatedExpense._id, 'category:', updatedExpense.category);
+            console.log('[Payment] Attempting to create payment transaction for expense:', updatedExpense._id, 'category:', updatedExpense.category);
             // Determine source account based on payment method
-            const paymentMethod = updatedExpense.paymentMethod || 'Petty Cash';
-            const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1010';
+            const paymentMethod = updatedExpense.paymentMethod || 'Bank Transfer';
+            const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1000'; // Default to Bank
             const sourceAccount = await Account.findOne({ code: sourceAccountCode });
             if (!sourceAccount) {
-                console.error('[PettyCash] Source account not found for payment method:', paymentMethod, 'using code:', sourceAccountCode);
+                console.error('[Payment] Source account not found for payment method:', paymentMethod, 'using code:', sourceAccountCode);
                 throw new Error('Source account not found for payment method: ' + paymentMethod);
             }
             let expenseAccount = null;
             const mappedAccountName = CATEGORY_TO_ACCOUNT[expense.category] || expense.category;
             expenseAccount = await Account.findOne({ name: new RegExp('^' + mappedAccountName + '$', 'i'), type: 'Expense' });
             if (!expenseAccount) {
-                console.error('[PettyCash] Expense account not found for category:', updatedExpense.category, 'using mapping:', mappedAccountName);
+                console.error('[Payment] Expense account not found for category:', updatedExpense.category, 'using mapping:', mappedAccountName);
                 throw new Error('Expense account not found for category: ' + updatedExpense.category);
             }
             const txn = await Transaction.create({
@@ -559,7 +559,7 @@ exports.approveExpense = async (req, res) => {
             await Transaction.findByIdAndUpdate(txn._id, { $push: { entries: { $each: entries.map(e => e._id) } } });
             await AuditLog.create({
                 user: req.user._id,
-                action: 'convert_to_petty_cash',
+                action: `convert_to_${paymentMethod.replace(/\s+/g, '_').toLowerCase()}`,
                 collection: 'Transaction',
                 recordId: txn._id,
                 before: null,
@@ -568,15 +568,15 @@ exports.approveExpense = async (req, res) => {
                 details: {
                     source: 'Expense',
                     sourceId: updatedExpense._id,
-                    description: 'Expense request converted to double-entry transaction'
+                    description: `Expense request converted to double-entry transaction via ${paymentMethod}`
                 }
             });
-            console.log('[PettyCash] Double-entry transaction created for expense:', updatedExpense._id, 'txn:', txn._id);
-        } catch (pettyCashError) {
-            console.error('[PettyCash] Failed to create double-entry transaction for expense:', updatedExpense._id, pettyCashError);
-            return res.status(500).json({ error: 'Failed to create double-entry transaction for paid expense', details: pettyCashError.message });
+            console.log('[Payment] Double-entry transaction created for expense:', updatedExpense._id, 'txn:', txn._id);
+        } catch (paymentError) {
+            console.error('[Payment] Failed to create double-entry transaction for expense:', updatedExpense._id, paymentError);
+            return res.status(500).json({ error: 'Failed to create double-entry transaction for paid expense', details: paymentError.message });
         }
-        // --- End Petty Cash Transaction ---
+        // --- End Payment Transaction ---
 
         // Audit log
         await AuditLog.create({

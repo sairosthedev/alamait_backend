@@ -8,6 +8,7 @@ const accounts = [
   { code: '1000', name: 'Bank - Main Account', type: 'Asset' },
   { code: '1005', name: 'Bank - Rent Deposits Account', type: 'Asset' },
   { code: '1010', name: 'Petty Cash', type: 'Asset' },
+  { code: '1015', name: 'Cash', type: 'Asset' },
   { code: '1100', name: 'Accounts Receivable - Tenants', type: 'Asset' },
   { code: '1105', name: 'Prepaid Expenses', type: 'Asset' },
   { code: '1110', name: 'Tenant Advance Payments', type: 'Asset' },

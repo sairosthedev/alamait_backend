@@ -5,6 +5,7 @@ const User = require('../../models/User');
 const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const auditLogRoutes = require('./auditLogRoutes');
+const { getAllStudentAccounts } = require('../../controllers/finance/studentAccountController');
 
 // Finance middleware - allow both admin and finance roles
 router.use(auth);
@@ -119,5 +120,8 @@ router.get('/students/:studentId/leases', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
+
+// Add this route for student accounts summary
+router.get('/student-accounts', getAllStudentAccounts);
 
 module.exports = router; 

@@ -441,10 +441,15 @@ const createPayment = async (req, res) => {
             after: payment.toObject()
         });
 
-        // --- Petty Cash Transaction for Rentals Received ---
+        // --- Payment Transaction for Rentals Received ---
         if (req.user && req.user.role === 'admin' && rent > 0) {
-            // Find Petty Cash and Rental Income accounts
-            const pettyCashAccount = await Account.findOne({ code: '1010' });
+            // Determine destination account based on payment method
+            let destinationAccount = null;
+            if (method && (method.toLowerCase().includes('bank'))) {
+                destinationAccount = await Account.findOne({ code: '1000' }); // Bank - Main Account
+            } else if (method && method.toLowerCase().includes('cash')) {
+                destinationAccount = await Account.findOne({ code: '1015' }); // Cash
+            }
             // Use '4000' (Rental Income - Residential) as default
             let rentAccount = await Account.findOne({ code: '4000' });
             // If residence is a school, use '4001'
@@ -452,7 +457,7 @@ const createPayment = async (req, res) => {
                 const schoolRent = await Account.findOne({ code: '4001' });
                 if (schoolRent) rentAccount = schoolRent;
             }
-            if (pettyCashAccount && rentAccount) {
+            if (destinationAccount && rentAccount) {
                 const txn = await Transaction.create({
                     date: payment.date,
                     description: 'Rentals Received',
@@ -461,13 +466,13 @@ const createPayment = async (req, res) => {
                     residenceName: residenceExists ? residenceExists.name : undefined
                 });
                 await TransactionEntry.insertMany([
-                    { transaction: txn._id, account: pettyCashAccount._id, debit: rent, credit: 0 },
+                    { transaction: txn._id, account: destinationAccount._id, debit: rent, credit: 0 },
                     { transaction: txn._id, account: rentAccount._id, debit: 0, credit: rent }
                 ]);
                 // --- Audit log for conversion ---
                 await AuditLog.create({
                     user: req.user._id,
-                    action: 'convert_to_petty_cash',
+                    action: 'convert_to_' + (destinationAccount.code === '1000' ? 'bank' : 'petty_cash'),
                     collection: 'Transaction',
                     recordId: txn._id,
                     before: null,
@@ -476,13 +481,13 @@ const createPayment = async (req, res) => {
                     details: {
                         source: 'Payment',
                         sourceId: payment._id,
-                        description: 'Admin payment converted to petty cash as Rentals Received'
+                        description: `Admin payment converted to ${(destinationAccount.code === '1000' ? 'bank' : 'petty cash')} as Rentals Received`
                     }
                 });
                 // --- End audit log ---
             }
         }
-        // --- End Petty Cash Transaction ---
+        // --- End Payment Transaction ---
 
         // Populate the response
         const populatedPayment = await Payment.findById(payment._id)
