@@ -450,9 +450,14 @@ const createPayment = async (req, res) => {
             receivingAccount = await Account.findOne({ code: '1015' }); // Cash
         }
         // Add more payment methods as needed
+        let rentAccount = await Account.findOne({ code: '4000' }); // Rental Income - Residential
+        if (residenceExists && residenceExists.name && residenceExists.name.toLowerCase().includes('school')) {
+            const schoolRent = await Account.findOne({ code: '4001' });
+            if (schoolRent) rentAccount = schoolRent;
+        }
         const studentAccount = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
         const studentName = studentExists ? `${studentExists.firstName} ${studentExists.lastName}` : 'Student';
-        if (receivingAccount && studentAccount && totalAmount > 0) {
+        if (receivingAccount && rentAccount && studentAccount && totalAmount > 0) {
             const txn = await Transaction.create({
                 date: payment.date,
                 description: `Payment: ${studentName} (${payment.paymentId}, ${payment.paymentMonth || ''})`,
@@ -470,29 +475,19 @@ const createPayment = async (req, res) => {
                 },
                 {
                     transaction: txn._id,
+                    account: rentAccount._id,
+                    debit: 0,
+                    credit: totalAmount,
+                    description: `Rental income from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                },
+                {
+                    transaction: txn._id,
                     account: studentAccount._id,
                     debit: 0,
                     credit: totalAmount,
                     description: `Paid by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
                 }
             ];
-            // For cash payments, also credit rental income as before
-            if (method && method.toLowerCase().includes('cash') && rent > 0) {
-                let rentAccount = await Account.findOne({ code: '4000' }); // Rental Income - Residential
-                if (residenceExists && residenceExists.name && residenceExists.name.toLowerCase().includes('school')) {
-                    const schoolRent = await Account.findOne({ code: '4001' });
-                    if (schoolRent) rentAccount = schoolRent;
-                }
-                if (rentAccount) {
-                    entries.push({
-                        transaction: txn._id,
-                        account: rentAccount._id,
-                        debit: 0,
-                        credit: rent,
-                        description: `Rental income from ${studentName} (cash, ${payment.paymentId}, ${payment.paymentMonth || ''})`
-                    });
-                }
-            }
             await TransactionEntry.insertMany(entries);
             // --- Audit log for conversion ---
             await AuditLog.create({
