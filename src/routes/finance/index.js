@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const { auth, checkAdminOrFinance } = require('../../middleware/auth');
 const User = require('../../models/User');
 const Residence = require('../../models/Residence');
@@ -15,6 +16,76 @@ router.use(auth);
 router.use(checkAdminOrFinance);
 router.use('/audit-log', auditLogRoutes);
 router.use('/petty-cash', pettyCashRoutes);
+
+// Get all users (for finance)
+router.get('/users', async (req, res) => {
+    try {
+        const { page = 1, limit = 10, search, role, status } = req.query;
+        const query = {};
+
+        // Add filters
+        if (role) {
+            query.role = role;
+        }
+
+        if (status) {
+            query.status = status;
+        }
+
+        if (search) {
+            query.$or = [
+                { firstName: { $regex: search, $options: 'i' } },
+                { lastName: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const skip = (page - 1) * limit;
+
+        const users = await User.find(query)
+            .select('-password')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        const total = await User.countDocuments(query);
+        const totalPages = Math.ceil(total / limit);
+
+        res.status(200).json({
+            users,
+            currentPage: parseInt(page),
+            totalPages,
+            total,
+            limit: parseInt(limit)
+        });
+    } catch (error) {
+        console.error('Error fetching users:', error);
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// Get specific user by ID (for finance)
+router.get('/users/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: 'Invalid user ID format' });
+        }
+
+        const user = await User.findById(id).select('-password');
+        
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        res.status(200).json(user);
+    } catch (error) {
+        console.error('Error fetching user:', error);
+        res.status(500).json({ message: error.message });
+    }
+});
 
 // Get all students with residence information (for finance)
 router.get('/students', async (req, res) => {
