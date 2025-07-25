@@ -77,6 +77,9 @@ router.get('/students', async (req, res) => {
             // Find all payments for this student
             const paymentHistory = await Payment.find({ student: s._id }).lean();
 
+            // Add paymentMonth to each payment in paymentHistory if present
+            const paymentHistoryWithMonth = paymentHistory.map(p => ({ ...p, paymentMonth: p.paymentMonth || null }));
+
             // Try to get residenceName, room, and billingPeriod from the latest lease or application
             let residenceName = null;
             let room = null;
@@ -115,7 +118,7 @@ router.get('/students', async (req, res) => {
             }
 
             // Calculate paid adminFee and deposit from payments
-            paymentHistory.forEach(p => {
+            paymentHistoryWithMonth.forEach(p => {
                 if (p.adminFee) adminFeePaid += p.adminFee;
                 if (p.deposit) depositPaid += p.deposit;
             });
@@ -125,7 +128,7 @@ router.get('/students', async (req, res) => {
             return {
                 ...s,
                 leases,
-                paymentHistory,
+                paymentHistory: paymentHistoryWithMonth,
                 residenceName,
                 room,
                 billingPeriod,
