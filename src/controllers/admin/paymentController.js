@@ -488,7 +488,13 @@ const createPayment = async (req, res) => {
                     description: `Paid by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
                 }
             ];
-            await TransactionEntry.insertMany(entries);
+            await TransactionEntry.insertMany(entries).then(async (createdEntries) => {
+                // Link entries to the transaction
+                await Transaction.findByIdAndUpdate(
+                    txn._id,
+                    { $push: { entries: { $each: createdEntries.map(e => e._id) } } }
+                );
+            });
             // --- Audit log for conversion ---
             await AuditLog.create({
                 user: req.user._id,
