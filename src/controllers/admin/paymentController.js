@@ -442,65 +442,74 @@ const createPayment = async (req, res) => {
         });
 
         // --- Payment Transaction for Rentals Received ---
-        if (method && method.toLowerCase().includes('cash') && rent > 0) {
-            // Find Cash, Rental Income, and Student accounts
-            const cashAccount = await Account.findOne({ code: '1015' }); // Cash
-            let rentAccount = await Account.findOne({ code: '4000' }); // Rental Income - Residential
-            const studentAccount = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
-            // If residence is a school, use '4001'
-            if (residenceExists && residenceExists.name && residenceExists.name.toLowerCase().includes('school')) {
-                const schoolRent = await Account.findOne({ code: '4001' });
-                if (schoolRent) rentAccount = schoolRent;
-            }
-            const studentName = studentExists ? `${studentExists.firstName} ${studentExists.lastName}` : 'Student';
-            if (cashAccount && rentAccount && studentAccount) {
-                const txn = await Transaction.create({
-                    date: payment.date,
-                    description: `Cash Payment: ${studentName} (${payment.paymentId}, ${payment.paymentMonth || ''})`,
-                    reference: payment.paymentId,
-                    residence: payment.residence,
-                    residenceName: residenceExists ? residenceExists.name : undefined
-                });
-                await TransactionEntry.insertMany([
-                    {
-                        transaction: txn._id,
-                        account: cashAccount._id,
-                        debit: rent,
-                        credit: 0,
-                        description: `Cash received from ${studentName} for rent (${payment.paymentId}, ${payment.paymentMonth || ''})`
-                    },
-                    {
+        // Always create a double-entry transaction for every payment
+        let receivingAccount = null;
+        if (method && method.toLowerCase().includes('bank')) {
+            receivingAccount = await Account.findOne({ code: '1000' }); // Bank
+        } else if (method && method.toLowerCase().includes('cash')) {
+            receivingAccount = await Account.findOne({ code: '1015' }); // Cash
+        }
+        // Add more payment methods as needed
+        const studentAccount = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
+        const studentName = studentExists ? `${studentExists.firstName} ${studentExists.lastName}` : 'Student';
+        if (receivingAccount && studentAccount && totalAmount > 0) {
+            const txn = await Transaction.create({
+                date: payment.date,
+                description: `Payment: ${studentName} (${payment.paymentId}, ${payment.paymentMonth || ''})`,
+                reference: payment.paymentId,
+                residence: payment.residence,
+                residenceName: residenceExists ? residenceExists.name : undefined
+            });
+            const entries = [
+                {
+                    transaction: txn._id,
+                    account: receivingAccount._id,
+                    debit: totalAmount,
+                    credit: 0,
+                    description: `Received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                },
+                {
+                    transaction: txn._id,
+                    account: studentAccount._id,
+                    debit: 0,
+                    credit: totalAmount,
+                    description: `Paid by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                }
+            ];
+            // For cash payments, also credit rental income as before
+            if (method && method.toLowerCase().includes('cash') && rent > 0) {
+                let rentAccount = await Account.findOne({ code: '4000' }); // Rental Income - Residential
+                if (residenceExists && residenceExists.name && residenceExists.name.toLowerCase().includes('school')) {
+                    const schoolRent = await Account.findOne({ code: '4001' });
+                    if (schoolRent) rentAccount = schoolRent;
+                }
+                if (rentAccount) {
+                    entries.push({
                         transaction: txn._id,
                         account: rentAccount._id,
                         debit: 0,
                         credit: rent,
                         description: `Rental income from ${studentName} (cash, ${payment.paymentId}, ${payment.paymentMonth || ''})`
-                    },
-                    {
-                        transaction: txn._id,
-                        account: studentAccount._id,
-                        debit: 0,
-                        credit: rent,
-                        description: `Paid by ${studentName} (cash, ${payment.paymentId}, ${payment.paymentMonth || ''})`
-                    }
-                ]);
-                // --- Audit log for conversion ---
-                await AuditLog.create({
-                    user: req.user._id,
-                    action: 'convert_to_cash',
-                    collection: 'Transaction',
-                    recordId: txn._id,
-                    before: null,
-                    after: txn.toObject(),
-                    timestamp: new Date(),
-                    details: {
-                        source: 'Payment',
-                        sourceId: payment._id,
-                        description: `Admin payment converted to cash as Rentals Received for ${studentName}`
-                    }
-                });
-                // --- End audit log ---
+                    });
+                }
             }
+            await TransactionEntry.insertMany(entries);
+            // --- Audit log for conversion ---
+            await AuditLog.create({
+                user: req.user._id,
+                action: 'convert_to_' + (receivingAccount.code === '1000' ? 'bank' : (receivingAccount.code === '1015' ? 'cash' : 'other')),
+                collection: 'Transaction',
+                recordId: txn._id,
+                before: null,
+                after: txn.toObject(),
+                timestamp: new Date(),
+                details: {
+                    source: 'Payment',
+                    sourceId: payment._id,
+                    description: `Admin payment converted to ${receivingAccount.name} as Payment for ${studentName}`
+                }
+            });
+            // --- End audit log ---
         }
         // --- End Payment Transaction ---
 
