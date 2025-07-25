@@ -43,7 +43,7 @@ router.get('/users', async (req, res) => {
         const skip = (page - 1) * limit;
 
         const users = await User.find(query)
-            .select('-password')
+            .select('firstName lastName email role status createdAt isVerified phone applicationCode currentRoom roomValidUntil roomApprovalDate residence emergencyContact lastLogin')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
