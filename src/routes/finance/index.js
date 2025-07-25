@@ -60,6 +60,7 @@ router.get('/students', async (req, res) => {
             let depositRequired = 0;
             let adminFeePaid = 0;
             let depositPaid = 0;
+            let application = null;
 
             if (leases.length > 0) {
                 const latestLease = leases[leases.length - 1];
@@ -76,7 +77,7 @@ router.get('/students', async (req, res) => {
                 depositRequired = latestLease.deposit || 0;
             } else {
                 // Fallback to latest approved application
-                const application = await Application.findOne({ student: s._id, status: 'approved' })
+                application = await Application.findOne({ student: s._id, status: 'approved' })
                     .sort({ createdAt: -1 })
                     .populate('residence', 'name')
                     .lean();
@@ -111,7 +112,8 @@ router.get('/students', async (req, res) => {
                 room,
                 billingPeriod,
                 unpaidAdminFee,
-                unpaidDeposit
+                unpaidDeposit,
+                application // attach application object
             };
         }));
 
