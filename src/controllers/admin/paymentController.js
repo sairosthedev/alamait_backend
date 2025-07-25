@@ -457,7 +457,10 @@ const createPayment = async (req, res) => {
                 const schoolRent = await Account.findOne({ code: '4001' });
                 if (schoolRent) rentAccount = schoolRent;
             }
-            if (destinationAccount && rentAccount) {
+            // Student account (Accounts Receivable - Tenants)
+            const studentAccount = await Account.findOne({ code: '1100' });
+            const studentName = studentExists ? `${studentExists.firstName} ${studentExists.lastName}` : 'Student';
+            if (destinationAccount && rentAccount && studentAccount) {
                 const txn = await Transaction.create({
                     date: payment.date,
                     description: 'Rentals Received',
@@ -466,8 +469,20 @@ const createPayment = async (req, res) => {
                     residenceName: residenceExists ? residenceExists.name : undefined
                 });
                 await TransactionEntry.insertMany([
-                    { transaction: txn._id, account: destinationAccount._id, debit: rent, credit: 0 },
-                    { transaction: txn._id, account: rentAccount._id, debit: 0, credit: rent }
+                    {
+                        transaction: txn._id,
+                        account: destinationAccount._id,
+                        debit: rent,
+                        credit: 0,
+                        description: `Received from ${studentName}`
+                    },
+                    {
+                        transaction: txn._id,
+                        account: studentAccount._id,
+                        debit: 0,
+                        credit: rent,
+                        description: `Paid by ${studentName}`
+                    }
                 ]);
                 // --- Audit log for conversion ---
                 await AuditLog.create({
