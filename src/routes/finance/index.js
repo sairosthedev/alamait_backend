@@ -46,6 +46,21 @@ router.get('/students', async (req, res) => {
             .limit(parseInt(limit))
             .lean();
 
+        // Fetch all applications for these students in one query
+        const studentIds = students.map(s => s._id.toString());
+        const applications = await Application.find({ student: { $in: studentIds }, status: 'approved' })
+            .sort({ createdAt: -1 })
+            .populate('residence', 'name')
+            .lean();
+        // Map latest application by student ID
+        const appMap = {};
+        applications.forEach(app => {
+            const sid = app.student.toString();
+            if (!appMap[sid] || new Date(app.createdAt) > new Date(appMap[sid].createdAt)) {
+                appMap[sid] = app;
+            }
+        });
+
         const studentsWithDetails = await Promise.all(students.map(async s => {
             // Find all leases for this student
             const leases = await Lease.find({ student: s._id }).populate('residence', 'name').lean();
@@ -60,7 +75,7 @@ router.get('/students', async (req, res) => {
             let depositRequired = 0;
             let adminFeePaid = 0;
             let depositPaid = 0;
-            let application = null;
+            let application = appMap[s._id.toString()] || null;
 
             if (leases.length > 0) {
                 const latestLease = leases[leases.length - 1];
@@ -75,25 +90,18 @@ router.get('/students', async (req, res) => {
                 }
                 adminFeeRequired = latestLease.adminFee || 0;
                 depositRequired = latestLease.deposit || 0;
-            } else {
-                // Fallback to latest approved application
-                application = await Application.findOne({ student: s._id, status: 'approved' })
-                    .sort({ createdAt: -1 })
-                    .populate('residence', 'name')
-                    .lean();
-                if (application) {
-                    room = application.allocatedRoom || null;
-                    residenceName = application.residence?.name || null;
-                    if (application.startDate && application.endDate) {
-                        const start = new Date(application.startDate);
-                        const end = new Date(application.endDate);
-                        const startStr = start.toLocaleString('default', { month: 'long', year: 'numeric' });
-                        const endStr = end.toLocaleString('default', { month: 'long', year: 'numeric' });
-                        billingPeriod = `${startStr} - ${endStr}`;
-                    }
-                    adminFeeRequired = application.adminFee || 0;
-                    depositRequired = application.deposit || 0;
+            } else if (application) {
+                room = application.allocatedRoom || null;
+                residenceName = application.residence?.name || null;
+                if (application.startDate && application.endDate) {
+                    const start = new Date(application.startDate);
+                    const end = new Date(application.endDate);
+                    const startStr = start.toLocaleString('default', { month: 'long', year: 'numeric' });
+                    const endStr = end.toLocaleString('default', { month: 'long', year: 'numeric' });
+                    billingPeriod = `${startStr} - ${endStr}`;
                 }
+                adminFeeRequired = application.adminFee || 0;
+                depositRequired = application.deposit || 0;
             }
 
             // Calculate paid adminFee and deposit from payments
