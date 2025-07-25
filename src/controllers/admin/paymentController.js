@@ -442,7 +442,7 @@ const createPayment = async (req, res) => {
         });
 
         // --- Payment Transaction for Rentals Received ---
-        // Always create a double-entry transaction for every payment
+        // Always create a transaction for every payment
         let receivingAccount = null;
         if (method && method.toLowerCase().includes('bank')) {
             receivingAccount = await Account.findOne({ code: '1000' }); // Bank
