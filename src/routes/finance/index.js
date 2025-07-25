@@ -54,10 +54,21 @@ router.get('/students', async (req, res) => {
             .lean();
         // Map all applications by student ID
         const allAppsMap = {};
+        // Fetch all residences for room price lookup
+        const allResidences = await Residence.find({}).lean();
         applications.forEach(app => {
             const sid = app.student?.toString();
             if (!allAppsMap[sid]) allAppsMap[sid] = [];
-            allAppsMap[sid].push(app);
+            // Attach room price if possible
+            let roomPrice = null;
+            if (app.allocatedRoom && app.residence && app.residence._id) {
+                const residence = allResidences.find(r => r._id.toString() === app.residence._id.toString());
+                if (residence && Array.isArray(residence.rooms)) {
+                    const roomObj = residence.rooms.find(rm => rm.roomNumber === app.allocatedRoom);
+                    if (roomObj && roomObj.price) roomPrice = roomObj.price;
+                }
+            }
+            allAppsMap[sid].push({ ...app, roomPrice });
         });
 
         const studentsWithDetails = await Promise.all(students.map(async s => {
