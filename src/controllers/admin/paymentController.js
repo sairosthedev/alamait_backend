@@ -471,6 +471,7 @@ const createPayment = async (req, res) => {
                     account: receivingAccount._id,
                     debit: totalAmount,
                     credit: 0,
+                    type: receivingAccount.type || 'asset',
                     description: `Received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
                 },
                 {
@@ -478,6 +479,7 @@ const createPayment = async (req, res) => {
                     account: rentAccount._id,
                     debit: 0,
                     credit: totalAmount,
+                    type: rentAccount.type || 'income',
                     description: `Rental income from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
                 },
                 {
@@ -485,6 +487,7 @@ const createPayment = async (req, res) => {
                     account: studentAccount._id,
                     debit: 0,
                     credit: totalAmount,
+                    type: studentAccount.type || 'asset',
                     description: `Paid by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
                 }
             ];
