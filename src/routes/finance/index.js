@@ -56,6 +56,11 @@ router.get('/students', async (req, res) => {
             let residenceName = null;
             let room = null;
             let billingPeriod = null;
+            let adminFeeRequired = 0;
+            let depositRequired = 0;
+            let adminFeePaid = 0;
+            let depositPaid = 0;
+
             if (leases.length > 0) {
                 const latestLease = leases[leases.length - 1];
                 residenceName = latestLease.residence?.name || null;
@@ -67,12 +72,17 @@ router.get('/students', async (req, res) => {
                     const endStr = end.toLocaleString('default', { month: 'long', year: 'numeric' });
                     billingPeriod = `${startStr} - ${endStr}`;
                 }
+                adminFeeRequired = latestLease.adminFee || 0;
+                depositRequired = latestLease.deposit || 0;
             } else {
                 // Fallback to latest approved application
-                const application = await Application.findOne({ student: s._id, status: 'approved' }).sort({ createdAt: -1 }).lean();
+                const application = await Application.findOne({ student: s._id, status: 'approved' })
+                    .sort({ createdAt: -1 })
+                    .populate('residence', 'name')
+                    .lean();
                 if (application) {
                     room = application.allocatedRoom || null;
-                    residenceName = application.residence || null;
+                    residenceName = application.residence?.name || null;
                     if (application.startDate && application.endDate) {
                         const start = new Date(application.startDate);
                         const end = new Date(application.endDate);
@@ -80,8 +90,18 @@ router.get('/students', async (req, res) => {
                         const endStr = end.toLocaleString('default', { month: 'long', year: 'numeric' });
                         billingPeriod = `${startStr} - ${endStr}`;
                     }
+                    adminFeeRequired = application.adminFee || 0;
+                    depositRequired = application.deposit || 0;
                 }
             }
+
+            // Calculate paid adminFee and deposit from payments
+            paymentHistory.forEach(p => {
+                if (p.adminFee) adminFeePaid += p.adminFee;
+                if (p.deposit) depositPaid += p.deposit;
+            });
+            const unpaidAdminFee = Math.max(0, adminFeeRequired - adminFeePaid);
+            const unpaidDeposit = Math.max(0, depositRequired - depositPaid);
 
             return {
                 ...s,
@@ -89,7 +109,9 @@ router.get('/students', async (req, res) => {
                 paymentHistory,
                 residenceName,
                 room,
-                billingPeriod
+                billingPeriod,
+                unpaidAdminFee,
+                unpaidDeposit
             };
         }));
 
