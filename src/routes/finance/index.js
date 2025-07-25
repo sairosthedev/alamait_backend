@@ -52,13 +52,35 @@ router.get('/students', async (req, res) => {
             // Find all payments for this student
             const paymentHistory = await Payment.find({ student: s._id }).lean();
 
-            // Try to get residenceName and room from the latest lease
+            // Try to get residenceName, room, and billingPeriod from the latest lease or application
             let residenceName = null;
             let room = null;
+            let billingPeriod = null;
             if (leases.length > 0) {
                 const latestLease = leases[leases.length - 1];
                 residenceName = latestLease.residence?.name || null;
                 room = latestLease.room || null;
+                if (latestLease.startDate && latestLease.endDate) {
+                    const start = new Date(latestLease.startDate);
+                    const end = new Date(latestLease.endDate);
+                    const startStr = start.toLocaleString('default', { month: 'long', year: 'numeric' });
+                    const endStr = end.toLocaleString('default', { month: 'long', year: 'numeric' });
+                    billingPeriod = `${startStr} - ${endStr}`;
+                }
+            } else {
+                // Fallback to latest approved application
+                const application = await Application.findOne({ student: s._id, status: 'approved' }).sort({ createdAt: -1 }).lean();
+                if (application) {
+                    room = application.allocatedRoom || null;
+                    residenceName = application.residence || null;
+                    if (application.startDate && application.endDate) {
+                        const start = new Date(application.startDate);
+                        const end = new Date(application.endDate);
+                        const startStr = start.toLocaleString('default', { month: 'long', year: 'numeric' });
+                        const endStr = end.toLocaleString('default', { month: 'long', year: 'numeric' });
+                        billingPeriod = `${startStr} - ${endStr}`;
+                    }
+                }
             }
 
             return {
@@ -66,7 +88,8 @@ router.get('/students', async (req, res) => {
                 leases,
                 paymentHistory,
                 residenceName,
-                room
+                room,
+                billingPeriod
             };
         }));
 
