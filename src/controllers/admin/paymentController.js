@@ -457,7 +457,9 @@ const createPayment = async (req, res) => {
         }
         const studentAccount = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
         const studentName = studentExists ? `${studentExists.firstName} ${studentExists.lastName}` : 'Student';
+        
         if (receivingAccount && rentAccount && studentAccount && totalAmount > 0) {
+            // Create the main transaction
             const txn = await Transaction.create({
                 date: payment.date,
                 description: `Payment: ${studentName} (${payment.paymentId}, ${payment.paymentMonth || ''})`,
@@ -465,6 +467,8 @@ const createPayment = async (req, res) => {
                 residence: payment.residence,
                 residenceName: residenceExists ? residenceExists.name : undefined
             });
+
+            // Create transaction entries for double-entry accounting
             const entries = [
                 {
                     transaction: txn._id,
@@ -491,14 +495,17 @@ const createPayment = async (req, res) => {
                     description: `Paid by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
                 }
             ];
-            await TransactionEntry.insertMany(entries).then(async (createdEntries) => {
-                // Link entries to the transaction
-                await Transaction.findByIdAndUpdate(
-                    txn._id,
-                    { $push: { entries: { $each: createdEntries.map(e => e._id) } } }
-                );
-            });
-            // --- Audit log for conversion ---
+
+            // Insert all transaction entries into the TransactionEntry collection
+            const createdEntries = await TransactionEntry.insertMany(entries);
+            
+            // Link the created entries to the main transaction
+            await Transaction.findByIdAndUpdate(
+                txn._id,
+                { $push: { entries: { $each: createdEntries.map(e => e._id) } } }
+            );
+
+            // Audit log for the conversion
             await AuditLog.create({
                 user: req.user._id,
                 action: 'convert_to_' + (receivingAccount.code === '1000' ? 'bank' : (receivingAccount.code === '1015' ? 'cash' : 'other')),
@@ -510,10 +517,14 @@ const createPayment = async (req, res) => {
                 details: {
                     source: 'Payment',
                     sourceId: payment._id,
-                    description: `Admin payment converted to ${receivingAccount.name} as Payment for ${studentName}`
+                    description: `Admin payment converted to ${receivingAccount.name} as Payment for ${studentName}`,
+                    entriesCreated: createdEntries.length
                 }
             });
-            // --- End audit log ---
+
+            console.log(`Payment ${payment.paymentId} converted to transaction ${txn._id} with ${createdEntries.length} entries`);
+        } else {
+            console.log(`Skipping transaction creation for payment ${payment.paymentId} - missing accounts or zero amount`);
         }
         // --- End Payment Transaction ---
 
