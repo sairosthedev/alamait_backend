@@ -48,17 +48,16 @@ router.get('/students', async (req, res) => {
 
         // Fetch all applications for these students in one query
         const studentIds = students.map(s => s._id.toString());
-        const applications = await Application.find({ student: { $in: studentIds }, status: 'approved' })
+        const applications = await Application.find({ student: { $in: studentIds } })
             .sort({ createdAt: -1 })
             .populate('residence', 'name')
             .lean();
-        // Map latest application by student ID
-        const appMap = {};
+        // Map all applications by student ID
+        const allAppsMap = {};
         applications.forEach(app => {
-            const sid = app.student.toString();
-            if (!appMap[sid] || new Date(app.createdAt) > new Date(appMap[sid].createdAt)) {
-                appMap[sid] = app;
-            }
+            const sid = app.student?.toString();
+            if (!allAppsMap[sid]) allAppsMap[sid] = [];
+            allAppsMap[sid].push(app);
         });
 
         const studentsWithDetails = await Promise.all(students.map(async s => {
@@ -75,7 +74,7 @@ router.get('/students', async (req, res) => {
             let depositRequired = 0;
             let adminFeePaid = 0;
             let depositPaid = 0;
-            let application = appMap[s._id.toString()] || null;
+            let application = allAppsMap[s._id.toString()]?.[0] || null; // latest approved application
 
             if (leases.length > 0) {
                 const latestLease = leases[leases.length - 1];
@@ -121,7 +120,8 @@ router.get('/students', async (req, res) => {
                 billingPeriod,
                 unpaidAdminFee,
                 unpaidDeposit,
-                application // attach application object
+                application, // latest approved application
+                applications: allAppsMap[s._id.toString()] || [] // all applications
             };
         }));
 
