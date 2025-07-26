@@ -2,13 +2,14 @@ const OtherIncome = require('../../models/finance/OtherIncome');
 const { generateUniqueId } = require('../../utils/idGenerator');
 const { validateMongoId } = require('../../utils/validators');
 const { createAuditLog } = require('../../utils/auditLogger');
+const { getPettyCashAccountByRole } = require('../../utils/pettyCashUtils');
 // Payment/receipt method to Account Code mapping (reuse or define as in expenseController)
 const RECEIPT_METHOD_TO_ACCOUNT_CODE = {
   'Cash': '1000', // Bank - Main Account (assuming cash is handled here)
   'Bank Transfer': '1000', // Bank - Main Account
   'Ecocash': '3000', // Owner's Capital (placeholder, update if you have Ecocash account)
   'Innbucks': '4000', // Rental Income - Residential (placeholder, update if you have Innbucks account)
-  'Petty Cash': '1010', // Petty Cash
+  // Petty Cash accounts will be determined by user role dynamically
   // Add more as needed
 };
 const CATEGORY_TO_INCOME_ACCOUNT = {
@@ -224,10 +225,18 @@ exports.createOtherIncome = async (req, res) => {
         if (newOtherIncome.paymentStatus === 'Received') {
           try {
             const paymentMethod = newOtherIncome.paymentMethod || 'Petty Cash';
-            const destAccountCode = RECEIPT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1010';
-            const destAccount = await Account.findOne({ code: destAccountCode });
+            let destAccount;
+            
+            if (paymentMethod === 'Petty Cash') {
+                // Get role-specific petty cash account
+                destAccount = await getPettyCashAccountByRole(req.user.role);
+            } else {
+                // Use the mapping for other payment methods
+                const destAccountCode = RECEIPT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1000'; // Default to Bank
+                destAccount = await Account.findOne({ code: destAccountCode });
+            }
             if (!destAccount) {
-              console.error('[Income] Destination account not found for payment method:', paymentMethod, 'using code:', destAccountCode);
+              console.error('[Income] Destination account not found for payment method:', paymentMethod);
               throw new Error('Destination account not found for payment method: ' + paymentMethod);
             }
             const mappedIncomeAccountName = CATEGORY_TO_INCOME_ACCOUNT[newOtherIncome.category] || newOtherIncome.category;

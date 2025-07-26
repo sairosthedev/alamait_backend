@@ -7,7 +7,11 @@ const accounts = [
   // Assets
   { code: '1000', name: 'Bank - Main Account', type: 'Asset' },
   { code: '1005', name: 'Bank - Rent Deposits Account', type: 'Asset' },
-  { code: '1010', name: 'Petty Cash', type: 'Asset' },
+  { code: '1010', name: 'General Petty Cash', type: 'Asset' },
+  { code: '1011', name: 'Admin Petty Cash', type: 'Asset' },
+  { code: '1012', name: 'Finance Petty Cash', type: 'Asset' },
+  { code: '1013', name: 'Property Manager Petty Cash', type: 'Asset' },
+  { code: '1014', name: 'Maintenance Petty Cash', type: 'Asset' },
   { code: '1015', name: 'Cash', type: 'Asset' },
   { code: '1100', name: 'Accounts Receivable - Tenants', type: 'Asset' },
   { code: '1105', name: 'Prepaid Expenses', type: 'Asset' },

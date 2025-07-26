@@ -6,6 +6,7 @@ const AuditLog = require('../../models/AuditLog');
 const Transaction = require('../../models/Transaction');
 const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
+const { getPettyCashAccountByRole } = require('../../utils/pettyCashUtils');
 
 // Category to Account Name mapping for Expense linkage
 const CATEGORY_TO_ACCOUNT = {
@@ -24,7 +25,7 @@ const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
   'Bank Transfer': '1000', // Bank - Main Account
   'Ecocash': '3000', // Owner's Capital (placeholder, update if you have Ecocash account)
   'Innbucks': '4000', // Rental Income - Residential (placeholder, update if you have Innbucks account)
-  'Petty Cash': '1010', // Petty Cash
+  // Petty Cash accounts will be determined by user role dynamically
   // Add more as needed
 };
 
@@ -532,10 +533,18 @@ exports.approveExpense = async (req, res) => {
             console.log('[Payment] Attempting to create payment transaction for expense:', updatedExpense._id, 'category:', updatedExpense.category);
             // Determine source account based on payment method
             const paymentMethod = updatedExpense.paymentMethod || 'Bank Transfer';
-            const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1000'; // Default to Bank
-            const sourceAccount = await Account.findOne({ code: sourceAccountCode });
+            let sourceAccount;
+            
+            if (paymentMethod === 'Petty Cash') {
+                // Get role-specific petty cash account
+                sourceAccount = await getPettyCashAccountByRole(req.user.role);
+            } else {
+                // Use the mapping for other payment methods
+                const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1000'; // Default to Bank
+                sourceAccount = await Account.findOne({ code: sourceAccountCode });
+            }
             if (!sourceAccount) {
-                console.error('[Payment] Source account not found for payment method:', paymentMethod, 'using code:', sourceAccountCode);
+                console.error('[Payment] Source account not found for payment method:', paymentMethod);
                 throw new Error('Source account not found for payment method: ' + paymentMethod);
             }
             let expenseAccount = null;

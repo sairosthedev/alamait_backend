@@ -7,6 +7,7 @@ const Transaction = require('../../models/Transaction');
 const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
 const mongoose = require('mongoose');
+const { getPettyCashAccountByRole } = require('../../utils/pettyCashUtils');
 
 // Get all petty cash allocations
 const getAllPettyCash = async (req, res) => {
@@ -123,7 +124,7 @@ const allocatePettyCash = async (req, res) => {
         await pettyCash.save();
 
         // Create double-entry transaction for petty cash allocation
-        const pettyCashAccount = await Account.findOne({ code: '1010' }); // Petty Cash account
+        const pettyCashAccount = await getPettyCashAccountByRole(user.role); // Get role-specific petty cash account
         const bankAccount = await Account.findOne({ code: '1000' }); // Bank account
         const cashAccount = await Account.findOne({ code: '1015' }); // Cash account
 
@@ -316,7 +317,9 @@ const createPettyCashUsage = async (req, res) => {
         await pettyCash.save();
 
         // Create double-entry transaction for petty cash usage
-        const pettyCashAccount = await Account.findOne({ code: '1010' }); // Petty Cash account
+        // Get the user's role to determine the appropriate petty cash account
+        const pettyCashUser = await User.findById(pettyCash.user);
+        const pettyCashAccount = await getPettyCashAccountByRole(pettyCashUser.role); // Get role-specific petty cash account
         
         // Map category to appropriate expense account
         let expenseAccount = null;
@@ -480,7 +483,7 @@ const createPettyCashEntry = async (req, res) => {
         }
 
         // Find accounts
-        const pettyCashAccount = await Account.findOne({ code: '1010' }); // Petty Cash account
+        const pettyCashAccount = await getPettyCashAccountByRole(userRole); // Get role-specific petty cash account
         
         // Map category to appropriate expense account
         let expenseAccount = null;
@@ -579,7 +582,7 @@ const createPettyCashEntry = async (req, res) => {
 // Get petty cash balance and transactions
 const getPettyCashBalance = async (req, res) => {
     try {
-        const pettyCashAccount = await Account.findOne({ code: '1010' }); // Petty Cash account
+        const pettyCashAccount = await getPettyCashAccountByRole(req.user.role); // Get role-specific petty cash account
         
         if (!pettyCashAccount) {
             return res.status(404).json({ message: 'Petty cash account not found' });
