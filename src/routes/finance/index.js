@@ -74,7 +74,7 @@ router.get('/users/:id', async (req, res) => {
             return res.status(400).json({ message: 'Invalid user ID format' });
         }
 
-        const user = await User.findById(id).select('-password');
+        const user = await User.findById(id).select('firstName lastName email role status createdAt isVerified phone applicationCode currentRoom roomValidUntil roomApprovalDate residence emergencyContact lastLogin');
         
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
