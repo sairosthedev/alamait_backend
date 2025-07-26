@@ -87,7 +87,7 @@ exports.getStudentPayments = async (req, res) => {
 
         // Query the database directly without pagination to better match admin method
         const payments = await Payment.find(query)
-            .populate('student', 'firstName lastName email')
+            .populate('student', 'firstName lastName email role')
             .populate('residence', 'name location')
             .populate('createdBy', 'firstName lastName')
             .populate('updatedBy', 'firstName lastName')
@@ -398,7 +398,7 @@ exports.getPaymentsByStudent = async (req, res) => {
 const findStudentById = async (studentId) => {
     try {
         // First, try to find in User collection
-        let student = await User.findById(studentId).select('firstName lastName email');
+        let student = await User.findById(studentId).select('firstName lastName email role');
         if (student) {
             return { student, source: 'User' };
         }
@@ -419,7 +419,7 @@ const findStudentById = async (studentId) => {
 
         // If not found in Application, try to find by email in User collection
         if (studentId.includes('@')) {
-            student = await User.findOne({ email: studentId }).select('firstName lastName email');
+            student = await User.findOne({ email: studentId }).select('firstName lastName email role');
             if (student) {
                 return { student, source: 'User (by email)' };
             }
@@ -442,13 +442,13 @@ const findStudentById = async (studentId) => {
         }
 
         // If still not found, try to find by looking up payments for this student ID
-        const payment = await Payment.findOne({ student: studentId }).populate('student', 'firstName lastName email');
+        const payment = await Payment.findOne({ student: studentId }).populate('student', 'firstName lastName email role');
         if (payment && payment.student) {
             return { student: payment.student, source: 'Payment' };
         }
 
         // If not found in payments, try to find by looking up leases for this student ID
-        const lease = await Lease.findOne({ studentId }).populate('studentId', 'firstName lastName email');
+        const lease = await Lease.findOne({ studentId }).populate('studentId', 'firstName lastName email role');
         if (lease && lease.studentId) {
             return { student: lease.studentId, source: 'Lease' };
         }
@@ -457,7 +457,7 @@ const findStudentById = async (studentId) => {
         const paymentByStudentField = await Payment.findOne({ student: studentId });
         if (paymentByStudentField) {
             // Try to find the actual student record
-            const actualStudent = await User.findById(studentId).select('firstName lastName email');
+            const actualStudent = await User.findById(studentId).select('firstName lastName email role');
             if (actualStudent) {
                 return { student: actualStudent, source: 'Payment -> User' };
             }

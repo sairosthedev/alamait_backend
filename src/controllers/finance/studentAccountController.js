@@ -4,7 +4,8 @@ const Lease = require('../../models/Lease');
 
 exports.getAllStudentAccounts = async (req, res) => {
   try {
-    const students = await User.find({ role: 'student' });
+    const students = await User.find({ role: 'student' })
+      .select('firstName lastName email role status createdAt');
 
     const results = await Promise.all(students.map(async (student) => {
       // Find all leases for the student
@@ -35,6 +36,9 @@ exports.getAllStudentAccounts = async (req, res) => {
       return {
         studentId: student._id,
         studentName: `${student.firstName} ${student.lastName}`,
+        studentEmail: student.email,
+        studentRole: student.role,
+        studentStatus: student.status,
         totalDue,
         totalPaid,
         amountOwed,

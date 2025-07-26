@@ -128,7 +128,7 @@ exports.getLeaseStats = async (req, res) => {
             .sort({ createdAt: -1 })
             .limit(5)
             .populate('residence', 'name')
-            .populate('studentId', 'firstName lastName')
+            .populate('studentId', 'firstName lastName email role')
             .lean();
 
         const formattedRecentLeases = recentLeases.map(lease => ({
@@ -164,7 +164,7 @@ exports.getLeasesByStudent = async (req, res) => {
         }
 
         // Check if student exists
-        const student = await User.findById(studentId).select('firstName lastName email');
+        const student = await User.findById(studentId).select('firstName lastName email role');
         if (!student) {
             return res.status(404).json({ error: 'Student not found' });
         }
