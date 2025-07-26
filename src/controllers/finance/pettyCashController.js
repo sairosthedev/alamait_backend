@@ -122,15 +122,19 @@ const allocatePettyCash = async (req, res) => {
 
         await pettyCash.save();
 
-        // Create transaction entry for petty cash allocation
+        // Create double-entry transaction for petty cash allocation
         const pettyCashAccount = await Account.findOne({ code: '1010' }); // Petty Cash account
         const bankAccount = await Account.findOne({ code: '1000' }); // Bank account
+        const cashAccount = await Account.findOne({ code: '1015' }); // Cash account
 
-        if (pettyCashAccount && bankAccount) {
+        if (pettyCashAccount && (bankAccount || cashAccount)) {
+            // Determine source account (prefer bank, fallback to cash)
+            const sourceAccount = bankAccount || cashAccount;
+            
             const txn = await Transaction.create({
                 date: new Date(),
                 description: `Petty Cash Allocation: ${user.firstName} ${user.lastName}`,
-                reference: `PC-${pettyCash._id}`,
+                reference: `PC-ALLOC-${pettyCash._id}`,
                 residence: null
             });
 
@@ -140,16 +144,16 @@ const allocatePettyCash = async (req, res) => {
                     account: pettyCashAccount._id,
                     debit: amount,
                     credit: 0,
-                    type: pettyCashAccount.type || 'asset',
+                    type: (pettyCashAccount.type || 'asset').toLowerCase(),
                     description: `Petty cash allocated to ${user.firstName} ${user.lastName}`
                 },
                 {
                     transaction: txn._id,
-                    account: bankAccount._id,
+                    account: sourceAccount._id,
                     debit: 0,
                     credit: amount,
-                    type: bankAccount.type || 'asset',
-                    description: `Bank transfer for petty cash to ${user.firstName} ${user.lastName}`
+                    type: (sourceAccount.type || 'asset').toLowerCase(),
+                    description: `${sourceAccount.name} transfer for petty cash to ${user.firstName} ${user.lastName}`
                 }
             ];
 
@@ -311,6 +315,70 @@ const createPettyCashUsage = async (req, res) => {
         pettyCash.usedAmount += amount;
         await pettyCash.save();
 
+        // Create double-entry transaction for petty cash usage
+        const pettyCashAccount = await Account.findOne({ code: '1010' }); // Petty Cash account
+        
+        // Map category to appropriate expense account
+        let expenseAccount = null;
+        switch (category.toLowerCase()) {
+            case 'maintenance':
+                expenseAccount = await Account.findOne({ code: '5000' }); // Maintenance Expense
+                break;
+            case 'utilities':
+                expenseAccount = await Account.findOne({ code: '5001' }); // Utilities Expense
+                break;
+            case 'supplies':
+                expenseAccount = await Account.findOne({ code: '5002' }); // Supplies Expense
+                break;
+            case 'transportation':
+                expenseAccount = await Account.findOne({ code: '5003' }); // Transportation Expense
+                break;
+            case 'meals':
+                expenseAccount = await Account.findOne({ code: '5004' }); // Meals Expense
+                break;
+            default:
+                expenseAccount = await Account.findOne({ code: '5099' }); // Other Expenses
+        }
+
+        if (pettyCashAccount && expenseAccount) {
+            const txn = await Transaction.create({
+                date: date || new Date(),
+                description: `Petty Cash Usage: ${description}`,
+                reference: `PC-USAGE-${usage._id}`,
+                residence: null
+            });
+
+            const entries = [
+                {
+                    transaction: txn._id,
+                    account: expenseAccount._id,
+                    debit: amount,
+                    credit: 0,
+                    type: (expenseAccount.type || 'expense').toLowerCase(),
+                    description: `${category}: ${description}`
+                },
+                {
+                    transaction: txn._id,
+                    account: pettyCashAccount._id,
+                    debit: 0,
+                    credit: amount,
+                    type: (pettyCashAccount.type || 'asset').toLowerCase(),
+                    description: `Petty cash used for ${category}: ${description}`
+                }
+            ];
+
+            const createdEntries = await TransactionEntry.insertMany(entries);
+            
+            await Transaction.findByIdAndUpdate(
+                txn._id,
+                { $push: { entries: { $each: createdEntries.map(e => e._id) } } }
+            );
+
+            // Update usage with transaction reference
+            usage.transactionId = txn._id;
+            await usage.save();
+        }
+
         const populatedUsage = await PettyCashUsage.findById(usage._id)
             .populate('user', 'firstName lastName email')
             .populate('approvedBy', 'firstName lastName');
@@ -321,13 +389,12 @@ const createPettyCashUsage = async (req, res) => {
             action: 'create_petty_cash_usage',
             collection: 'PettyCashUsage',
             recordId: usage._id,
-            before: null,
-            after: populatedUsage.toObject(),
             details: {
                 pettyCashId,
                 amount,
                 category,
-                remainingAmount: pettyCash.remainingAmount
+                remainingAmount: pettyCash.remainingAmount,
+                transactionId: usage.transactionId
             }
         });
 
@@ -385,6 +452,168 @@ const updatePettyCashUsageStatus = async (req, res) => {
     }
 };
 
+// Create petty cash entry directly (for admin and petty cash users)
+const createPettyCashEntry = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { amount, description, category, date, sourceAccount, targetAccount, notes } = req.body;
+
+        // Validate required fields
+        if (!amount || !description || !category) {
+            return res.status(400).json({
+                message: 'Amount, description, and category are required'
+            });
+        }
+
+        // Check if user has permission (admin, finance, or petty cash user)
+        const userRole = req.user.role;
+        const allowedRoles = ['admin', 'finance_admin', 'finance_user'];
+        
+        if (!allowedRoles.includes(userRole)) {
+            return res.status(403).json({ 
+                message: 'Insufficient permissions to create petty cash entries' 
+            });
+        }
+
+        // Find accounts
+        const pettyCashAccount = await Account.findOne({ code: '1010' }); // Petty Cash account
+        
+        // Map category to appropriate expense account
+        let expenseAccount = null;
+        switch (category.toLowerCase()) {
+            case 'maintenance':
+                expenseAccount = await Account.findOne({ code: '5000' }); // Maintenance Expense
+                break;
+            case 'utilities':
+                expenseAccount = await Account.findOne({ code: '5001' }); // Utilities Expense
+                break;
+            case 'supplies':
+                expenseAccount = await Account.findOne({ code: '5002' }); // Supplies Expense
+                break;
+            case 'transportation':
+                expenseAccount = await Account.findOne({ code: '5003' }); // Transportation Expense
+                break;
+            case 'meals':
+                expenseAccount = await Account.findOne({ code: '5004' }); // Meals Expense
+                break;
+            default:
+                expenseAccount = await Account.findOne({ code: '5099' }); // Other Expenses
+        }
+
+        if (!pettyCashAccount || !expenseAccount) {
+            return res.status(500).json({ 
+                message: 'Required accounts not found in chart of accounts' 
+            });
+        }
+
+        // Create double-entry transaction
+        const txn = await Transaction.create({
+            date: date || new Date(),
+            description: `Petty Cash Entry: ${description}`,
+            reference: `PC-ENTRY-${Date.now()}`,
+            residence: null
+        });
+
+        const entries = [
+            {
+                transaction: txn._id,
+                account: expenseAccount._id,
+                debit: amount,
+                credit: 0,
+                type: expenseAccount.type || 'expense',
+                description: `${category}: ${description}`
+            },
+            {
+                transaction: txn._id,
+                account: pettyCashAccount._id,
+                debit: 0,
+                credit: amount,
+                type: (pettyCashAccount.type || 'asset').toLowerCase(),
+                description: `Petty cash used for ${category}: ${description}`
+            }
+        ];
+
+        const createdEntries = await TransactionEntry.insertMany(entries);
+        
+        await Transaction.findByIdAndUpdate(
+            txn._id,
+            { $push: { entries: { $each: createdEntries.map(e => e._id) } } }
+        );
+
+        // Create audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'create_petty_cash_entry',
+            collection: 'Transaction',
+            recordId: txn._id,
+            details: {
+                amount,
+                category,
+                description,
+                transactionId: txn._id,
+                createdBy: `${req.user.firstName} ${req.user.lastName}`
+            }
+        });
+
+        res.status(201).json({
+            message: 'Petty cash entry created successfully',
+            transaction: {
+                id: txn._id,
+                date: txn.date,
+                description: txn.description,
+                reference: txn.reference,
+                amount,
+                category
+            }
+        });
+    } catch (error) {
+        console.error('Error creating petty cash entry:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Get petty cash balance and transactions
+const getPettyCashBalance = async (req, res) => {
+    try {
+        const pettyCashAccount = await Account.findOne({ code: '1010' }); // Petty Cash account
+        
+        if (!pettyCashAccount) {
+            return res.status(404).json({ message: 'Petty cash account not found' });
+        }
+
+        // Get all transactions involving petty cash account
+        const transactions = await Transaction.find({
+            'entries.account': pettyCashAccount._id
+        })
+        .populate('entries.account', 'code name type')
+        .sort({ date: -1 })
+        .limit(50);
+
+        // Calculate current balance
+        let balance = 0;
+        transactions.forEach(txn => {
+            txn.entries.forEach(entry => {
+                if (entry.account._id.toString() === pettyCashAccount._id.toString()) {
+                    balance += entry.debit - entry.credit;
+                }
+            });
+        });
+
+        res.status(200).json({
+            account: pettyCashAccount,
+            currentBalance: balance,
+            recentTransactions: transactions.slice(0, 10)
+        });
+    } catch (error) {
+        console.error('Error fetching petty cash balance:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = {
     getAllPettyCash,
     getPettyCashById,
@@ -393,5 +622,7 @@ module.exports = {
     updatePettyCash,
     getPettyCashUsage,
     createPettyCashUsage,
-    updatePettyCashUsageStatus
+    updatePettyCashUsageStatus,
+    createPettyCashEntry,
+    getPettyCashBalance
 }; 

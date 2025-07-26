@@ -10,7 +10,9 @@ const {
     updatePettyCash,
     getPettyCashUsage,
     createPettyCashUsage,
-    updatePettyCashUsageStatus
+    updatePettyCashUsageStatus,
+    createPettyCashEntry,
+    getPettyCashBalance
 } = require('../../controllers/finance/pettyCashController');
 
 // Apply authentication and role middleware to all routes
@@ -52,5 +54,18 @@ router.put('/usage/:id', [
     body('status').isIn(['pending', 'approved', 'rejected']).withMessage('Invalid status'),
     body('notes').optional().isString().withMessage('Notes must be a string')
 ], updatePettyCashUsageStatus);
+
+// Direct petty cash entry routes (for admin and petty cash users)
+router.get('/balance', getPettyCashBalance);
+
+router.post('/entry', [
+    body('amount').isNumeric().withMessage('Amount must be a number'),
+    body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
+    body('description').notEmpty().withMessage('Description is required'),
+    body('category').notEmpty().withMessage('Category is required'),
+    body('category').isIn(['maintenance', 'utilities', 'supplies', 'transportation', 'meals', 'other']).withMessage('Invalid category'),
+    body('date').optional().isISO8601().withMessage('Date must be a valid date'),
+    body('notes').optional().isString().withMessage('Notes must be a string')
+], createPettyCashEntry);
 
 module.exports = router; 
