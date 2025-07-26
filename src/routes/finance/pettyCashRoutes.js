@@ -12,7 +12,9 @@ const {
     createPettyCashUsage,
     updatePettyCashUsageStatus,
     createPettyCashEntry,
-    getPettyCashBalance
+    getPettyCashBalance,
+    getAllPettyCashBalances,
+    transferPettyCash
 } = require('../../controllers/finance/pettyCashController');
 
 // Apply authentication and role middleware to all routes
@@ -57,6 +59,7 @@ router.put('/usage/:id', [
 
 // Direct petty cash entry routes (for admin and petty cash users)
 router.get('/balance', getPettyCashBalance);
+router.get('/all-balances', getAllPettyCashBalances);
 
 router.post('/entry', [
     body('amount').isNumeric().withMessage('Amount must be a number'),
@@ -67,5 +70,14 @@ router.post('/entry', [
     body('date').optional().isISO8601().withMessage('Date must be a valid date'),
     body('notes').optional().isString().withMessage('Notes must be a string')
 ], createPettyCashEntry);
+
+// Petty cash transfer route (for finance users only)
+router.post('/transfer', [
+    body('fromRole').notEmpty().withMessage('From role is required'),
+    body('toRole').notEmpty().withMessage('To role is required'),
+    body('amount').isNumeric().withMessage('Amount must be a number'),
+    body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
+    body('notes').optional().isString().withMessage('Notes must be a string')
+], transferPettyCash);
 
 module.exports = router; 

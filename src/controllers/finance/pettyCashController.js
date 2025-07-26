@@ -579,7 +579,7 @@ const createPettyCashEntry = async (req, res) => {
     }
 };
 
-// Get petty cash balance and transactions
+// Get petty cash balance and transactions for current user's role
 const getPettyCashBalance = async (req, res) => {
     try {
         const pettyCashAccount = await getPettyCashAccountByRole(req.user.role); // Get role-specific petty cash account
@@ -617,6 +617,199 @@ const getPettyCashBalance = async (req, res) => {
     }
 };
 
+// Transfer petty cash between role-based accounts
+const transferPettyCash = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { fromRole, toRole, amount, notes } = req.body;
+
+        if (!fromRole || !toRole || !amount) {
+            return res.status(400).json({
+                message: 'From role, to role, and amount are required'
+            });
+        }
+
+        if (fromRole === toRole) {
+            return res.status(400).json({
+                message: 'Cannot transfer petty cash to the same role'
+            });
+        }
+
+        if (amount <= 0) {
+            return res.status(400).json({
+                message: 'Amount must be greater than zero'
+            });
+        }
+
+        // Check if user has permission to transfer from the specified role
+        if (req.user.role !== 'finance_admin' && req.user.role !== 'finance_user') {
+            return res.status(403).json({
+                message: 'Only finance users can transfer petty cash between accounts'
+            });
+        }
+
+        // Get the petty cash accounts for both roles
+        const fromAccount = await getPettyCashAccountByRole(fromRole);
+        const toAccount = await getPettyCashAccountByRole(toRole);
+
+        if (!fromAccount || !toAccount) {
+            return res.status(404).json({
+                message: 'One or both petty cash accounts not found'
+            });
+        }
+
+        // Check if source account has sufficient balance
+        const fromAccountBalance = await getAccountBalance(fromAccount._id);
+        if (fromAccountBalance < amount) {
+            return res.status(400).json({
+                message: `Insufficient balance in ${fromAccount.name}. Available: $${fromAccountBalance.toFixed(2)}`
+            });
+        }
+
+        // Create the transfer transaction
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            // Create transaction for the transfer
+            const transaction = new Transaction({
+                date: new Date(),
+                description: `Petty Cash Transfer: ${fromAccount.name} to ${toAccount.name}`,
+                reference: `PC-TRANSFER-${Date.now()}`,
+                amount: amount,
+                type: 'transfer',
+                createdBy: req.user._id,
+                notes: notes || `Transfer from ${fromAccount.name} to ${toAccount.name}`
+            });
+
+            await transaction.save({ session });
+
+            // Create transaction entries
+            const fromEntry = new TransactionEntry({
+                transactionId: transaction._id,
+                accountId: fromAccount._id,
+                debit: 0,
+                credit: amount,
+                description: `Transfer to ${toAccount.name}`
+            });
+
+            const toEntry = new TransactionEntry({
+                transactionId: transaction._id,
+                accountId: toAccount._id,
+                debit: amount,
+                credit: 0,
+                description: `Transfer from ${fromAccount.name}`
+            });
+
+            await TransactionEntry.insertMany([fromEntry, toEntry], { session });
+
+            // Create audit log
+            await AuditLog.create({
+                user: req.user._id,
+                action: 'PETTY_CASH_TRANSFER',
+                collection: 'Transaction',
+                recordId: transaction._id,
+                details: {
+                    fromRole: fromRole,
+                    toRole: toRole,
+                    amount: amount,
+                    fromAccount: fromAccount.name,
+                    toAccount: toAccount.name,
+                    transactionId: transaction._id
+                },
+                ipAddress: req.ip
+            }, session);
+
+            await session.commitTransaction();
+
+            res.status(201).json({
+                message: 'Petty cash transfer completed successfully',
+                transfer: {
+                    id: transaction._id,
+                    fromRole: fromRole,
+                    toRole: toRole,
+                    amount: amount,
+                    fromAccount: fromAccount.name,
+                    toAccount: toAccount.name,
+                    date: transaction.date,
+                    notes: notes
+                }
+            });
+
+        } catch (error) {
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
+        }
+
+    } catch (error) {
+        console.error('Error transferring petty cash:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Get account balance helper function
+const getAccountBalance = async (accountId) => {
+    const entries = await TransactionEntry.find({ accountId });
+    let balance = 0;
+    
+    entries.forEach(entry => {
+        balance += entry.debit - entry.credit;
+    });
+    
+    return balance;
+};
+
+// Get petty cash balances for all roles (finance users only)
+const getAllPettyCashBalances = async (req, res) => {
+    try {
+        // Check if user has permission to view all balances
+        if (req.user.role !== 'finance_admin' && req.user.role !== 'finance_user') {
+            return res.status(403).json({
+                message: 'Only finance users can view all petty cash balances'
+            });
+        }
+
+        const { getAllPettyCashAccounts } = require('../../utils/pettyCashUtils');
+        const allPettyCashAccounts = await getAllPettyCashAccounts();
+        
+        const balances = [];
+        
+        for (const account of allPettyCashAccounts) {
+            const balance = await getAccountBalance(account._id);
+            balances.push({
+                accountCode: account.code,
+                accountName: account.name,
+                balance: balance,
+                role: getRoleFromAccountName(account.name)
+            });
+        }
+
+        res.status(200).json({
+            balances: balances,
+            totalBalance: balances.reduce((sum, b) => sum + b.balance, 0)
+        });
+
+    } catch (error) {
+        console.error('Error fetching all petty cash balances:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Helper function to extract role from account name
+const getRoleFromAccountName = (accountName) => {
+    if (accountName.includes('Admin')) return 'admin';
+    if (accountName.includes('Finance')) return 'finance';
+    if (accountName.includes('Property Manager')) return 'property_manager';
+    if (accountName.includes('Maintenance')) return 'maintenance';
+    return 'general';
+};
+
 module.exports = {
     getAllPettyCash,
     getPettyCashById,
@@ -627,5 +820,7 @@ module.exports = {
     createPettyCashUsage,
     updatePettyCashUsageStatus,
     createPettyCashEntry,
-    getPettyCashBalance
+    getPettyCashBalance,
+    getAllPettyCashBalances,
+    transferPettyCash
 }; 
