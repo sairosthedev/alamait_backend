@@ -32,10 +32,10 @@ router.delete('/:id',
 );
 
 // Generate balance sheet (admin and finance_admin only)
-router.post('/generate', 
-    checkRole('admin', 'finance_admin'),
-    balanceSheetController.generateBalanceSheet
-);
+// router.post('/generate', 
+//     checkRole('admin', 'finance_admin'),
+//     balanceSheetController.generateBalanceSheet
+// );
 
 // Approve balance sheet (admin only)
 router.patch('/:id/approve', 
