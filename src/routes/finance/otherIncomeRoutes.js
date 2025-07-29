@@ -9,21 +9,21 @@ router.use(auth);
 // Apply finance access middleware to all routes
 router.use(financeAccess);
 
-// Get all other income entries (finance admin and admin)
+// Get all other income entries (finance admin, admin, and CEO)
 router.get('/', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin', 'ceo'), 
     otherIncomeController.getAllOtherIncome
 );
 
-// Get other income summary statistics (finance admin and admin)
+// Get other income summary statistics (finance admin, admin, and CEO)
 router.get('/summary/stats', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin', 'ceo'), 
     otherIncomeController.getOtherIncomeSummary
 );
 
-// Get other income by ID (finance admin and admin)
+// Get other income by ID (finance admin, admin, and CEO)
 router.get('/:id', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin', 'ceo'), 
     otherIncomeController.getOtherIncomeById
 );
 

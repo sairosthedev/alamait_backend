@@ -13,13 +13,13 @@ router.use(auth);
 // Apply finance access middleware to all routes
 router.use(financeAccess);
 
-// Get all leases (finance admin and admin)
-router.get('/', checkRole('admin', 'finance_admin', 'finance_user'), getAllLeases);
+// Get all leases (finance admin, admin, and CEO)
+router.get('/', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getAllLeases);
 
-// Get single lease (finance admin and admin)
-router.get('/:id', checkRole('admin', 'finance_admin', 'finance_user'), getLease);
+// Get single lease (finance admin, admin, and CEO)
+router.get('/:id', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getLease);
 
 // Get leases for a specific student
-router.get('/students/:studentId', checkRole('admin', 'finance_admin', 'finance_user'), getLeasesByStudent);
+router.get('/students/:studentId', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getLeasesByStudent);
 
 module.exports = router; 
