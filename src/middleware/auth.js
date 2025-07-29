@@ -168,7 +168,7 @@ const checkCEORole = (req, res, next) => {
 };
 
 const checkAdminOrFinance = (req, res, next) => {
-    const allowedRoles = ['admin', 'finance_admin', 'finance_user'];
+    const allowedRoles = ['admin', 'finance_admin', 'finance_user', 'ceo'];
     console.log('Admin/Finance role check - User:', {
         id: req.user?._id,
         email: req.user?.email,
@@ -191,7 +191,7 @@ const checkAdminOrFinance = (req, res, next) => {
         });
         return res.status(403).json({ 
             success: false,
-            message: 'Access denied. Required role: admin, finance_admin, or finance_user' 
+            message: 'Access denied. Required role: admin, finance_admin, finance_user, or ceo' 
         });
     }
 
@@ -296,7 +296,7 @@ const verifyApplicationCode = async (req, res, next) => {
 
 const financeAccess = async (req, res, next) => {
     try {
-        const financeRoles = ['admin', 'finance_admin', 'finance_user'];
+        const financeRoles = ['admin', 'finance_admin', 'finance_user', 'ceo'];
         
         if (!req.user) {
             console.error('Finance middleware - No user found');

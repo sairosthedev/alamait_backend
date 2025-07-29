@@ -8,10 +8,10 @@ router.use(auth);
 // Apply finance access middleware to all routes
 router.use(financeAccess);
 
-// Get all residences (finance admin and admin)
-router.get('/', checkRole('admin', 'finance_admin', 'finance_user'), getAllResidences);
+// Get all residences (finance admin, admin, and CEO)
+router.get('/', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getAllResidences);
 
-// Get single residence (finance admin and admin)
-router.get('/:id', checkRole('admin', 'finance_admin', 'finance_user'), getResidence);
+// Get single residence (finance admin, admin, and CEO)
+router.get('/:id', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getResidence);
 
 module.exports = router; 

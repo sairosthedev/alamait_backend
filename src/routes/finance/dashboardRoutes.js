@@ -8,33 +8,33 @@ router.use(auth);
 // Apply finance access middleware to all routes
 router.use(financeAccess);
 
-// Finance overview (finance admin and admin)
+// Finance overview (finance admin, admin, and CEO)
 router.get('/overview', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin', 'ceo'), 
     dashboardController.getFinanceOverview
 );
 
-// Income by period (finance admin and admin)
+// Income by period (finance admin, admin, and CEO)
 router.get('/income/period', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin', 'ceo'), 
     dashboardController.getIncomeByPeriod
 );
 
-// Expenses by period (finance admin and admin)
+// Expenses by period (finance admin, admin, and CEO)
 router.get('/expenses/period', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin', 'ceo'), 
     dashboardController.getExpensesByPeriod
 );
 
-// Expenses by category (finance admin and admin)
+// Expenses by category (finance admin, admin, and CEO)
 router.get('/expenses/category', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin', 'ceo'), 
     dashboardController.getExpensesByCategory
 );
 
-// Income by residence (finance admin and admin)
+// Income by residence (finance admin, admin, and CEO)
 router.get('/income/residence', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin', 'ceo'), 
     dashboardController.getIncomeByResidence
 );
 
