@@ -1,4 +1,4 @@
-const roleMiddleware = (allowedRoles) => {
+const checkRole = (allowedRoles) => {
     return (req, res, next) => {
         if (!req.user) {
             return res.status(401).json({
@@ -18,4 +18,7 @@ const roleMiddleware = (allowedRoles) => {
     };
 };
 
-module.exports = roleMiddleware; 
+// Keep the old export for backward compatibility
+const roleMiddleware = checkRole;
+
+module.exports = { checkRole, roleMiddleware }; 

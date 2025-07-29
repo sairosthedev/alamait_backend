@@ -79,6 +79,7 @@ const accountRoutes = require('./routes/accountRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const invoiceRoutes = require('./routes/invoiceRoutes');
+const requestRoutes = require('./routes/requestRoutes');
 
 const app = express();
 
@@ -294,6 +295,9 @@ app.use('/api/transactions', transactionRoutes);
 
 // Invoices routes
 app.use('/api/invoices', invoiceRoutes);
+
+// Request routes
+app.use('/api/requests', requestRoutes);
 
 // 404 handler
 app.use((req, res) => {
