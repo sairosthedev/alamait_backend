@@ -111,6 +111,62 @@ const checkRole = (...roles) => {
     };
 };
 
+// New middleware for CEO role - allows full view access but restricts write operations
+const checkCEORole = (req, res, next) => {
+    console.log('CEO role check middleware - User:', {
+        id: req.user?._id,
+        email: req.user?.email,
+        role: req.user?.role,
+        method: req.method,
+        path: req.path
+    });
+
+    if (!req.user) {
+        console.error('CEO role check middleware - No user found');
+        return res.status(401).json({ 
+            success: false,
+            message: 'Please authenticate' 
+        });
+    }
+
+    // CEO has access to everything
+    if (req.user.role === 'ceo') {
+        // Allow all GET requests (view access)
+        if (req.method === 'GET') {
+            return next();
+        }
+        
+        // Allow POST/PUT/PATCH/DELETE only for request approvals
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+            // Check if this is a request approval endpoint
+            if (req.path.includes('/requests') && req.path.includes('/approve')) {
+                return next();
+            }
+            
+            // Check if this is a request-related endpoint
+            if (req.path.includes('/requests/')) {
+                return next();
+            }
+            
+            // Deny other write operations
+            console.error('CEO role check middleware - Write operation denied:', {
+                method: req.method,
+                path: req.path,
+                userRole: req.user.role
+            });
+            return res.status(403).json({ 
+                success: false,
+                message: 'CEO role has view-only access. Only request approvals are allowed.' 
+            });
+        }
+        
+        return next();
+    }
+
+    // For non-CEO users, continue with normal role checking
+    next();
+};
+
 const checkAdminOrFinance = (req, res, next) => {
     const allowedRoles = ['admin', 'finance_admin', 'finance_user'];
     console.log('Admin/Finance role check - User:', {
@@ -135,7 +191,7 @@ const checkAdminOrFinance = (req, res, next) => {
         });
         return res.status(403).json({ 
             success: false,
-            message: 'Access denied. Required role: admin, finance_admin, or finance_user'
+            message: 'Access denied. Required role: admin, finance_admin, or finance_user' 
         });
     }
 
@@ -269,6 +325,7 @@ module.exports = {
     auth,
     isAdmin,
     checkRole,
+    checkCEORole, // Added checkCEORole to exports
     checkAdminOrFinance,
     verifyApplicationCode,
     financeAccess

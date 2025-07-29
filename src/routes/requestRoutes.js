@@ -33,10 +33,10 @@ const upload = multer({
 // Apply authentication middleware to all routes
 router.use(auth);
 
-// Get all requests (filtered by user role)
+// Get all requests (filtered by user role) - CEO can view all requests
 router.get('/', requestController.getAllRequests);
 
-// Get request by ID
+// Get request by ID - CEO can view any request
 router.get('/:id', requestController.getRequestById);
 
 // Create new request

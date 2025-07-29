@@ -1,5 +1,6 @@
 const User = require('../../models/User');
 const { validationResult } = require('express-validator');
+const bcrypt = require('bcryptjs');
 
 // Get all users
 exports.getAllUsers = async (req, res) => {
@@ -94,6 +95,71 @@ exports.deleteUser = async (req, res) => {
     } catch (error) {
         console.error('Delete user error:', error);
         res.status(500).json({ error: 'Error deleting user' });
+    }
+};
+
+// Create new admin user (for admin, ceo, finance_admin, finance_user roles)
+exports.createUser = async (req, res) => {
+    try {
+        console.log('=== CREATE USER DEBUG ===');
+        console.log('Request body:', req.body);
+        console.log('Request headers:', req.headers);
+        console.log('Content-Type:', req.headers['content-type']);
+        
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            console.log('Validation errors:', errors.array());
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { email, password, firstName, lastName, phone, role } = req.body;
+        
+        console.log('Extracted data:', { email, password, firstName, lastName, phone, role });
+
+        // Validate role
+        const validRoles = ['admin', 'ceo', 'finance_admin', 'finance_user'];
+        if (!validRoles.includes(role)) {
+            return res.status(400).json({ 
+                error: `Invalid role. Must be one of: ${validRoles.join(', ')}` 
+            });
+        }
+
+        // Check if user already exists
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ error: 'User with this email already exists' });
+        }
+
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Create new user
+        const newUser = new User({
+            email,
+            password: hashedPassword,
+            firstName,
+            lastName,
+            phone,
+            role,
+            isVerified: true, // Admin users are automatically verified
+            status: 'active'
+        });
+
+        await newUser.save();
+
+        // Return user without password
+        const userResponse = newUser.toObject();
+        delete userResponse.password;
+
+        console.log('User created successfully:', userResponse);
+        res.status(201).json({
+            message: 'User created successfully',
+            user: userResponse
+        });
+    } catch (error) {
+        console.error('Create user error:', error);
+        res.status(500).json({ error: 'Error creating user' });
     }
 };
 

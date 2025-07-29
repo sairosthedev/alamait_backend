@@ -3,38 +3,31 @@ const router = express.Router();
 const incomeStatementController = require('../../controllers/finance/incomeStatementController');
 const { auth, checkRole, financeAccess } = require('../../middleware/auth');
 
-// Apply authentication middleware to all routes
+// All routes require finance role authorization
 router.use(auth);
-// Apply finance access middleware to all routes
-router.use(financeAccess);
+router.use(checkRole('admin', 'finance_admin', 'finance_user', 'ceo'));
 
-// Get all income statements (finance admin and admin)
-router.get('/', 
-    checkRole('admin', 'finance_admin'), 
-    incomeStatementController.getAllIncomeStatements
-);
+// Get all income statements
+router.get('/', incomeStatementController.getAllIncomeStatements);
 
-// Get income statement by ID (finance admin and admin)
-router.get('/:id', 
-    checkRole('admin', 'finance_admin'), 
-    incomeStatementController.getIncomeStatementById
-);
+// Get income statement by ID
+router.get('/:id', incomeStatementController.getIncomeStatementById);
 
-// Create new income statement (finance admin and admin)
+// Create new income statement (admin and finance_admin only)
 router.post('/', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin'),
     incomeStatementController.createIncomeStatement
 );
 
-// Update existing income statement (finance admin and admin)
+// Update income statement (admin and finance_admin only)
 router.put('/:id', 
-    checkRole('admin', 'finance_admin'), 
+    checkRole('admin', 'finance_admin'),
     incomeStatementController.updateIncomeStatement
 );
 
 // Delete income statement (admin only)
 router.delete('/:id', 
-    checkRole('admin'), 
+    checkRole('admin'),
     incomeStatementController.deleteIncomeStatement
 );
 
