@@ -5,9 +5,13 @@ const { auth, checkRole } = require('../../middleware/auth');
 
 // Import CEO controllers
 const dashboardController = require('../../controllers/ceo/dashboardController');
-const financialController = require('../../controllers/ceo/financialController');
 const requestController = require('../../controllers/ceo/requestController');
 const auditController = require('../../controllers/ceo/auditController');
+
+// Import finance controllers for financial data
+const balanceSheetController = require('../../controllers/finance/balanceSheetController');
+const incomeStatementController = require('../../controllers/finance/incomeStatementController');
+const expenseController = require('../../controllers/finance/expenseController');
 
 // Validation middleware
 const approvalValidation = [
@@ -34,14 +38,13 @@ router.get('/dashboard/expense-distribution', dashboardController.getExpenseDist
 router.get('/dashboard/recent-transactions', dashboardController.getRecentTransactions);
 router.get('/dashboard/recent-requests', dashboardController.getRecentRequests);
 
-// Financial routes
-router.get('/financial/income-statements', financialController.getAllIncomeStatements);
-router.get('/financial/income-statements/:id', financialController.getIncomeStatementById);
-router.get('/financial/balance-sheets', financialController.getAllBalanceSheets);
-router.get('/financial/balance-sheets/:id', financialController.getBalanceSheetById);
-router.get('/financial/cashflow', financialController.getCashflow);
-router.get('/financial/expenses', financialController.getAllExpenses);
-router.get('/financial/expenses/:id', financialController.getExpenseById);
+// Financial routes (using finance controllers for consistent data)
+router.get('/financial/income-statements', incomeStatementController.getAllIncomeStatements);
+router.get('/financial/income-statements/:id', incomeStatementController.getIncomeStatementById);
+router.get('/financial/balance-sheets', balanceSheetController.getAllBalanceSheets);
+router.get('/financial/balance-sheets/:id', balanceSheetController.getBalanceSheetById);
+router.get('/financial/expenses', expenseController.getAllExpenses);
+router.get('/financial/expenses/:id', expenseController.getExpenseById);
 
 // Request routes
 router.get('/requests', requestController.getAllRequests);
