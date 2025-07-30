@@ -10,7 +10,8 @@ const {
     getResidence,
     updateResidence,
     deleteResidence,
-    getRoomsByResidence
+    getRoomsByResidence,
+    getResidenceRooms
 } = require('../../controllers/admin/residenceController');
 
 // Validation middleware
@@ -66,6 +67,7 @@ router.use(checkRole('admin', 'ceo'));
 router.post('/', residenceValidation, addResidence);
 router.get('/', getAllResidences);
 router.get('/:id', getResidence);
+router.get('/:id/rooms', getResidenceRooms);
 router.put('/:id', residenceValidation, updateResidence);
 router.delete('/:id', deleteResidence);
 router.get('/:residenceId/rooms', getRoomsByResidence);

@@ -23,7 +23,8 @@ const {
     getStudentLeases,
     downloadSignedLease,
     getExpiredStudents,
-    getAllSignedLeases
+    getAllSignedLeases,
+    manualAddStudent
 } = require('../../controllers/admin/studentController');
 
 // Validation middleware
@@ -37,6 +38,32 @@ const studentValidation = [
     check('emergencyContact.relationship', 'Emergency contact relationship is required').optional().notEmpty(),
     check('emergencyContact.phone', 'Emergency contact phone is required').optional().notEmpty(),
     check('residenceId', 'Residence ID is required').notEmpty().isMongoId().withMessage('Invalid residence ID format')
+];
+
+// Comprehensive validation for manual student addition
+const manualStudentValidation = [
+    check('email', 'Please include a valid email').isEmail(),
+    check('firstName', 'First name is required').notEmpty().trim(),
+    check('lastName', 'Last name is required').notEmpty().trim(),
+    check('phone', 'Phone number is required').notEmpty().trim(),
+    check('emergencyContact.name', 'Emergency contact name is required').notEmpty().trim(),
+    check('emergencyContact.relationship', 'Emergency contact relationship is required').notEmpty().trim(),
+    check('emergencyContact.phone', 'Emergency contact phone is required').notEmpty().trim(),
+    check('residenceId', 'Residence ID is required').isMongoId(),
+    check('roomNumber', 'Room number is required').notEmpty().trim(),
+    check('startDate', 'Start date is required').isISO8601().toDate(),
+    check('endDate', 'End date is required').isISO8601().toDate(),
+    check('monthlyRent', 'Monthly rent is required').isNumeric().withMessage('Monthly rent must be a number'),
+    check('securityDeposit').optional().isNumeric().withMessage('Security deposit must be a number'),
+    check('adminFee').optional().isNumeric().withMessage('Admin fee must be a number'),
+    check('endDate').custom((endDate, { req }) => {
+        const startDate = new Date(req.body.startDate);
+        const endDateObj = new Date(endDate);
+        if (endDateObj <= startDate) {
+            throw new Error('End date must be after start date');
+        }
+        return true;
+    })
 ];
 
 // All routes require admin role
@@ -107,6 +134,8 @@ router.post('/residence/:residenceId', [
     check('emergencyContact.phone', 'Emergency contact phone is required').optional().notEmpty()
 ], createStudent);
 
+router.post('/', studentValidation, createStudent);
+router.post('/manual-add', manualStudentValidation, manualAddStudent);
 router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);
 router.delete('/:studentId', async (req, res) => {
