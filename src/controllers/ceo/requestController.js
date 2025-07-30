@@ -56,14 +56,16 @@ exports.getRequestById = async (req, res) => {
         const request = await Request.findById(req.params.id)
             .populate('submittedBy', 'firstName lastName email')
             .populate('residence', 'name')
+            .populate('quotations.uploadedBy', 'firstName lastName email')
+            .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.approvedBy', 'firstName lastName email')
             .populate('approval.admin.approvedBy', 'firstName lastName')
             .populate('approval.finance.approvedBy', 'firstName lastName')
             .populate('approval.ceo.approvedBy', 'firstName lastName')
             .populate('assignedTo._id', 'firstName lastName')
             .populate('updates.author', 'firstName lastName')
-            .populate('requestHistory.user', 'firstName lastName')
-            .populate('quotations.uploadedBy', 'firstName lastName')
-            .populate('quotations.approvedBy', 'firstName lastName');
+            .populate('requestHistory.user', 'firstName lastName');
 
         if (!request) {
             return res.status(404).json({ error: 'Request not found' });
@@ -98,8 +100,10 @@ exports.getPendingCEOApproval = async (req, res) => {
                 .populate('residence', 'name')
                 .populate('approval.admin.approvedBy', 'firstName lastName')
                 .populate('approval.finance.approvedBy', 'firstName lastName')
-                .populate('quotations.uploadedBy', 'firstName lastName')
-                .populate('quotations.approvedBy', 'firstName lastName')
+                .populate('quotations.uploadedBy', 'firstName lastName email')
+                .populate('quotations.approvedBy', 'firstName lastName email')
+                .populate('items.quotations.uploadedBy', 'firstName lastName email')
+                .populate('items.quotations.approvedBy', 'firstName lastName email')
                 .lean(),
             Request.countDocuments(query)
         ]);

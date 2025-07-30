@@ -75,6 +75,10 @@ exports.getAllRequests = async (req, res) => {
             .populate('submittedBy', 'firstName lastName email role')
             .populate('assignedTo._id', 'firstName lastName email role')
             .populate('residence', 'name')
+            .populate('quotations.uploadedBy', 'firstName lastName email')
+            .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.approvedBy', 'firstName lastName email')
             .populate('approval.admin.approvedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email')
             .populate('approval.ceo.approvedBy', 'firstName lastName email')
@@ -107,6 +111,8 @@ exports.getRequestById = async (req, res) => {
             .populate('residence', 'name')
             .populate('quotations.uploadedBy', 'firstName lastName email')
             .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.approvedBy', 'firstName lastName email')
             .populate('approval.admin.approvedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email')
             .populate('approval.ceo.approvedBy', 'firstName lastName email')
@@ -1221,6 +1227,267 @@ exports.approveItemQuotation = async (req, res) => {
         res.status(200).json(updatedRequest);
     } catch (error) {
         console.error('Error approving item quotation:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Update request-level quotation
+exports.updateRequestQuotation = async (req, res) => {
+    try {
+        const { id, quotationId } = req.params;
+        const { provider, amount, description } = req.body;
+        const user = req.user;
+
+        // Check permissions - only admin can update quotations
+        if (user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can update quotations' });
+        }
+
+        const request = await Request.findById(id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        // Find the quotation
+        const quotation = request.quotations.id(quotationId);
+        if (!quotation) {
+            return res.status(404).json({ message: 'Quotation not found' });
+        }
+
+        // Only allow updates if request is still pending or approved by admin
+        if (!['pending', 'admin-approved'].includes(request.status)) {
+            return res.status(400).json({ message: 'Cannot update quotation for request in current status' });
+        }
+
+        const changes = [];
+
+        // Update fields if provided
+        if (provider && provider !== quotation.provider) {
+            quotation.provider = provider;
+            changes.push(`Provider updated to: ${provider}`);
+        }
+
+        if (amount !== undefined && amount !== quotation.amount) {
+            quotation.amount = amount;
+            changes.push(`Amount updated to: ${amount}`);
+        }
+
+        if (description !== undefined && description !== quotation.description) {
+            quotation.description = description;
+            changes.push('Description updated');
+        }
+
+        // Handle file upload if provided
+        if (req.file) {
+            try {
+                // Delete old file from S3 if it exists
+                if (quotation.fileUrl) {
+                    const oldKey = quotation.fileUrl.split(`${s3Configs.requestQuotations.bucket}.s3.amazonaws.com/`)[1];
+                    if (oldKey) {
+                        await s3.deleteObject({
+                            Bucket: s3Configs.requestQuotations.bucket,
+                            Key: oldKey
+                        }).promise();
+                    }
+                }
+
+                // Upload new file to S3
+                const s3Key = `request_quotations/${user._id}_${Date.now()}_${req.file.originalname}`;
+                const s3UploadParams = {
+                    Bucket: s3Configs.requestQuotations.bucket,
+                    Key: s3Key,
+                    Body: req.file.buffer,
+                    ContentType: req.file.mimetype,
+                    ACL: s3Configs.requestQuotations.acl,
+                    Metadata: {
+                        fieldName: 'quotation',
+                        uploadedBy: user._id.toString(),
+                        uploadDate: new Date().toISOString(),
+                        action: 'updated'
+                    }
+                };
+
+                const s3Result = await s3.upload(s3UploadParams).promise();
+
+                // Update quotation with new file info
+                quotation.fileUrl = s3Result.Location;
+                quotation.fileName = req.file.originalname;
+                quotation.uploadedBy = user._id;
+                quotation.uploadedAt = new Date();
+                changes.push(`File updated to: ${req.file.originalname}`);
+            } catch (uploadError) {
+                console.error('Error uploading quotation file to S3:', uploadError);
+                return res.status(500).json({ message: 'Error uploading file' });
+            }
+        }
+
+        // If quotation was approved, unapprove it since it's being modified
+        if (quotation.isApproved) {
+            quotation.isApproved = false;
+            quotation.approvedBy = null;
+            quotation.approvedAt = null;
+            changes.push('Quotation unapproved due to modification');
+        }
+
+        // Add to request history
+        if (changes.length > 0) {
+            request.requestHistory.push({
+                date: new Date(),
+                action: 'Quotation Updated',
+                user: user._id,
+                changes
+            });
+        }
+
+        await request.save();
+
+        const updatedRequest = await Request.findById(request._id)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('residence', 'name')
+            .populate('quotations.uploadedBy', 'firstName lastName email')
+            .populate('quotations.approvedBy', 'firstName lastName email');
+
+        res.status(200).json({
+            message: 'Quotation updated successfully',
+            request: updatedRequest
+        });
+    } catch (error) {
+        console.error('Error updating quotation:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Update item-level quotation
+exports.updateItemQuotation = async (req, res) => {
+    try {
+        const { id, itemIndex, quotationIndex } = req.params;
+        const { provider, amount, description } = req.body;
+        const user = req.user;
+
+        // Check permissions - only admin can update quotations
+        if (user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can update quotations' });
+        }
+
+        const request = await Request.findById(id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        // Check if item exists
+        if (!request.items || !request.items[itemIndex]) {
+            return res.status(404).json({ message: 'Item not found' });
+        }
+
+        const item = request.items[itemIndex];
+
+        // Check if quotation exists
+        if (!item.quotations || !item.quotations[quotationIndex]) {
+            return res.status(404).json({ message: 'Quotation not found' });
+        }
+
+        const quotation = item.quotations[quotationIndex];
+
+        // Only allow updates if request is still pending or approved by admin
+        if (!['pending', 'admin-approved'].includes(request.status)) {
+            return res.status(400).json({ message: 'Cannot update quotation for request in current status' });
+        }
+
+        const changes = [];
+
+        // Update fields if provided
+        if (provider && provider !== quotation.provider) {
+            quotation.provider = provider;
+            changes.push(`Provider updated to: ${provider}`);
+        }
+
+        if (amount !== undefined && amount !== quotation.amount) {
+            quotation.amount = amount;
+            changes.push(`Amount updated to: ${amount}`);
+        }
+
+        if (description !== undefined && description !== quotation.description) {
+            quotation.description = description;
+            changes.push('Description updated');
+        }
+
+        // Handle file upload if provided
+        if (req.file) {
+            try {
+                // Delete old file from S3 if it exists
+                if (quotation.fileUrl) {
+                    const oldKey = quotation.fileUrl.split(`${s3Configs.requestQuotations.bucket}.s3.amazonaws.com/`)[1];
+                    if (oldKey) {
+                        await s3.deleteObject({
+                            Bucket: s3Configs.requestQuotations.bucket,
+                            Key: oldKey
+                        }).promise();
+                    }
+                }
+
+                // Upload new file to S3
+                const s3Key = `request_quotations/${user._id}_${Date.now()}_${req.file.originalname}`;
+                const s3UploadParams = {
+                    Bucket: s3Configs.requestQuotations.bucket,
+                    Key: s3Key,
+                    Body: req.file.buffer,
+                    ContentType: req.file.mimetype,
+                    ACL: s3Configs.requestQuotations.acl,
+                    Metadata: {
+                        fieldName: 'quotation',
+                        uploadedBy: user._id.toString(),
+                        uploadDate: new Date().toISOString(),
+                        action: 'updated',
+                        itemIndex: itemIndex
+                    }
+                };
+
+                const s3Result = await s3.upload(s3UploadParams).promise();
+
+                // Update quotation with new file info
+                quotation.fileUrl = s3Result.Location;
+                quotation.fileName = req.file.originalname;
+                quotation.uploadedBy = user._id;
+                quotation.uploadedAt = new Date();
+                changes.push(`File updated to: ${req.file.originalname}`);
+            } catch (uploadError) {
+                console.error('Error uploading quotation file to S3:', uploadError);
+                return res.status(500).json({ message: 'Error uploading file' });
+            }
+        }
+
+        // If quotation was approved, unapprove it since it's being modified
+        if (quotation.isApproved) {
+            quotation.isApproved = false;
+            quotation.approvedBy = null;
+            quotation.approvedAt = null;
+            changes.push('Quotation unapproved due to modification');
+        }
+
+        // Add to request history
+        if (changes.length > 0) {
+            request.requestHistory.push({
+                date: new Date(),
+                action: 'Item Quotation Updated',
+                user: user._id,
+                changes: [`Item ${parseInt(itemIndex) + 1}: ${changes.join(', ')}`]
+            });
+        }
+
+        await request.save();
+
+        const updatedRequest = await Request.findById(request._id)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('residence', 'name')
+            .populate('quotations.uploadedBy', 'firstName lastName email')
+            .populate('quotations.approvedBy', 'firstName lastName email');
+
+        res.status(200).json({
+            message: 'Item quotation updated successfully',
+            request: updatedRequest
+        });
+    } catch (error) {
+        console.error('Error updating item quotation:', error);
         res.status(500).json({ message: error.message });
     }
 };

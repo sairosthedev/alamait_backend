@@ -75,6 +75,22 @@ router.patch('/:id/items/:itemIndex/quotations/:quotationIndex/approve',
     monthlyRequestController.approveItemQuotation
 );
 
+// Update item quotation (admin only) - handles both FormData and JSON
+router.put('/:id/items/:itemIndex/quotations/:quotationIndex', 
+    checkRole(['admin']), 
+    (req, res, next) => {
+        // Check if this is a multipart request (file upload)
+        if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
+            // Use multer for file uploads
+            upload.single('quotation')(req, res, next);
+        } else {
+            // Skip multer for JSON requests
+            next();
+        }
+    },
+    monthlyRequestController.updateItemQuotation
+);
+
 // Delete monthly request (admin or submitter only)
 router.delete('/:id', monthlyRequestController.deleteMonthlyRequest);
 

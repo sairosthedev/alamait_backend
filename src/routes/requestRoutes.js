@@ -138,6 +138,38 @@ router.patch('/:id/items/:itemIndex/quotations/:quotationIndex/approve',
     requestController.approveItemQuotation
 );
 
+// Update request-level quotation (admin only) - handles both FormData and JSON
+router.put('/:id/quotations/:quotationId', 
+    checkRole(['admin']), 
+    (req, res, next) => {
+        // Check if this is a multipart request (file upload)
+        if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
+            // Use multer for file uploads
+            upload.single('quotation')(req, res, next);
+        } else {
+            // Skip multer for JSON requests
+            next();
+        }
+    },
+    requestController.updateRequestQuotation
+);
+
+// Update item-level quotation (admin only) - handles both FormData and JSON
+router.put('/:id/items/:itemIndex/quotations/:quotationIndex', 
+    checkRole(['admin']), 
+    (req, res, next) => {
+        // Check if this is a multipart request (file upload)
+        if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
+            // Use multer for file uploads
+            upload.single('quotation')(req, res, next);
+        } else {
+            // Skip multer for JSON requests
+            next();
+        }
+    },
+    requestController.updateItemQuotation
+);
+
 // Delete request (only by submitter or admin)
 router.delete('/:id', requestController.deleteRequest);
 
