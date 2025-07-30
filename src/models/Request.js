@@ -17,11 +17,11 @@ const quotationSchema = new mongoose.Schema({
     },
     fileUrl: {
         type: String,
-        required: true
+        required: false // Changed from required: true to allow creation without files
     },
     fileName: {
         type: String,
-        required: true
+        required: false // Changed from required: true to allow creation without files
     },
     uploadedBy: {
         type: mongoose.Schema.Types.ObjectId,
@@ -83,11 +83,11 @@ const requestItemSchema = new mongoose.Schema({
         },
         fileUrl: {
             type: String,
-            required: true
+            required: false // Changed from required: true to allow creation without files
         },
         fileName: {
             type: String,
-            required: true
+            required: false // Changed from required: true to allow creation without files
         },
         uploadedBy: {
             type: mongoose.Schema.Types.ObjectId,

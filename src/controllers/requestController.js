@@ -3,6 +3,7 @@ const Expense = require('../models/finance/Expense');
 const User = require('../models/User');
 const { generateUniqueId } = require('../utils/idGenerator');
 const { uploadToS3 } = require('../utils/fileStorage');
+const { s3, s3Configs } = require('../config/s3');
 
 // Get all requests (filtered by user role)
 exports.getAllRequests = async (req, res) => {
@@ -158,6 +159,17 @@ exports.createRequest = async (req, res) => {
         
         const user = req.user;
         
+        // Parse items if it's a string (from FormData)
+        let parsedItems = items;
+        if (typeof items === 'string') {
+            try {
+                parsedItems = JSON.parse(items);
+            } catch (error) {
+                console.error('Error parsing items:', error);
+                return res.status(400).json({ message: 'Invalid items format' });
+            }
+        }
+        
         // Validate required fields
         if (!title || !description || !type) {
             return res.status(400).json({ message: 'Missing required fields: title, description, type' });
@@ -189,13 +201,13 @@ exports.createRequest = async (req, res) => {
             if (!deliveryLocation) {
                 return res.status(400).json({ message: 'Delivery location is required for non-student requests' });
             }
-            if (!items || !Array.isArray(items) || items.length === 0) {
+            if (!parsedItems || !Array.isArray(parsedItems) || parsedItems.length === 0) {
                 return res.status(400).json({ message: 'At least one item/service is required for non-student requests' });
             }
             
-            // Validate each item
-            for (let i = 0; i < items.length; i++) {
-                const item = items[i];
+            // Validate each item and handle file uploads for quotations
+            for (let i = 0; i < parsedItems.length; i++) {
+                const item = parsedItems[i];
                 if (!item.description) {
                     return res.status(400).json({ message: `Item ${i + 1}: Description is required` });
                 }
@@ -205,7 +217,51 @@ exports.createRequest = async (req, res) => {
                 if (!item.estimatedCost || item.estimatedCost < 0) {
                     return res.status(400).json({ message: `Item ${i + 1}: Estimated cost must be 0 or greater` });
                 }
-                // Purpose is optional, no validation needed
+                
+                // Handle quotations with file uploads
+                if (item.quotations && Array.isArray(item.quotations)) {
+                    for (let j = 0; j < item.quotations.length; j++) {
+                        const quotation = item.quotations[j];
+                        
+                        // Find uploaded file for this quotation
+                        const uploadedFile = req.files ? req.files.find(file => 
+                            file.fieldname === `items[${i}].quotations[${j}].file` ||
+                            file.fieldname === `quotation_${i}_${j}`
+                        ) : null;
+                        
+                        // If quotation has a file, upload it to S3
+                        if (uploadedFile) {
+                            try {
+                                const s3Key = `request_quotations/${user._id}_${Date.now()}_${uploadedFile.originalname}`;
+                                const s3UploadParams = {
+                                    Bucket: s3Configs.requestQuotations.bucket,
+                                    Key: s3Key,
+                                    Body: uploadedFile.buffer,
+                                    ContentType: uploadedFile.mimetype,
+                                    ACL: s3Configs.requestQuotations.acl,
+                                    Metadata: {
+                                        fieldName: 'quotation',
+                                        uploadedBy: user._id.toString(),
+                                        uploadDate: new Date().toISOString()
+                                    }
+                                };
+                                
+                                const s3Result = await s3.upload(s3UploadParams).promise();
+                                
+                                // Update quotation with S3 URL
+                                quotation.fileUrl = s3Result.Location;
+                                quotation.fileName = uploadedFile.originalname;
+                                quotation.uploadedBy = user._id;
+                                quotation.uploadedAt = new Date();
+                            } catch (uploadError) {
+                                console.error('Error uploading quotation file to S3:', uploadError);
+                                return res.status(500).json({ 
+                                    message: `Error uploading file for item ${i + 1}, quotation ${j + 1}` 
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
         
@@ -244,13 +300,13 @@ exports.createRequest = async (req, res) => {
             // Non-student request
             requestData.department = department;
             requestData.requestedBy = requestedBy;
-            requestData.items = items;
+            requestData.items = parsedItems;
             requestData.proposedVendor = proposedVendor;
             requestData.deliveryLocation = deliveryLocation;
             
             // Calculate total estimated cost
-            if (items && items.length > 0) {
-                requestData.totalEstimatedCost = items.reduce((total, item) => {
+            if (parsedItems && parsedItems.length > 0) {
+                requestData.totalEstimatedCost = parsedItems.reduce((total, item) => {
                     return total + (item.estimatedCost * item.quantity);
                 }, 0);
             }
@@ -701,27 +757,62 @@ exports.uploadQuotation = async (req, res) => {
         let fileName = '';
         
         if (req.file) {
-            // File was uploaded via FormData
+            // File was uploaded via FormData - upload to S3
             console.log('File uploaded via FormData');
-            const uploadResult = await uploadToS3(req.file, 'quotations');
-            fileUrl = uploadResult.url;
-            fileName = uploadResult.fileName;
+            try {
+                const s3Key = `request_quotations/${user._id}_${Date.now()}_${req.file.originalname}`;
+                const s3UploadParams = {
+                    Bucket: s3Configs.requestQuotations.bucket,
+                    Key: s3Key,
+                    Body: req.file.buffer,
+                    ContentType: req.file.mimetype,
+                    ACL: s3Configs.requestQuotations.acl,
+                    Metadata: {
+                        fieldName: 'quotation',
+                        uploadedBy: user._id.toString(),
+                        uploadDate: new Date().toISOString()
+                    }
+                };
+                
+                const s3Result = await s3.upload(s3UploadParams).promise();
+                fileUrl = s3Result.Location;
+                fileName = req.file.originalname;
+                console.log('File uploaded to S3:', fileUrl);
+            } catch (uploadError) {
+                console.error('Error uploading file to S3:', uploadError);
+                return res.status(500).json({ message: 'Error uploading file to S3' });
+            }
         } else if (req.body.fileUrl) {
             // File URL was provided via JSON
             console.log('File URL provided via JSON');
             fileUrl = req.body.fileUrl;
             fileName = req.body.fileName || 'uploaded-file';
+        } else if (req.body.file && typeof req.body.file === 'object' && Object.keys(req.body.file).length === 0) {
+            // Frontend sent empty file object - this is a common pattern when no file is selected
+            console.log('Empty file object received - treating as no file');
+            return res.status(400).json({ 
+                message: 'Please select a file to upload or provide a file URL',
+                debug: {
+                    contentType: req.headers['content-type'],
+                    bodyKeys: Object.keys(req.body),
+                    hasFile: !!req.file,
+                    hasFileUrl: !!req.body.fileUrl,
+                    fileObject: req.body.file
+                }
+            });
         } else {
             console.log('No file found in request');
             console.log('Content-Type header:', req.headers['content-type']);
             console.log('Request body keys:', Object.keys(req.body));
+            console.log('File object:', req.body.file);
             return res.status(400).json({ 
                 message: 'No file uploaded or file URL provided',
                 debug: {
                     contentType: req.headers['content-type'],
                     bodyKeys: Object.keys(req.body),
                     hasFile: !!req.file,
-                    hasFileUrl: !!req.body.fileUrl
+                    hasFileUrl: !!req.body.fileUrl,
+                    fileObject: req.body.file
                 }
             });
         }
@@ -996,17 +1087,32 @@ exports.addItemQuotation = async (req, res) => {
             console.log('File URL provided via JSON');
             fileUrl = req.body.fileUrl;
             fileName = req.body.fileName || 'uploaded-file';
+        } else if (req.body.file && typeof req.body.file === 'object' && Object.keys(req.body.file).length === 0) {
+            // Frontend sent empty file object - this is a common pattern when no file is selected
+            console.log('Empty file object received - treating as no file');
+            return res.status(400).json({ 
+                message: 'Please select a file to upload or provide a file URL',
+                debug: {
+                    contentType: req.headers['content-type'],
+                    bodyKeys: Object.keys(req.body),
+                    hasFile: !!req.file,
+                    hasFileUrl: !!req.body.fileUrl,
+                    fileObject: req.body.file
+                }
+            });
         } else {
             console.log('No file found in request');
             console.log('Content-Type header:', req.headers['content-type']);
             console.log('Request body keys:', Object.keys(req.body));
+            console.log('File object:', req.body.file);
             return res.status(400).json({ 
                 message: 'Quotation file is required (either upload file or provide fileUrl)',
                 debug: {
                     contentType: req.headers['content-type'],
                     bodyKeys: Object.keys(req.body),
                     hasFile: !!req.file,
-                    hasFileUrl: !!req.body.fileUrl
+                    hasFileUrl: !!req.body.fileUrl,
+                    fileObject: req.body.file
                 }
             });
         }

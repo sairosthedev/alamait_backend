@@ -56,6 +56,13 @@ const s3Configs = {
     acl: 'private'
   },
   
+  // For request quotations
+  requestQuotations: {
+    bucket: bucketName,
+    key: (req, file) => `request_quotations/${req.user._id}_${Date.now()}_${file.originalname}`,
+    acl: 'private'
+  },
+  
   // For general uploads
   general: {
     bucket: bucketName,

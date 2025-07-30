@@ -65,7 +65,19 @@ router.get('/:id', requestController.getRequestById);
 router.get('/:id/quotations', requestController.getRequestQuotations);
 
 // Create new request
-router.post('/', requestController.createRequest);
+router.post('/', 
+    (req, res, next) => {
+        // Check if this is a multipart request (file upload)
+        if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
+            // Use multer for file uploads
+            upload.any()(req, res, next);
+        } else {
+            // Skip multer for JSON requests
+            next();
+        }
+    },
+    requestController.createRequest
+);
 
 // Add update message to request
 router.post('/:id/updates', requestController.addUpdate);
