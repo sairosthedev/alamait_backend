@@ -55,7 +55,7 @@ const maintenanceSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'assigned', 'in-progress', 'on-hold', 'completed', 'approved', 'rejected'],
+        enum: ['pending', 'assigned', 'in-progress', 'on-hold', 'completed', 'approved', 'rejected', 'pending-ceo-approval', 'pending-finance-approval', 'pending-admin-approval'],
         default: 'pending',
         set: function(value) {
             if (value) {
