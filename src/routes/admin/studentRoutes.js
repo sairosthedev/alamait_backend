@@ -23,8 +23,7 @@ const {
     getStudentLeases,
     downloadSignedLease,
     getExpiredStudents,
-    getAllSignedLeases
-    downloadSignedLease,
+    getAllSignedLeases,
     manualAddStudent
 } = require('../../controllers/admin/studentController');
 

@@ -8,14 +8,12 @@ const Residence = require('../../models/Residence');
 const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateService');
 const ExpiredStudent = require('../../models/ExpiredStudent');
 const Application = require('../../models/Application');
-const Lease = require('../../models/Lease');
 const Payment = require('../../models/Payment');
 const { createAuditLog } = require('../../utils/auditLogger');
 const multer = require('multer');
 const multerS3 = require('multer-s3');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 const AuditLog = require('../../models/AuditLog');
-const Application = require('../../models/Application');
 const Lease = require('../../models/Lease');
 const bcrypt = require('bcryptjs');
 

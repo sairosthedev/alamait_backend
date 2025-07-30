@@ -244,6 +244,43 @@ exports.getRoomsByResidence = async (req, res) => {
             .select('name rooms')
             .lean();
 
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        // Return rooms with availability information
+        const rooms = residence.rooms.map(room => ({
+            roomNumber: room.roomNumber,
+            type: room.type,
+            capacity: room.capacity,
+            price: room.price,
+            status: room.status,
+            currentOccupancy: room.currentOccupancy || 0,
+            floor: room.floor,
+            area: room.area,
+            features: room.features || [],
+            isAvailable: (room.currentOccupancy || 0) < room.capacity
+        }));
+
+        res.status(200).json({
+            success: true,
+            data: rooms,
+            residenceName: residence.name
+        });
+    } catch (error) {
+        console.error('Error in getRoomsByResidence:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching rooms for residence',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+// Get rooms for a specific residence (alternative implementation)
 exports.getResidenceRooms = async (req, res) => {
     try {
         const residence = await Residence.findById(req.params.id);
@@ -278,31 +315,6 @@ exports.getResidenceRooms = async (req, res) => {
             rooms: formattedRooms,
             totalRooms: formattedRooms.length,
             availableRooms: formattedRooms.filter(room => room.isAvailable).length
-        });
-    } catch (error) {
-        console.error('Error in getRoomsByResidence:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching rooms for residence',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
-        // Return rooms with availability information
-        const rooms = residence.rooms.map(room => ({
-            roomNumber: room.roomNumber,
-            type: room.type,
-            capacity: room.capacity,
-            price: room.price,
-            status: room.status,
-            currentOccupancy: room.currentOccupancy || 0,
-            floor: room.floor,
-            area: room.area,
-            features: room.features || [],
-            isAvailable: (room.currentOccupancy || 0) < room.capacity
-        }));
-
-        res.status(200).json({
-            success: true,
-            data: rooms,
-            residenceName: residence.name
         });
     } catch (error) {
         console.error('Error in getResidenceRooms:', error);
