@@ -37,9 +37,9 @@ router.delete('/:id',
 //     balanceSheetController.generateBalanceSheet
 // );
 
-// Approve balance sheet (admin only)
+// Approve balance sheet (admin and CEO only)
 router.patch('/:id/approve', 
-    checkRole('admin'), 
+    checkRole('admin', 'ceo'), 
     balanceSheetController.approveBalanceSheet
 );
 

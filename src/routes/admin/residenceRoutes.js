@@ -60,7 +60,7 @@ const residenceValidation = [
 
 // Apply auth middleware to all routes
 router.use(auth);
-router.use(checkRole('admin'));
+router.use(checkRole('admin', 'ceo'));
 
 // Routes
 router.post('/', residenceValidation, addResidence);

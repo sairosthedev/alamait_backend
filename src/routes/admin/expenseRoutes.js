@@ -25,6 +25,6 @@ router.put('/:expenseId', checkRole('admin', 'finance_admin', 'finance_user'), u
 router.put('/:expenseId/status', checkRole('admin', 'finance_admin', 'finance_user'), updateExpenseStatus);
 
 // Route to handle expense approval
-router.patch('/:id/approve', checkRole('admin'), approveExpense);
+router.patch('/:id/approve', checkRole('admin', 'ceo'), approveExpense);
 
 module.exports = router;

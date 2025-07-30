@@ -31,9 +31,9 @@ router.delete('/:id',
     incomeStatementController.deleteIncomeStatement
 );
 
-// Approve income statement (admin only)
+// Approve income statement (admin and CEO only)
 router.patch('/:id/approve', 
-    checkRole('admin'), 
+    checkRole('admin', 'ceo'), 
     incomeStatementController.approveIncomeStatement
 );
 
