@@ -7,7 +7,7 @@ const { uploadToS3 } = require('../utils/fileStorage');
 // Get all requests (filtered by user role)
 exports.getAllRequests = async (req, res) => {
     try {
-        const { type, status, residence } = req.query;
+        const { type, status, residence, priority, category, search, page = 1, limit = 10 } = req.query;
         const user = req.user;
         
         let query = {};
@@ -26,6 +26,24 @@ exports.getAllRequests = async (req, res) => {
         if (residence) {
             query.residence = residence;
         }
+
+        // Filter by priority if provided
+        if (priority) {
+            query.priority = priority;
+        }
+
+        // Filter by category if provided
+        if (category) {
+            query.category = category;
+        }
+
+        // Search in title and description
+        if (search) {
+            query.$or = [
+                { title: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } }
+            ];
+        }
         
         // Role-based filtering
         if (user.role === 'student') {
@@ -41,22 +59,39 @@ exports.getAllRequests = async (req, res) => {
             // No additional filtering needed
         } else if (user.role === 'finance' || user.role === 'finance_admin' || user.role === 'finance_user') {
             // Finance can see admin requests that have been forwarded to them
-            query.type = { $in: ['financial', 'operational'] };
+            query.type = { $in: ['financial', 'operational', 'administrative'] };
             query['approval.admin.approved'] = true;
         } else if (user.role === 'ceo') {
             // CEO can see admin requests that have been approved by finance
-            query.type = { $in: ['financial', 'operational'] };
+            query.type = { $in: ['financial', 'operational', 'administrative'] };
             query['approval.admin.approved'] = true;
             query['approval.finance.approved'] = true;
         }
+        
+        const skip = (page - 1) * limit;
         
         const requests = await Request.find(query)
             .populate('submittedBy', 'firstName lastName email role')
             .populate('assignedTo._id', 'firstName lastName email role')
             .populate('residence', 'name')
-            .sort({ createdAt: -1 });
+            .populate('approval.admin.approvedBy', 'firstName lastName email')
+            .populate('approval.finance.approvedBy', 'firstName lastName email')
+            .populate('approval.ceo.approvedBy', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
         
-        res.status(200).json(requests);
+        const total = await Request.countDocuments(query);
+        
+        res.status(200).json({
+            requests,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / limit),
+                totalItems: total,
+                itemsPerPage: parseInt(limit)
+            }
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -70,7 +105,11 @@ exports.getRequestById = async (req, res) => {
             .populate('assignedTo._id', 'firstName lastName email role')
             .populate('residence', 'name')
             .populate('quotations.uploadedBy', 'firstName lastName email')
-            .populate('quotations.approvedBy', 'firstName lastName email');
+            .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('approval.admin.approvedBy', 'firstName lastName email')
+            .populate('approval.finance.approvedBy', 'firstName lastName email')
+            .populate('approval.ceo.approvedBy', 'firstName lastName email')
+            .populate('updates.author', 'firstName lastName email');
         
         if (!request) {
             return res.status(404).json({ message: 'Request not found' });
@@ -97,7 +136,7 @@ exports.getRequestById = async (req, res) => {
 // Create new request
 exports.createRequest = async (req, res) => {
     try {
-        const { title, description, type, residence, room, category, priority, images } = req.body;
+        const { title, description, type, residence, room, category, priority, amount, dueDate, tags, images } = req.body;
         const user = req.user;
         
         // Validate required fields
@@ -125,7 +164,7 @@ exports.createRequest = async (req, res) => {
             title: title,
             description: description,
             submittedBy: user._id,
-            status: { $in: ['pending', 'assigned', 'in_progress'] }
+            status: { $in: ['pending_admin_approval', 'pending_finance_approval', 'pending_ceo_approval'] }
         });
         
         if (existingRequest) {
@@ -138,11 +177,15 @@ exports.createRequest = async (req, res) => {
             description,
             type,
             submittedBy: user._id,
+            submittedDate: new Date(),
             residence,
             room,
             category,
             priority: priority || 'medium',
-            status: 'pending'
+            status: 'pending_admin_approval',
+            amount: amount || 0,
+            dueDate: dueDate ? new Date(dueDate) : null,
+            tags: tags || []
         };
         
         // Add images if provided
@@ -165,6 +208,7 @@ exports.createRequest = async (req, res) => {
                     approved: false
                 }
             };
+            requestData.status = 'pending_finance_approval';
         }
         
         const request = new Request(requestData);
@@ -189,10 +233,61 @@ exports.createRequest = async (req, res) => {
     }
 };
 
-// Update request status (for maintenance requests)
+// Update request (only if pending)
+exports.updateRequest = async (req, res) => {
+    try {
+        const { title, description, room, category, priority, amount, dueDate, tags } = req.body;
+        const user = req.user;
+        
+        const request = await Request.findById(req.params.id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+        
+        // Check permissions
+        if (user.role === 'student' && request.submittedBy.toString() !== user._id.toString()) {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+        
+        // Only allow updates if request is still pending
+        if (request.status !== 'pending_admin_approval') {
+            return res.status(400).json({ message: 'Cannot update request that is not pending' });
+        }
+        
+        // Update fields
+        if (title) request.title = title;
+        if (description) request.description = description;
+        if (room) request.room = room;
+        if (category) request.category = category;
+        if (priority) request.priority = priority;
+        if (amount !== undefined) request.amount = amount;
+        if (dueDate) request.dueDate = new Date(dueDate);
+        if (tags) request.tags = tags;
+        
+        // Add to request history
+        request.requestHistory.push({
+            date: new Date(),
+            action: 'Request updated',
+            user: user._id,
+            changes: ['Request details modified']
+        });
+        
+        await request.save();
+        
+        const updatedRequest = await Request.findById(request._id)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('residence', 'name');
+        
+        res.status(200).json(updatedRequest);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Update request status (admin only - for maintenance requests)
 exports.updateRequestStatus = async (req, res) => {
     try {
-        const { status, assignedTo, notes } = req.body;
+        const { status, notes } = req.body;
         const user = req.user;
         
         const request = await Request.findById(req.params.id);
@@ -205,59 +300,23 @@ exports.updateRequestStatus = async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
         
-        // Validate status transition
-        const validTransitions = {
-            'pending': ['assigned', 'rejected'],
-            'assigned': ['in_progress', 'rejected'],
-            'in_progress': ['completed', 'rejected'],
-            'completed': [],
-            'rejected': []
-        };
-        
-        if (!validTransitions[request.status].includes(status)) {
-            return res.status(400).json({ 
-                message: `Invalid status transition from ${request.status} to ${status}` 
-            });
-        }
-        
-        // Update request
+        // Update the status
         request.status = status;
-        
-        if (assignedTo) {
-            const assignedUser = await User.findById(assignedTo);
-            if (assignedUser) {
-                request.assignedTo = {
-                    _id: assignedUser._id,
-                    name: assignedUser.firstName,
-                    surname: assignedUser.lastName,
-                    role: assignedUser.role
-                };
-            }
-        }
-        
-        // Add update message if provided
-        if (notes) {
-            request.updates.push({
-                date: new Date(),
-                message: notes,
-                author: user._id
-            });
-        }
         
         // Add to request history
         request.requestHistory.push({
             date: new Date(),
-            action: 'Status updated',
+            action: 'Status update',
             user: user._id,
-            changes: [`Status changed to ${status}`]
+            changes: [`Status changed to: ${status}`, notes ? `Notes: ${notes}` : null].filter(Boolean)
         });
         
         await request.save();
         
         const updatedRequest = await Request.findById(request._id)
             .populate('submittedBy', 'firstName lastName email role')
-            .populate('assignedTo._id', 'firstName lastName email role')
-            .populate('residence', 'name');
+            .populate('residence', 'name')
+            .populate('approval.admin.approvedBy', 'firstName lastName email');
         
         res.status(200).json(updatedRequest);
     } catch (error) {
@@ -265,7 +324,7 @@ exports.updateRequestStatus = async (req, res) => {
     }
 };
 
-// Admin approval for admin requests
+// Admin approval for requests
 exports.adminApproval = async (req, res) => {
     try {
         const { approved, notes } = req.body;
@@ -276,14 +335,14 @@ exports.adminApproval = async (req, res) => {
             return res.status(404).json({ message: 'Request not found' });
         }
         
-        // Only admins can approve admin requests
+        // Only admins can approve requests
         if (user.role !== 'admin') {
             return res.status(403).json({ message: 'Access denied' });
         }
         
-        // Only financial/operational requests need admin approval
-        if (request.type === 'maintenance') {
-            return res.status(400).json({ message: 'Maintenance requests do not require admin approval' });
+        // Check if request is in correct status
+        if (request.status !== 'pending_admin_approval') {
+            return res.status(400).json({ message: 'Request is not pending admin approval' });
         }
         
         request.approval.admin = {
@@ -292,6 +351,13 @@ exports.adminApproval = async (req, res) => {
             approvedAt: new Date(),
             notes
         };
+        
+        // Update status based on approval
+        if (approved) {
+            request.status = 'pending_finance_approval';
+        } else {
+            request.status = 'rejected';
+        }
         
         // Add to request history
         request.requestHistory.push({
@@ -305,7 +371,8 @@ exports.adminApproval = async (req, res) => {
         
         const updatedRequest = await Request.findById(request._id)
             .populate('submittedBy', 'firstName lastName email role')
-            .populate('residence', 'name');
+            .populate('residence', 'name')
+            .populate('approval.admin.approvedBy', 'firstName lastName email');
         
         res.status(200).json(updatedRequest);
     } catch (error) {
@@ -313,7 +380,7 @@ exports.adminApproval = async (req, res) => {
     }
 };
 
-// Finance approval for admin requests
+// Finance approval for requests
 exports.financeApproval = async (req, res) => {
     try {
         const { approved, notes } = req.body;
@@ -334,12 +401,24 @@ exports.financeApproval = async (req, res) => {
             return res.status(400).json({ message: 'Admin approval required before finance approval' });
         }
         
+        // Check if request is in correct status
+        if (request.status !== 'pending_finance_approval') {
+            return res.status(400).json({ message: 'Request is not pending finance approval' });
+        }
+        
         request.approval.finance = {
             approved,
             approvedBy: user._id,
             approvedAt: new Date(),
             notes
         };
+        
+        // Update status based on approval
+        if (approved) {
+            request.status = 'pending_ceo_approval';
+        } else {
+            request.status = 'rejected';
+        }
         
         // Add to request history
         request.requestHistory.push({
@@ -353,7 +432,8 @@ exports.financeApproval = async (req, res) => {
         
         const updatedRequest = await Request.findById(request._id)
             .populate('submittedBy', 'firstName lastName email role')
-            .populate('residence', 'name');
+            .populate('residence', 'name')
+            .populate('approval.finance.approvedBy', 'firstName lastName email');
         
         res.status(200).json(updatedRequest);
     } catch (error) {
@@ -361,7 +441,7 @@ exports.financeApproval = async (req, res) => {
     }
 };
 
-// CEO approval for admin requests
+// CEO approval for requests
 exports.ceoApproval = async (req, res) => {
     try {
         const { approved, notes } = req.body;
@@ -382,6 +462,11 @@ exports.ceoApproval = async (req, res) => {
             return res.status(400).json({ message: 'Admin and finance approval required before CEO approval' });
         }
         
+        // Check if request is in correct status
+        if (request.status !== 'pending_ceo_approval') {
+            return res.status(400).json({ message: 'Request is not pending CEO approval' });
+        }
+        
         request.approval.ceo = {
             approved,
             approvedBy: user._id,
@@ -389,25 +474,32 @@ exports.ceoApproval = async (req, res) => {
             notes
         };
         
-        // If approved, convert to expense
+        // Update status based on approval
         if (approved) {
-            const expense = new Expense({
-                expenseId: generateUniqueId('EXP'),
-                residence: request.residence,
-                category: 'Other',
-                amount: request.amount || 0,
-                description: request.title,
-                expenseDate: new Date(),
-                paymentStatus: 'Pending',
-                period: 'monthly',
-                createdBy: user._id,
-                maintenanceRequestId: request._id
-            });
+            request.status = 'approved';
             
-            await expense.save();
-            
-            request.convertedToExpense = true;
-            request.expenseId = expense._id;
+            // Convert to expense if amount is specified
+            if (request.amount > 0) {
+                const expense = new Expense({
+                    expenseId: generateUniqueId('EXP'),
+                    residence: request.residence,
+                    category: 'Other',
+                    amount: request.amount,
+                    description: request.title,
+                    expenseDate: new Date(),
+                    paymentStatus: 'Pending',
+                    period: 'monthly',
+                    createdBy: user._id,
+                    maintenanceRequestId: request._id
+                });
+                
+                await expense.save();
+                
+                request.convertedToExpense = true;
+                request.expenseId = expense._id;
+            }
+        } else {
+            request.status = 'rejected';
         }
         
         // Add to request history
@@ -423,7 +515,86 @@ exports.ceoApproval = async (req, res) => {
         const updatedRequest = await Request.findById(request._id)
             .populate('submittedBy', 'firstName lastName email role')
             .populate('residence', 'name')
+            .populate('approval.ceo.approvedBy', 'firstName lastName email')
             .populate('expenseId');
+        
+        res.status(200).json(updatedRequest);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// CEO change quotation
+exports.changeQuotation = async (req, res) => {
+    try {
+        const { quotationId, reason } = req.body;
+        const user = req.user;
+        
+        const request = await Request.findById(req.params.id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+        
+        // Only CEO can change quotations
+        if (user.role !== 'ceo') {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+        
+        // Check if request is approved by CEO
+        if (!request.approval.ceo.approved) {
+            return res.status(400).json({ message: 'Request must be approved by CEO before changing quotations' });
+        }
+        
+        // Find the quotation
+        const quotation = request.quotations.id(quotationId);
+        if (!quotation) {
+            return res.status(404).json({ message: 'Quotation not found' });
+        }
+        
+        // Find the currently approved quotation
+        const approvedQuotation = request.quotations.find(q => q.isApproved);
+        if (!approvedQuotation) {
+            return res.status(400).json({ message: 'No quotation is currently approved' });
+        }
+        
+        // Unapprove current quotation
+        approvedQuotation.isApproved = false;
+        approvedQuotation.approvedBy = null;
+        approvedQuotation.approvedAt = null;
+        
+        // Approve new quotation
+        quotation.isApproved = true;
+        quotation.approvedBy = user._id;
+        quotation.approvedAt = new Date();
+        
+        // Update request amount
+        request.amount = quotation.amount;
+        request.status = 'approved_with_changes';
+        
+        // Add quotation change to CEO approval
+        request.approval.ceo.quotationChanges.push({
+            originalQuotation: approvedQuotation.amount,
+            newQuotation: quotation.amount,
+            changeReason: reason,
+            changedDate: new Date()
+        });
+        
+        // Add to request history
+        request.requestHistory.push({
+            date: new Date(),
+            action: 'Quotation changed',
+            user: user._id,
+            changes: [`Quotation changed from ${approvedQuotation.provider} to ${quotation.provider}`]
+        });
+        
+        await request.save();
+        
+        const updatedRequest = await Request.findById(request._id)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('quotations.uploadedBy', 'firstName lastName email')
+            .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('residence', 'name')
+            .populate('approval.ceo.approvedBy', 'firstName lastName email');
         
         res.status(200).json(updatedRequest);
     } catch (error) {
@@ -434,7 +605,7 @@ exports.ceoApproval = async (req, res) => {
 // Upload quotation (admin only)
 exports.uploadQuotation = async (req, res) => {
     try {
-        const { provider, amount, description } = req.body;
+        const { provider, amount, description, validUntil, terms } = req.body;
         const user = req.user;
         
         const request = await Request.findById(req.params.id);
@@ -467,7 +638,9 @@ exports.uploadQuotation = async (req, res) => {
             fileUrl,
             fileName: req.file.originalname,
             uploadedBy: user._id,
-            uploadedAt: new Date()
+            uploadedAt: new Date(),
+            validUntil: validUntil ? new Date(validUntil) : null,
+            terms
         };
         
         request.quotations.push(quotation);
@@ -602,7 +775,7 @@ exports.deleteRequest = async (req, res) => {
         }
         
         // Only allow deletion if request is still pending
-        if (request.status !== 'pending') {
+        if (request.status !== 'pending_admin_approval') {
             return res.status(400).json({ message: 'Cannot delete request that is not pending' });
         }
         

@@ -3,7 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const residenceController = require('../../controllers/residenceController');
 const authMiddleware = require('../../middleware/authMiddleware');
-const { roleMiddleware } = require('../../middleware/roleMiddleware');
+const roleMiddleware = require('../../middleware/roleMiddleware');
 
 // Validation middleware
 const residenceValidation = [

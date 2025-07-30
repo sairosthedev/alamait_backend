@@ -78,4 +78,7 @@ router.get('/audit/reports', auditController.getAuditReports);
 router.get('/audit/trail', auditController.getAuditTrail);
 router.get('/audit/trail/:id', auditController.getAuditTrailById);
 
+// Simple audit log endpoint (similar to admin audit-log)
+router.get('/audit-log', auditController.getAuditLogs);
+
 module.exports = router; 

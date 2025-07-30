@@ -2,8 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const requestController = require('../controllers/requestController');
-const { auth } = require('../middleware/auth');
-const { checkRole } = require('../middleware/roleMiddleware');
+const { auth, checkRole } = require('../middleware/auth');
 
 // Configure multer for file uploads
 const upload = multer({
