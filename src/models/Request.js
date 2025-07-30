@@ -57,10 +57,17 @@ const requestItemSchema = new mongoose.Schema({
         required: true,
         min: 1
     },
-    estimatedCost: {
+    unitCost: {
         type: Number,
         required: true,
-        min: 0
+        min: 0,
+        description: 'Cost per unit/item'
+    },
+    totalCost: {
+        type: Number,
+        required: true,
+        min: 0,
+        description: 'Total cost for this item (unitCost × quantity)'
     },
     purpose: {
         type: String,
@@ -185,7 +192,7 @@ const requestSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'assigned', 'in-progress', 'completed', 'rejected'],
+        enum: ['pending', 'assigned', 'in-progress', 'completed', 'rejected', 'pending_ceo_approval', 'pending_finance_approval', 'pending_admin_approval'],
         default: 'pending'
     },
     approval: {
@@ -343,10 +350,18 @@ requestSchema.index({
 
 // Pre-save middleware to update request history and calculate total cost
 requestSchema.pre('save', function(next) {
-    // Calculate total estimated cost from items
+    // Calculate total cost for each item and overall total
     if (this.items && this.items.length > 0) {
+        this.items.forEach(item => {
+            // Calculate total cost for this item (unitCost × quantity)
+            if (item.unitCost && item.quantity) {
+                item.totalCost = item.unitCost * item.quantity;
+            }
+        });
+        
+        // Calculate total estimated cost from all items
         this.totalEstimatedCost = this.items.reduce((total, item) => {
-            return total + (item.estimatedCost * item.quantity);
+            return total + (item.totalCost || 0);
         }, 0);
     }
     
@@ -398,6 +413,31 @@ requestSchema.virtual('approvalStage').get(function() {
         if (!this.approval.ceo.approved) return 'ceo_pending';
         return 'approved';
     }
+});
+
+// Virtual for cost breakdown
+requestSchema.virtual('costBreakdown').get(function() {
+    if (!this.items || this.items.length === 0) {
+        return {
+            totalItems: 0,
+            totalCost: 0,
+            items: []
+        };
+    }
+    
+    const breakdown = {
+        totalItems: this.items.length,
+        totalCost: this.totalEstimatedCost || 0,
+        items: this.items.map(item => ({
+            description: item.description,
+            quantity: item.quantity,
+            unitCost: item.unitCost,
+            totalCost: item.totalCost,
+            purpose: item.purpose
+        }))
+    };
+    
+    return breakdown;
 });
 
 module.exports = mongoose.model('Request', requestSchema, 'maintenance');

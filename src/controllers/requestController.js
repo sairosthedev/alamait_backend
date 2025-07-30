@@ -220,9 +220,12 @@ exports.createRequest = async (req, res) => {
                 if (!item.quantity || item.quantity < 1) {
                     return res.status(400).json({ message: `Item ${i + 1}: Quantity must be at least 1` });
                 }
-                if (!item.estimatedCost || item.estimatedCost < 0) {
-                    return res.status(400).json({ message: `Item ${i + 1}: Estimated cost must be 0 or greater` });
+                if (!item.unitCost || item.unitCost < 0) {
+                    return res.status(400).json({ message: `Item ${i + 1}: Unit cost must be 0 or greater` });
                 }
+                
+                // Calculate total cost for this item
+                item.totalCost = item.unitCost * item.quantity;
                 
                 // Handle quotations with file uploads
                 if (item.quotations && Array.isArray(item.quotations)) {
