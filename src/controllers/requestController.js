@@ -678,6 +678,11 @@ exports.changeQuotation = async (req, res) => {
 // Upload quotation (admin only)
 exports.uploadQuotation = async (req, res) => {
     try {
+        console.log('=== Upload Quotation Debug ===');
+        console.log('Request body:', req.body);
+        console.log('Request file:', req.file);
+        console.log('Request headers:', req.headers);
+        
         const { provider, amount, description, validUntil, terms } = req.body;
         const user = req.user;
         
@@ -693,7 +698,17 @@ exports.uploadQuotation = async (req, res) => {
         
         // Check if file was uploaded
         if (!req.file) {
-            return res.status(400).json({ message: 'No file uploaded' });
+            console.log('No file found in request');
+            console.log('Content-Type header:', req.headers['content-type']);
+            console.log('Request body keys:', Object.keys(req.body));
+            return res.status(400).json({ 
+                message: 'No file uploaded',
+                debug: {
+                    contentType: req.headers['content-type'],
+                    bodyKeys: Object.keys(req.body),
+                    hasFile: !!req.file
+                }
+            });
         }
         
         // Check quotation limit (max 3)
@@ -702,14 +717,14 @@ exports.uploadQuotation = async (req, res) => {
         }
         
         // Upload file to S3
-        const fileUrl = await uploadToS3(req.file, 'quotations');
+        const uploadResult = await uploadToS3(req.file, 'quotations');
         
         const quotation = {
             provider,
             amount: parseFloat(amount),
             description,
-            fileUrl,
-            fileName: req.file.originalname,
+            fileUrl: uploadResult.url,
+            fileName: uploadResult.fileName,
             uploadedBy: user._id,
             uploadedAt: new Date(),
             validUntil: validUntil ? new Date(validUntil) : null,
@@ -920,6 +935,11 @@ exports.getRequestQuotations = async (req, res) => {
 // Add quotation to specific item in request
 exports.addItemQuotation = async (req, res) => {
     try {
+        console.log('=== Add Item Quotation Debug ===');
+        console.log('Request body:', req.body);
+        console.log('Request file:', req.file);
+        console.log('Request headers:', req.headers);
+        
         const { provider, amount, description } = req.body;
         const { itemIndex } = req.params;
         const user = req.user;
@@ -952,13 +972,23 @@ exports.addItemQuotation = async (req, res) => {
             try {
                 const uploadResult = await uploadToS3(req.file, 'quotations');
                 fileUrl = uploadResult.url;
-                fileName = req.file.originalname;
+                fileName = uploadResult.fileName;
             } catch (uploadError) {
                 console.error('File upload error:', uploadError);
                 return res.status(500).json({ message: 'Error uploading file' });
             }
         } else {
-            return res.status(400).json({ message: 'Quotation file is required' });
+            console.log('No file found in request');
+            console.log('Content-Type header:', req.headers['content-type']);
+            console.log('Request body keys:', Object.keys(req.body));
+            return res.status(400).json({ 
+                message: 'Quotation file is required',
+                debug: {
+                    contentType: req.headers['content-type'],
+                    bodyKeys: Object.keys(req.body),
+                    hasFile: !!req.file
+                }
+            });
         }
         
         // Add quotation to the specific item

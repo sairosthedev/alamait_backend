@@ -84,6 +84,7 @@ const transactionRoutes = require('./routes/transactionRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const invoiceRoutes = require('./routes/invoiceRoutes');
 const requestRoutes = require('./routes/requestRoutes');
+const monthlyRequestRoutes = require('./routes/monthlyRequestRoutes');
 
 const app = express();
 
@@ -154,6 +155,16 @@ app.use('/api/student/lease', (req, res, next) => {
 app.use('/api/student/lease-agreement', (req, res, next) => {
   // Set longer timeout for lease agreement routes
   if (req.method === 'POST' && req.path.includes('upload')) {
+    req.setTimeout(60000); // 60 seconds for file uploads
+    res.setTimeout(60000);
+  }
+  next();
+});
+
+// Add timeout middleware for request routes
+app.use('/api/requests', (req, res, next) => {
+  // Set longer timeout for request file upload routes
+  if (req.method === 'POST' && (req.path.includes('quotations') || req.path.includes('items'))) {
     req.setTimeout(60000); // 60 seconds for file uploads
     res.setTimeout(60000);
   }
@@ -306,6 +317,7 @@ app.use('/api/invoices', invoiceRoutes);
 
 // Request routes
 app.use('/api/requests', requestRoutes);
+app.use('/api/monthly-requests', monthlyRequestRoutes);
 
 // 404 handler
 app.use((req, res) => {

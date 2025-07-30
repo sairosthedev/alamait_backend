@@ -11,6 +11,12 @@ const upload = multer({
         fileSize: 10 * 1024 * 1024, // 10MB limit
     },
     fileFilter: (req, file, cb) => {
+        console.log('Multer fileFilter called with file:', {
+            fieldname: file.fieldname,
+            originalname: file.originalname,
+            mimetype: file.mimetype
+        });
+        
         // Allow PDF, DOC, DOCX, and image files
         const allowedTypes = [
             'application/pdf',
@@ -27,10 +33,27 @@ const upload = multer({
             cb(new Error('Invalid file type. Only PDF, DOC, DOCX, and image files are allowed.'), false);
         }
     }
-});
+}).single('quotation');
 
 // Apply authentication middleware to all routes
 router.use(auth);
+
+// Error handling middleware for multer
+router.use((error, req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        console.error('Multer error:', error);
+        return res.status(400).json({ 
+            message: 'File upload error', 
+            error: error.message 
+        });
+    } else if (error) {
+        console.error('Other error:', error);
+        return res.status(400).json({ 
+            message: error.message 
+        });
+    }
+    next();
+});
 
 // Get all requests (filtered by user role) - CEO can view all requests
 router.get('/', requestController.getAllRequests);
@@ -62,7 +85,7 @@ router.patch('/:id/ceo-approval', checkRole(['ceo']), requestController.ceoAppro
 // Upload quotation (admin only)
 router.post('/:id/quotations', 
     checkRole(['admin']), 
-    upload.single('quotation'), 
+    upload, 
     requestController.uploadQuotation
 );
 
@@ -75,7 +98,7 @@ router.patch('/:id/quotations/approve',
 // Add quotation to specific item (admin only)
 router.post('/:id/items/:itemIndex/quotations', 
     checkRole(['admin']), 
-    upload.single('quotation'), 
+    upload, 
     requestController.addItemQuotation
 );
 
