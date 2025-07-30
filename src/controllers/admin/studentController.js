@@ -15,6 +15,9 @@ const multer = require('multer');
 const multerS3 = require('multer-s3');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 const AuditLog = require('../../models/AuditLog');
+const Application = require('../../models/Application');
+const Lease = require('../../models/Lease');
+const bcrypt = require('bcryptjs');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -813,3 +816,285 @@ exports.getStudentLeases = async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 }; 
+// Comprehensive function to manually add student with room assignment and lease
+exports.manualAddStudent = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+        const {
+            email,
+            firstName,
+            lastName,
+            phone,
+            emergencyContact,
+            residenceId,
+            roomNumber,
+            startDate,
+            endDate,
+            monthlyRent,
+            securityDeposit,
+            adminFee
+        } = req.body;
+
+        // Check if user already exists
+        let existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ error: 'Email already registered' });
+        }
+
+        // Validate residence and room
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({ error: 'Residence not found' });
+        }
+
+        const room = residence.rooms.find(r => r.roomNumber === roomNumber);
+        if (!room) {
+            return res.status(404).json({ error: 'Room not found in this residence' });
+        }
+
+        // Check room availability
+        if (room.currentOccupancy >= room.capacity) {
+            return res.status(400).json({ error: 'Room is at full capacity' });
+        }
+
+        // Generate temporary password
+        const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(tempPassword, salt);
+
+        // Create new student user
+        const student = new User({
+            email,
+            firstName,
+            lastName,
+            phone,
+            password: hashedPassword,
+            status: 'active',
+            emergencyContact,
+            role: 'student',
+            isVerified: true
+        });
+
+        await student.save();
+
+        // Create application record (following the existing application logic)
+        const application = new Application({
+            student: student._id,
+            email,
+            firstName,
+            lastName,
+            phone,
+            requestType: 'new',
+            status: 'approved', // Directly approve the application
+            paymentStatus: 'paid', // Mark as paid since admin is adding manually
+            startDate,
+            endDate,
+            preferredRoom: roomNumber,
+            allocatedRoom: roomNumber,
+            residence: residenceId,
+            applicationDate: new Date(),
+            actionDate: new Date(),
+            actionBy: req.user.id
+        });
+
+        await application.save();
+
+        // Update room occupancy and status (following existing logic)
+        room.currentOccupancy = (room.currentOccupancy || 0) + 1;
+        room.occupants = [...(room.occupants || []), student._id];
+        
+        // Update room status based on occupancy
+        if (room.currentOccupancy >= room.capacity) {
+            room.status = 'occupied';
+        } else if (room.currentOccupancy > 0) {
+            room.status = 'reserved';
+        }
+
+        await residence.save();
+
+        // Update student with room assignment (following existing logic)
+        const approvalDate = new Date();
+        const validUntil = new Date(endDate);
+        
+        student.currentRoom = roomNumber;
+        student.roomValidUntil = validUntil;
+        student.roomApprovalDate = approvalDate;
+        student.residence = residenceId;
+        await student.save();
+
+        // Create booking record
+        const booking = new Booking({
+            student: student._id,
+            residence: residenceId,
+            room: {
+                roomNumber: roomNumber,
+                type: room.type,
+                price: room.price
+            },
+            startDate,
+            endDate,
+            totalAmount: monthlyRent,
+            paymentStatus: 'paid',
+            status: 'confirmed',
+            paidAmount: monthlyRent + (adminFee || 0) + (securityDeposit || 0),
+            payments: [{
+                amount: monthlyRent + (adminFee || 0) + (securityDeposit || 0),
+                date: new Date(),
+                method: 'admin_manual',
+                status: 'completed',
+                transactionId: `ADMIN_${Date.now()}`
+            }]
+        });
+
+        await booking.save();
+
+        // Create lease record
+        const lease = new Lease({
+            studentId: student._id,
+            studentName: `${firstName} ${lastName}`,
+            email,
+            residence: residenceId,
+            residenceName: residence.name,
+            startDate,
+            endDate,
+            filename: `lease_${student._id}_${Date.now()}.pdf`,
+            originalname: `Lease_Agreement_${firstName}_${lastName}.pdf`,
+            path: `/uploads/leases/lease_${student._id}_${Date.now()}.pdf`,
+            mimetype: 'application/pdf',
+            size: 0,
+            uploadedAt: new Date()
+        });
+
+        await lease.save();
+
+        // Update student with current booking
+        student.currentBooking = booking._id;
+        await student.save();
+
+        // Prepare lease agreement attachment (following existing logic)
+        let attachments = [];
+        const leaseFile = getLeaseTemplateFile(residence.name);
+        if (leaseFile) {
+            const templatePath = path.normalize(path.join(__dirname, '..', '..', '..', 'uploads', leaseFile));
+            if (fs.existsSync(templatePath)) {
+                attachments.push({
+                    filename: leaseFile,
+                    path: templatePath,
+                    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                });
+            }
+        }
+
+        // Send welcome email with login details (following existing application approval logic)
+        await sendEmail({
+            to: email,
+            subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
+            text: `
+                Dear ${firstName} ${lastName},
+
+                Welcome to Alamait Student Accommodation! Your account has been successfully created and your application has been approved.
+
+                ACCOUNT DETAILS:
+                Email: ${email}
+                Temporary Password: ${tempPassword}
+
+                APPLICATION DETAILS:
+                Application Code: ${application.applicationCode}
+                Allocated Room: ${roomNumber}
+                Approval Date: ${approvalDate.toLocaleDateString()}
+                Valid Until: ${validUntil.toLocaleDateString()}
+
+                ROOM ASSIGNMENT:
+                Residence: ${residence.name}
+                Room: ${roomNumber}
+                Start Date: ${new Date(startDate).toLocaleDateString()}
+                End Date: ${new Date(endDate).toLocaleDateString()}
+
+                PAYMENT DETAILS:
+                Monthly Rent: $${monthlyRent}
+                Admin Fee: $${adminFee || 0}
+                Security Deposit: $${securityDeposit || 0}
+                Total Initial Payment: $${monthlyRent + (adminFee || 0) + (securityDeposit || 0)}
+
+                IMPORTANT:
+                1. Please log in to your account using the temporary password above
+                2. Change your password immediately after first login
+                3. Review and sign your lease agreement (attached)
+                4. Upload your signed lease agreement through your student portal
+
+                LOGIN URL: ${process.env.FRONTEND_URL || 'http://localhost:5173' ||'https://alamait.vercel.app' || 'https://alamait.com'}/login
+
+                If you have any questions, please contact our support team.
+
+                Best regards,
+                Alamait Student Accommodation Team
+            `,
+            attachments: attachments.length > 0 ? attachments : undefined
+        });
+
+        // Return success response with login details (following existing application response format)
+        res.status(201).json({
+            success: true,
+            message: 'Student added successfully with room assignment and lease',
+            application: {
+                id: application._id,
+                applicationCode: application.applicationCode,
+                status: application.status,
+                paymentStatus: application.paymentStatus
+            },
+            student: {
+                id: student._id,
+                email,
+                firstName,
+                lastName,
+                phone,
+                status: student.status,
+                residence: residence.name,
+                roomNumber,
+                startDate,
+                endDate
+            },
+            loginDetails: {
+                email,
+                temporaryPassword: tempPassword
+            },
+            booking: {
+                id: booking._id,
+                totalAmount: booking.totalAmount,
+                paymentStatus: booking.paymentStatus
+            },
+            lease: {
+                id: lease._id,
+                filename: lease.filename
+            },
+            room: {
+                name: roomNumber,
+                status: room.status,
+                currentOccupancy: room.currentOccupancy,
+                capacity: room.capacity,
+                occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+            }
+        });
+
+    } catch (error) {
+        console.error('Error in manualAddStudent:', error);
+        res.status(500).json({ error: 'Server error', details: error.message });
+    }
+};
+
+// Helper function to get lease template file based on residence name
+function getLeaseTemplateFile(residenceName) {
+    const name = residenceName.toLowerCase();
+    if (name.includes('st kilda') || name.includes('belvedere')) {
+        return 'ST Kilda Boarding Agreement1.docx';
+    } else if (name.includes('newlands')) {
+        return 'Lease_Agreement_Template.docx';
+    } else if (name.includes('office')) {
+        return 'Office_Lease_Agreement.docx';
+    }
+    return null;
+} 
