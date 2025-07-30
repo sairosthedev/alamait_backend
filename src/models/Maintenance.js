@@ -55,7 +55,7 @@ const maintenanceSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'assigned', 'in-progress', 'on-hold', 'completed'],
+        enum: ['pending', 'assigned', 'in-progress', 'on-hold', 'completed', 'approved'],
         default: 'pending',
         set: function(value) {
             if (value) {
@@ -103,6 +103,24 @@ const maintenanceSchema = new mongoose.Schema({
         }
     },
     financeNotes: {
+        type: String,
+        trim: true
+    },
+    ceoStatus: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending',
+        set: function(value) {
+            if (value) {
+                return value.toLowerCase();
+            }
+            return value;
+        }
+    },
+    ceoApprovalDate: {
+        type: Date
+    },
+    ceoApprovalReason: {
         type: String,
         trim: true
     },
