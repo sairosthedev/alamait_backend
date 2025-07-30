@@ -400,4 +400,4 @@ requestSchema.virtual('approvalStage').get(function() {
     }
 });
 
-module.exports = mongoose.model('Request', requestSchema);
+module.exports = mongoose.model('Request', requestSchema, 'maintenance');
