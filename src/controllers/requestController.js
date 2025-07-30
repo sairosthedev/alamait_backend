@@ -205,9 +205,7 @@ exports.createRequest = async (req, res) => {
                 if (!item.estimatedCost || item.estimatedCost < 0) {
                     return res.status(400).json({ message: `Item ${i + 1}: Estimated cost must be 0 or greater` });
                 }
-                if (!item.purpose) {
-                    return res.status(400).json({ message: `Item ${i + 1}: Purpose/justification is required` });
-                }
+                // Purpose is optional, no validation needed
             }
         }
         
@@ -850,7 +848,7 @@ exports.deleteRequest = async (req, res) => {
         }
         
         // Only allow deletion if request is still pending
-        if (request.status !== 'pending_admin_approval') {
+        if (request.status !== 'pending') {
             return res.status(400).json({ message: 'Cannot delete request that is not pending' });
         }
         
@@ -858,6 +856,215 @@ exports.deleteRequest = async (req, res) => {
         
         res.status(200).json({ message: 'Request deleted successfully' });
     } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Get quotations for a request (CEO and Finance can view)
+exports.getRequestQuotations = async (req, res) => {
+    try {
+        const user = req.user;
+        
+        const request = await Request.findById(req.params.id)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('residence', 'name')
+            .populate('quotations.uploadedBy', 'firstName lastName email')
+            .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.approvedBy', 'firstName lastName email');
+        
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+        
+        // Check permissions - CEO and Finance can view quotations
+        if (user.role !== 'admin' && user.role !== 'finance' && user.role !== 'finance_admin' && user.role !== 'finance_user' && user.role !== 'ceo') {
+            return res.status(403).json({ message: 'Access denied. Only admin, finance, and CEO users can view quotations.' });
+        }
+        
+        // Prepare quotation data
+        const quotationData = {
+            requestId: request._id,
+            requestTitle: request.title,
+            requestType: request.type,
+            submittedBy: request.submittedBy,
+            residence: request.residence,
+            status: request.status,
+            totalEstimatedCost: request.totalEstimatedCost,
+            requestLevelQuotations: request.quotations || [],
+            itemLevelQuotations: []
+        };
+        
+        // Add item-level quotations
+        if (request.items && request.items.length > 0) {
+            request.items.forEach((item, itemIndex) => {
+                if (item.quotations && item.quotations.length > 0) {
+                    quotationData.itemLevelQuotations.push({
+                        itemIndex: itemIndex,
+                        itemDescription: item.description,
+                        itemQuantity: item.quantity,
+                        itemEstimatedCost: item.estimatedCost,
+                        quotations: item.quotations
+                    });
+                }
+            });
+        }
+        
+        res.status(200).json(quotationData);
+    } catch (error) {
+        console.error('Error getting request quotations:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Add quotation to specific item in request
+exports.addItemQuotation = async (req, res) => {
+    try {
+        const { provider, amount, description } = req.body;
+        const { itemIndex } = req.params;
+        const user = req.user;
+        
+        const request = await Request.findById(req.params.id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+        
+        // Check permissions - only admins can add quotations
+        if (user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can add quotations' });
+        }
+        
+        // Validate item index
+        if (!request.items || itemIndex < 0 || itemIndex >= request.items.length) {
+            return res.status(400).json({ message: 'Invalid item index' });
+        }
+        
+        // Validate required fields
+        if (!provider || !amount) {
+            return res.status(400).json({ message: 'Provider and amount are required' });
+        }
+        
+        // Handle file upload
+        let fileUrl = '';
+        let fileName = '';
+        
+        if (req.file) {
+            try {
+                const uploadResult = await uploadToS3(req.file, 'quotations');
+                fileUrl = uploadResult.url;
+                fileName = req.file.originalname;
+            } catch (uploadError) {
+                console.error('File upload error:', uploadError);
+                return res.status(500).json({ message: 'Error uploading file' });
+            }
+        } else {
+            return res.status(400).json({ message: 'Quotation file is required' });
+        }
+        
+        // Add quotation to the specific item
+        const quotation = {
+            provider,
+            amount: parseFloat(amount),
+            description: description || '',
+            fileUrl,
+            fileName,
+            uploadedBy: user._id,
+            uploadedAt: new Date(),
+            isApproved: false
+        };
+        
+        request.items[itemIndex].quotations.push(quotation);
+        
+        // Add to request history
+        request.requestHistory.push({
+            date: new Date(),
+            action: 'Item quotation added',
+            user: user._id,
+            changes: [`Quotation added for item: ${request.items[itemIndex].description}`]
+        });
+        
+        await request.save();
+        
+        const updatedRequest = await Request.findById(request._id)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.approvedBy', 'firstName lastName email')
+            .populate('residence', 'name');
+        
+        res.status(201).json(updatedRequest);
+    } catch (error) {
+        console.error('Error adding item quotation:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Approve quotation for specific item
+exports.approveItemQuotation = async (req, res) => {
+    try {
+        const { itemIndex, quotationIndex } = req.params;
+        const user = req.user;
+        
+        const request = await Request.findById(req.params.id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+        
+        // Check permissions - only admins and finance users can approve quotations
+        if (user.role !== 'admin' && user.role !== 'finance' && user.role !== 'finance_admin' && user.role !== 'finance_user') {
+            return res.status(403).json({ message: 'Only admins and finance users can approve quotations' });
+        }
+        
+        // Validate indices
+        if (!request.items || itemIndex < 0 || itemIndex >= request.items.length) {
+            return res.status(400).json({ message: 'Invalid item index' });
+        }
+        
+        const item = request.items[itemIndex];
+        if (!item.quotations || quotationIndex < 0 || quotationIndex >= item.quotations.length) {
+            return res.status(400).json({ message: 'Invalid quotation index' });
+        }
+        
+        // Unapprove all other quotations for this item
+        item.quotations.forEach((quotation, index) => {
+            quotation.isApproved = false;
+            quotation.approvedBy = null;
+            quotation.approvedAt = null;
+        });
+        
+        // Approve the selected quotation
+        item.quotations[quotationIndex].isApproved = true;
+        item.quotations[quotationIndex].approvedBy = user._id;
+        item.quotations[quotationIndex].approvedAt = new Date();
+        
+        // Update item's estimated cost to the approved quotation amount
+        item.estimatedCost = item.quotations[quotationIndex].amount;
+        
+        // Recalculate total estimated cost
+        if (request.items && request.items.length > 0) {
+            request.totalEstimatedCost = request.items.reduce((total, item) => {
+                return total + (item.estimatedCost * item.quantity);
+            }, 0);
+        }
+        
+        // Add to request history
+        request.requestHistory.push({
+            date: new Date(),
+            action: 'Item quotation approved',
+            user: user._id,
+            changes: [`Quotation approved for item: ${item.description}`]
+        });
+        
+        await request.save();
+        
+        const updatedRequest = await Request.findById(request._id)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.approvedBy', 'firstName lastName email')
+            .populate('residence', 'name');
+        
+        res.status(200).json(updatedRequest);
+    } catch (error) {
+        console.error('Error approving item quotation:', error);
         res.status(500).json({ message: error.message });
     }
 };

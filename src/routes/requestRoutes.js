@@ -38,6 +38,9 @@ router.get('/', requestController.getAllRequests);
 // Get request by ID - CEO can view any request
 router.get('/:id', requestController.getRequestById);
 
+// Get quotations for a request (CEO and Finance can view)
+router.get('/:id/quotations', requestController.getRequestQuotations);
+
 // Create new request
 router.post('/', requestController.createRequest);
 
@@ -67,6 +70,19 @@ router.post('/:id/quotations',
 router.patch('/:id/quotations/approve', 
     checkRole(['finance', 'finance_admin', 'finance_user']), 
     requestController.approveQuotation
+);
+
+// Add quotation to specific item (admin only)
+router.post('/:id/items/:itemIndex/quotations', 
+    checkRole(['admin']), 
+    upload.single('quotation'), 
+    requestController.addItemQuotation
+);
+
+// Approve quotation for specific item (admin and finance users)
+router.patch('/:id/items/:itemIndex/quotations/:quotationIndex/approve', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    requestController.approveItemQuotation
 );
 
 // Delete request (only by submitter or admin)

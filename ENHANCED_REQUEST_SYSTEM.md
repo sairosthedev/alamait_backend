@@ -53,7 +53,7 @@ Non-student users can submit comprehensive requests with detailed specifications
 - `description` - Item/service description
 - `quantity` - Quantity needed (minimum 1)
 - `estimatedCost` - Estimated cost per unit (minimum 0)
-- `purpose` - Purpose/justification for the item
+- `purpose` - Purpose/justification for the item (optional)
 
 **Optional Fields:**
 - `proposedVendor` - Preferred vendor/supplier
@@ -81,8 +81,7 @@ Non-student users can submit comprehensive requests with detailed specifications
     {
       "description": "Office Chairs",
       "quantity": 5,
-      "estimatedCost": 120.00,
-      "purpose": "New chairs for the reception area"
+      "estimatedCost": 120.00
     }
   ],
   "proposedVendor": "Office Supplies Co.",
@@ -161,6 +160,11 @@ totalEstimatedCost = items.reduce((total, item) => {
 - Item 2: 5 chairs × $120 = $600
 - **Total Estimated Cost: $1,100**
 
+**After Quotation Approval:**
+- Item 1: 2 printers × $240 (approved quotation) = $480
+- Item 2: 5 chairs × $110 (approved quotation) = $550
+- **Updated Total Estimated Cost: $1,030**
+
 ## API Endpoints
 
 ### 📝 **Create Request**
@@ -206,6 +210,18 @@ GET /api/requests
 GET /api/requests/:id
 ```
 
+### 📄 **Get Quotations**
+```
+GET /api/requests/:id/quotations
+```
+
+**Access:** Admin, Finance, and CEO users
+
+**Response includes:**
+- Request-level quotations with approval status
+- Item-level quotations with approval status
+- Approved quotation details (who approved, when, etc.)
+
 **Query Parameters:**
 - `type` - Filter by request type
 - `status` - Filter by status
@@ -228,7 +244,8 @@ GET /api/requests/:id
 - Can submit financial or operational requests
 - Department, requestedBy, and deliveryLocation are required
 - At least one item is required
-- Each item must have description, quantity, estimatedCost, and purpose
+- Each item must have description, quantity, and estimatedCost
+- Purpose is optional for each item
 - Quantity must be at least 1
 - Estimated cost must be 0 or greater
 
@@ -251,23 +268,23 @@ GET /api/requests/:id
 
 ### 👀 **View Access**
 - **Students:** Can view their own requests and requests from their residence
-- **Admin:** Can view all requests
-- **Finance:** Can view financial/operational requests approved by admin
-- **CEO:** Can view financial/operational requests approved by admin and finance
+- **Admin:** Can view all requests and quotations
+- **Finance:** Can view financial/operational requests approved by admin and quotations
+- **CEO:** Can view financial/operational requests approved by admin and finance, and all quotations
 
 ### ✏️ **Create Access**
 - **Students:** Can create maintenance requests only
 - **Admin/Finance/CEO:** Can create any type of request
 
 ### ✅ **Approval Access**
-- **Admin:** Can approve any request
-- **Finance:** Can approve requests after admin approval
+- **Admin:** Can approve any request and quotations
+- **Finance:** Can approve requests after admin approval and quotations
 - **CEO:** Can approve requests after admin and finance approval
 
 ## Quotation System
 
-### 📄 **Admin Quotations**
-Admins can still upload quotations for requests:
+### 📄 **Request-Level Quotations**
+Admins can upload quotations for entire requests:
 
 ```
 POST /api/requests/:id/quotations
@@ -284,6 +301,37 @@ POST /api/requests/:id/quotations
 }
 ```
 
+### 📄 **Item-Level Quotations**
+Admins can upload quotations for specific items within requests:
+
+```
+POST /api/requests/:id/items/:itemIndex/quotations
+```
+
+**Request Body:**
+```json
+{
+  "provider": "Vendor Name",
+  "amount": 250.00,
+  "description": "Item-specific quotation"
+}
+```
+
+**File Upload:** Include the quotation file in the request
+
+### ✅ **Approve Item Quotations**
+```
+PATCH /api/requests/:id/items/:itemIndex/quotations/:quotationIndex/approve
+```
+
+**Access:** Admin and Finance users
+
+**What happens when a quotation is approved:**
+1. **Item cost is updated** - The item's `estimatedCost` becomes the approved quotation amount
+2. **Total cost is recalculated** - The request's `totalEstimatedCost` is updated automatically
+3. **Other quotations are unapproved** - Only one quotation per item can be approved
+4. **Approval is tracked** - Who approved, when, and which quotation is recorded
+
 ### 📋 **Quotation Tracking**
 Each quotation tracks:
 - Provider name
@@ -292,6 +340,19 @@ Each quotation tracks:
 - File URL and name
 - Upload date and user
 - Approval status and approver
+
+### 💰 **Automatic Cost Updates**
+When an item quotation is approved:
+- **The item's estimated cost is updated to the approved quotation amount**
+- **The total estimated cost is automatically recalculated** based on all approved quotations
+- Only one quotation per item can be approved at a time
+- The approved quotation amount becomes the new baseline cost for that item
+
+**Example Workflow:**
+1. **Initial Request:** Item estimated at $250
+2. **Quotations Received:** Vendor A ($240), Vendor B ($260)
+3. **Quotation Approved:** Vendor A ($240) is approved
+4. **Result:** Item cost becomes $240, total request cost is recalculated
 
 ## Error Handling
 
@@ -367,6 +428,12 @@ Each quotation tracks:
 7. **Approval workflow** ✅
 8. **Cost calculation** ✅
 9. **Email tracking** ✅
+10. **Item quotation upload** ✅
+11. **Item quotation approval** ✅
+12. **Automatic cost recalculation** ✅
+13. **Finance user quotation approval** ✅
+14. **CEO quotation viewing** ✅
+15. **Quotation amount becomes item cost** ✅
 
 ## Migration Notes
 

@@ -64,9 +64,52 @@ const requestItemSchema = new mongoose.Schema({
     },
     purpose: {
         type: String,
-        required: true,
         trim: true
-    }
+    },
+    quotations: [{
+        provider: {
+            type: String,
+            required: true,
+            trim: true
+        },
+        amount: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        description: {
+            type: String,
+            trim: true
+        },
+        fileUrl: {
+            type: String,
+            required: true
+        },
+        fileName: {
+            type: String,
+            required: true
+        },
+        uploadedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        uploadedAt: {
+            type: Date,
+            default: Date.now
+        },
+        isApproved: {
+            type: Boolean,
+            default: false
+        },
+        approvedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        approvedAt: {
+            type: Date
+        }
+    }]
 });
 
 const requestSchema = new mongoose.Schema({
