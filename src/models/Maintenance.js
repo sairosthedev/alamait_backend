@@ -59,7 +59,7 @@ const maintenanceSchema = new mongoose.Schema({
         default: 'pending',
         set: function(value) {
             if (value) {
-                return value.toLowerCase().replace(/\s+/g, '-');
+                return value.toLowerCase().replace(/[\s_]+/g, '-');
             }
             return value;
         }
@@ -221,7 +221,7 @@ maintenanceSchema.index({
 // Pre-save middleware to ensure dates are valid and normalize values
 maintenanceSchema.pre('save', function(next) {
     if (this.isModified('status')) {
-        this.status = this.status.toLowerCase().replace(/\s+/g, '-');
+        this.status = this.status.toLowerCase().replace(/[\s_]+/g, '-');
     }
 
     if (this.isModified('category')) {

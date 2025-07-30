@@ -761,7 +761,7 @@ exports.removeMaintenanceStaff = async (req, res) => {
         // Check if staff has any assigned maintenance requests
         const assignedRequests = await Maintenance.countDocuments({ 
             assignedTo: staff._id,
-            status: { $in: ['assigned', 'in_progress'] }
+            status: { $in: ['assigned', 'in-progress'] }
         });
 
         if (assignedRequests > 0) {
