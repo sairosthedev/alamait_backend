@@ -14,7 +14,7 @@ const {
 const maintenanceUpdateValidation = [
     check('status')
         .optional()
-        .isIn(['pending', 'in_progress', 'completed', 'cancelled']),
+        .isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed', 'approved', 'rejected']),
     check('priority')
         .optional()
         .isIn(['low', 'medium', 'high', 'urgent']),

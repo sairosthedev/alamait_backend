@@ -49,7 +49,7 @@ const leaseController = require('../../controllers/student/leaseController');
 const maintenanceUpdateValidation = [
     check('status')
         .optional()
-        .isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed'])
+        .isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed', 'approved', 'rejected'])
         .withMessage('Invalid status'),
     check('assignedTo')
         .optional()
@@ -97,7 +97,7 @@ const maintenanceCreateValidation = [
     check('room', 'Room is required').notEmpty().trim(),
     check('residence', 'Residence ID is required').notEmpty().isMongoId().withMessage('Invalid residence ID format'),
     check('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Invalid priority level'),
-    check('status').optional().isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed']).withMessage('Invalid status'),
+    check('status').optional().isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed', 'approved', 'rejected']).withMessage('Invalid status'),
     check('amount').optional().isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
     check('assignedTo').optional().isMongoId().withMessage('Invalid assigned user ID')
 ];
