@@ -192,7 +192,7 @@ const requestSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'assigned', 'in-progress', 'completed', 'rejected', 'pending_ceo_approval', 'pending_finance_approval', 'pending_admin_approval'],
+        enum: ['pending', 'assigned', 'in-progress', 'completed', 'rejected', 'pending_ceo_approval', 'pending_finance_approval', 'pending_admin_approval', 'pending-ceo-approval', 'pending-finance-approval', 'pending-admin-approval'],
         default: 'pending'
     },
     approval: {
