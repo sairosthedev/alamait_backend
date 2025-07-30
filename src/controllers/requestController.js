@@ -696,17 +696,32 @@ exports.uploadQuotation = async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
         
-        // Check if file was uploaded
-        if (!req.file) {
+        // Check if file was uploaded or if file URL is provided
+        let fileUrl = '';
+        let fileName = '';
+        
+        if (req.file) {
+            // File was uploaded via FormData
+            console.log('File uploaded via FormData');
+            const uploadResult = await uploadToS3(req.file, 'quotations');
+            fileUrl = uploadResult.url;
+            fileName = uploadResult.fileName;
+        } else if (req.body.fileUrl) {
+            // File URL was provided via JSON
+            console.log('File URL provided via JSON');
+            fileUrl = req.body.fileUrl;
+            fileName = req.body.fileName || 'uploaded-file';
+        } else {
             console.log('No file found in request');
             console.log('Content-Type header:', req.headers['content-type']);
             console.log('Request body keys:', Object.keys(req.body));
             return res.status(400).json({ 
-                message: 'No file uploaded',
+                message: 'No file uploaded or file URL provided',
                 debug: {
                     contentType: req.headers['content-type'],
                     bodyKeys: Object.keys(req.body),
-                    hasFile: !!req.file
+                    hasFile: !!req.file,
+                    hasFileUrl: !!req.body.fileUrl
                 }
             });
         }
@@ -716,15 +731,12 @@ exports.uploadQuotation = async (req, res) => {
             return res.status(400).json({ message: 'Maximum of 3 quotations allowed' });
         }
         
-        // Upload file to S3
-        const uploadResult = await uploadToS3(req.file, 'quotations');
-        
         const quotation = {
             provider,
             amount: parseFloat(amount),
             description,
-            fileUrl: uploadResult.url,
-            fileName: uploadResult.fileName,
+            fileUrl: fileUrl,
+            fileName: fileName,
             uploadedBy: user._id,
             uploadedAt: new Date(),
             validUntil: validUntil ? new Date(validUntil) : null,
@@ -964,12 +976,14 @@ exports.addItemQuotation = async (req, res) => {
             return res.status(400).json({ message: 'Provider and amount are required' });
         }
         
-        // Handle file upload
+        // Handle file upload or file URL
         let fileUrl = '';
         let fileName = '';
         
         if (req.file) {
+            // File was uploaded via FormData
             try {
+                console.log('File uploaded via FormData');
                 const uploadResult = await uploadToS3(req.file, 'quotations');
                 fileUrl = uploadResult.url;
                 fileName = uploadResult.fileName;
@@ -977,16 +991,22 @@ exports.addItemQuotation = async (req, res) => {
                 console.error('File upload error:', uploadError);
                 return res.status(500).json({ message: 'Error uploading file' });
             }
+        } else if (req.body.fileUrl) {
+            // File URL was provided via JSON
+            console.log('File URL provided via JSON');
+            fileUrl = req.body.fileUrl;
+            fileName = req.body.fileName || 'uploaded-file';
         } else {
             console.log('No file found in request');
             console.log('Content-Type header:', req.headers['content-type']);
             console.log('Request body keys:', Object.keys(req.body));
             return res.status(400).json({ 
-                message: 'Quotation file is required',
+                message: 'Quotation file is required (either upload file or provide fileUrl)',
                 debug: {
                     contentType: req.headers['content-type'],
                     bodyKeys: Object.keys(req.body),
-                    hasFile: !!req.file
+                    hasFile: !!req.file,
+                    hasFileUrl: !!req.body.fileUrl
                 }
             });
         }

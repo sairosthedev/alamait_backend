@@ -33,7 +33,7 @@ const upload = multer({
             cb(new Error('Invalid file type. Only PDF, DOC, DOCX, and image files are allowed.'), false);
         }
     }
-}).single('quotation');
+});
 
 // Apply authentication middleware to all routes
 router.use(auth);
@@ -82,10 +82,19 @@ router.patch('/:id/finance-approval', checkRole(['finance', 'finance_admin', 'fi
 // CEO approval for admin requests
 router.patch('/:id/ceo-approval', checkRole(['ceo']), requestController.ceoApproval);
 
-// Upload quotation (admin only)
+// Upload quotation (admin only) - handles both FormData and JSON
 router.post('/:id/quotations', 
     checkRole(['admin']), 
-    upload, 
+    (req, res, next) => {
+        // Check if this is a multipart request (file upload)
+        if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
+            // Use multer for file uploads
+            upload.single('quotation')(req, res, next);
+        } else {
+            // Skip multer for JSON requests
+            next();
+        }
+    },
     requestController.uploadQuotation
 );
 
@@ -95,10 +104,19 @@ router.patch('/:id/quotations/approve',
     requestController.approveQuotation
 );
 
-// Add quotation to specific item (admin only)
+// Add quotation to specific item (admin only) - handles both FormData and JSON
 router.post('/:id/items/:itemIndex/quotations', 
     checkRole(['admin']), 
-    upload, 
+    (req, res, next) => {
+        // Check if this is a multipart request (file upload)
+        if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
+            // Use multer for file uploads
+            upload.single('quotation')(req, res, next);
+        } else {
+            // Skip multer for JSON requests
+            next();
+        }
+    },
     requestController.addItemQuotation
 );
 
