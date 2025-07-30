@@ -10,7 +10,7 @@ const {
     getResidence,
     updateResidence,
     deleteResidence,
-    getRoomsByResidence
+    getRoomsByResidence,
     getResidenceRooms
 } = require('../../controllers/admin/residenceController');
 
