@@ -42,17 +42,31 @@ const quotationSchema = new mongoose.Schema({
     },
     approvedAt: {
         type: Date
-    },
-    validUntil: {
-        type: Date
-    },
-    terms: {
+    }
+});
+
+// Schema for items/services in non-student requests
+const requestItemSchema = new mongoose.Schema({
+    description: {
         type: String,
+        required: true,
         trim: true
     },
-    attachments: [{
-        type: String
-    }]
+    quantity: {
+        type: Number,
+        required: true,
+        min: 1
+    },
+    estimatedCost: {
+        type: Number,
+        required: true,
+        min: 0
+    },
+    purpose: {
+        type: String,
+        required: true,
+        trim: true
+    }
 });
 
 const requestSchema = new mongoose.Schema({
@@ -68,7 +82,7 @@ const requestSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['maintenance', 'financial', 'operational', 'administrative'],
+        enum: ['maintenance', 'financial', 'operational'],
         required: true
     },
     submittedBy: {
@@ -76,24 +90,51 @@ const requestSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
-    submittedDate: {
-        type: Date,
-        default: Date.now
-    },
     residence: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Residence',
         required: true
     },
+    
+    // Student-specific fields (for maintenance requests)
     room: {
         type: String,
         trim: true
     },
     category: {
         type: String,
-        enum: ['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'renovation', 'other'],
+        enum: ['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other'],
         required: function() { return this.type === 'maintenance'; }
     },
+    
+    // Non-student specific fields
+    department: {
+        type: String,
+        trim: true,
+        required: function() { return this.type !== 'maintenance'; }
+    },
+    requestedBy: {
+        type: String,
+        trim: true,
+        required: function() { return this.type !== 'maintenance'; }
+    },
+    items: [requestItemSchema], // Multiple items/services
+    totalEstimatedCost: {
+        type: Number,
+        min: 0,
+        default: 0
+    },
+    proposedVendor: {
+        type: String,
+        trim: true
+    },
+    deliveryLocation: {
+        type: String,
+        trim: true,
+        required: function() { return this.type !== 'maintenance'; }
+    },
+    
+    // Common fields
     priority: {
         type: String,
         enum: ['low', 'medium', 'high'],
@@ -101,24 +142,9 @@ const requestSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending_admin_approval', 'pending_finance_approval', 'pending_ceo_approval', 'approved', 'approved_with_changes', 'rejected'],
-        default: 'pending_admin_approval'
+        enum: ['pending', 'assigned', 'in-progress', 'completed', 'rejected'],
+        default: 'pending'
     },
-    amount: {
-        type: Number,
-        min: 0,
-        default: 0
-    },
-    dueDate: {
-        type: Date
-    },
-    tags: [{
-        type: String,
-        trim: true
-    }],
-    attachments: [{
-        type: String
-    }],
     approval: {
         admin: {
             approved: {
@@ -128,6 +154,10 @@ const requestSchema = new mongoose.Schema({
             approvedBy: {
                 type: mongoose.Schema.Types.ObjectId,
                 ref: 'User'
+            },
+            approvedByEmail: {
+                type: String,
+                trim: true
             },
             approvedAt: {
                 type: Date
@@ -146,6 +176,10 @@ const requestSchema = new mongoose.Schema({
                 type: mongoose.Schema.Types.ObjectId,
                 ref: 'User'
             },
+            approvedByEmail: {
+                type: String,
+                trim: true
+            },
             approvedAt: {
                 type: Date
             },
@@ -163,32 +197,17 @@ const requestSchema = new mongoose.Schema({
                 type: mongoose.Schema.Types.ObjectId,
                 ref: 'User'
             },
+            approvedByEmail: {
+                type: String,
+                trim: true
+            },
             approvedAt: {
                 type: Date
             },
             notes: {
                 type: String,
                 trim: true
-            },
-            quotationChanges: [{
-                originalQuotation: {
-                    type: Number,
-                    required: true
-                },
-                newQuotation: {
-                    type: Number,
-                    required: true
-                },
-                changeReason: {
-                    type: String,
-                    required: true,
-                    trim: true
-                },
-                changedDate: {
-                    type: Date,
-                    default: Date.now
-                }
-            }]
+            }
         }
     },
     assignedTo: {
@@ -208,6 +227,11 @@ const requestSchema = new mongoose.Schema({
     expenseId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Expense'
+    },
+    amount: {
+        type: Number,
+        min: 0,
+        default: 0
     },
     images: [{
         url: {
@@ -260,9 +284,6 @@ requestSchema.index({ submittedBy: 1 });
 requestSchema.index({ residence: 1 });
 requestSchema.index({ createdAt: -1 });
 requestSchema.index({ priority: 1 });
-requestSchema.index({ 'approval.admin.approved': 1 });
-requestSchema.index({ 'approval.finance.approved': 1 });
-requestSchema.index({ 'approval.ceo.approved': 1 });
 
 // Add compound index for duplicate detection
 requestSchema.index({ 
@@ -273,12 +294,19 @@ requestSchema.index({
 }, { 
     name: 'duplicate_detection_index',
     partialFilterExpression: { 
-        status: { $in: ['pending_admin_approval', 'pending_finance_approval', 'pending_ceo_approval'] } 
+        status: { $in: ['pending', 'assigned', 'in-progress'] } 
     }
 });
 
-// Pre-save middleware to update request history
+// Pre-save middleware to update request history and calculate total cost
 requestSchema.pre('save', function(next) {
+    // Calculate total estimated cost from items
+    if (this.items && this.items.length > 0) {
+        this.totalEstimatedCost = this.items.reduce((total, item) => {
+            return total + (item.estimatedCost * item.quantity);
+        }, 0);
+    }
+    
     if (this.isModified()) {
         const changes = [];
         
@@ -309,7 +337,7 @@ requestSchema.pre('save', function(next) {
 // Virtual for checking if request is fully approved
 requestSchema.virtual('isFullyApproved').get(function() {
     if (this.type === 'maintenance') {
-        return this.status === 'approved' || this.status === 'approved_with_changes';
+        return this.status === 'completed';
     } else {
         return this.approval.admin.approved && 
                this.approval.finance.approved && 
@@ -322,19 +350,11 @@ requestSchema.virtual('approvalStage').get(function() {
     if (this.type === 'maintenance') {
         return this.status;
     } else {
-        if (!this.approval.admin.approved) return 'pending_admin_approval';
-        if (!this.approval.finance.approved) return 'pending_finance_approval';
-        if (!this.approval.ceo.approved) return 'pending_ceo_approval';
+        if (!this.approval.admin.approved) return 'admin_pending';
+        if (!this.approval.finance.approved) return 'finance_pending';
+        if (!this.approval.ceo.approved) return 'ceo_pending';
         return 'approved';
     }
-});
-
-// Virtual for getting pending CEO approval requests
-requestSchema.virtual('isPendingCEOApproval').get(function() {
-    return this.approval.admin.approved && 
-           this.approval.finance.approved && 
-           !this.approval.ceo.approved &&
-           this.status !== 'rejected';
 });
 
 module.exports = mongoose.model('Request', requestSchema);

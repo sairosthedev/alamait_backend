@@ -136,7 +136,26 @@ exports.getRequestById = async (req, res) => {
 // Create new request
 exports.createRequest = async (req, res) => {
     try {
-        const { title, description, type, residence, room, category, priority, amount, dueDate, tags, images } = req.body;
+        const { 
+            title, 
+            description, 
+            type, 
+            residence, 
+            room, 
+            category, 
+            priority, 
+            amount, 
+            dueDate, 
+            tags, 
+            images,
+            // Non-student specific fields
+            department,
+            requestedBy,
+            items,
+            proposedVendor,
+            deliveryLocation
+        } = req.body;
+        
         const user = req.user;
         
         // Validate required fields
@@ -159,12 +178,45 @@ exports.createRequest = async (req, res) => {
             }
         }
         
+        // Validate non-student specific fields
+        if (user.role !== 'student' && type !== 'maintenance') {
+            if (!department) {
+                return res.status(400).json({ message: 'Department is required for non-student requests' });
+            }
+            if (!requestedBy) {
+                return res.status(400).json({ message: 'Requested by is required for non-student requests' });
+            }
+            if (!deliveryLocation) {
+                return res.status(400).json({ message: 'Delivery location is required for non-student requests' });
+            }
+            if (!items || !Array.isArray(items) || items.length === 0) {
+                return res.status(400).json({ message: 'At least one item/service is required for non-student requests' });
+            }
+            
+            // Validate each item
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (!item.description) {
+                    return res.status(400).json({ message: `Item ${i + 1}: Description is required` });
+                }
+                if (!item.quantity || item.quantity < 1) {
+                    return res.status(400).json({ message: `Item ${i + 1}: Quantity must be at least 1` });
+                }
+                if (!item.estimatedCost || item.estimatedCost < 0) {
+                    return res.status(400).json({ message: `Item ${i + 1}: Estimated cost must be 0 or greater` });
+                }
+                if (!item.purpose) {
+                    return res.status(400).json({ message: `Item ${i + 1}: Purpose/justification is required` });
+                }
+            }
+        }
+        
         // Check for duplicate requests (same title and description by same user)
         const existingRequest = await Request.findOne({
             title: title,
             description: description,
             submittedBy: user._id,
-            status: { $in: ['pending_admin_approval', 'pending_finance_approval', 'pending_ceo_approval'] }
+            status: { $in: ['pending', 'assigned', 'in-progress'] }
         });
         
         if (existingRequest) {
@@ -177,16 +229,34 @@ exports.createRequest = async (req, res) => {
             description,
             type,
             submittedBy: user._id,
-            submittedDate: new Date(),
             residence,
-            room,
-            category,
             priority: priority || 'medium',
-            status: 'pending_admin_approval',
+            status: 'pending',
             amount: amount || 0,
             dueDate: dueDate ? new Date(dueDate) : null,
             tags: tags || []
         };
+        
+        // Add role-specific fields
+        if (user.role === 'student') {
+            // Student maintenance request
+            requestData.room = room;
+            requestData.category = category;
+        } else {
+            // Non-student request
+            requestData.department = department;
+            requestData.requestedBy = requestedBy;
+            requestData.items = items;
+            requestData.proposedVendor = proposedVendor;
+            requestData.deliveryLocation = deliveryLocation;
+            
+            // Calculate total estimated cost
+            if (items && items.length > 0) {
+                requestData.totalEstimatedCost = items.reduce((total, item) => {
+                    return total + (item.estimatedCost * item.quantity);
+                }, 0);
+            }
+        }
         
         // Add images if provided
         if (images && Array.isArray(images)) {
@@ -199,6 +269,7 @@ exports.createRequest = async (req, res) => {
                 admin: {
                     approved: true,
                     approvedBy: user._id,
+                    approvedByEmail: user.email,
                     approvedAt: new Date()
                 },
                 finance: {
@@ -208,7 +279,7 @@ exports.createRequest = async (req, res) => {
                     approved: false
                 }
             };
-            requestData.status = 'pending_finance_approval';
+            requestData.status = 'pending';
         }
         
         const request = new Request(requestData);
@@ -229,6 +300,7 @@ exports.createRequest = async (req, res) => {
         
         res.status(201).json(populatedRequest);
     } catch (error) {
+        console.error('Error creating request:', error);
         res.status(500).json({ message: error.message });
     }
 };
@@ -250,7 +322,7 @@ exports.updateRequest = async (req, res) => {
         }
         
         // Only allow updates if request is still pending
-        if (request.status !== 'pending_admin_approval') {
+        if (request.status !== 'pending') {
             return res.status(400).json({ message: 'Cannot update request that is not pending' });
         }
         
@@ -341,20 +413,21 @@ exports.adminApproval = async (req, res) => {
         }
         
         // Check if request is in correct status
-        if (request.status !== 'pending_admin_approval') {
-            return res.status(400).json({ message: 'Request is not pending admin approval' });
+        if (request.status !== 'pending') {
+            return res.status(400).json({ message: 'Request is not pending approval' });
         }
         
         request.approval.admin = {
             approved,
             approvedBy: user._id,
+            approvedByEmail: user.email,
             approvedAt: new Date(),
             notes
         };
         
         // Update status based on approval
         if (approved) {
-            request.status = 'pending_finance_approval';
+            request.status = 'pending';
         } else {
             request.status = 'rejected';
         }
@@ -402,20 +475,21 @@ exports.financeApproval = async (req, res) => {
         }
         
         // Check if request is in correct status
-        if (request.status !== 'pending_finance_approval') {
-            return res.status(400).json({ message: 'Request is not pending finance approval' });
+        if (request.status !== 'pending') {
+            return res.status(400).json({ message: 'Request is not pending approval' });
         }
         
         request.approval.finance = {
             approved,
             approvedBy: user._id,
+            approvedByEmail: user.email,
             approvedAt: new Date(),
             notes
         };
         
         // Update status based on approval
         if (approved) {
-            request.status = 'pending_ceo_approval';
+            request.status = 'pending';
         } else {
             request.status = 'rejected';
         }
@@ -463,20 +537,21 @@ exports.ceoApproval = async (req, res) => {
         }
         
         // Check if request is in correct status
-        if (request.status !== 'pending_ceo_approval') {
-            return res.status(400).json({ message: 'Request is not pending CEO approval' });
+        if (request.status !== 'pending') {
+            return res.status(400).json({ message: 'Request is not pending approval' });
         }
         
         request.approval.ceo = {
             approved,
             approvedBy: user._id,
+            approvedByEmail: user.email,
             approvedAt: new Date(),
             notes
         };
         
         // Update status based on approval
         if (approved) {
-            request.status = 'approved';
+            request.status = 'completed';
             
             // Convert to expense if amount is specified
             if (request.amount > 0) {
