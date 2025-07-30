@@ -19,7 +19,8 @@
     "clear-app-code-from-user": "node scripts/clearApplicationCodeFromUser.js",
     "update-all-waitlisted": "node scripts/updateAllWaitlistedApplications.js",
     "update-room-c2": "node scripts/updateRoomC2Status.js",
-    "update-specific-room": "node scripts/updateSpecificRoomStatus.js"
+    "update-specific-room": "node scripts/updateSpecificRoomStatus.js",
+    "fix-room-types": "node scripts/fixInvalidRoomTypes.js"
   },
   "keywords": [],
   "author": "",
