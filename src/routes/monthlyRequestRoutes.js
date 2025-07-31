@@ -72,11 +72,29 @@ router.get('/residence/:residenceId/:month/:year', monthlyRequestController.getM
 // Get templates for a residence
 router.get('/templates/:residence', monthlyRequestController.getTemplates);
 
+// Get available templates for a residence with enhanced information
+router.get('/available-templates/:residence', monthlyRequestController.getAvailableTemplates);
+
+// Get template items as table format
+router.get('/templates/:templateId/table', monthlyRequestController.getTemplateItemsTable);
+
+// Get templates with pending changes for finance approval
+router.get('/templates/:residence/pending-changes', monthlyRequestController.getTemplatesWithPendingChanges);
+
 // Create new monthly request
 router.post('/', monthlyRequestController.createMonthlyRequest);
 
 // Create monthly request from template
 router.post('/templates/:templateId', monthlyRequestController.createFromTemplate);
+
+// Template management routes (Admin only)
+router.post('/templates/:templateId/items', monthlyRequestController.addTemplateItem);
+router.put('/templates/:templateId/items/:itemIndex', monthlyRequestController.modifyTemplateItem);
+router.delete('/templates/:templateId/items/:itemIndex', monthlyRequestController.removeTemplateItem);
+
+// Template change approval routes (Finance only)
+router.post('/templates/:templateId/changes/:changeIndex/approve', monthlyRequestController.approveTemplateChanges);
+router.post('/templates/:templateId/changes/:changeIndex/reject', monthlyRequestController.rejectTemplateChanges);
 
 // Update monthly request (admin or submitter only)
 router.put('/:id', monthlyRequestController.updateMonthlyRequest);

@@ -156,6 +156,15 @@ exports.createMonthlyRequest = async (req, res) => {
 
         // Map templateRequests to items if provided (frontend compatibility)
         const finalItems = items || templateRequests || [];
+        
+        // Ensure all items have required fields with defaults
+        const processedItems = finalItems.map(item => ({
+            ...item,
+            quantity: item.quantity || 1, // Default to 1 if not provided
+            estimatedCost: item.estimatedCost || 0, // Default to 0 if not provided
+            category: item.category || 'other', // Default category
+            isRecurring: item.isRecurring !== undefined ? item.isRecurring : true // Default to true
+        }));
 
         // Log the request for debugging
         console.log('Monthly request creation attempt:', {
@@ -170,6 +179,7 @@ exports.createMonthlyRequest = async (req, res) => {
             hasItems: !!finalItems,
             hasTemplateRequests: !!templateRequests,
             itemsCount: finalItems.length,
+            processedItemsCount: processedItems.length,
             timestamp: new Date().toISOString()
         });
 
@@ -208,7 +218,8 @@ exports.createMonthlyRequest = async (req, res) => {
                     isTemplate,
                     hasItems: !!finalItems,
                     hasTemplateRequests: !!templateRequests,
-                    itemsCount: finalItems.length
+                    itemsCount: finalItems.length,
+                    processedItemsCount: processedItems.length
                 }
             });
         }
@@ -272,6 +283,31 @@ exports.createMonthlyRequest = async (req, res) => {
                     existingRequestId: existingRequest._id
                 });
             }
+            
+            // Check if there are templates available for this residence
+            const availableTemplates = await MonthlyRequest.find({
+                residence,
+                isTemplate: true
+            }).populate('residence', 'name');
+            
+            if (availableTemplates.length > 0) {
+                console.log(`Found ${availableTemplates.length} templates for residence ${residence}`);
+                
+                // If no items provided, suggest using a template
+                if (!processedItems || processedItems.length === 0) {
+                    return res.status(400).json({
+                        message: 'No items provided for monthly request. Please provide items or use an existing template.',
+                        availableTemplates: availableTemplates.map(template => ({
+                            id: template._id,
+                            title: template.title,
+                            description: template.description,
+                            itemsCount: template.items.length,
+                            totalEstimatedCost: template.totalEstimatedCost
+                        })),
+                        suggestion: 'Use POST /api/monthly-requests/templates/:templateId with month and year to create from template'
+                    });
+                }
+            }
         }
 
         const monthlyRequest = new MonthlyRequest({
@@ -280,7 +316,7 @@ exports.createMonthlyRequest = async (req, res) => {
             residence: residence, // Always required
             month: isTemplateValue ? null : parseInt(month),
             year: isTemplateValue ? null : parseInt(year),
-            items: finalItems, // Use the mapped items
+            items: processedItems, // Use the processed items with defaults
             priority: priority || 'medium',
             notes,
             isTemplate: isTemplateValue || false,
@@ -1253,6 +1289,379 @@ exports.getFinancePendingApprovals = async (req, res) => {
         });
     } catch (error) {
         console.error('Error getting finance pending approvals:', error);
+        res.status(500).json({ message: error.message });
+    }
+}; 
+
+// Get available templates for a residence with enhanced information
+exports.getAvailableTemplates = async (req, res) => {
+    try {
+        const user = req.user;
+        
+        // Students cannot access monthly request templates
+        if (user.role === 'student') {
+            return res.status(403).json({ message: 'Students do not have access to monthly requests' });
+        }
+        
+        const { residence } = req.params;
+        
+        // Validate residence ID
+        if (!residence) {
+            return res.status(400).json({ message: 'Residence ID is required' });
+        }
+        
+        // Check if residence exists
+        const residenceExists = await Residence.findById(residence);
+        if (!residenceExists) {
+            return res.status(404).json({ message: 'Residence not found' });
+        }
+        
+        // Get templates for this residence
+        const templates = await MonthlyRequest.find({
+            residence,
+            isTemplate: true
+        }).populate('residence', 'name')
+          .populate('submittedBy', 'firstName lastName email')
+          .sort({ createdAt: -1 });
+        
+        // Enhance template data with additional information
+        const enhancedTemplates = templates.map(template => ({
+            id: template._id,
+            title: template.title,
+            description: template.description,
+            residence: template.residence,
+            submittedBy: template.submittedBy,
+            itemsCount: template.items.length,
+            totalEstimatedCost: template.totalEstimatedCost,
+            priority: template.priority,
+            tags: template.tags || [],
+            createdAt: template.createdAt,
+            updatedAt: template.updatedAt,
+            // Sample items (first 3) for preview
+            sampleItems: template.items.slice(0, 3).map(item => ({
+                title: item.title,
+                description: item.description,
+                estimatedCost: item.estimatedCost,
+                category: item.category
+            })),
+            // Usage instructions
+            usageInstructions: {
+                endpoint: `POST /api/monthly-requests/templates/${template._id}`,
+                requiredFields: ['month', 'year'],
+                example: {
+                    month: 12,
+                    year: 2024
+                }
+            }
+        }));
+        
+        res.status(200).json({
+            residence: {
+                id: residenceExists._id,
+                name: residenceExists.name
+            },
+            templates: enhancedTemplates,
+            totalTemplates: enhancedTemplates.length,
+            message: enhancedTemplates.length > 0 
+                ? `Found ${enhancedTemplates.length} template(s) for ${residenceExists.name}`
+                : `No templates found for ${residenceExists.name}. Create a template first.`
+        });
+        
+    } catch (error) {
+        console.error('Error getting available templates:', error);
+        res.status(500).json({ message: error.message });
+    }
+}; 
+
+// Get template items as table format
+exports.getTemplateItemsTable = async (req, res) => {
+    try {
+        const user = req.user;
+        const { templateId } = req.params;
+        
+        // Students cannot access monthly request templates
+        if (user.role === 'student') {
+            return res.status(403).json({ message: 'Students do not have access to monthly requests' });
+        }
+        
+        const tableData = await MonthlyRequest.getTemplateItemsTable(templateId);
+        
+        res.status(200).json(tableData);
+    } catch (error) {
+        console.error('Error getting template items table:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Get templates with pending changes for finance approval
+exports.getTemplatesWithPendingChanges = async (req, res) => {
+    try {
+        const user = req.user;
+        const { residence } = req.params;
+        
+        // Only finance users can see pending changes
+        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ message: 'Only finance users can view pending template changes' });
+        }
+        
+        const templates = await MonthlyRequest.getTemplatesWithPendingChanges(residence);
+        
+        res.status(200).json({
+            residence: { id: residence },
+            templates: templates,
+            totalTemplates: templates.length,
+            pendingChangesCount: templates.reduce((total, template) => 
+                total + template.templateChanges.filter(change => change.status === 'pending').length, 0
+            )
+        });
+    } catch (error) {
+        console.error('Error getting templates with pending changes:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Add item to template (Admin only)
+exports.addTemplateItem = async (req, res) => {
+    try {
+        const user = req.user;
+        const { templateId } = req.params;
+        const itemData = req.body;
+        
+        // Only admins can modify templates
+        if (user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can modify templates' });
+        }
+        
+        const template = await MonthlyRequest.findById(templateId);
+        if (!template) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+        
+        if (!template.isTemplate) {
+            return res.status(400).json({ message: 'This is not a template' });
+        }
+        
+        // Validate item data
+        if (!itemData.title || !itemData.description || !itemData.estimatedCost) {
+            return res.status(400).json({ 
+                message: 'Title, description, and estimated cost are required' 
+            });
+        }
+        
+        // Add item to template (will be effective from next month)
+        await template.addTemplateItem(itemData, user._id);
+        
+        const updatedTemplate = await MonthlyRequest.findById(templateId)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('templateChanges.changedBy', 'firstName lastName email');
+        
+        res.status(200).json({
+            message: 'Item added to template successfully. Changes will be effective from next month and require finance approval.',
+            template: updatedTemplate,
+            addedItem: itemData
+        });
+        
+    } catch (error) {
+        console.error('Error adding template item:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Modify template item (Admin only)
+exports.modifyTemplateItem = async (req, res) => {
+    try {
+        const user = req.user;
+        const { templateId, itemIndex } = req.params;
+        const { field, newValue } = req.body;
+        
+        // Only admins can modify templates
+        if (user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can modify templates' });
+        }
+        
+        const template = await MonthlyRequest.findById(templateId);
+        if (!template) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+        
+        if (!template.isTemplate) {
+            return res.status(400).json({ message: 'This is not a template' });
+        }
+        
+        if (!template.items[itemIndex]) {
+            return res.status(400).json({ message: 'Invalid item index' });
+        }
+        
+        // Validate field
+        const allowedFields = ['title', 'description', 'quantity', 'estimatedCost', 'category', 'priority', 'notes'];
+        if (!allowedFields.includes(field)) {
+            return res.status(400).json({ 
+                message: `Invalid field. Allowed fields: ${allowedFields.join(', ')}` 
+            });
+        }
+        
+        // Modify item in template (will be effective from next month)
+        await template.modifyTemplateItem(parseInt(itemIndex), field, newValue, user._id);
+        
+        const updatedTemplate = await MonthlyRequest.findById(templateId)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('templateChanges.changedBy', 'firstName lastName email');
+        
+        res.status(200).json({
+            message: 'Item modified successfully. Changes will be effective from next month and require finance approval.',
+            template: updatedTemplate,
+            modifiedItem: {
+                index: parseInt(itemIndex),
+                field: field,
+                newValue: newValue
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error modifying template item:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Remove template item (Admin only)
+exports.removeTemplateItem = async (req, res) => {
+    try {
+        const user = req.user;
+        const { templateId, itemIndex } = req.params;
+        
+        // Only admins can modify templates
+        if (user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can modify templates' });
+        }
+        
+        const template = await MonthlyRequest.findById(templateId);
+        if (!template) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+        
+        if (!template.isTemplate) {
+            return res.status(400).json({ message: 'This is not a template' });
+        }
+        
+        if (!template.items[itemIndex]) {
+            return res.status(400).json({ message: 'Invalid item index' });
+        }
+        
+        const removedItem = template.items[itemIndex];
+        
+        // Remove item from template (will be effective from next month)
+        await template.removeTemplateItem(parseInt(itemIndex), user._id);
+        
+        const updatedTemplate = await MonthlyRequest.findById(templateId)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('templateChanges.changedBy', 'firstName lastName email');
+        
+        res.status(200).json({
+            message: 'Item removed successfully. Changes will be effective from next month and require finance approval.',
+            template: updatedTemplate,
+            removedItem: removedItem
+        });
+        
+    } catch (error) {
+        console.error('Error removing template item:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Approve template changes (Finance only)
+exports.approveTemplateChanges = async (req, res) => {
+    try {
+        const user = req.user;
+        const { templateId, changeIndex } = req.params;
+        
+        // Only finance users can approve template changes
+        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ message: 'Only finance users can approve template changes' });
+        }
+        
+        const template = await MonthlyRequest.findById(templateId);
+        if (!template) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+        
+        if (!template.isTemplate) {
+            return res.status(400).json({ message: 'This is not a template' });
+        }
+        
+        if (!template.templateChanges[changeIndex]) {
+            return res.status(400).json({ message: 'Invalid change index' });
+        }
+        
+        // Approve the change
+        await template.approveTemplateChanges(parseInt(changeIndex), user._id);
+        
+        const updatedTemplate = await MonthlyRequest.findById(templateId)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('templateChanges.changedBy', 'firstName lastName email')
+            .populate('templateChanges.approvedBy', 'firstName lastName email');
+        
+        res.status(200).json({
+            message: 'Template change approved successfully.',
+            template: updatedTemplate,
+            approvedChange: updatedTemplate.templateChanges[changeIndex]
+        });
+        
+    } catch (error) {
+        console.error('Error approving template changes:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Reject template changes (Finance only)
+exports.rejectTemplateChanges = async (req, res) => {
+    try {
+        const user = req.user;
+        const { templateId, changeIndex } = req.params;
+        const { reason } = req.body;
+        
+        // Only finance users can reject template changes
+        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ message: 'Only finance users can reject template changes' });
+        }
+        
+        const template = await MonthlyRequest.findById(templateId);
+        if (!template) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+        
+        if (!template.isTemplate) {
+            return res.status(400).json({ message: 'This is not a template' });
+        }
+        
+        if (!template.templateChanges[changeIndex]) {
+            return res.status(400).json({ message: 'Invalid change index' });
+        }
+        
+        if (!reason) {
+            return res.status(400).json({ message: 'Rejection reason is required' });
+        }
+        
+        // Reject the change
+        await template.rejectTemplateChanges(parseInt(changeIndex), user._id, reason);
+        
+        const updatedTemplate = await MonthlyRequest.findById(templateId)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('templateChanges.changedBy', 'firstName lastName email')
+            .populate('templateChanges.approvedBy', 'firstName lastName email');
+        
+        res.status(200).json({
+            message: 'Template change rejected successfully.',
+            template: updatedTemplate,
+            rejectedChange: updatedTemplate.templateChanges[changeIndex]
+        });
+        
+    } catch (error) {
+        console.error('Error rejecting template changes:', error);
         res.status(500).json({ message: error.message });
     }
 }; 
