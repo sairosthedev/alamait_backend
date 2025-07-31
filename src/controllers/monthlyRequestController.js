@@ -32,6 +32,35 @@ const monthNames = [
     'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
+// Helper function to determine if a request is for past/current month or future month
+function isPastOrCurrentMonth(month, year) {
+    const currentDate = new Date();
+    const currentMonth = currentDate.getMonth() + 1; // getMonth() returns 0-11
+    const currentYear = currentDate.getFullYear();
+    
+    // If year is less than current year, it's past
+    if (year < currentYear) return true;
+    
+    // If year is current year and month is less than or equal to current month, it's past/current
+    if (year === currentYear && month <= currentMonth) return true;
+    
+    // Otherwise it's future
+    return false;
+}
+
+// Helper function to determine appropriate status based on month/year
+function getDefaultStatusForMonth(month, year, userRole) {
+    const isPastOrCurrent = isPastOrCurrentMonth(month, year);
+    
+    if (isPastOrCurrent) {
+        // For past/current months, auto-approve (assuming these were already processed)
+        return 'approved';
+    } else {
+        // For future months, set as pending for finance approval
+        return 'pending';
+    }
+}
+
 // Get all monthly requests (filtered by user role and residence)
 exports.getAllMonthlyRequests = async (req, res) => {
     try {
@@ -359,6 +388,12 @@ exports.createMonthlyRequest = async (req, res) => {
             }
         }
 
+        // Determine appropriate status based on month/year
+        let requestStatus = 'draft';
+        if (!isTemplateValue) {
+            requestStatus = getDefaultStatusForMonth(parseInt(month), parseInt(year), user.role);
+        }
+        
         const monthlyRequest = new MonthlyRequest({
             title,
             description: isTemplateValue ? description : formatDescriptionWithMonth(description, parseInt(month), parseInt(year)),
@@ -372,7 +407,7 @@ exports.createMonthlyRequest = async (req, res) => {
             templateName: isTemplateValue ? templateName : undefined,
             templateDescription: isTemplateValue ? templateDescription : undefined,
             submittedBy: user._id,
-            status: 'draft',
+            status: requestStatus,
             tags: tags || []
         });
 

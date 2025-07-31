@@ -344,6 +344,20 @@ monthlyRequestSchema.statics.createFromTemplate = function(templateId, month, ye
             throw new Error('Template not found');
         }
         
+        // Determine appropriate status based on month/year
+        const currentDate = new Date();
+        const currentMonth = currentDate.getMonth() + 1;
+        const currentYear = currentDate.getFullYear();
+        
+        let requestStatus = 'draft';
+        if (year < currentYear || (year === currentYear && month <= currentMonth)) {
+            // Past/current month - auto-approve
+            requestStatus = 'approved';
+        } else {
+            // Future month - set as pending for finance approval
+            requestStatus = 'pending';
+        }
+        
         const monthlyRequest = new this({
             title: template.title,
             description: formatDescriptionWithMonth(template.description, month, year),
@@ -352,7 +366,7 @@ monthlyRequestSchema.statics.createFromTemplate = function(templateId, month, ye
             year: year,
             items: template.items,
             submittedBy: submittedBy,
-            status: 'draft',
+            status: requestStatus,
             tags: template.tags
         });
         
