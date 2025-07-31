@@ -75,6 +75,9 @@ router.get('/templates/:residence', monthlyRequestController.getTemplates);
 // Get available templates for a residence with enhanced information
 router.get('/available-templates/:residence', monthlyRequestController.getAvailableTemplates);
 
+// Get templates for residence selection (for monthly request creation)
+router.get('/residence/:residenceId/templates', monthlyRequestController.getTemplatesForResidence);
+
 // Get template items as table format
 router.get('/templates/:templateId/table', monthlyRequestController.getTemplateItemsTable);
 

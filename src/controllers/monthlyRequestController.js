@@ -26,6 +26,12 @@ function formatDescriptionWithMonth(description, month, year) {
     }
 }
 
+// Month names array for use throughout the controller
+const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+];
+
 // Get all monthly requests (filtered by user role and residence)
 exports.getAllMonthlyRequests = async (req, res) => {
     try {
@@ -284,7 +290,7 @@ exports.createMonthlyRequest = async (req, res) => {
                 });
             }
             
-            // Check if there are templates available for this residence
+                                // Check if there are templates available for this residence
             const availableTemplates = await MonthlyRequest.find({
                 residence,
                 isTemplate: true
@@ -293,18 +299,61 @@ exports.createMonthlyRequest = async (req, res) => {
             if (availableTemplates.length > 0) {
                 console.log(`Found ${availableTemplates.length} templates for residence ${residence}`);
                 
-                // If no items provided, suggest using a template
+                // If no items provided, automatically use the first template
+                if (!processedItems || processedItems.length === 0) {
+                    const firstTemplate = availableTemplates[0];
+                    console.log(`Auto-using template: ${firstTemplate.title}`);
+                    
+                    // Use the template items
+                    const templateItems = firstTemplate.items.map(item => ({
+                        ...item.toObject(),
+                        quantity: item.quantity || 1,
+                        estimatedCost: item.estimatedCost || 0,
+                        category: item.category || 'other',
+                        isRecurring: item.isRecurring !== undefined ? item.isRecurring : true
+                    }));
+                    
+                    processedItems = templateItems;
+                    
+                    // Update the request data to reflect template usage
+                    const templateTitle = `${firstTemplate.title} for ${monthNames[parseInt(month) - 1]} ${year}`;
+                    
+                    console.log(`Auto-created monthly request from template with ${processedItems.length} items`);
+                    
+                    // Add template usage to request history
+                    const templateUsageNote = `Auto-created from template: ${firstTemplate.title}`;
+                    
+                    // Continue with template-based request creation
+                } else {
+                    // Items provided manually, but templates are available
+                    console.log('Manual items provided, but templates are available for future use');
+                }
+            } else {
+                // No templates available
                 if (!processedItems || processedItems.length === 0) {
                     return res.status(400).json({
-                        message: 'No items provided for monthly request. Please provide items or use an existing template.',
-                        availableTemplates: availableTemplates.map(template => ({
-                            id: template._id,
-                            title: template.title,
-                            description: template.description,
-                            itemsCount: template.items.length,
-                            totalEstimatedCost: template.totalEstimatedCost
-                        })),
-                        suggestion: 'Use POST /api/monthly-requests/templates/:templateId with month and year to create from template'
+                        message: 'No items provided for monthly request and no templates available for this residence.',
+                        suggestion: 'Create a template first or provide items manually',
+                        quickActions: {
+                            createTemplate: {
+                                endpoint: 'POST /api/monthly-requests',
+                                description: 'Create a template for this residence',
+                                example: {
+                                    title: 'Monthly Services Template',
+                                    description: 'Template for monthly services',
+                                    residence: residence,
+                                    isTemplate: true,
+                                    items: [
+                                        {
+                                            title: 'WiFi Service',
+                                            description: 'Monthly WiFi service',
+                                            estimatedCost: 150,
+                                            category: 'utilities'
+                                        }
+                                    ]
+                                }
+                            }
+                        }
                     });
                 }
             }
@@ -1662,6 +1711,167 @@ exports.rejectTemplateChanges = async (req, res) => {
         
     } catch (error) {
         console.error('Error rejecting template changes:', error);
+        res.status(500).json({ message: error.message });
+    }
+}; 
+
+// Get templates for residence selection (for monthly request creation)
+exports.getTemplatesForResidence = async (req, res) => {
+    try {
+        const user = req.user;
+        const { residenceId } = req.params;
+        
+        // Students cannot access monthly request templates
+        if (user.role === 'student') {
+            return res.status(403).json({ message: 'Students do not have access to monthly requests' });
+        }
+        
+        // Validate residence ID
+        if (!residenceId) {
+            return res.status(400).json({ message: 'Residence ID is required' });
+        }
+        
+        // Check if residence exists
+        const residenceExists = await Residence.findById(residenceId);
+        if (!residenceExists) {
+            return res.status(404).json({ message: 'Residence not found' });
+        }
+        
+        // Get all templates for this residence
+        const templates = await MonthlyRequest.find({
+            residence: residenceId,
+            isTemplate: true
+        }).populate('residence', 'name')
+          .populate('submittedBy', 'firstName lastName email')
+          .sort({ lastUpdated: -1 });
+        
+        // Get current month and year
+        const currentDate = new Date();
+        const currentMonth = currentDate.getMonth() + 1;
+        const currentYear = currentDate.getFullYear();
+        
+        // Generate next 12 months for template preview
+        const upcomingMonths = [];
+        for (let i = 0; i < 12; i++) {
+            const futureDate = new Date(currentYear, currentMonth - 1 + i, 1);
+            upcomingMonths.push({
+                month: futureDate.getMonth() + 1,
+                year: futureDate.getFullYear(),
+                monthName: futureDate.toLocaleString('default', { month: 'long' }),
+                isCurrentMonth: futureDate.getMonth() === currentDate.getMonth() && 
+                               futureDate.getFullYear() === currentDate.getFullYear()
+            });
+        }
+        
+        // Process templates with enhanced information
+        const processedTemplates = templates.map(template => {
+            // Calculate total cost for the template
+            const totalCost = template.items.reduce((sum, item) => {
+                return sum + (item.estimatedCost * item.quantity);
+            }, 0);
+            
+            // Get pending changes count
+            const pendingChangesCount = template.templateChanges ? 
+                template.templateChanges.filter(change => change.status === 'pending').length : 0;
+            
+            return {
+                id: template._id,
+                title: template.title,
+                description: template.description,
+                residence: template.residence,
+                submittedBy: template.submittedBy,
+                itemsCount: template.items.length,
+                totalEstimatedCost: totalCost,
+                priority: template.priority,
+                tags: template.tags || [],
+                createdAt: template.createdAt,
+                lastUpdated: template.lastUpdated,
+                templateVersion: template.templateVersion || 1,
+                pendingChangesCount: pendingChangesCount,
+                // Sample items for preview (first 3)
+                sampleItems: template.items.slice(0, 3).map(item => ({
+                    title: item.title,
+                    description: item.description,
+                    estimatedCost: item.estimatedCost,
+                    category: item.category,
+                    priority: item.priority
+                })),
+                // Usage instructions
+                usageInstructions: {
+                    endpoint: `POST /api/monthly-requests/templates/${template._id}`,
+                    requiredFields: ['month', 'year'],
+                    example: {
+                        month: currentMonth,
+                        year: currentYear
+                    }
+                },
+                // Quick create options for upcoming months
+                quickCreateOptions: upcomingMonths.map(month => ({
+                    month: month.month,
+                    year: month.year,
+                    monthName: month.monthName,
+                    isCurrentMonth: month.isCurrentMonth,
+                    endpoint: `POST /api/monthly-requests/templates/${template._id}`,
+                    requestBody: {
+                        month: month.month,
+                        year: month.year
+                    }
+                }))
+            };
+        });
+        
+        res.status(200).json({
+            residence: {
+                id: residenceExists._id,
+                name: residenceExists.name,
+                address: residenceExists.address
+            },
+            templates: processedTemplates,
+            totalTemplates: processedTemplates.length,
+            currentMonth: currentMonth,
+            currentYear: currentYear,
+            upcomingMonths: upcomingMonths,
+            message: processedTemplates.length > 0 
+                ? `Found ${processedTemplates.length} template(s) for ${residenceExists.name}. Select a template to create monthly requests.`
+                : `No templates found for ${residenceExists.name}. Create a template first to enable recurring monthly requests.`,
+            // Quick actions
+            quickActions: {
+                createTemplate: {
+                    endpoint: 'POST /api/monthly-requests',
+                    description: 'Create a new template for this residence',
+                    example: {
+                        title: 'Monthly Services Template',
+                        description: 'Template for monthly services',
+                        residence: residenceId,
+                        isTemplate: true,
+                        items: [
+                            {
+                                title: 'WiFi Service',
+                                description: 'Monthly WiFi service',
+                                estimatedCost: 150,
+                                category: 'utilities'
+                            }
+                        ]
+                    }
+                },
+                createManualRequest: {
+                    endpoint: 'POST /api/monthly-requests',
+                    description: 'Create a manual monthly request without template',
+                    example: {
+                        title: 'Custom Monthly Request',
+                        description: 'Custom monthly request',
+                        residence: residenceId,
+                        month: currentMonth,
+                        year: currentYear,
+                        isTemplate: false,
+                        items: []
+                    }
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error getting templates for residence:', error);
         res.status(500).json({ message: error.message });
     }
 }; 
