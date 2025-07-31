@@ -35,6 +35,30 @@ router.use(auth);
 // Get all monthly requests (filtered by user role and residence)
 router.get('/', monthlyRequestController.getAllMonthlyRequests);
 
+// Get finance-specific monthly requests (only shows requests with changes in current month)
+router.get('/finance/dashboard', 
+    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    monthlyRequestController.getFinanceMonthlyRequests
+);
+
+// Get finance pending approvals (only requests that need approval)
+router.get('/finance/pending-approvals', 
+    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    monthlyRequestController.getFinancePendingApprovals
+);
+
+// Get CEO monthly request dashboard
+router.get('/ceo/dashboard', 
+    checkRole(['ceo']), 
+    monthlyRequestController.getCEOMonthlyRequests
+);
+
+// Convert approved monthly requests to expenses
+router.post('/convert-to-expenses', 
+    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    monthlyRequestController.convertToExpenses
+);
+
 // Get monthly request by ID
 router.get('/:id', monthlyRequestController.getMonthlyRequestById);
 

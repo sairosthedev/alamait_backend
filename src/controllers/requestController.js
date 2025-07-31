@@ -293,32 +293,17 @@ exports.createRequest = async (req, res) => {
                 status: { $in: ['pending', 'assigned', 'in-progress'] },
                 createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } // Last 30 days
             };
-        } else {
-            // For non-students: Only check for duplicates by the same user
-            // This allows different users to create similar requests
-            duplicateCheckQuery = {
-                title: title,
-                description: description,
-                submittedBy: user._id,
-                status: { $in: ['pending', 'assigned', 'in-progress'] }
-            };
-        }
-        
-        const existingRequest = await Request.findOne(duplicateCheckQuery);
-        
-        if (existingRequest) {
-            if (user.role === 'student') {
+            
+            const existingRequest = await Request.findOne(duplicateCheckQuery);
+            
+            if (existingRequest) {
                 return res.status(400).json({ 
                     message: 'A similar request already exists in your residence. Please check existing requests before submitting a new one.',
                     existingRequestId: existingRequest._id
                 });
-            } else {
-                return res.status(400).json({ 
-                    message: 'You have already submitted a similar request',
-                    existingRequestId: existingRequest._id
-                });
             }
         }
+        // For non-students: No duplicate checking - allow multiple requests by same user
         
         // Build request data
         const requestData = {

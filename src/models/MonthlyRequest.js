@@ -1,5 +1,28 @@
 const mongoose = require('mongoose');
 
+// Helper function to format description with month name
+function formatDescriptionWithMonth(description, month, year) {
+    if (!description) return description;
+    
+    const monthNames = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    
+    const monthName = monthNames[month - 1];
+    
+    // Check if description already contains month/year
+    const monthYearPattern = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}/i;
+    
+    if (monthYearPattern.test(description)) {
+        // Replace existing month/year with new one
+        return description.replace(monthYearPattern, `${monthName} ${year}`);
+    } else {
+        // Add month/year to description
+        return `${description} for ${monthName} ${year}`;
+    }
+}
+
 const monthlyRequestItemSchema = new mongoose.Schema({
     description: {
         type: String,
@@ -57,17 +80,21 @@ const monthlyRequestSchema = new mongoose.Schema({
     residence: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Residence',
-        required: true
+        required: true // Required for both templates and regular requests
     },
     month: {
         type: Number,
-        required: true,
+        required: function() {
+            return !this.isTemplate; // Only required if not a template
+        },
         min: 1,
         max: 12
     },
     year: {
         type: Number,
-        required: true,
+        required: function() {
+            return !this.isTemplate; // Only required if not a template
+        },
         min: 2020
     },
     status: {
@@ -136,13 +163,20 @@ monthlyRequestSchema.index({ residence: 1, month: 1, year: 1 });
 monthlyRequestSchema.index({ status: 1 });
 monthlyRequestSchema.index({ isTemplate: 1 });
 
-// Pre-save middleware to calculate total cost
+// Pre-save middleware to calculate total cost and format description
 monthlyRequestSchema.pre('save', function(next) {
+    // Calculate total cost
     if (this.items && this.items.length > 0) {
         this.totalEstimatedCost = this.items.reduce((total, item) => {
             return total + (item.estimatedCost * item.quantity);
         }, 0);
     }
+    
+    // Format description with month name if not a template
+    if (!this.isTemplate && this.description && this.month && this.year) {
+        this.description = formatDescriptionWithMonth(this.description, this.month, this.year);
+    }
+    
     next();
 });
 
@@ -172,7 +206,7 @@ monthlyRequestSchema.statics.createFromTemplate = function(templateId, month, ye
         
         const monthlyRequest = new this({
             title: template.title,
-            description: template.description,
+            description: formatDescriptionWithMonth(template.description, month, year),
             residence: template.residence,
             month: month,
             year: year,
