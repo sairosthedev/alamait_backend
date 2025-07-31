@@ -552,7 +552,54 @@ exports.financeApproval = async (req, res) => {
         
         // Update status based on approval
         if (approved) {
-            request.status = 'pending';
+            request.status = 'pending-ceo-approval';
+            
+            // If there are quotations, approve the first one automatically when finance approves
+            if (request.quotations && request.quotations.length > 0) {
+                // Unapprove all quotations first
+                request.quotations.forEach(quotation => {
+                    quotation.isApproved = false;
+                    quotation.approvedBy = null;
+                    quotation.approvedAt = null;
+                });
+                
+                // Approve the first quotation
+                request.quotations[0].isApproved = true;
+                request.quotations[0].approvedBy = user._id;
+                request.quotations[0].approvedAt = new Date();
+                
+                // Update request amount to match the approved quotation
+                request.amount = request.quotations[0].amount;
+            }
+            
+            // If there are item-level quotations, approve the first quotation for each item
+            if (request.items && request.items.length > 0) {
+                request.items.forEach(item => {
+                    if (item.quotations && item.quotations.length > 0) {
+                        // Unapprove all quotations for this item
+                        item.quotations.forEach(quotation => {
+                            quotation.isApproved = false;
+                            quotation.approvedBy = null;
+                            quotation.approvedAt = null;
+                        });
+                        
+                        // Approve the first quotation for this item
+                        item.quotations[0].isApproved = true;
+                        item.quotations[0].approvedBy = user._id;
+                        item.quotations[0].approvedAt = new Date();
+                        
+                        // Update item's estimated cost to match the approved quotation
+                        item.estimatedCost = item.quotations[0].amount;
+                    }
+                });
+                
+                // Recalculate total estimated cost
+                if (request.items && request.items.length > 0) {
+                    request.totalEstimatedCost = request.items.reduce((total, item) => {
+                        return total + (item.estimatedCost * item.quantity);
+                    }, 0);
+                }
+            }
         } else {
             request.status = 'rejected';
         }
@@ -570,6 +617,10 @@ exports.financeApproval = async (req, res) => {
         const updatedRequest = await Request.findById(request._id)
             .populate('submittedBy', 'firstName lastName email role')
             .populate('residence', 'name')
+            .populate('quotations.uploadedBy', 'firstName lastName email')
+            .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.approvedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email');
         
         res.status(200).json(updatedRequest);
