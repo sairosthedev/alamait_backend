@@ -1875,3 +1875,87 @@ exports.getTemplatesForResidence = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 }; 
+
+// Get all templates (general endpoint)
+exports.getAllTemplates = async (req, res) => {
+    try {
+        const user = req.user;
+        
+        // Students cannot access monthly request templates
+        if (user.role === 'student') {
+            return res.status(403).json({ message: 'Students do not have access to monthly requests' });
+        }
+        
+        // Get all templates with residence information
+        const templates = await MonthlyRequest.find({
+            isTemplate: true
+        }).populate('residence', 'name address')
+          .populate('submittedBy', 'firstName lastName email')
+          .populate('templateChanges.changedBy', 'firstName lastName email')
+          .sort({ lastUpdated: -1 });
+        
+        // Group templates by residence
+        const templatesByResidence = {};
+        templates.forEach(template => {
+            const residenceId = template.residence._id.toString();
+            const residenceName = template.residence.name;
+            
+            if (!templatesByResidence[residenceId]) {
+                templatesByResidence[residenceId] = {
+                    residence: {
+                        id: residenceId,
+                        name: residenceName,
+                        address: template.residence.address
+                    },
+                    templates: []
+                };
+            }
+            
+            // Calculate total cost for the template
+            const totalCost = template.items.reduce((sum, item) => {
+                return sum + (item.estimatedCost * item.quantity);
+            }, 0);
+            
+            // Get pending changes count
+            const pendingChangesCount = template.templateChanges ? 
+                template.templateChanges.filter(change => change.status === 'pending').length : 0;
+            
+            templatesByResidence[residenceId].templates.push({
+                id: template._id,
+                title: template.title,
+                description: template.description,
+                submittedBy: template.submittedBy,
+                itemsCount: template.items.length,
+                totalEstimatedCost: totalCost,
+                priority: template.priority,
+                tags: template.tags || [],
+                createdAt: template.createdAt,
+                lastUpdated: template.lastUpdated,
+                templateVersion: template.templateVersion || 1,
+                pendingChangesCount: pendingChangesCount,
+                // Sample items for preview (first 3)
+                sampleItems: template.items.slice(0, 3).map(item => ({
+                    title: item.title,
+                    description: item.description,
+                    estimatedCost: item.estimatedCost,
+                    category: item.category,
+                    priority: item.priority
+                }))
+            });
+        });
+        
+        // Convert to array format
+        const residences = Object.values(templatesByResidence);
+        
+        res.status(200).json({
+            totalResidences: residences.length,
+            totalTemplates: templates.length,
+            residences: residences,
+            message: `Found ${templates.length} template(s) across ${residences.length} residence(s)`
+        });
+        
+    } catch (error) {
+        console.error('Error getting all templates:', error);
+        res.status(500).json({ message: error.message });
+    }
+}; 

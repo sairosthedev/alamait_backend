@@ -63,11 +63,15 @@ router.post('/convert-to-expenses',
     monthlyRequestController.convertToExpenses
 );
 
-// Get monthly request by ID
-router.get('/:id', monthlyRequestController.getMonthlyRequestById);
+// Template routes (must come before /:id to avoid conflicts)
+// Get all templates (general endpoint)
+router.get('/templates', monthlyRequestController.getAllTemplates);
 
-// Get monthly requests for a specific residence and month/year
-router.get('/residence/:residenceId/:month/:year', monthlyRequestController.getMonthlyRequestsByResidence);
+// Get template items as table format
+router.get('/templates/:templateId/table', monthlyRequestController.getTemplateItemsTable);
+
+// Get templates with pending changes for finance approval
+router.get('/templates/:residence/pending-changes', monthlyRequestController.getTemplatesWithPendingChanges);
 
 // Get templates for a residence
 router.get('/templates/:residence', monthlyRequestController.getTemplates);
@@ -78,11 +82,11 @@ router.get('/available-templates/:residence', monthlyRequestController.getAvaila
 // Get templates for residence selection (for monthly request creation)
 router.get('/residence/:residenceId/templates', monthlyRequestController.getTemplatesForResidence);
 
-// Get template items as table format
-router.get('/templates/:templateId/table', monthlyRequestController.getTemplateItemsTable);
+// Get monthly request by ID
+router.get('/:id', monthlyRequestController.getMonthlyRequestById);
 
-// Get templates with pending changes for finance approval
-router.get('/templates/:residence/pending-changes', monthlyRequestController.getTemplatesWithPendingChanges);
+// Get monthly requests for a specific residence and month/year
+router.get('/residence/:residenceId/:month/:year', monthlyRequestController.getMonthlyRequestsByResidence);
 
 // Create new monthly request
 router.post('/', monthlyRequestController.createMonthlyRequest);
