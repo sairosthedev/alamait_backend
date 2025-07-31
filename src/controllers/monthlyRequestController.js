@@ -443,267 +443,229 @@ exports.getMonthlyRequestById = async (req, res) => {
     }
 };
 
-// Create new monthly request
+// Enhanced createMonthlyRequest to handle templates with historical data
 exports.createMonthlyRequest = async (req, res) => {
     try {
-        const user = req.user;
         const {
             title,
             description,
             residence,
             month,
             year,
-            items,
-            templateRequests, // Handle frontend field name
-            priority,
-            notes,
-            isTemplate,
+            priority = 'medium',
+            items = [],
+            isTemplate = false,
+            historicalData = [], // New: historical cost data for templates
+            itemHistory = [], // New: item change history for templates
             templateName,
-            templateDescription,
-            tags
+            templateDescription
         } = req.body;
 
-        // Map templateRequests to items if provided (frontend compatibility)
-        const finalItems = items || templateRequests || [];
-        
-        // Ensure all items have required fields with defaults
-        const processedItems = finalItems.map(item => ({
-            ...item,
-            quantity: item.quantity || 1, // Default to 1 if not provided
-            estimatedCost: item.estimatedCost || 0, // Default to 0 if not provided
-            category: item.category || 'other', // Default category
-            isRecurring: item.isRecurring !== undefined ? item.isRecurring : true // Default to true
-        }));
+        // Validate required fields
+        if (!title || !residence) {
+            return res.status(400).json({
+                success: false,
+                message: 'Title and residence are required'
+            });
+        }
 
-        // Log the request for debugging
-        console.log('Monthly request creation attempt:', {
-            user: user._id,
-            userRole: user.role,
+        // Validate residence exists
+        const residenceExists = await Residence.findById(residence);
+        if (!residenceExists) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        // Process items with historical data if it's a template
+        let processedItems = items;
+        if (isTemplate && (historicalData.length > 0 || itemHistory.length > 0)) {
+            processedItems = items.map(item => {
+                const processedItem = {
+                    title: item.title,
+                    description: item.description || item.title,
+                    estimatedCost: item.estimatedCost,
+                    quantity: item.quantity || 1,
+                    category: item.category || 'general',
+                    priority: item.priority || 'medium',
+                    notes: item.notes || '',
+                    tags: item.tags || [],
+                    isRecurring: item.isRecurring || false,
+                    itemHistory: [], // Track when this item was added/removed/modified
+                    costHistory: [] // Track cost changes
+                };
+
+                // Add cost history if provided
+                if (historicalData && Array.isArray(historicalData)) {
+                    const itemHistory = historicalData.filter(h => 
+                        h.itemTitle && h.itemTitle.toLowerCase().trim() === item.title.toLowerCase().trim()
+                    );
+
+                    if (itemHistory.length > 0) {
+                        processedItem.costHistory = itemHistory.map(h => ({
+                            month: h.month,
+                            year: h.year,
+                            cost: h.cost,
+                            date: new Date(h.year, h.month - 1, 1),
+                            note: h.note || `Historical cost from ${h.month}/${h.year}`
+                        }));
+
+                        // Sort cost history by date (most recent first)
+                        processedItem.costHistory.sort((a, b) => b.date - a.date);
+
+                        // Calculate cost variations
+                        processedItem.costVariations = [];
+                        for (let i = 0; i < processedItem.costHistory.length - 1; i++) {
+                            const current = processedItem.costHistory[i];
+                            const previous = processedItem.costHistory[i + 1];
+                            
+                            if (current.cost !== previous.cost) {
+                                processedItem.costVariations.push({
+                                    from: `${previous.month}/${previous.year}`,
+                                    to: `${current.month}/${current.year}`,
+                                    oldCost: previous.cost,
+                                    newCost: current.cost,
+                                    change: current.cost - previous.cost,
+                                    changePercent: ((current.cost - previous.cost) / previous.cost * 100).toFixed(1)
+                                });
+                            }
+                        }
+
+                        // Add cost summary
+                        const uniqueCosts = [...new Set(processedItem.costHistory.map(h => h.cost))].sort((a, b) => a - b);
+                        const averageCost = (processedItem.costHistory.reduce((sum, h) => sum + h.cost, 0) / processedItem.costHistory.length).toFixed(2);
+                        
+                        processedItem.costSummary = {
+                            mostRecentCost: processedItem.costHistory[0].cost,
+                            mostRecentMonth: `${processedItem.costHistory[0].month}/${processedItem.costHistory[0].year}`,
+                            uniqueCosts: uniqueCosts,
+                            totalVariations: processedItem.costVariations.length,
+                            averageCost: averageCost
+                        };
+                    }
+                }
+
+                // Add item history if provided
+                if (itemHistory && Array.isArray(itemHistory)) {
+                    const itemItemHistory = itemHistory.filter(h => 
+                        h.itemTitle && h.itemTitle.toLowerCase().trim() === item.title.toLowerCase().trim()
+                    );
+
+                    if (itemItemHistory.length > 0) {
+                        processedItem.itemHistory = itemItemHistory.map(h => ({
+                            month: h.month,
+                            year: h.year,
+                            date: new Date(h.year, h.month - 1, 1),
+                            action: h.action, // 'added', 'removed', 'modified'
+                            oldValue: h.oldValue,
+                            newValue: h.newValue,
+                            note: h.note || `${h.action} in ${h.month}/${h.year}`,
+                            cost: h.cost,
+                            quantity: h.quantity
+                        }));
+
+                        // Sort item history by date (most recent first)
+                        processedItem.itemHistory.sort((a, b) => b.date - a.date);
+                    }
+                }
+
+                // Update notes with historical information
+                let historyNotes = [];
+                if (processedItem.costHistory.length > 0) {
+                    historyNotes.push(`Cost history: ${processedItem.costHistory.length} entries, ${processedItem.costVariations.length} variations`);
+                }
+                if (processedItem.itemHistory.length > 0) {
+                    const addedCount = processedItem.itemHistory.filter(h => h.action === 'added').length;
+                    const removedCount = processedItem.itemHistory.filter(h => h.action === 'removed').length;
+                    const modifiedCount = processedItem.itemHistory.filter(h => h.action === 'modified').length;
+                    historyNotes.push(`Item history: ${addedCount} added, ${removedCount} removed, ${modifiedCount} modified`);
+                }
+                
+                if (historyNotes.length > 0) {
+                    const historyNote = historyNotes.join('; ');
+                    processedItem.notes = processedItem.notes ? `${processedItem.notes}. ${historyNote}` : historyNote;
+                }
+
+                return processedItem;
+            });
+        }
+
+        // Calculate total estimated cost
+        const totalEstimatedCost = processedItems.reduce((sum, item) => sum + (item.estimatedCost * item.quantity), 0);
+
+        // Determine appropriate status based on month/year and template
+        let requestStatus = 'draft';
+        if (!isTemplate) {
+            requestStatus = getDefaultStatusForMonth(parseInt(month), parseInt(year), req.user.role);
+        }
+
+        // Create the monthly request
+        const monthlyRequest = new MonthlyRequest({
             title,
             description,
             residence,
-            month,
-            year,
-            isTemplate,
-            hasItems: !!finalItems,
-            hasTemplateRequests: !!templateRequests,
-            itemsCount: finalItems.length,
-            processedItemsCount: processedItems.length,
-            timestamp: new Date().toISOString()
-        });
-
-        // Validate required fields with detailed error messages
-        const isTemplateValue = isTemplate || false;
-        const errors = [];
-        
-        if (!title) errors.push('Title is required');
-        if (!description) errors.push('Description is required');
-        if (!residence) errors.push('Residence is required');
-        
-        if (!isTemplateValue) {
-            if (!month) errors.push('Month is required for non-template requests');
-            if (!year) errors.push('Year is required for non-template requests');
-            
-            if (month && (month < 1 || month > 12)) {
-                errors.push('Month must be between 1 and 12');
-            }
-            
-            if (year && year < 2020) {
-                errors.push('Year must be 2020 or later');
-            }
-        }
-
-        if (errors.length > 0) {
-            console.log('Validation errors:', errors);
-            return res.status(400).json({ 
-                message: 'Validation failed', 
-                errors,
-                receivedData: { 
-                    title, 
-                    description, 
-                    residence, 
-                    month, 
-                    year, 
-                    isTemplate,
-                    hasItems: !!finalItems,
-                    hasTemplateRequests: !!templateRequests,
-                    itemsCount: finalItems.length,
-                    processedItemsCount: processedItems.length
-                }
-            });
-        }
-        
-        // Residence is required for both templates and regular requests
-        if (!residence) {
-            return res.status(400).json({ message: 'Residence is required' });
-        }
-        
-        // For non-templates, month and year are also required
-        if (!isTemplateValue) {
-            if (!month || !year) {
-                return res.status(400).json({ message: 'Month and year are required for non-template requests' });
-            }
-            
-            // Validate month and year for non-templates
-            if (month < 1 || month > 12) {
-                return res.status(400).json({ message: 'Month must be between 1 and 12' });
-            }
-
-            if (year < 2020) {
-                return res.status(400).json({ message: 'Year must be 2020 or later' });
-            }
-        }
-
-        // Check if residence exists (only for non-templates)
-        if (!isTemplateValue && residence) {
-            const residenceExists = await Residence.findById(residence);
-            if (!residenceExists) {
-                console.log('Residence not found:', residence);
-                return res.status(400).json({ 
-                    message: 'Residence not found',
-                    residenceId: residence
-                });
-            }
-        }
-
-        // Students cannot create monthly requests
-        if (user.role === 'student') {
-            console.log('Student attempted to create monthly request:', user._id);
-            return res.status(403).json({ 
-                message: 'Students do not have access to monthly requests',
-                userRole: user.role
-            });
-        }
-
-        // Check for duplicate monthly request (only for non-templates)
-        if (!isTemplateValue) {
-            const existingRequest = await MonthlyRequest.findOne({
-                residence,
-                month: parseInt(month),
-                year: parseInt(year),
-                title,
-                isTemplate: false
-            });
-
-            if (existingRequest) {
-                console.log('Duplicate request found:', existingRequest._id);
-                return res.status(400).json({ 
-                    message: 'A monthly request with this title already exists for this residence and month',
-                    existingRequestId: existingRequest._id
-                });
-            }
-            
-                                // Check if there are templates available for this residence
-            const availableTemplates = await MonthlyRequest.find({
-                residence,
-                isTemplate: true
-            }).populate('residence', 'name');
-            
-            if (availableTemplates.length > 0) {
-                console.log(`Found ${availableTemplates.length} templates for residence ${residence}`);
-                
-                // If no items provided, automatically use the first template
-                if (!processedItems || processedItems.length === 0) {
-                    const firstTemplate = availableTemplates[0];
-                    console.log(`Auto-using template: ${firstTemplate.title}`);
-                    
-                    // Use the template items
-                    const templateItems = firstTemplate.items.map(item => ({
-                        ...item.toObject(),
-                        quantity: item.quantity || 1,
-                        estimatedCost: item.estimatedCost || 0,
-                        category: item.category || 'other',
-                        isRecurring: item.isRecurring !== undefined ? item.isRecurring : true
-                    }));
-                    
-                    processedItems = templateItems;
-                    
-                    // Update the request data to reflect template usage
-                    const templateTitle = `${firstTemplate.title} for ${monthNames[parseInt(month) - 1]} ${year}`;
-                    
-                    console.log(`Auto-created monthly request from template with ${processedItems.length} items`);
-                    
-                    // Add template usage to request history
-                    const templateUsageNote = `Auto-created from template: ${firstTemplate.title}`;
-                    
-                    // Continue with template-based request creation
-                } else {
-                    // Items provided manually, but templates are available
-                    console.log('Manual items provided, but templates are available for future use');
-                }
-            } else {
-                // No templates available
-                if (!processedItems || processedItems.length === 0) {
-                    return res.status(400).json({
-                        message: 'No items provided for monthly request and no templates available for this residence.',
-                        suggestion: 'Create a template first or provide items manually',
-                        quickActions: {
-                            createTemplate: {
-                                endpoint: 'POST /api/monthly-requests',
-                                description: 'Create a template for this residence',
-                                example: {
-                                    title: 'Monthly Services Template',
-                                    description: 'Template for monthly services',
-                                    residence: residence,
-                                    isTemplate: true,
-                                    items: [
-                                        {
-                                            title: 'WiFi Service',
-                                            description: 'Monthly WiFi service',
-                                            estimatedCost: 150,
-                                            category: 'utilities'
-                                        }
-                                    ]
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-        }
-
-        // Determine appropriate status based on month/year
-        let requestStatus = 'draft';
-        if (!isTemplateValue) {
-            requestStatus = getDefaultStatusForMonth(parseInt(month), parseInt(year), user.role);
-        }
-        
-        const monthlyRequest = new MonthlyRequest({
-            title,
-            description: isTemplateValue ? description : formatDescriptionWithMonth(description, parseInt(month), parseInt(year)),
-            residence: residence, // Always required
-            month: isTemplateValue ? null : parseInt(month),
-            year: isTemplateValue ? null : parseInt(year),
-            items: processedItems, // Use the processed items with defaults
-            priority: priority || 'medium',
-            notes,
-            isTemplate: isTemplateValue || false,
-            templateName: isTemplateValue ? templateName : undefined,
-            templateDescription: isTemplateValue ? templateDescription : undefined,
-            submittedBy: user._id,
+            month: isTemplate ? null : month,
+            year: isTemplate ? null : year,
             status: requestStatus,
-            tags: tags || []
+            priority,
+            items: processedItems,
+            totalEstimatedCost,
+            submittedBy: req.user._id,
+            isTemplate,
+            templateVersion: isTemplate ? 1 : undefined,
+            lastUpdated: isTemplate ? new Date() : undefined,
+            effectiveFrom: isTemplate ? new Date() : undefined,
+            templateChanges: isTemplate ? [] : undefined,
+            templateMetadata: isTemplate ? {
+                createdWithHistoricalData: historicalData.length > 0 || itemHistory.length > 0,
+                creationDate: new Date(),
+                historicalDataProvided: historicalData.length,
+                itemHistoryProvided: itemHistory.length,
+                templateName: templateName,
+                templateDescription: templateDescription,
+                totalHistoricalEntries: processedItems.reduce((sum, item) => sum + (item.costHistory ? item.costHistory.length : 0), 0),
+                totalItemHistoryEntries: processedItems.reduce((sum, item) => sum + (item.itemHistory ? item.itemHistory.length : 0), 0)
+            } : undefined
         });
+
+        await monthlyRequest.save();
 
         // Add to request history
         monthlyRequest.requestHistory.push({
             date: new Date(),
-            action: 'Monthly request created',
-            user: user._id,
-            changes: ['Request created']
+            action: isTemplate ? 'Template created with historical data' : 'Monthly request created',
+            user: req.user._id,
+            changes: [{
+                field: isTemplate ? 'template_creation' : 'request_creation',
+                oldValue: null,
+                newValue: isTemplate ? 'Template created with historical data' : 'Monthly request created'
+            }]
         });
 
         await monthlyRequest.save();
-        console.log('Monthly request created successfully:', monthlyRequest._id);
 
-        const populatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
-            .populate('residence', 'name')
-            .populate('submittedBy', 'firstName lastName email');
+        res.status(201).json({
+            success: true,
+            message: isTemplate ? 'Template created successfully with historical data' : 'Monthly request created successfully',
+            monthlyRequest: monthlyRequest,
+            summary: isTemplate ? {
+                totalItems: processedItems.length,
+                itemsWithCostHistory: processedItems.filter(item => item.costHistory && item.costHistory.length > 0).length,
+                itemsWithItemHistory: processedItems.filter(item => item.itemHistory && item.itemHistory.length > 0).length,
+                totalCostHistoryEntries: processedItems.reduce((sum, item) => sum + (item.costHistory ? item.costHistory.length : 0), 0),
+                totalItemHistoryEntries: processedItems.reduce((sum, item) => sum + (item.itemHistory ? item.itemHistory.length : 0), 0),
+                totalCostVariations: processedItems.reduce((sum, item) => sum + (item.costVariations ? item.costVariations.length : 0), 0)
+            } : undefined
+        });
 
-        res.status(201).json(populatedRequest);
     } catch (error) {
         console.error('Error creating monthly request:', error);
-        res.status(500).json({ message: error.message });
+        res.status(500).json({
+            success: false,
+            message: 'Error creating monthly request',
+            error: error.message
+        });
     }
 };
 
@@ -2027,247 +1989,277 @@ exports.rejectTemplateChanges = async (req, res) => {
 // Get templates for residence selection (for monthly request creation)
 exports.getTemplatesForResidence = async (req, res) => {
     try {
-        const user = req.user;
         const { residenceId } = req.params;
-        
-        // Students cannot access monthly request templates
-        if (user.role === 'student') {
-            return res.status(403).json({ message: 'Students do not have access to monthly requests' });
+        const { month, year } = req.query; // Optional: specific month/year to show
+
+        // Validate residence exists
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
         }
-        
-        // Validate residence ID
-        if (!residenceId) {
-            return res.status(400).json({ message: 'Residence ID is required' });
-        }
-        
-        // Check if residence exists
-        const residenceExists = await Residence.findById(residenceId);
-        if (!residenceExists) {
-            return res.status(404).json({ message: 'Residence not found' });
-        }
-        
-        // Get all templates for this residence
+
+        // Get templates for the residence
         const templates = await MonthlyRequest.find({
             residence: residenceId,
             isTemplate: true
-        }).populate('residence', 'name')
-          .populate('submittedBy', 'firstName lastName email')
-          .sort({ lastUpdated: -1 });
-        
-        // Get current month and year
-        const currentDate = new Date();
-        const currentMonth = currentDate.getMonth() + 1;
-        const currentYear = currentDate.getFullYear();
-        
-        // Generate next 12 months for template preview
-        const upcomingMonths = [];
-        for (let i = 0; i < 12; i++) {
-            const futureDate = new Date(currentYear, currentMonth - 1 + i, 1);
-            upcomingMonths.push({
-                month: futureDate.getMonth() + 1,
-                year: futureDate.getFullYear(),
-                monthName: futureDate.toLocaleString('default', { month: 'long' }),
-                isCurrentMonth: futureDate.getMonth() === currentDate.getMonth() && 
-                               futureDate.getFullYear() === currentDate.getFullYear()
+        }).populate('residence', 'name');
+
+        if (templates.length === 0) {
+            return res.status(200).json({
+                success: true,
+                message: 'No templates found for this residence',
+                templates: [],
+                residence: residence
             });
         }
-        
-        // Process templates with enhanced information
+
+        // Process templates to show appropriate data based on month/year
         const processedTemplates = templates.map(template => {
-            // Calculate total cost for the template
-            const totalCost = template.items.reduce((sum, item) => {
-                return sum + (item.estimatedCost * item.quantity);
-            }, 0);
-            
-            // Get pending changes count
-            const pendingChangesCount = template.templateChanges ? 
-                template.templateChanges.filter(change => change.status === 'pending').length : 0;
-            
-            return {
-                id: template._id,
+            const processedTemplate = {
+                _id: template._id,
                 title: template.title,
                 description: template.description,
                 residence: template.residence,
-                submittedBy: template.submittedBy,
-                itemsCount: template.items.length,
-                totalEstimatedCost: totalCost,
-                priority: template.priority,
-                tags: template.tags || [],
-                createdAt: template.createdAt,
+                status: template.status,
+                isTemplate: template.isTemplate,
+                templateVersion: template.templateVersion,
                 lastUpdated: template.lastUpdated,
-                templateVersion: template.templateVersion || 1,
-                pendingChangesCount: pendingChangesCount,
-                // Sample items for preview (first 3)
-                sampleItems: template.items.slice(0, 3).map(item => ({
-                    title: item.title,
-                    description: item.description,
-                    estimatedCost: item.estimatedCost,
-                    category: item.category,
-                    priority: item.priority
-                })),
-                // Usage instructions
-                usageInstructions: {
-                    endpoint: `POST /api/monthly-requests/templates/${template._id}`,
-                    requiredFields: ['month', 'year'],
-                    example: {
-                        month: currentMonth,
-                        year: currentYear
-                    }
-                },
-                // Quick create options for upcoming months
-                quickCreateOptions: upcomingMonths.map(month => ({
-                    month: month.month,
-                    year: month.year,
-                    monthName: month.monthName,
-                    isCurrentMonth: month.isCurrentMonth,
-                    endpoint: `POST /api/monthly-requests/templates/${template._id}`,
-                    requestBody: {
-                        month: month.month,
-                        year: month.year
-                    }
-                }))
+                effectiveFrom: template.effectiveFrom,
+                templateMetadata: template.templateMetadata,
+                totalEstimatedCost: template.totalEstimatedCost,
+                items: []
             };
-        });
-        
-        res.status(200).json({
-            residence: {
-                id: residenceExists._id,
-                name: residenceExists.name,
-                address: residenceExists.address
-            },
-            templates: processedTemplates,
-            totalTemplates: processedTemplates.length,
-            currentMonth: currentMonth,
-            currentYear: currentYear,
-            upcomingMonths: upcomingMonths,
-            message: processedTemplates.length > 0 
-                ? `Found ${processedTemplates.length} template(s) for ${residenceExists.name}. Select a template to create monthly requests.`
-                : `No templates found for ${residenceExists.name}. Create a template first to enable recurring monthly requests.`,
-            // Quick actions
-            quickActions: {
-                createTemplate: {
-                    endpoint: 'POST /api/monthly-requests',
-                    description: 'Create a new template for this residence',
-                    example: {
-                        title: 'Monthly Services Template',
-                        description: 'Template for monthly services',
-                        residence: residenceId,
-                        isTemplate: true,
-                        items: [
-                            {
-                                title: 'WiFi Service',
-                                description: 'Monthly WiFi service',
-                                estimatedCost: 150,
-                                category: 'utilities'
+
+            // Process items based on month/year context
+            if (template.items && template.items.length > 0) {
+                processedTemplate.items = template.items.map(item => {
+                    const processedItem = {
+                        title: item.title,
+                        description: item.description,
+                        category: item.category,
+                        priority: item.priority,
+                        isRecurring: item.isRecurring,
+                        tags: item.tags || [],
+                        notes: item.notes || '',
+                        quantity: item.quantity || 1,
+                        estimatedCost: item.estimatedCost,
+                        costHistory: item.costHistory || [],
+                        itemHistory: item.itemHistory || [],
+                        costVariations: item.costVariations || [],
+                        costSummary: item.costSummary || null
+                    };
+
+                    // If specific month/year is requested, show historical data for that period
+                    if (month && year) {
+                        const requestedMonth = parseInt(month);
+                        const requestedYear = parseInt(year);
+                        const currentDate = new Date();
+                        const currentMonth = currentDate.getMonth() + 1;
+                        const currentYear = currentDate.getFullYear();
+
+                        // Check if requested month is in the past
+                        const isPastMonth = (requestedYear < currentYear) || 
+                                          (requestedYear === currentYear && requestedMonth < currentMonth);
+
+                        if (isPastMonth && item.costHistory && item.costHistory.length > 0) {
+                            // Find historical data for the requested month
+                            const historicalEntry = item.costHistory.find(h => 
+                                h.month === requestedMonth && h.year === requestedYear
+                            );
+
+                            if (historicalEntry) {
+                                // Show historical data for past month
+                                processedItem.estimatedCost = historicalEntry.cost;
+                                processedItem.historicalNote = `Historical cost from ${requestedMonth}/${requestedYear}: $${historicalEntry.cost}`;
+                                processedItem.isHistoricalData = true;
+                                processedItem.historicalEntry = historicalEntry;
                             }
-                        ]
+                        }
+
+                        // Check if there were item changes in the requested month
+                        if (item.itemHistory && item.itemHistory.length > 0) {
+                            const itemChange = item.itemHistory.find(h => 
+                                h.month === requestedMonth && h.year === requestedYear
+                            );
+
+                            if (itemChange) {
+                                processedItem.itemChangeNote = `${itemChange.action} in ${requestedMonth}/${requestedYear}: ${itemChange.note}`;
+                                processedItem.itemChange = itemChange;
+                            }
+                        }
                     }
-                },
-                createManualRequest: {
-                    endpoint: 'POST /api/monthly-requests',
-                    description: 'Create a manual monthly request without template',
-                    example: {
-                        title: 'Custom Monthly Request',
-                        description: 'Custom monthly request',
-                        residence: residenceId,
-                        month: currentMonth,
-                        year: currentYear,
-                        isTemplate: false,
-                        items: []
-                    }
-                }
+
+                    return processedItem;
+                });
+            }
+
+            return processedTemplate;
+        });
+
+        res.status(200).json({
+            success: true,
+            message: `Found ${templates.length} template(s) for residence`,
+            templates: processedTemplates,
+            residence: residence,
+            context: month && year ? {
+                requestedMonth: parseInt(month),
+                requestedYear: parseInt(year),
+                isPastMonth: (parseInt(year) < new Date().getFullYear()) || 
+                            (parseInt(year) === new Date().getFullYear() && parseInt(month) < new Date().getMonth() + 1),
+                note: month && year ? 
+                    `Showing data for ${month}/${year}. Past months show historical costs, current/future months show template costs.` : 
+                    'Showing current template data for all months.'
+            } : {
+                note: 'Showing current template data. Use month and year query parameters to see historical data for specific periods.'
             }
         });
-        
+
     } catch (error) {
-        console.error('Error getting templates for residence:', error);
-        res.status(500).json({ message: error.message });
+        console.error('Error fetching templates for residence:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching templates for residence',
+            error: error.message
+        });
     }
-}; 
+};
 
 // Get all templates (general endpoint)
 exports.getAllTemplates = async (req, res) => {
     try {
-        const user = req.user;
-        
-        // Students cannot access monthly request templates
-        if (user.role === 'student') {
-            return res.status(403).json({ message: 'Students do not have access to monthly requests' });
+        const { month, year, residenceId } = req.query; // Optional: specific month/year/residence to show
+
+        // Build query
+        let query = { isTemplate: true };
+        if (residenceId) {
+            query.residence = residenceId;
         }
-        
-        // Get all templates with residence information
-        const templates = await MonthlyRequest.find({
-            isTemplate: true
-        }).populate('residence', 'name address')
-          .populate('submittedBy', 'firstName lastName email')
-          .populate('templateChanges.changedBy', 'firstName lastName email')
-          .sort({ lastUpdated: -1 });
-        
-        // Group templates by residence
-        const templatesByResidence = {};
-        templates.forEach(template => {
-            const residenceId = template.residence._id.toString();
-            const residenceName = template.residence.name;
-            
-            if (!templatesByResidence[residenceId]) {
-                templatesByResidence[residenceId] = {
-                    residence: {
-                        id: residenceId,
-                        name: residenceName,
-                        address: template.residence.address
-                    },
-                    templates: []
-                };
-            }
-            
-            // Calculate total cost for the template
-            const totalCost = template.items.reduce((sum, item) => {
-                return sum + (item.estimatedCost * item.quantity);
-            }, 0);
-            
-            // Get pending changes count
-            const pendingChangesCount = template.templateChanges ? 
-                template.templateChanges.filter(change => change.status === 'pending').length : 0;
-            
-            templatesByResidence[residenceId].templates.push({
-                id: template._id,
+
+        // Get templates
+        const templates = await MonthlyRequest.find(query)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .sort({ lastUpdated: -1 });
+
+        if (templates.length === 0) {
+            return res.status(200).json({
+                success: true,
+                message: 'No templates found',
+                templates: []
+            });
+        }
+
+        // Process templates to show appropriate data based on month/year
+        const processedTemplates = templates.map(template => {
+            const processedTemplate = {
+                _id: template._id,
                 title: template.title,
                 description: template.description,
+                residence: template.residence,
                 submittedBy: template.submittedBy,
-                itemsCount: template.items.length,
-                totalEstimatedCost: totalCost,
-                priority: template.priority,
-                tags: template.tags || [],
-                createdAt: template.createdAt,
+                status: template.status,
+                isTemplate: template.isTemplate,
+                templateVersion: template.templateVersion,
                 lastUpdated: template.lastUpdated,
-                templateVersion: template.templateVersion || 1,
-                pendingChangesCount: pendingChangesCount,
-                // Sample items for preview (first 3)
-                sampleItems: template.items.slice(0, 3).map(item => ({
-                    title: item.title,
-                    description: item.description,
-                    estimatedCost: item.estimatedCost,
-                    category: item.category,
-                    priority: item.priority
-                }))
-            });
+                effectiveFrom: template.effectiveFrom,
+                templateMetadata: template.templateMetadata,
+                totalEstimatedCost: template.totalEstimatedCost,
+                items: []
+            };
+
+            // Process items based on month/year context
+            if (template.items && template.items.length > 0) {
+                processedTemplate.items = template.items.map(item => {
+                    const processedItem = {
+                        title: item.title,
+                        description: item.description,
+                        category: item.category,
+                        priority: item.priority,
+                        isRecurring: item.isRecurring,
+                        tags: item.tags || [],
+                        notes: item.notes || '',
+                        quantity: item.quantity || 1,
+                        estimatedCost: item.estimatedCost,
+                        costHistory: item.costHistory || [],
+                        itemHistory: item.itemHistory || [],
+                        costVariations: item.costVariations || [],
+                        costSummary: item.costSummary || null
+                    };
+
+                    // If specific month/year is requested, show historical data for that period
+                    if (month && year) {
+                        const requestedMonth = parseInt(month);
+                        const requestedYear = parseInt(year);
+                        const currentDate = new Date();
+                        const currentMonth = currentDate.getMonth() + 1;
+                        const currentYear = currentDate.getFullYear();
+
+                        // Check if requested month is in the past
+                        const isPastMonth = (requestedYear < currentYear) || 
+                                          (requestedYear === currentYear && requestedMonth < currentMonth);
+
+                        if (isPastMonth && item.costHistory && item.costHistory.length > 0) {
+                            // Find historical data for the requested month
+                            const historicalEntry = item.costHistory.find(h => 
+                                h.month === requestedMonth && h.year === requestedYear
+                            );
+
+                            if (historicalEntry) {
+                                // Show historical data for past month
+                                processedItem.estimatedCost = historicalEntry.cost;
+                                processedItem.historicalNote = `Historical cost from ${requestedMonth}/${requestedYear}: $${historicalEntry.cost}`;
+                                processedItem.isHistoricalData = true;
+                                processedItem.historicalEntry = historicalEntry;
+                            }
+                        }
+
+                        // Check if there were item changes in the requested month
+                        if (item.itemHistory && item.itemHistory.length > 0) {
+                            const itemChange = item.itemHistory.find(h => 
+                                h.month === requestedMonth && h.year === requestedYear
+                            );
+
+                            if (itemChange) {
+                                processedItem.itemChangeNote = `${itemChange.action} in ${requestedMonth}/${requestedYear}: ${itemChange.note}`;
+                                processedItem.itemChange = itemChange;
+                            }
+                        }
+                    }
+
+                    return processedItem;
+                });
+            }
+
+            return processedTemplate;
         });
-        
-        // Convert to array format
-        const residences = Object.values(templatesByResidence);
-        
+
         res.status(200).json({
-            totalResidences: residences.length,
-            totalTemplates: templates.length,
-            residences: residences,
-            message: `Found ${templates.length} template(s) across ${residences.length} residence(s)`
+            success: true,
+            message: `Found ${templates.length} template(s)`,
+            templates: processedTemplates,
+            context: month && year ? {
+                requestedMonth: parseInt(month),
+                requestedYear: parseInt(year),
+                isPastMonth: (parseInt(year) < new Date().getFullYear()) || 
+                            (parseInt(year) === new Date().getFullYear() && parseInt(month) < new Date().getMonth() + 1),
+                note: `Showing data for ${month}/${year}. Past months show historical costs, current/future months show template costs.`
+            } : {
+                note: 'Showing current template data. Use month and year query parameters to see historical data for specific periods.'
+            }
         });
-        
+
     } catch (error) {
-        console.error('Error getting all templates:', error);
-        res.status(500).json({ message: error.message });
+        console.error('Error fetching all templates:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching templates',
+            error: error.message
+        });
     }
-}; 
+};
 
 // Analyze historical data for template creation
 exports.analyzeHistoricalData = async (req, res) => {
@@ -2313,5 +2305,376 @@ exports.createTemplateFromHistorical = async (req, res) => {
             message: 'Error creating template from historical data',
             error: error.message 
         });
+    }
+};
+
+// Create template with manual historical cost data
+exports.createTemplateWithHistory = async (req, res) => {
+    try {
+        const { residenceId } = req.params;
+        const { 
+            title, 
+            description, 
+            items, 
+            historicalData, // Array of historical cost data
+            itemHistory, // Array of item addition/removal history
+            templateName,
+            templateDescription 
+        } = req.body;
+
+        // Validate required fields
+        if (!title || !residenceId || !items || !Array.isArray(items)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Title, residenceId, and items array are required'
+            });
+        }
+
+        // Validate residence exists
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        // Process items with historical data
+        const processedItems = items.map(item => {
+            const processedItem = {
+                title: item.title,
+                description: item.description || item.title,
+                estimatedCost: item.estimatedCost,
+                quantity: item.quantity || 1,
+                category: item.category || 'general',
+                priority: item.priority || 'medium',
+                notes: item.notes || '',
+                tags: item.tags || [],
+                isRecurring: item.isRecurring || false,
+                itemHistory: [], // Track when this item was added/removed/modified
+                costHistory: [] // Track cost changes
+            };
+
+            // Add cost history if provided
+            if (historicalData && Array.isArray(historicalData)) {
+                const itemHistory = historicalData.filter(h => 
+                    h.itemTitle && h.itemTitle.toLowerCase().trim() === item.title.toLowerCase().trim()
+                );
+
+                if (itemHistory.length > 0) {
+                    processedItem.costHistory = itemHistory.map(h => ({
+                        month: h.month,
+                        year: h.year,
+                        cost: h.cost,
+                        date: new Date(h.year, h.month - 1, 1),
+                        note: h.note || `Historical cost from ${h.month}/${h.year}`
+                    }));
+
+                    // Sort cost history by date (most recent first)
+                    processedItem.costHistory.sort((a, b) => b.date - a.date);
+
+                    // Calculate cost variations
+                    processedItem.costVariations = [];
+                    for (let i = 0; i < processedItem.costHistory.length - 1; i++) {
+                        const current = processedItem.costHistory[i];
+                        const previous = processedItem.costHistory[i + 1];
+                        
+                        if (current.cost !== previous.cost) {
+                            processedItem.costVariations.push({
+                                from: `${previous.month}/${previous.year}`,
+                                to: `${current.month}/${current.year}`,
+                                oldCost: previous.cost,
+                                newCost: current.cost,
+                                change: current.cost - previous.cost,
+                                changePercent: ((current.cost - previous.cost) / previous.cost * 100).toFixed(1)
+                            });
+                        }
+                    }
+
+                    // Add cost summary
+                    const uniqueCosts = [...new Set(processedItem.costHistory.map(h => h.cost))].sort((a, b) => a - b);
+                    const averageCost = (processedItem.costHistory.reduce((sum, h) => sum + h.cost, 0) / processedItem.costHistory.length).toFixed(2);
+                    
+                    processedItem.costSummary = {
+                        mostRecentCost: processedItem.costHistory[0].cost,
+                        mostRecentMonth: `${processedItem.costHistory[0].month}/${processedItem.costHistory[0].year}`,
+                        uniqueCosts: uniqueCosts,
+                        totalVariations: processedItem.costVariations.length,
+                        averageCost: averageCost
+                    };
+                }
+            }
+
+            // Add item history if provided
+            if (itemHistory && Array.isArray(itemHistory)) {
+                const itemItemHistory = itemHistory.filter(h => 
+                    h.itemTitle && h.itemTitle.toLowerCase().trim() === item.title.toLowerCase().trim()
+                );
+
+                if (itemItemHistory.length > 0) {
+                    processedItem.itemHistory = itemItemHistory.map(h => ({
+                        month: h.month,
+                        year: h.year,
+                        date: new Date(h.year, h.month - 1, 1),
+                        action: h.action, // 'added', 'removed', 'modified'
+                        oldValue: h.oldValue,
+                        newValue: h.newValue,
+                        note: h.note || `${h.action} in ${h.month}/${h.year}`,
+                        cost: h.cost,
+                        quantity: h.quantity
+                    }));
+
+                    // Sort item history by date (most recent first)
+                    processedItem.itemHistory.sort((a, b) => b.date - a.date);
+                }
+            }
+
+            // Update notes with historical information
+            let historyNotes = [];
+            if (processedItem.costHistory.length > 0) {
+                historyNotes.push(`Cost history: ${processedItem.costHistory.length} entries, ${processedItem.costVariations.length} variations`);
+            }
+            if (processedItem.itemHistory.length > 0) {
+                const addedCount = processedItem.itemHistory.filter(h => h.action === 'added').length;
+                const removedCount = processedItem.itemHistory.filter(h => h.action === 'removed').length;
+                const modifiedCount = processedItem.itemHistory.filter(h => h.action === 'modified').length;
+                historyNotes.push(`Item history: ${addedCount} added, ${removedCount} removed, ${modifiedCount} modified`);
+            }
+            
+            if (historyNotes.length > 0) {
+                const historyNote = historyNotes.join('; ');
+                processedItem.notes = processedItem.notes ? `${processedItem.notes}. ${historyNote}` : historyNote;
+            }
+
+            return processedItem;
+        });
+
+        // Calculate total estimated cost
+        const totalEstimatedCost = processedItems.reduce((sum, item) => sum + (item.estimatedCost * item.quantity), 0);
+
+        // Create the template
+        const template = new MonthlyRequest({
+            title: title,
+            description: description,
+            residence: residenceId,
+            month: null,
+            year: null,
+            status: 'draft',
+            priority: 'medium',
+            items: processedItems,
+            totalEstimatedCost: totalEstimatedCost,
+            submittedBy: req.user._id,
+            isTemplate: true,
+            templateVersion: 1,
+            lastUpdated: new Date(),
+            effectiveFrom: new Date(),
+            templateChanges: [],
+            templateMetadata: {
+                createdWithManualHistory: true,
+                creationDate: new Date(),
+                historicalDataProvided: historicalData ? historicalData.length : 0,
+                itemHistoryProvided: itemHistory ? itemHistory.length : 0,
+                templateName: templateName,
+                templateDescription: templateDescription,
+                totalHistoricalEntries: processedItems.reduce((sum, item) => sum + (item.costHistory ? item.costHistory.length : 0), 0),
+                totalItemHistoryEntries: processedItems.reduce((sum, item) => sum + (item.itemHistory ? item.itemHistory.length : 0), 0)
+            }
+        });
+
+        await template.save();
+
+        // Add to request history
+        template.requestHistory.push({
+            date: new Date(),
+            action: 'Template created with manual historical data',
+            user: req.user._id,
+            changes: [{
+                field: 'template_creation',
+                oldValue: null,
+                newValue: 'Template created with cost and item history'
+            }]
+        });
+
+        await template.save();
+
+        res.status(201).json({
+            success: true,
+            message: 'Template created successfully with historical data',
+            template: template,
+            summary: {
+                totalItems: processedItems.length,
+                itemsWithCostHistory: processedItems.filter(item => item.costHistory && item.costHistory.length > 0).length,
+                itemsWithItemHistory: processedItems.filter(item => item.itemHistory && item.itemHistory.length > 0).length,
+                totalCostHistoryEntries: processedItems.reduce((sum, item) => sum + (item.costHistory ? item.costHistory.length : 0), 0),
+                totalItemHistoryEntries: processedItems.reduce((sum, item) => sum + (item.itemHistory ? item.itemHistory.length : 0), 0),
+                totalCostVariations: processedItems.reduce((sum, item) => sum + (item.costVariations ? item.costVariations.length : 0), 0)
+            }
+        });
+
+    } catch (error) {
+        console.error('Error creating template with history:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error creating template with historical data',
+            error: error.message
+        });
+    }
+};
+
+// Update entire template (Admin only)
+exports.updateTemplate = async (req, res) => {
+    try {
+        const user = req.user;
+        const { templateId } = req.params;
+        const { 
+            title, 
+            description, 
+            items, 
+            effectiveFromMonth, 
+            effectiveFromYear,
+            templateName,
+            templateDescription 
+        } = req.body;
+        
+        // Only admins can modify templates
+        if (user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can modify templates' });
+        }
+        
+        const template = await MonthlyRequest.findById(templateId);
+        if (!template) {
+            return res.status(404).json({ message: 'Template not found' });
+        }
+        
+        if (!template.isTemplate) {
+            return res.status(400).json({ message: 'This is not a template' });
+        }
+        
+        // Store original template for change tracking
+        const originalTemplate = template.toObject();
+        
+        // Update basic template fields
+        if (title !== undefined) template.title = title;
+        if (description !== undefined) template.description = description;
+        if (templateName !== undefined) {
+            if (!template.templateMetadata) template.templateMetadata = {};
+            template.templateMetadata.templateName = templateName;
+        }
+        if (templateDescription !== undefined) {
+            if (!template.templateMetadata) template.templateMetadata = {};
+            template.templateMetadata.templateDescription = templateDescription;
+        }
+        
+        // Handle items update
+        if (items && Array.isArray(items)) {
+            // Validate items
+            for (const item of items) {
+                if (!item.title || !item.description || !item.estimatedCost) {
+                    return res.status(400).json({ 
+                        message: 'Each item must have title, description, and estimated cost' 
+                    });
+                }
+            }
+            
+            // Calculate new total cost
+            const newTotalCost = items.reduce((sum, item) => sum + (item.estimatedCost * (item.quantity || 1)), 0);
+            template.totalEstimatedCost = newTotalCost;
+            
+            // Store original items for change tracking
+            const originalItems = template.items;
+            template.items = items;
+            
+            // Create change record for items modification
+            const changeRecord = {
+                date: new Date(),
+                type: 'items_updated',
+                changedBy: user._id,
+                description: 'Template items updated',
+                details: {
+                    originalItemCount: originalItems.length,
+                    newItemCount: items.length,
+                    originalTotalCost: template.totalEstimatedCost,
+                    newTotalCost: newTotalCost
+                },
+                status: 'pending' // Requires finance approval
+            };
+            
+            if (!template.templateChanges) template.templateChanges = [];
+            template.templateChanges.push(changeRecord);
+        }
+        
+        // Handle effective date for future changes
+        if (effectiveFromMonth && effectiveFromYear) {
+            const effectiveDate = new Date(effectiveFromYear, effectiveFromMonth - 1, 1);
+            const currentDate = new Date();
+            
+            // Ensure effective date is in the future
+            if (effectiveDate <= currentDate) {
+                return res.status(400).json({ 
+                    message: 'Effective date must be in the future' 
+                });
+            }
+            
+            template.effectiveFrom = effectiveDate;
+            
+            // Create change record for effective date
+            const changeRecord = {
+                date: new Date(),
+                type: 'effective_date_changed',
+                changedBy: user._id,
+                description: `Template changes effective from ${effectiveFromMonth}/${effectiveFromYear}`,
+                details: {
+                    effectiveFromMonth: effectiveFromMonth,
+                    effectiveFromYear: effectiveFromYear,
+                    effectiveDate: effectiveDate
+                },
+                status: 'pending' // Requires finance approval
+            };
+            
+            if (!template.templateChanges) template.templateChanges = [];
+            template.templateChanges.push(changeRecord);
+        }
+        
+        // Update template version and metadata
+        template.templateVersion = (template.templateVersion || 1) + 1;
+        template.lastUpdated = new Date();
+        
+        // Update template metadata
+        if (!template.templateMetadata) template.templateMetadata = {};
+        template.templateMetadata.lastModifiedBy = user._id;
+        template.templateMetadata.lastModifiedAt = new Date();
+        template.templateMetadata.modificationCount = (template.templateMetadata.modificationCount || 0) + 1;
+        
+        // Add to request history
+        template.requestHistory.push({
+            date: new Date(),
+            action: 'Template updated',
+            user: user._id,
+            changes: [
+                { field: 'template_update', oldValue: 'Previous version', newValue: `Version ${template.templateVersion}` }
+            ]
+        });
+        
+        await template.save();
+        
+        // Populate and return updated template
+        const updatedTemplate = await MonthlyRequest.findById(templateId)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('templateChanges.changedBy', 'firstName lastName email');
+        
+        res.status(200).json({
+            message: 'Template updated successfully. Changes require finance approval before taking effect.',
+            template: updatedTemplate,
+            changes: {
+                version: template.templateVersion,
+                effectiveFrom: template.effectiveFrom,
+                pendingChanges: template.templateChanges.filter(change => change.status === 'pending').length
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error updating template:', error);
+        res.status(500).json({ message: error.message });
     }
 };

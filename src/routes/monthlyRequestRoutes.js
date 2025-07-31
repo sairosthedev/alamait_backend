@@ -88,6 +88,9 @@ router.get('/residence/:residenceId/analyze-historical', monthlyRequestControlle
 // Create template from historical data
 router.post('/residence/:residenceId/create-template-from-historical', monthlyRequestController.createTemplateFromHistorical);
 
+// Route for creating template with manual historical data
+router.post('/residence/:residenceId/create-template-with-history', auth, checkRole(['admin', 'finance']), monthlyRequestController.createTemplateWithHistory);
+
 // Get monthly request by ID
 router.get('/:id', monthlyRequestController.getMonthlyRequestById);
 
@@ -104,6 +107,9 @@ router.post('/templates/:templateId', monthlyRequestController.createFromTemplat
 router.post('/templates/:templateId/items', monthlyRequestController.addTemplateItem);
 router.put('/templates/:templateId/items/:itemIndex', monthlyRequestController.modifyTemplateItem);
 router.delete('/templates/:templateId/items/:itemIndex', monthlyRequestController.removeTemplateItem);
+
+// Update entire template (Admin only)
+router.put('/templates/:templateId', monthlyRequestController.updateTemplate);
 
 // Template change approval routes (Finance only)
 router.post('/templates/:templateId/changes/:changeIndex/approve', monthlyRequestController.approveTemplateChanges);
