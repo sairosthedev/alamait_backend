@@ -21,16 +21,89 @@ async function connectToDatabase() {
 async function testSpecificRequest() {
     try {
         console.log('🔍 Testing specific request: 688a4e45c0f30f13fe683751');
-        console.log('Collection: maintenance');
         
         const requestId = '688a4e45c0f30f13fe683751';
-        const request = await Request.findById(requestId);
+        
+        // First try the Request model (which uses maintenance collection)
+        let request = await Request.findById(requestId);
         
         if (!request) {
             console.log('❌ Request not found in maintenance collection');
             
-            // Let's check if it exists in any collection
+            // Try the requests collection directly
             const db = mongoose.connection.db;
+            console.log('\n🔍 Checking requests collection...');
+            
+            try {
+                const doc = await db.collection('requests').findOne({ _id: new mongoose.Types.ObjectId(requestId) });
+                if (doc) {
+                    console.log('✅ Found document in requests collection!');
+                    console.log('\n📋 Document Details:');
+                    console.log(`  - Title: ${doc.title}`);
+                    console.log(`  - Status: ${doc.status}`);
+                    console.log(`  - Type: ${doc.type}`);
+                    console.log(`  - financeStatus: ${doc.financeStatus}`);
+                    console.log(`  - approval.finance.approved: ${doc.approval?.finance?.approved}`);
+                    
+                    if (doc.items && doc.items.length > 0) {
+                        console.log('\n🔍 Item-level Quotations:');
+                        doc.items.forEach((item, itemIndex) => {
+                            console.log(`  - Item ${itemIndex + 1}: ${item.description}`);
+                            if (item.quotations && item.quotations.length > 0) {
+                                item.quotations.forEach((quotation, quotationIndex) => {
+                                    console.log(`    * Quotation ${quotationIndex + 1}:`);
+                                    console.log(`      - Provider: ${quotation.provider}`);
+                                    console.log(`      - Amount: ${quotation.amount}`);
+                                    console.log(`      - isApproved: ${quotation.isApproved}`);
+                                    console.log(`      - approvedBy: ${quotation.approvedBy}`);
+                                    console.log(`      - approvedAt: ${quotation.approvedAt}`);
+                                });
+                            }
+                        });
+                    }
+                    
+                    // Check for inconsistencies
+                    console.log('\n⚠️  Inconsistencies Found:');
+                    let hasInconsistencies = false;
+                    
+                    if (doc.financeStatus === 'approved' && !doc.approval?.finance?.approved) {
+                        console.log('  ❌ financeStatus is "approved" but approval.finance.approved is false');
+                        hasInconsistencies = true;
+                    }
+                    
+                    if (doc.financeStatus === 'rejected' && doc.approval?.finance?.approved) {
+                        console.log('  ❌ financeStatus is "rejected" but approval.finance.approved is true');
+                        hasInconsistencies = true;
+                    }
+                    
+                    if (doc.approval?.finance?.approved && doc.items && doc.items.length > 0) {
+                        let hasApprovedQuotations = false;
+                        doc.items.forEach(item => {
+                            if (item.quotations && item.quotations.length > 0) {
+                                const approvedQuotations = item.quotations.filter(q => q.isApproved);
+                                if (approvedQuotations.length > 0) {
+                                    hasApprovedQuotations = true;
+                                }
+                            }
+                        });
+                        
+                        if (!hasApprovedQuotations) {
+                            console.log('  ❌ Finance approved but no item quotations are approved');
+                            hasInconsistencies = true;
+                        }
+                    }
+                    
+                    if (!hasInconsistencies) {
+                        console.log('  ✅ No inconsistencies found');
+                    }
+                    
+                    return;
+                }
+            } catch (err) {
+                console.log('❌ Error checking requests collection:', err.message);
+            }
+            
+            // Let's check if it exists in any collection
             const collections = await db.listCollections().toArray();
             console.log('\n📋 Available collections:');
             collections.forEach(col => console.log(`  - ${col.name}`));
