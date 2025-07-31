@@ -48,16 +48,290 @@ function isPastOrCurrentMonth(month, year) {
     return false;
 }
 
-// Helper function to determine appropriate status based on month/year
+// Enhanced function to get appropriate status and handle historical costs
 function getDefaultStatusForMonth(month, year, userRole) {
     const isPastOrCurrent = isPastOrCurrentMonth(month, year);
     
     if (isPastOrCurrent) {
-        // For past/current months, auto-approve (assuming these were already processed)
-        return 'approved';
+        return 'approved'; // Auto-approve historical requests
     } else {
-        // For future months, set as pending for finance approval
-        return 'pending';
+        return 'pending'; // Require finance approval for future
+    }
+}
+
+// Function to handle template creation with cost history
+function createMonthlyRequestFromTemplate(template, month, year, submittedBy) {
+    const currentDate = new Date();
+    const currentMonth = currentDate.getMonth() + 1;
+    const currentYear = currentDate.getFullYear();
+    
+    // Determine if this is a historical month
+    const isHistorical = year < currentYear || (year === currentYear && month < currentMonth);
+    
+    // For historical months, we might want to preserve original costs
+    // For current/future months, use template costs
+    const items = template.items.map(item => ({
+        ...item,
+        // Add cost history tracking
+        costHistory: isHistorical ? [{
+            date: new Date(),
+            cost: item.estimatedCost,
+            note: isHistorical ? 'Historical cost preserved' : 'Template cost applied'
+        }] : []
+    }));
+    
+    const status = getDefaultStatusForMonth(month, year);
+    
+    return {
+        title: template.title,
+        description: formatDescriptionWithMonth(template.description, month, year),
+        residence: template.residence,
+        month: month,
+        year: year,
+        items: items,
+        submittedBy: submittedBy,
+        status: status,
+        tags: template.tags,
+        isFromTemplate: true,
+        templateId: template._id,
+        templateVersion: template.templateVersion
+    };
+}
+
+// Enhanced function to analyze historical data with better cost tracking
+async function analyzeHistoricalDataForTemplate(residenceId, months = 6) {
+    try {
+        const currentDate = new Date();
+        const currentMonth = currentDate.getMonth() + 1;
+        const currentYear = currentDate.getFullYear();
+        
+        // Get historical monthly requests for the last N months
+        const historicalRequests = await MonthlyRequest.find({
+            residence: residenceId,
+            isTemplate: false,
+            month: { $exists: true, $ne: null },
+            year: { $exists: true, $ne: null },
+            $or: [
+                { year: { $lt: currentYear } },
+                { 
+                    year: currentYear,
+                    month: { $lt: currentMonth }
+                }
+            ]
+        })
+        .sort({ year: -1, month: -1 })
+        .limit(months)
+        .populate('residence', 'name');
+        
+        if (historicalRequests.length === 0) {
+            return {
+                success: false,
+                message: 'No historical data found to analyze',
+                suggestedItems: []
+            };
+        }
+        
+        // Analyze items across historical requests with detailed cost tracking
+        const itemAnalysis = {};
+        
+        historicalRequests.forEach(request => {
+            request.items.forEach(item => {
+                const itemKey = item.title.toLowerCase().trim();
+                
+                if (!itemAnalysis[itemKey]) {
+                    itemAnalysis[itemKey] = {
+                        title: item.title,
+                        description: item.description,
+                        category: item.category,
+                        costHistory: [],
+                        quantities: [],
+                        isRecurring: false,
+                        lastSeen: null,
+                        frequency: 0,
+                        uniqueCosts: new Set(),
+                        costVariations: []
+                    };
+                }
+                
+                const costEntry = {
+                    month: request.month,
+                    year: request.year,
+                    cost: item.estimatedCost,
+                    quantity: item.quantity || 1,
+                    date: new Date(request.year, request.month - 1, 1)
+                };
+                
+                itemAnalysis[itemKey].costHistory.push(costEntry);
+                itemAnalysis[itemKey].quantities.push(item.quantity || 1);
+                itemAnalysis[itemKey].frequency++;
+                itemAnalysis[itemKey].lastSeen = `${request.month}/${request.year}`;
+                itemAnalysis[itemKey].uniqueCosts.add(item.estimatedCost);
+                
+                // Check if item appears in multiple months (recurring)
+                if (itemAnalysis[itemKey].frequency > 1) {
+                    itemAnalysis[itemKey].isRecurring = true;
+                }
+            });
+        });
+        
+        // Analyze cost variations for each item
+        Object.keys(itemAnalysis).forEach(itemKey => {
+            const item = itemAnalysis[itemKey];
+            
+            // Sort cost history by date (most recent first)
+            item.costHistory.sort((a, b) => b.date - a.date);
+            
+            // Find cost variations (when cost changes)
+            item.costVariations = [];
+            for (let i = 0; i < item.costHistory.length - 1; i++) {
+                const current = item.costHistory[i];
+                const previous = item.costHistory[i + 1];
+                
+                if (current.cost !== previous.cost) {
+                    item.costVariations.push({
+                        from: `${previous.month}/${previous.year}`,
+                        to: `${current.month}/${current.year}`,
+                        oldCost: previous.cost,
+                        newCost: current.cost,
+                        change: current.cost - previous.cost,
+                        changePercent: ((current.cost - previous.cost) / previous.cost * 100).toFixed(1)
+                    });
+                }
+            }
+            
+            // Determine the most recent cost (for template)
+            item.mostRecentCost = item.costHistory[0].cost;
+            item.mostRecentMonth = `${item.costHistory[0].month}/${item.costHistory[0].year}`;
+        });
+        
+        // Generate suggested template items
+        const suggestedItems = Object.values(itemAnalysis)
+            .filter(item => item.frequency >= 1)
+            .map(item => {
+                const avgQuantity = item.quantities.reduce((sum, qty) => sum + qty, 0) / item.quantities.length;
+                
+                return {
+                    title: item.title,
+                    description: item.description,
+                    estimatedCost: item.mostRecentCost, // Use most recent cost for template
+                    quantity: Math.round(avgQuantity),
+                    category: item.category || 'general',
+                    isRecurring: item.isRecurring,
+                    priority: item.isRecurring ? 'medium' : 'low',
+                    notes: item.isRecurring ? 
+                        `Recurring item (appeared ${item.frequency} times in last ${months} months)` :
+                        `One-time item (last seen: ${item.lastSeen})`,
+                    costHistory: item.costHistory.map(entry => ({
+                        date: entry.date,
+                        cost: entry.cost,
+                        month: entry.month,
+                        year: entry.year,
+                        note: `Cost in ${entry.month}/${entry.year}`
+                    })),
+                    costVariations: item.costVariations,
+                    costSummary: {
+                        mostRecentCost: item.mostRecentCost,
+                        mostRecentMonth: item.mostRecentMonth,
+                        uniqueCosts: Array.from(item.uniqueCosts).sort((a, b) => a - b),
+                        totalVariations: item.costVariations.length,
+                        averageCost: (item.costHistory.reduce((sum, entry) => sum + entry.cost, 0) / item.costHistory.length).toFixed(2)
+                    }
+                };
+            })
+            .sort((a, b) => {
+                // Sort by: recurring items first, then by frequency, then by title
+                if (a.isRecurring && !b.isRecurring) return -1;
+                if (!a.isRecurring && b.isRecurring) return 1;
+                return b.frequency - a.frequency;
+            });
+        
+        return {
+            success: true,
+            message: `Analyzed ${historicalRequests.length} historical requests`,
+            suggestedItems: suggestedItems,
+            analysis: {
+                totalRequests: historicalRequests.length,
+                totalItems: suggestedItems.length,
+                recurringItems: suggestedItems.filter(item => item.isRecurring).length,
+                oneTimeItems: suggestedItems.filter(item => !item.isRecurring).length,
+                dateRange: {
+                    from: `${historicalRequests[historicalRequests.length - 1].month}/${historicalRequests[historicalRequests.length - 1].year}`,
+                    to: `${historicalRequests[0].month}/${historicalRequests[0].year}`
+                },
+                costAnalysis: {
+                    itemsWithCostVariations: suggestedItems.filter(item => item.costVariations.length > 0).length,
+                    totalCostChanges: suggestedItems.reduce((sum, item) => sum + item.costVariations.length, 0)
+                }
+            }
+        };
+        
+    } catch (error) {
+        console.error('Error analyzing historical data:', error);
+        return {
+            success: false,
+            message: 'Error analyzing historical data',
+            error: error.message
+        };
+    }
+}
+
+// Function to create template from historical analysis
+async function createTemplateFromHistoricalData(residenceId, templateData, user) {
+    try {
+        // Analyze historical data first
+        const analysis = await analyzeHistoricalDataForTemplate(residenceId);
+        
+        if (!analysis.success) {
+            throw new Error(analysis.message);
+        }
+        
+        // Merge suggested items with user-provided items
+        const mergedItems = templateData.items || [];
+        
+        // Add suggested items that user didn't explicitly include
+        analysis.suggestedItems.forEach(suggestedItem => {
+            const exists = mergedItems.some(item => 
+                item.title.toLowerCase().trim() === suggestedItem.title.toLowerCase().trim()
+            );
+            
+            if (!exists) {
+                mergedItems.push(suggestedItem);
+            }
+        });
+        
+        // Create the template
+        const template = new MonthlyRequest({
+            title: templateData.title || 'Monthly Services Template',
+            description: templateData.description || 'Template based on historical data',
+            residence: residenceId,
+            isTemplate: true,
+            status: 'draft',
+            items: mergedItems,
+            submittedBy: user._id,
+            templateName: templateData.templateName,
+            templateDescription: templateData.templateDescription,
+            tags: templateData.tags || [],
+            // Add metadata about historical analysis
+            templateMetadata: {
+                createdFromHistoricalAnalysis: true,
+                analysisDate: new Date(),
+                historicalRequestsAnalyzed: analysis.analysis.totalRequests,
+                dateRange: analysis.analysis.dateRange
+            }
+        });
+        
+        await template.save();
+        
+        return {
+            success: true,
+            template: template,
+            analysis: analysis,
+            message: `Template created with ${mergedItems.length} items based on historical analysis`
+        };
+        
+    } catch (error) {
+        console.error('Error creating template from historical data:', error);
+        throw error;
     }
 }
 
@@ -1994,3 +2268,50 @@ exports.getAllTemplates = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 }; 
+
+// Analyze historical data for template creation
+exports.analyzeHistoricalData = async (req, res) => {
+    try {
+        const { residenceId } = req.params;
+        const { months = 6 } = req.query;
+        
+        const analysis = await analyzeHistoricalDataForTemplate(residenceId, parseInt(months));
+        
+        res.json(analysis);
+    } catch (error) {
+        console.error('Error analyzing historical data:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Error analyzing historical data',
+            error: error.message 
+        });
+    }
+};
+
+// Create template from historical data
+exports.createTemplateFromHistorical = async (req, res) => {
+    try {
+        const user = req.user;
+        const { residenceId } = req.params;
+        const templateData = req.body;
+        
+        // Check if user has permission to create templates
+        if (!['admin', 'finance'].includes(user.role)) {
+            return res.status(403).json({ 
+                success: false, 
+                message: 'Only admins and finance users can create templates' 
+            });
+        }
+        
+        const result = await createTemplateFromHistoricalData(residenceId, templateData, user);
+        
+        res.status(201).json(result);
+    } catch (error) {
+        console.error('Error creating template from historical data:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Error creating template from historical data',
+            error: error.message 
+        });
+    }
+};

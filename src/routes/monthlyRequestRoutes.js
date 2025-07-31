@@ -82,6 +82,12 @@ router.get('/available-templates/:residence', monthlyRequestController.getAvaila
 // Get templates for residence selection (for monthly request creation)
 router.get('/residence/:residenceId/templates', monthlyRequestController.getTemplatesForResidence);
 
+// Analyze historical data for template creation
+router.get('/residence/:residenceId/analyze-historical', monthlyRequestController.analyzeHistoricalData);
+
+// Create template from historical data
+router.post('/residence/:residenceId/create-template-from-historical', monthlyRequestController.createTemplateFromHistorical);
+
 // Get monthly request by ID
 router.get('/:id', monthlyRequestController.getMonthlyRequestById);
 
