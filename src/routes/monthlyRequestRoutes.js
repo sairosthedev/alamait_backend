@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const monthlyRequestController = require('../controllers/monthlyRequestController');
 const { auth, checkRole } = require('../middleware/auth');
+const requestLogger = require('../middleware/requestLogger');
 
 // Configure multer for file uploads
 const upload = multer({
@@ -31,6 +32,9 @@ const upload = multer({
 
 // Apply authentication middleware to all routes
 router.use(auth);
+
+// Apply request logging middleware for debugging
+router.use(requestLogger);
 
 // Get all monthly requests (filtered by user role and residence)
 router.get('/', monthlyRequestController.getAllMonthlyRequests);

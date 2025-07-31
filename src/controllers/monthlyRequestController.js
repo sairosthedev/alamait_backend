@@ -153,11 +153,48 @@ exports.createMonthlyRequest = async (req, res) => {
             tags
         } = req.body;
 
-        // Validate required fields
+        // Log the request for debugging
+        console.log('Monthly request creation attempt:', {
+            user: user._id,
+            userRole: user.role,
+            title,
+            description,
+            residence,
+            month,
+            year,
+            isTemplate,
+            hasItems: !!items,
+            timestamp: new Date().toISOString()
+        });
+
+        // Validate required fields with detailed error messages
         const isTemplateValue = isTemplate || false;
+        const errors = [];
         
-        if (!title || !description) {
-            return res.status(400).json({ message: 'Title and description are required' });
+        if (!title) errors.push('Title is required');
+        if (!description) errors.push('Description is required');
+        if (!residence) errors.push('Residence is required');
+        
+        if (!isTemplateValue) {
+            if (!month) errors.push('Month is required for non-template requests');
+            if (!year) errors.push('Year is required for non-template requests');
+            
+            if (month && (month < 1 || month > 12)) {
+                errors.push('Month must be between 1 and 12');
+            }
+            
+            if (year && year < 2020) {
+                errors.push('Year must be 2020 or later');
+            }
+        }
+
+        if (errors.length > 0) {
+            console.log('Validation errors:', errors);
+            return res.status(400).json({ 
+                message: 'Validation failed', 
+                errors,
+                receivedData: { title, description, residence, month, year, isTemplate }
+            });
         }
         
         // Residence is required for both templates and regular requests
@@ -185,13 +222,21 @@ exports.createMonthlyRequest = async (req, res) => {
         if (!isTemplateValue && residence) {
             const residenceExists = await Residence.findById(residence);
             if (!residenceExists) {
-                return res.status(400).json({ message: 'Residence not found' });
+                console.log('Residence not found:', residence);
+                return res.status(400).json({ 
+                    message: 'Residence not found',
+                    residenceId: residence
+                });
             }
         }
 
         // Students cannot create monthly requests
         if (user.role === 'student') {
-            return res.status(403).json({ message: 'Students do not have access to monthly requests' });
+            console.log('Student attempted to create monthly request:', user._id);
+            return res.status(403).json({ 
+                message: 'Students do not have access to monthly requests',
+                userRole: user.role
+            });
         }
 
         // Check for duplicate monthly request (only for non-templates)
@@ -205,7 +250,11 @@ exports.createMonthlyRequest = async (req, res) => {
             });
 
             if (existingRequest) {
-                return res.status(400).json({ message: 'A monthly request with this title already exists for this residence and month' });
+                console.log('Duplicate request found:', existingRequest._id);
+                return res.status(400).json({ 
+                    message: 'A monthly request with this title already exists for this residence and month',
+                    existingRequestId: existingRequest._id
+                });
             }
         }
 
@@ -235,6 +284,7 @@ exports.createMonthlyRequest = async (req, res) => {
         });
 
         await monthlyRequest.save();
+        console.log('Monthly request created successfully:', monthlyRequest._id);
 
         const populatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
             .populate('residence', 'name')
