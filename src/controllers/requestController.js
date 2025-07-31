@@ -4,6 +4,7 @@ const User = require('../models/User');
 const { generateUniqueId } = require('../utils/idGenerator');
 const { uploadToS3 } = require('../utils/fileStorage');
 const { s3, s3Configs } = require('../config/s3');
+const { findSimilarRequests, generateSimilarityQuery } = require('../utils/requestSimilarity');
 
 // Get all requests (filtered by user role)
 exports.getAllRequests = async (req, res) => {
@@ -220,9 +221,7 @@ exports.createRequest = async (req, res) => {
                 if (!item.quantity || item.quantity < 1) {
                     return res.status(400).json({ message: `Item ${i + 1}: Quantity must be at least 1` });
                 }
-                if (!item.unitCost || item.unitCost < 0) {
-                    return res.status(400).json({ message: `Item ${i + 1}: Unit cost must be 0 or greater` });
-                }
+                // Unit cost validation removed - allowing any value including negative
                 
                 // Calculate total cost for this item
                 item.totalCost = item.unitCost * item.quantity;
@@ -274,16 +273,46 @@ exports.createRequest = async (req, res) => {
             }
         }
         
-        // Check for duplicate requests (same title and description by same user)
-        const existingRequest = await Request.findOne({
-            title: title,
-            description: description,
-            submittedBy: user._id,
-            status: { $in: ['pending', 'assigned', 'in-progress'] }
-        });
+        // Enhanced duplicate request detection
+        let duplicateCheckQuery = {};
+        
+        if (user.role === 'student') {
+            // For students: Check for similar requests by ANY student in the same residence
+            // This prevents students from creating duplicate requests
+            duplicateCheckQuery = {
+                title: { $regex: new RegExp(title, 'i') }, // Case-insensitive title match
+                description: { $regex: new RegExp(description, 'i') }, // Case-insensitive description match
+                type: type,
+                residence: residence,
+                submittedBy: { $ne: user._id }, // Exclude current user's own requests
+                status: { $in: ['pending', 'assigned', 'in-progress'] },
+                createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } // Last 30 days
+            };
+        } else {
+            // For non-students: Only check for duplicates by the same user
+            // This allows different users to create similar requests
+            duplicateCheckQuery = {
+                title: title,
+                description: description,
+                submittedBy: user._id,
+                status: { $in: ['pending', 'assigned', 'in-progress'] }
+            };
+        }
+        
+        const existingRequest = await Request.findOne(duplicateCheckQuery);
         
         if (existingRequest) {
-            return res.status(400).json({ message: 'A similar request already exists' });
+            if (user.role === 'student') {
+                return res.status(400).json({ 
+                    message: 'A similar request already exists in your residence. Please check existing requests before submitting a new one.',
+                    existingRequestId: existingRequest._id
+                });
+            } else {
+                return res.status(400).json({ 
+                    message: 'You have already submitted a similar request',
+                    existingRequestId: existingRequest._id
+                });
+            }
         }
         
         // Build request data
@@ -1607,6 +1636,95 @@ exports.updateItemQuotation = async (req, res) => {
         });
     } catch (error) {
         console.error('Error updating item quotation:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Check for similar requests before submission
+exports.checkSimilarRequests = async (req, res) => {
+    try {
+        const { title, description, type, residence } = req.body;
+        const user = req.user;
+        
+        if (!title || !description || !type) {
+            return res.status(400).json({ 
+                message: 'Missing required fields: title, description, type' 
+            });
+        }
+        
+        // Validate residence for students
+        if (user.role === 'student') {
+            if (!residence) {
+                return res.status(400).json({ 
+                    message: 'Residence is required for student requests' 
+                });
+            }
+            if (!user.residence || residence.toString() !== user.residence.toString()) {
+                return res.status(400).json({ 
+                    message: 'Students can only check requests for their assigned residence' 
+                });
+            }
+        }
+        
+        // Generate query to find potentially similar requests
+        const requestData = { title, description, type, residence };
+        const query = generateSimilarityQuery(requestData, user);
+        
+        // Find existing requests that might be similar
+        const existingRequests = await Request.find(query)
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('residence', 'name')
+            .sort({ createdAt: -1 })
+            .limit(20); // Limit to recent requests for performance
+        
+        // Find similar requests using the utility function
+        const similarRequests = findSimilarRequests(requestData, existingRequests, {
+            threshold: 0.6, // Lower threshold for checking
+            maxResults: 5,
+            includeOwnRequests: user.role !== 'student' // Include own requests for non-students
+        });
+        
+        // Check if any requests are too similar (blocking threshold)
+        const blockingSimilarRequests = similarRequests.filter(
+            result => result.similarity >= 0.8
+        );
+        
+        const response = {
+            hasSimilarRequests: similarRequests.length > 0,
+            hasBlockingSimilarRequests: blockingSimilarRequests.length > 0,
+            similarRequests: similarRequests.map(result => ({
+                id: result.request._id,
+                title: result.request.title,
+                description: result.request.description,
+                status: result.request.status,
+                submittedBy: result.request.submittedBy,
+                residence: result.request.residence,
+                createdAt: result.request.createdAt,
+                similarity: result.similarity,
+                titleSimilarity: result.titleSimilarity,
+                descriptionSimilarity: result.descriptionSimilarity
+            })),
+            blockingSimilarRequests: blockingSimilarRequests.map(result => ({
+                id: result.request._id,
+                title: result.request.title,
+                description: result.request.description,
+                status: result.request.status,
+                submittedBy: result.request.submittedBy,
+                residence: result.request.residence,
+                createdAt: result.request.createdAt,
+                similarity: result.similarity
+            })),
+            message: blockingSimilarRequests.length > 0 
+                ? 'Similar requests found that may prevent submission'
+                : similarRequests.length > 0 
+                ? 'Similar requests found - please review before submitting'
+                : 'No similar requests found'
+        };
+        
+        res.status(200).json(response);
+        
+    } catch (error) {
+        console.error('Error checking similar requests:', error);
         res.status(500).json({ message: error.message });
     }
 };
