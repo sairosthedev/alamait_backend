@@ -74,46 +74,11 @@ async function fixRequestFinanceApproval() {
                 needsUpdate = true;
             }
             
-            // Update quotations if finance approved the request
-            if (request.financeStatus === 'approved' && request.quotations && request.quotations.length > 0) {
-                console.log('  - Finance approved request, updating quotations');
-                
-                // Unapprove all quotations first
-                request.quotations.forEach((quotation, index) => {
-                    updates[`quotations.${index}.isApproved`] = false;
-                    updates[`quotations.${index}.approvedBy`] = null;
-                    updates[`quotations.${index}.approvedAt`] = null;
-                });
-                
-                // Approve the first quotation
-                if (request.quotations[0]) {
-                    updates['quotations.0.isApproved'] = true;
-                    updates['quotations.0.approvedAt'] = new Date();
-                    updates['amount'] = request.quotations[0].amount;
-                }
-            }
-            
-            // Update item-level quotations if finance approved the request
-            if (request.financeStatus === 'approved' && request.items && request.items.length > 0) {
-                console.log('  - Finance approved request, updating item-level quotations');
-                
-                request.items.forEach((item, itemIndex) => {
-                    if (item.quotations && item.quotations.length > 0) {
-                        // Unapprove all quotations for this item
-                        item.quotations.forEach((quotation, quotationIndex) => {
-                            updates[`items.${itemIndex}.quotations.${quotationIndex}.isApproved`] = false;
-                            updates[`items.${itemIndex}.quotations.${quotationIndex}.approvedBy`] = null;
-                            updates[`items.${itemIndex}.quotations.${quotationIndex}.approvedAt`] = null;
-                        });
-                        
-                        // Approve the first quotation for this item
-                        if (item.quotations[0]) {
-                            updates[`items.${itemIndex}.quotations.0.isApproved`] = true;
-                            updates[`items.${itemIndex}.quotations.0.approvedAt`] = new Date();
-                            updates[`items.${itemIndex}.estimatedCost`] = item.quotations[0].amount;
-                        }
-                    }
-                });
+            // Note: We do NOT automatically approve quotations when finance approves the request
+            // Finance must manually select and approve specific quotations using the approveQuotation endpoints
+            if (request.financeStatus === 'approved') {
+                console.log('  - Finance approved request - quotations should be manually approved by finance');
+                console.log('  - No automatic quotation approval (finance must select specific quotations)');
             }
             
             if (needsUpdate) {
@@ -170,6 +135,10 @@ async function fixRequestFinanceApproval() {
         }
         
         console.log('\n✅ Request finance approval fix completed!');
+        console.log('\n📋 Next Steps:');
+        console.log('  - Finance should manually approve specific quotations using:');
+        console.log('    * POST /api/requests/:id/approve-quotation (for request-level quotations)');
+        console.log('    * POST /api/requests/:id/items/:itemIndex/quotations/:quotationIndex/approve (for item-level quotations)');
         
     } catch (error) {
         console.error('❌ Error fixing request finance approval:', error);

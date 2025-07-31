@@ -519,7 +519,14 @@ exports.adminApproval = async (req, res) => {
 // Finance approval for requests
 exports.financeApproval = async (req, res) => {
     try {
-        const { approved, notes } = req.body;
+        const { 
+            approved, 
+            notes, 
+            rejected, 
+            waitlisted, 
+            quotationUpdates,
+            selectedQuotationId 
+        } = req.body;
         const user = req.user;
         
         const request = await Request.findById(req.params.id);
@@ -542,27 +549,132 @@ exports.financeApproval = async (req, res) => {
             return res.status(400).json({ message: 'Request is not pending approval' });
         }
         
-        request.approval.finance = {
-            approved,
+        // Build approval object based on action type
+        const approvalData = {
+            approved: approved || false,
             approvedBy: user._id,
             approvedByEmail: user.email,
             approvedAt: new Date(),
             notes
         };
         
-        // Update status based on approval
+        // Add rejection data if rejected
+        if (rejected) {
+            approvalData.rejected = true;
+            approvalData.rejectedBy = user._id;
+            approvalData.rejectedAt = new Date();
+            approvalData.rejectedByEmail = user.email;
+        }
+        
+        // Add waitlist data if waitlisted
+        if (waitlisted) {
+            approvalData.waitlisted = true;
+            approvalData.waitlistedBy = user._id;
+            approvalData.waitlistedAt = new Date();
+            approvalData.waitlistedByEmail = user.email;
+        }
+        
+        request.approval.finance = approvalData;
+        
+        // Update financeStatus field
         if (approved) {
+            request.financeStatus = 'approved';
             request.status = 'pending-ceo-approval';
-        } else {
+        } else if (rejected) {
+            request.financeStatus = 'rejected';
             request.status = 'rejected';
+        } else if (waitlisted) {
+            request.financeStatus = 'waitlisted';
+            request.status = 'waitlisted';
+        }
+        
+        // Handle quotation updates if provided
+        if (quotationUpdates && Array.isArray(quotationUpdates)) {
+            for (const update of quotationUpdates) {
+                const { quotationId, isApproved, approvedBy, approvedAt } = update;
+                
+                // Find and update request-level quotations
+                const requestQuotation = request.quotations.id(quotationId);
+                if (requestQuotation) {
+                    requestQuotation.isApproved = isApproved;
+                    requestQuotation.approvedBy = approvedBy || user._id;
+                    requestQuotation.approvedAt = approvedAt ? new Date(approvedAt) : new Date();
+                    
+                    // Update request amount if quotation is approved
+                    if (isApproved) {
+                        request.amount = requestQuotation.amount;
+                    }
+                }
+                
+                // Find and update item-level quotations
+                if (request.items && request.items.length > 0) {
+                    for (const item of request.items) {
+                        if (item.quotations && item.quotations.length > 0) {
+                            const itemQuotation = item.quotations.id(quotationId);
+                            if (itemQuotation) {
+                                itemQuotation.isApproved = isApproved;
+                                itemQuotation.approvedBy = approvedBy || user._id;
+                                itemQuotation.approvedAt = approvedAt ? new Date(approvedAt) : new Date();
+                                
+                                // Update item's estimated cost if quotation is approved
+                                if (isApproved) {
+                                    item.estimatedCost = itemQuotation.amount;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Recalculate total estimated cost
+                    request.totalEstimatedCost = request.items.reduce((total, item) => {
+                        return total + (item.estimatedCost * item.quantity);
+                    }, 0);
+                }
+            }
+        }
+        
+        // Handle selected quotation if provided (for backward compatibility)
+        if (selectedQuotationId && approved) {
+            // Unapprove all quotations first
+            if (request.quotations && request.quotations.length > 0) {
+                request.quotations.forEach(quotation => {
+                    quotation.isApproved = false;
+                    quotation.approvedBy = null;
+                    quotation.approvedAt = null;
+                });
+            }
+            
+            if (request.items && request.items.length > 0) {
+                request.items.forEach(item => {
+                    if (item.quotations && item.quotations.length > 0) {
+                        item.quotations.forEach(quotation => {
+                            quotation.isApproved = false;
+                            quotation.approvedBy = null;
+                            quotation.approvedAt = null;
+                        });
+                    }
+                });
+            }
+            
+            // Approve the selected quotation
+            const selectedQuotation = request.quotations.id(selectedQuotationId);
+            if (selectedQuotation) {
+                selectedQuotation.isApproved = true;
+                selectedQuotation.approvedBy = user._id;
+                selectedQuotation.approvedAt = new Date();
+                request.amount = selectedQuotation.amount;
+            }
         }
         
         // Add to request history
+        let actionDescription = 'Finance approval';
+        if (rejected) actionDescription = 'Finance rejection';
+        if (waitlisted) actionDescription = 'Finance waitlist';
+        
         request.requestHistory.push({
             date: new Date(),
-            action: 'Finance approval',
+            action: actionDescription,
             user: user._id,
-            changes: [`Finance ${approved ? 'approved' : 'rejected'} the request`]
+            changes: [`Finance ${approved ? 'approved' : rejected ? 'rejected' : waitlisted ? 'waitlisted' : 'updated'} the request`]
         });
         
         await request.save();

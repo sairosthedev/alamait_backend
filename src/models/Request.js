@@ -192,7 +192,12 @@ const requestSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'assigned', 'in-progress', 'completed', 'rejected', 'pending_ceo_approval', 'pending_finance_approval', 'pending_admin_approval', 'pending-ceo-approval', 'pending-finance-approval', 'pending-admin-approval'],
+        enum: ['pending', 'assigned', 'in-progress', 'completed', 'rejected', 'waitlisted', 'pending_ceo_approval', 'pending_finance_approval', 'pending_admin_approval', 'pending-ceo-approval', 'pending-finance-approval', 'pending-admin-approval'],
+        default: 'pending'
+    },
+    financeStatus: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected', 'waitlisted'],
         default: 'pending'
     },
     approval: {
@@ -236,6 +241,36 @@ const requestSchema = new mongoose.Schema({
             notes: {
                 type: String,
                 trim: true
+            },
+            rejected: {
+                type: Boolean,
+                default: false
+            },
+            rejectedBy: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            rejectedByEmail: {
+                type: String,
+                trim: true
+            },
+            rejectedAt: {
+                type: Date
+            },
+            waitlisted: {
+                type: Boolean,
+                default: false
+            },
+            waitlistedBy: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            waitlistedByEmail: {
+                type: String,
+                trim: true
+            },
+            waitlistedAt: {
+                type: Date
             }
         },
         ceo: {
