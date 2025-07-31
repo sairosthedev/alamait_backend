@@ -59,14 +59,14 @@ const requestItemSchema = new mongoose.Schema({
     },
     unitCost: {
         type: Number,
-        required: true,
-        min: 0,
+        required: false,
+        default: 0,
         description: 'Cost per unit/item'
     },
     totalCost: {
         type: Number,
-        required: true,
-        min: 0,
+        required: false,
+        default: 0,
         description: 'Total cost for this item (unitCost × quantity)'
     },
     purpose: {

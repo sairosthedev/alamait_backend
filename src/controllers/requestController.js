@@ -223,8 +223,13 @@ exports.createRequest = async (req, res) => {
                 }
                 // Unit cost validation removed - allowing any value including negative
                 
+                // Handle unitCost if it's undefined/null
+                if (item.unitCost === undefined || item.unitCost === null) {
+                    item.unitCost = 0;
+                }
+                
                 // Calculate total cost for this item
-                item.totalCost = item.unitCost * item.quantity;
+                item.totalCost = (item.unitCost || 0) * item.quantity;
                 
                 // Handle quotations with file uploads
                 if (item.quotations && Array.isArray(item.quotations)) {
@@ -1226,15 +1231,30 @@ exports.addItemQuotation = async (req, res) => {
         let fileName = '';
         
         if (req.file) {
-            // File was uploaded via FormData
+            // File was uploaded via FormData - upload to S3
+            console.log('File uploaded via FormData');
             try {
-                console.log('File uploaded via FormData');
-                const uploadResult = await uploadToS3(req.file, 'quotations');
-                fileUrl = uploadResult.url;
-                fileName = uploadResult.fileName;
+                const s3Key = `request_quotations/${user._id}_${Date.now()}_${req.file.originalname}`;
+                const s3UploadParams = {
+                    Bucket: s3Configs.requestQuotations.bucket,
+                    Key: s3Key,
+                    Body: req.file.buffer,
+                    ContentType: req.file.mimetype,
+                    ACL: s3Configs.requestQuotations.acl,
+                    Metadata: {
+                        fieldName: 'quotation',
+                        uploadedBy: user._id.toString(),
+                        uploadDate: new Date().toISOString()
+                    }
+                };
+                
+                const s3Result = await s3.upload(s3UploadParams).promise();
+                fileUrl = s3Result.Location;
+                fileName = req.file.originalname;
+                console.log('File uploaded to S3:', fileUrl);
             } catch (uploadError) {
-                console.error('File upload error:', uploadError);
-                return res.status(500).json({ message: 'Error uploading file' });
+                console.error('Error uploading file to S3:', uploadError);
+                return res.status(500).json({ message: 'Error uploading file to S3' });
             }
         } else if (req.body.fileUrl) {
             // File URL was provided via JSON
