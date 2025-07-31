@@ -145,6 +145,7 @@ exports.createMonthlyRequest = async (req, res) => {
             month,
             year,
             items,
+            templateRequests, // Handle frontend field name
             priority,
             notes,
             isTemplate,
@@ -152,6 +153,9 @@ exports.createMonthlyRequest = async (req, res) => {
             templateDescription,
             tags
         } = req.body;
+
+        // Map templateRequests to items if provided (frontend compatibility)
+        const finalItems = items || templateRequests || [];
 
         // Log the request for debugging
         console.log('Monthly request creation attempt:', {
@@ -163,7 +167,9 @@ exports.createMonthlyRequest = async (req, res) => {
             month,
             year,
             isTemplate,
-            hasItems: !!items,
+            hasItems: !!finalItems,
+            hasTemplateRequests: !!templateRequests,
+            itemsCount: finalItems.length,
             timestamp: new Date().toISOString()
         });
 
@@ -193,7 +199,17 @@ exports.createMonthlyRequest = async (req, res) => {
             return res.status(400).json({ 
                 message: 'Validation failed', 
                 errors,
-                receivedData: { title, description, residence, month, year, isTemplate }
+                receivedData: { 
+                    title, 
+                    description, 
+                    residence, 
+                    month, 
+                    year, 
+                    isTemplate,
+                    hasItems: !!finalItems,
+                    hasTemplateRequests: !!templateRequests,
+                    itemsCount: finalItems.length
+                }
             });
         }
         
@@ -264,7 +280,7 @@ exports.createMonthlyRequest = async (req, res) => {
             residence: residence, // Always required
             month: isTemplateValue ? null : parseInt(month),
             year: isTemplateValue ? null : parseInt(year),
-            items: items || [],
+            items: finalItems, // Use the mapped items
             priority: priority || 'medium',
             notes,
             isTemplate: isTemplateValue || false,
