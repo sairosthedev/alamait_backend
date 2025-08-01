@@ -55,7 +55,12 @@ function getDefaultStatusForMonth(month, year, userRole) {
     if (isPastOrCurrent) {
         return 'approved'; // Auto-approve historical requests
     } else {
-        return 'pending'; // Require finance approval for future
+        // For future months, status depends on user role
+        if (userRole === 'admin') {
+            return 'draft'; // Admin creates as draft
+        } else {
+            return 'pending'; // Other roles create as pending
+        }
     }
 }
 
@@ -481,7 +486,56 @@ exports.createMonthlyRequest = async (req, res) => {
         // Process items with historical data if provided
         let processedItems = items;
         if (isTemplate && (historicalData.length > 0 || itemHistory.length > 0)) {
-            processedItems = items.map(item => {
+            // First, create a map of all historical items to ensure we include all items
+            const allHistoricalItems = new Map();
+            
+            // Add current items
+            items.forEach(item => {
+                allHistoricalItems.set(item.title.toLowerCase().trim(), {
+                    ...item,
+                    costHistory: [],
+                    itemHistory: [],
+                    costVariations: [],
+                    costSummary: null
+                });
+            });
+            
+            // Historical data represents when items started (unchanged since then)
+            // So we only add cost history to existing items, not create new items
+            console.log('📊 Processing historical data for existing items...');
+            
+            // Item history represents items that were added/removed/modified
+            // Process all item history entries to track the complete timeline
+            console.log('📊 Processing item history for timeline tracking...');
+            itemHistory.forEach(h => {
+                const key = h.title.toLowerCase().trim();
+                
+                // If item exists in current items, it was either never removed or was added back
+                if (allHistoricalItems.has(key)) {
+                    console.log(`📊 Item "${h.title}" exists in current items - tracking history`);
+                } else if (h.action === 'removed') {
+                    // Item was removed and not added back - add it to the list
+                    console.log(`📊 Adding permanently removed item: ${h.title}`);
+                    allHistoricalItems.set(key, {
+                        title: h.title,
+                        description: h.description || h.title,
+                        quantity: h.quantity || 1,
+                        estimatedCost: h.cost || 0,
+                        category: h.category || 'other',
+                        priority: h.priority || 'medium',
+                        isRecurring: h.isRecurring !== undefined ? h.isRecurring : true,
+                        notes: h.notes || '',
+                        tags: h.tags || [],
+                        costHistory: [],
+                        itemHistory: [],
+                        costVariations: [],
+                        costSummary: null
+                    });
+                }
+            });
+            
+            // Now process all items
+            processedItems = Array.from(allHistoricalItems.values()).map(item => {
                 const processedItem = {
                     title: item.title,
                     description: item.description,
@@ -500,9 +554,23 @@ exports.createMonthlyRequest = async (req, res) => {
 
                 // Add cost history if provided
                 if (historicalData && Array.isArray(historicalData)) {
-                    const itemHistory = historicalData.filter(h => 
-                        h.title && h.title.toLowerCase().trim() === item.title.toLowerCase().trim()
-                    );
+                    // More flexible matching: check if titles are similar
+                    const itemHistory = historicalData.filter(h => {
+                        if (!h.title) return false;
+                        const historicalTitle = h.title.toLowerCase().trim();
+                        const currentTitle = item.title.toLowerCase().trim();
+                        
+                        // Exact match
+                        if (historicalTitle === currentTitle) return true;
+                        
+                        // Similar match (e.g., "wifi" vs "wil")
+                        if (historicalTitle.includes(currentTitle) || currentTitle.includes(historicalTitle)) {
+                            console.log(`📊 Matching historical item: "${h.title}" with current item: "${item.title}"`);
+                            return true;
+                        }
+                        
+                        return false;
+                    });
 
                     if (itemHistory.length > 0) {
                         processedItem.costHistory = itemHistory.map(h => ({
@@ -558,9 +626,23 @@ exports.createMonthlyRequest = async (req, res) => {
 
                 // Add item history if provided
                 if (itemHistory && Array.isArray(itemHistory)) {
-                    const itemItemHistory = itemHistory.filter(h => 
-                        h.title && h.title.toLowerCase().trim() === item.title.toLowerCase().trim()
-                    );
+                    // More flexible matching: check if titles are similar
+                    const itemItemHistory = itemHistory.filter(h => {
+                        if (!h.title) return false;
+                        const historicalTitle = h.title.toLowerCase().trim();
+                        const currentTitle = item.title.toLowerCase().trim();
+                        
+                        // Exact match
+                        if (historicalTitle === currentTitle) return true;
+                        
+                        // Similar match (e.g., "wifi" vs "lo")
+                        if (historicalTitle.includes(currentTitle) || currentTitle.includes(historicalTitle)) {
+                            console.log(`📊 Matching item history: "${h.title}" with current item: "${item.title}"`);
+                            return true;
+                        }
+                        
+                        return false;
+                    });
 
                     if (itemItemHistory.length > 0) {
                         processedItem.itemHistory = itemItemHistory.map(h => ({
@@ -584,6 +666,33 @@ exports.createMonthlyRequest = async (req, res) => {
 
                         // Sort item history by date (most recent first)
                         processedItem.itemHistory.sort((a, b) => b.date - a.date);
+                        
+                        // Also add cost changes to cost history if the action involves cost changes
+                        itemItemHistory.forEach(h => {
+                            if (h.cost && h.cost !== item.estimatedCost) {
+                                console.log(`📊 Adding cost change to history: ${h.title} - $${h.cost} in ${h.month}/${h.year}`);
+                                processedItem.costHistory.push({
+                                    month: h.month,
+                                    year: h.year,
+                                    cost: h.cost,
+                                    date: new Date(h.year, h.month - 1, 1),
+                                    note: `Cost changed during ${h.action} - ${h.note}`,
+                                    // Standardized fields
+                                    title: h.title,
+                                    description: h.description || item.description,
+                                    quantity: h.quantity || 1,
+                                    category: h.category || item.category || 'other',
+                                    priority: h.priority || item.priority || 'medium',
+                                    isRecurring: h.isRecurring !== undefined ? h.isRecurring : true,
+                                    notes: h.notes || item.notes || ''
+                                });
+                            }
+                        });
+                        
+                        // Re-sort cost history after adding item history costs
+                        if (processedItem.costHistory.length > 0) {
+                            processedItem.costHistory.sort((a, b) => b.date - a.date);
+                        }
                     }
                 }
 
@@ -678,10 +787,14 @@ exports.createMonthlyRequest = async (req, res) => {
 
     } catch (error) {
         console.error('Error creating monthly request:', error);
+        console.error('Error stack:', error.stack);
+        console.error('Request body:', JSON.stringify(req.body, null, 2));
+        
         res.status(500).json({
             success: false,
             message: 'Error creating monthly request',
-            error: error.message
+            error: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 };
@@ -2098,13 +2211,46 @@ exports.getTemplatesForResidence = async (req, res) => {
 
                         // Check if there were item changes in the requested month
                         if (item.itemHistory && item.itemHistory.length > 0) {
-                            const itemChange = item.itemHistory.find(h => 
-                                h.month === requestedMonth && h.year === requestedYear
-                            );
+                            // Sort item history by date to get the most recent change before or during the requested month
+                            const sortedItemHistory = [...item.itemHistory].sort((a, b) => {
+                                const dateA = new Date(a.year, a.month - 1, 1);
+                                const dateB = new Date(b.year, b.month - 1, 1);
+                                return dateA - dateB;
+                            });
 
-                            if (itemChange) {
-                                processedItem.itemChangeNote = `${itemChange.action} in ${requestedMonth}/${requestedYear}: ${itemChange.note}`;
-                                processedItem.itemChange = itemChange;
+                            const requestedDate = new Date(requestedYear, requestedMonth - 1, 1);
+                            
+                            // Find the most recent change that happened before or during the requested month
+                            let mostRecentChange = null;
+                            for (const change of sortedItemHistory) {
+                                const changeDate = new Date(change.year, change.month - 1, 1);
+                                if (changeDate <= requestedDate) {
+                                    mostRecentChange = change;
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            if (mostRecentChange) {
+                                processedItem.itemChangeNote = `${mostRecentChange.action} in ${mostRecentChange.month}/${mostRecentChange.year}: ${mostRecentChange.note}`;
+                                processedItem.itemChange = mostRecentChange;
+                                
+                                // If the item was removed and not added back by the requested month, mark it as inactive
+                                if (mostRecentChange.action === 'removed') {
+                                    // Check if there's a subsequent 'added' action before the requested month
+                                    const wasAddedBack = sortedItemHistory.some(change => 
+                                        change.action === 'added' && 
+                                        new Date(change.year, change.month - 1, 1) > new Date(mostRecentChange.year, mostRecentChange.month - 1, 1) &&
+                                        new Date(change.year, change.month - 1, 1) <= requestedDate
+                                    );
+                                    
+                                    if (!wasAddedBack) {
+                                        processedItem.status = 'inactive';
+                                        processedItem.inactiveNote = `Item was removed in ${mostRecentChange.month}/${mostRecentChange.year} and not active in ${requestedMonth}/${requestedYear}`;
+                                        processedItem.estimatedCost = 0; // No cost when inactive
+                                        processedItem.historicalNote = `Item was inactive in ${requestedMonth}/${requestedYear}`;
+                                    }
+                                }
                             }
                         }
                     }
@@ -2127,7 +2273,7 @@ exports.getTemplatesForResidence = async (req, res) => {
                 isPastMonth: (parseInt(year) < new Date().getFullYear()) || 
                             (parseInt(year) === new Date().getFullYear() && parseInt(month) < new Date().getMonth() + 1),
                 note: month && year ? 
-                    `Showing data for ${month}/${year}. Past months show historical costs, current/future months show template costs.` : 
+                    `Showing data for ${month}/${year}. Past months show historical costs, current/future months show template costs. Items removed in past months will show as inactive.` : 
                     'Showing current template data for all months.'
             } : {
                 note: 'Showing current template data. Use month and year query parameters to see historical data for specific periods.'
@@ -2235,13 +2381,46 @@ exports.getAllTemplates = async (req, res) => {
 
                         // Check if there were item changes in the requested month
                         if (item.itemHistory && item.itemHistory.length > 0) {
-                            const itemChange = item.itemHistory.find(h => 
-                                h.month === requestedMonth && h.year === requestedYear
-                            );
+                            // Sort item history by date to get the most recent change before or during the requested month
+                            const sortedItemHistory = [...item.itemHistory].sort((a, b) => {
+                                const dateA = new Date(a.year, a.month - 1, 1);
+                                const dateB = new Date(b.year, b.month - 1, 1);
+                                return dateA - dateB;
+                            });
 
-                            if (itemChange) {
-                                processedItem.itemChangeNote = `${itemChange.action} in ${requestedMonth}/${requestedYear}: ${itemChange.note}`;
-                                processedItem.itemChange = itemChange;
+                            const requestedDate = new Date(requestedYear, requestedMonth - 1, 1);
+                            
+                            // Find the most recent change that happened before or during the requested month
+                            let mostRecentChange = null;
+                            for (const change of sortedItemHistory) {
+                                const changeDate = new Date(change.year, change.month - 1, 1);
+                                if (changeDate <= requestedDate) {
+                                    mostRecentChange = change;
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            if (mostRecentChange) {
+                                processedItem.itemChangeNote = `${mostRecentChange.action} in ${mostRecentChange.month}/${mostRecentChange.year}: ${mostRecentChange.note}`;
+                                processedItem.itemChange = mostRecentChange;
+                                
+                                // If the item was removed and not added back by the requested month, mark it as inactive
+                                if (mostRecentChange.action === 'removed') {
+                                    // Check if there's a subsequent 'added' action before the requested month
+                                    const wasAddedBack = sortedItemHistory.some(change => 
+                                        change.action === 'added' && 
+                                        new Date(change.year, change.month - 1, 1) > new Date(mostRecentChange.year, mostRecentChange.month - 1, 1) &&
+                                        new Date(change.year, change.month - 1, 1) <= requestedDate
+                                    );
+                                    
+                                    if (!wasAddedBack) {
+                                        processedItem.status = 'inactive';
+                                        processedItem.inactiveNote = `Item was removed in ${mostRecentChange.month}/${mostRecentChange.year} and not active in ${requestedMonth}/${requestedYear}`;
+                                        processedItem.estimatedCost = 0; // No cost when inactive
+                                        processedItem.historicalNote = `Item was inactive in ${requestedMonth}/${requestedYear}`;
+                                    }
+                                }
                             }
                         }
                     }
@@ -2262,7 +2441,7 @@ exports.getAllTemplates = async (req, res) => {
                 requestedYear: parseInt(year),
                 isPastMonth: (parseInt(year) < new Date().getFullYear()) || 
                             (parseInt(year) === new Date().getFullYear() && parseInt(month) < new Date().getMonth() + 1),
-                note: `Showing data for ${month}/${year}. Past months show historical costs, current/future months show template costs.`
+                note: `Showing data for ${month}/${year}. Past months show historical costs, current/future months show template costs. Items removed in past months will show as inactive.`
             } : {
                 note: 'Showing current template data. Use month and year query parameters to see historical data for specific periods.'
             }
@@ -2694,4 +2873,4 @@ exports.updateTemplate = async (req, res) => {
         console.error('Error updating template:', error);
         res.status(500).json({ message: error.message });
     }
-};
+}; 
