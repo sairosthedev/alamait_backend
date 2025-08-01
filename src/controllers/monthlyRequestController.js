@@ -991,6 +991,69 @@ exports.sendToFinance = async (req, res) => {
 
         await monthlyRequest.save();
 
+        // Auto-approve and convert to expenses for past/current months
+        let autoApprovalResult = null;
+        if (monthlyRequest.isTemplate && month && year) {
+            const currentDate = new Date();
+            const currentMonth = currentDate.getMonth() + 1;
+            const currentYear = currentDate.getFullYear();
+            
+            // Auto-approve past/current months
+            const isPastOrCurrent = (parseInt(year) < currentYear) || 
+                                  (parseInt(year) === currentYear && parseInt(month) <= currentMonth);
+            
+            if (isPastOrCurrent) {
+                try {
+                    // Find the monthly approval we just created
+                    const monthlyApproval = monthlyRequest.monthlyApprovals.find(
+                        approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+                    );
+                    
+                    if (monthlyApproval) {
+                        // Auto-approve the monthly approval
+                        monthlyApproval.status = 'approved';
+                        monthlyApproval.approvedBy = user._id; // Using admin as approver for auto-approval
+                        monthlyApproval.approvedAt = new Date();
+                        monthlyApproval.approvedByEmail = user.email;
+                        monthlyApproval.notes = 'Auto-approved for past/current month';
+                        
+                        // Add to request history
+                        monthlyRequest.requestHistory.push({
+                            date: new Date(),
+                            action: `Auto-approved ${month}/${year} monthly request`,
+                            user: user._id,
+                            changes: [`${month}/${year} auto-approved for past/current month`]
+                        });
+                        
+                        await monthlyRequest.save();
+                        
+                        // Auto-convert to expenses
+                        const tempRequest = {
+                            ...monthlyRequest.toObject(),
+                            items: monthlyApproval.items,
+                            totalEstimatedCost: monthlyApproval.totalCost,
+                            month: monthlyApproval.month,
+                            year: monthlyApproval.year,
+                            status: 'approved'
+                        };
+                        
+                        const expenseConversionResult = await convertRequestToExpenses(tempRequest, user);
+                        
+                        autoApprovalResult = {
+                            autoApproved: true,
+                            converted: expenseConversionResult.expenses.length,
+                            errors: expenseConversionResult.errors.length > 0 ? expenseConversionResult.errors : undefined
+                        };
+                        
+                        console.log(`Auto-approved and converted ${expenseConversionResult.expenses.length} expenses for ${month}/${year}: ${monthlyRequest._id}`);
+                    }
+                } catch (autoApprovalError) {
+                    console.error('Error auto-approving past/current month:', autoApprovalError);
+                    autoApprovalResult = { autoApproved: false, error: autoApprovalError.message };
+                }
+            }
+        }
+
         const updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
             .populate('residence', 'name')
             .populate('submittedBy', 'firstName lastName email')
@@ -1001,7 +1064,8 @@ exports.sendToFinance = async (req, res) => {
             message: monthlyRequest.isTemplate 
                 ? `Monthly request for ${month}/${year} sent to finance successfully`
                 : 'Request sent to finance successfully',
-            monthlyRequest: updatedRequest
+            monthlyRequest: updatedRequest,
+            autoApproval: autoApprovalResult
         });
 
     } catch (error) {
@@ -1134,6 +1198,42 @@ exports.approveMonthlyRequest = async (req, res) => {
 
         await monthlyRequest.save();
 
+        // Auto-convert to expenses if approved
+        let expenseConversionResult = null;
+        if (approved) {
+            try {
+                if (monthlyRequest.isTemplate) {
+                    // For templates, convert the specific monthly approval
+                    const monthlyApproval = monthlyRequest.monthlyApprovals.find(
+                        approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+                    );
+                    
+                    if (monthlyApproval) {
+                        // Create a temporary request object for conversion
+                        const tempRequest = {
+                            ...monthlyRequest.toObject(),
+                            items: monthlyApproval.items,
+                            totalEstimatedCost: monthlyApproval.totalCost,
+                            month: monthlyApproval.month,
+                            year: monthlyApproval.year,
+                            status: 'approved'
+                        };
+                        
+                        expenseConversionResult = await convertRequestToExpenses(tempRequest, user);
+                    }
+                } else {
+                    // For regular requests, convert directly
+                    expenseConversionResult = await convertRequestToExpenses(monthlyRequest, user);
+                }
+                
+                console.log(`Auto-converted ${expenseConversionResult.expenses.length} expenses for approved request: ${monthlyRequest._id}`);
+            } catch (conversionError) {
+                console.error('Error auto-converting to expenses:', conversionError);
+                // Don't fail the approval if expense conversion fails
+                expenseConversionResult = { expenses: [], errors: [conversionError.message] };
+            }
+        }
+
         const updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
             .populate('residence', 'name')
             .populate('submittedBy', 'firstName lastName email')
@@ -1145,7 +1245,11 @@ exports.approveMonthlyRequest = async (req, res) => {
             message: monthlyRequest.isTemplate 
                 ? `Monthly request for ${month}/${year} ${approved ? 'approved' : 'rejected'} successfully`
                 : `Monthly request ${approved ? 'approved' : 'rejected'} successfully`,
-            monthlyRequest: updatedRequest
+            monthlyRequest: updatedRequest,
+            expenseConversion: approved ? {
+                converted: expenseConversionResult.expenses.length,
+                errors: expenseConversionResult.errors.length > 0 ? expenseConversionResult.errors : undefined
+            } : undefined
         });
     } catch (error) {
         console.error('Error approving monthly request:', error);
