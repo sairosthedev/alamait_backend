@@ -151,6 +151,8 @@ exports.createRequest = async (req, res) => {
         console.log('Request body keys:', Object.keys(req.body));
         console.log('Files received:', req.files ? req.files.map(f => ({ fieldname: f.fieldname, originalname: f.originalname, filename: f.filename, size: f.size })) : 'No files');
         console.log('Content-Type:', req.headers['content-type']);
+        console.log('Items type:', typeof items);
+        console.log('Items value:', items);
         const { 
             title, 
             description, 
@@ -178,10 +180,23 @@ exports.createRequest = async (req, res) => {
         if (typeof items === 'string') {
             try {
                 parsedItems = JSON.parse(items);
+                console.log('Items parsed from string:', parsedItems.length, 'items');
             } catch (error) {
                 console.error('Error parsing items:', error);
                 return res.status(400).json({ message: 'Invalid items format' });
             }
+        } else {
+            console.log('Items received as object:', Array.isArray(items) ? items.length : 'not array');
+        }
+        
+        console.log('DEBUG: Items structure after parsing:');
+        if (Array.isArray(parsedItems)) {
+            parsedItems.forEach((item, index) => {
+                console.log(`DEBUG: Item ${index}:`, {
+                    description: item.description,
+                    quotationsCount: item.quotations ? item.quotations.length : 0
+                });
+            });
         }
         
         // Validate required fields
@@ -256,10 +271,28 @@ exports.createRequest = async (req, res) => {
                         
                         // Look for any file that contains the item and quotation indices
                         if (req.files) {
-                            uploadedFile = req.files.find(file => 
-                                file.fieldname.includes(`items[${i}]`) && 
-                                file.fieldname.includes(`quotations[${j}]`)
-                            );
+                            // First try exact match
+                            const exactFieldname = `items[${i}][quotations][${j}][quotation]`;
+                            uploadedFile = req.files.find(file => file.fieldname === exactFieldname);
+                            
+                            if (uploadedFile) {
+                                console.log(`Found file with exact match: ${exactFieldname}`);
+                            } else {
+                                // Try pattern match as fallback
+                                uploadedFile = req.files.find(file => 
+                                    file.fieldname.includes(`items[${i}]`) && 
+                                    file.fieldname.includes(`quotations[${j}]`)
+                                );
+                                
+                                if (uploadedFile) {
+                                    console.log(`Found file with pattern match: ${uploadedFile.fieldname}`);
+                                }
+                            }
+                            
+                            // Debug: Log all files and what we're looking for
+                            console.log(`DEBUG: Looking for file with fieldname: ${exactFieldname}`);
+                            console.log(`DEBUG: Available files:`, req.files.map(f => f.fieldname));
+                            console.log(`DEBUG: Found file:`, uploadedFile ? uploadedFile.fieldname : 'NOT FOUND');
                         }
                         
                         if (uploadedFile) {
@@ -269,6 +302,24 @@ exports.createRequest = async (req, res) => {
                         }
                         
                         console.log(`File found for item ${i}, quotation ${j}:`, uploadedFile ? uploadedFile.fieldname : 'No file found');
+                        console.log(`Debug - Looking for item ${i}, quotation ${j}`);
+                        console.log(`Debug - Available fieldnames:`, req.files ? req.files.map(f => f.fieldname) : 'No files');
+                        console.log(`Debug - Checking pattern: items[${i}] and quotations[${j}]`);
+                        console.log(`Debug - Exact fieldname to find: items[${i}][quotations][${j}][quotation]`);
+                        
+                        // Debug each file
+                        if (req.files) {
+                            req.files.forEach((file, index) => {
+                                console.log(`Debug - File ${index}:`, {
+                                    fieldname: file.fieldname,
+                                    originalname: file.originalname,
+                                    size: file.size,
+                                    containsItem: file.fieldname.includes(`items[${i}]`),
+                                    containsQuotation: file.fieldname.includes(`quotations[${j}]`),
+                                    exactMatch: file.fieldname === `items[${i}][quotations][${j}][quotation]`
+                                });
+                            });
+                        }
                         
                         // If quotation has a file, upload it to S3
                         if (uploadedFile) {
@@ -338,48 +389,15 @@ exports.createRequest = async (req, res) => {
                         // Auto-create vendor if provider name is provided and no vendorId exists
                         if (quotation.provider && !quotation.vendorId) {
                             try {
-                                // Determine category from request type or item description
-                                let vendorCategory = 'other';
-                                if (type === 'maintenance') {
-                                    vendorCategory = 'maintenance';
-                                } else if (item.description) {
-                                    const description = item.description.toLowerCase();
-                                    if (description.includes('plumbing') || description.includes('pipe') || description.includes('drain')) {
-                                        vendorCategory = 'plumbing';
-                                    } else if (description.includes('electrical') || description.includes('wiring') || description.includes('power')) {
-                                        vendorCategory = 'electrical';
-                                    } else if (description.includes('cleaning') || description.includes('clean')) {
-                                        vendorCategory = 'cleaning';
-                                    } else if (description.includes('security') || description.includes('guard')) {
-                                        vendorCategory = 'security';
-                                    } else if (description.includes('landscaping') || description.includes('garden')) {
-                                        vendorCategory = 'landscaping';
-                                    }
+                                const vendorData = await autoCreateVendor(quotation.provider, user, requestData.type || 'other');
+                                if (vendorData) {
+                                    quotation.vendorId = vendorData._id;
+                                    quotation.vendorName = vendorData.businessName || vendorData.tradingName;
                                 }
-
-                                // Auto-create vendor
-                                const vendor = await autoCreateVendor(quotation.provider, user, vendorCategory);
-                                
-                                // Update quotation with vendor information
-                                quotation.vendorId = vendor._id;
-                                quotation.vendorCode = vendor.chartOfAccountsCode;
-                                quotation.vendorName = vendor.businessName;
-                                quotation.vendorType = vendor.vendorType;
-                                quotation.vendorContact = {
-                                    firstName: vendor.contactPerson.firstName,
-                                    lastName: vendor.contactPerson.lastName,
-                                    email: vendor.contactPerson.email,
-                                    phone: vendor.contactPerson.phone
-                                };
-                                quotation.expenseCategory = vendor.expenseCategory;
-                                // Add payment method information
-                                quotation.paymentMethod = determinePaymentMethod(vendor);
-                                quotation.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
-                                
-                                console.log(`Auto-linked quotation to vendor: ${vendor.businessName} (${vendor._id})`);
                             } catch (vendorError) {
-                                console.error('Error auto-creating vendor:', vendorError);
-                                // Continue without vendor creation - don't fail the request
+                                console.warn('Error auto-creating vendor:', vendorError.message);
+                                // Continue with request creation even if vendor creation fails
+                                // The vendor can be created manually later
                             }
                         }
                     }
