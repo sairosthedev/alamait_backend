@@ -19,7 +19,16 @@ router.get('/search', vendorController.searchVendors);
 // Get vendors by category (Finance only)
 router.get('/category/:category', vendorController.getVendorsByCategory);
 
-// Get vendor by ID (Finance only)
+// Get creditors (vendors) - Finance only
+router.get('/creditors', vendorController.getCreditors);
+
+// Get debtors (students/tenants) - Finance only
+router.get('/debtors', vendorController.getDebtors);
+
+// Get creditor summary - Finance only
+router.get('/creditors/:vendorId/summary', vendorController.getCreditorSummary);
+
+// Get vendor by ID (Finance only) - This must be last to avoid catching other routes
 router.get('/:id', vendorController.getVendorById);
 
 // Create new vendor (Finance only)
@@ -33,14 +42,5 @@ router.patch('/:id/performance', vendorController.updateVendorPerformance);
 
 // Delete vendor (Admin only)
 router.delete('/:id', checkRole(['admin']), vendorController.deleteVendor);
-
-// Get creditors (vendors) - Finance only
-router.get('/creditors', vendorController.getCreditors);
-
-// Get debtors (students/tenants) - Finance only
-router.get('/debtors', vendorController.getDebtors);
-
-// Get creditor summary - Finance only
-router.get('/creditors/:vendorId/summary', vendorController.getCreditorSummary);
 
 module.exports = router; 
