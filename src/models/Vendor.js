@@ -1,0 +1,281 @@
+const mongoose = require('mongoose');
+
+const vendorSchema = new mongoose.Schema({
+    // Basic Information
+    vendorCode: {
+        type: String,
+        required: true,
+        unique: true,
+        trim: true
+    },
+    businessName: {
+        type: String,
+        required: true,
+        trim: true
+    },
+    tradingName: {
+        type: String,
+        trim: true
+    },
+    
+    // Contact Information
+    contactPerson: {
+        firstName: { type: String, required: true, trim: true },
+        lastName: { type: String, required: true, trim: true },
+        email: { 
+            type: String, 
+            required: true, 
+            trim: true,
+            lowercase: true,
+            match: [/^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email address']
+        },
+        phone: { type: String, required: true, trim: true },
+        mobile: { type: String, trim: true }
+    },
+    
+    // Business Details
+    businessAddress: {
+        street: { type: String, required: true, trim: true },
+        city: { type: String, required: true, trim: true },
+        state: { type: String, trim: true },
+        postalCode: { type: String, trim: true },
+        country: { type: String, default: 'South Africa', trim: true }
+    },
+    
+    // Tax and Registration
+    taxNumber: {
+        type: String,
+        trim: true
+    },
+    vatNumber: {
+        type: String,
+        trim: true
+    },
+    registrationNumber: {
+        type: String,
+        trim: true
+    },
+    
+    // Chart of Accounts Integration
+    chartOfAccountsCode: {
+        type: String,
+        required: true,
+        trim: true,
+        ref: 'Account'
+    },
+    expenseAccountCode: {
+        type: String,
+        required: true,
+        trim: true,
+        ref: 'Account'
+    },
+    
+    // Banking Information
+    bankDetails: {
+        bankName: { type: String, trim: true },
+        accountNumber: { type: String, trim: true },
+        accountType: { type: String, trim: true },
+        branchCode: { type: String, trim: true },
+        swiftCode: { type: String, trim: true }
+    },
+    
+    // Business Classification
+    category: {
+        type: String,
+        required: true,
+        enum: [
+            'maintenance',
+            'utilities',
+            'supplies',
+            'equipment',
+            'services',
+            'cleaning',
+            'security',
+            'landscaping',
+            'electrical',
+            'plumbing',
+            'carpentry',
+            'painting',
+            'other'
+        ],
+        default: 'other'
+    },
+    
+    // Specializations
+    specializations: [{
+        type: String,
+        trim: true
+    }],
+    
+    // Service Areas
+    serviceAreas: [{
+        type: String,
+        trim: true
+    }],
+    
+    // Status and Rating
+    status: {
+        type: String,
+        enum: ['active', 'inactive', 'suspended', 'blacklisted'],
+        default: 'active'
+    },
+    
+    rating: {
+        average: { type: Number, default: 0, min: 0, max: 5 },
+        totalReviews: { type: Number, default: 0 },
+        lastReviewDate: { type: Date }
+    },
+    
+    // Performance Metrics
+    performance: {
+        totalOrders: { type: Number, default: 0 },
+        completedOrders: { type: Number, default: 0 },
+        averageResponseTime: { type: Number, default: 0 }, // in hours
+        onTimeDelivery: { type: Number, default: 0 }, // percentage
+        qualityRating: { type: Number, default: 0, min: 0, max: 5 }
+    },
+    
+    // Financial Information
+    creditLimit: {
+        type: Number,
+        default: 0
+    },
+    currentBalance: {
+        type: Number,
+        default: 0
+    },
+    paymentTerms: {
+        type: Number,
+        default: 30 // days
+    },
+    
+    // Documents
+    documents: [{
+        type: { type: String, required: true },
+        name: { type: String, required: true },
+        url: { type: String, required: true },
+        uploadedAt: { type: Date, default: Date.now },
+        uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    }],
+    
+    // Notes and Comments
+    notes: {
+        type: String,
+        trim: true
+    },
+    
+    // Audit Trail
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    updatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    
+    // History
+    history: [{
+        action: { type: String, required: true },
+        description: { type: String },
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        timestamp: { type: Date, default: Date.now },
+        changes: [{
+            field: { type: String },
+            oldValue: { type: mongoose.Schema.Types.Mixed },
+            newValue: { type: mongoose.Schema.Types.Mixed }
+        }]
+    }]
+}, {
+    timestamps: true,
+    collection: 'vendors'
+});
+
+// Indexes for performance
+vendorSchema.index({ vendorCode: 1 });
+vendorSchema.index({ businessName: 1 });
+vendorSchema.index({ 'contactPerson.email': 1 });
+vendorSchema.index({ category: 1 });
+vendorSchema.index({ status: 1 });
+vendorSchema.index({ chartOfAccountsCode: 1 });
+
+// Pre-save middleware to generate vendor code if not provided
+vendorSchema.pre('save', async function(next) {
+    if (!this.vendorCode) {
+        this.vendorCode = await generateVendorCode();
+    }
+    next();
+});
+
+// Generate unique vendor code
+async function generateVendorCode() {
+    const count = await mongoose.model('Vendor').countDocuments();
+    const year = new Date().getFullYear().toString().substr(-2);
+    const sequence = (count + 1).toString().padStart(4, '0');
+    return `V${year}${sequence}`;
+}
+
+// Virtual for full contact person name
+vendorSchema.virtual('contactPerson.fullName').get(function() {
+    return `${this.contactPerson.firstName} ${this.contactPerson.lastName}`;
+});
+
+// Virtual for full address
+vendorSchema.virtual('fullAddress').get(function() {
+    const addr = this.businessAddress;
+    return `${addr.street}, ${addr.city}${addr.state ? ', ' + addr.state : ''}${addr.postalCode ? ', ' + addr.postalCode : ''}, ${addr.country}`;
+});
+
+// Method to update performance metrics
+vendorSchema.methods.updatePerformance = function(metrics) {
+    if (metrics.responseTime) {
+        this.performance.averageResponseTime = 
+            (this.performance.averageResponseTime * this.performance.totalOrders + metrics.responseTime) / 
+            (this.performance.totalOrders + 1);
+    }
+    
+    if (metrics.onTime) {
+        this.performance.onTimeDelivery = 
+            ((this.performance.onTimeDelivery * this.performance.totalOrders) + (metrics.onTime ? 1 : 0)) / 
+            (this.performance.totalOrders + 1) * 100;
+    }
+    
+    if (metrics.qualityRating) {
+        this.rating.average = 
+            (this.rating.average * this.rating.totalReviews + metrics.qualityRating) / 
+            (this.rating.totalReviews + 1);
+        this.rating.totalReviews += 1;
+        this.rating.lastReviewDate = new Date();
+    }
+    
+    this.performance.totalOrders += 1;
+    if (metrics.completed) {
+        this.performance.completedOrders += 1;
+    }
+};
+
+// Method to add history entry
+vendorSchema.methods.addHistory = function(action, description, user, changes = []) {
+    this.history.push({
+        action,
+        description,
+        user,
+        changes
+    });
+};
+
+// Static method to find vendors by category
+vendorSchema.statics.findByCategory = function(category) {
+    return this.find({ category, status: 'active' });
+};
+
+// Static method to find vendors by service area
+vendorSchema.statics.findByServiceArea = function(area) {
+    return this.find({ 
+        serviceAreas: { $in: [area] }, 
+        status: 'active' 
+    });
+};
+
+module.exports = mongoose.model('Vendor', vendorSchema); 

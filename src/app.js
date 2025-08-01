@@ -319,6 +319,10 @@ app.use('/api/invoices', invoiceRoutes);
 app.use('/api/requests', requestRoutes);
 app.use('/api/monthly-requests', monthlyRequestRoutes);
 
+// Vendor routes
+const vendorRoutes = require('./routes/vendorRoutes');
+app.use('/api/vendors', vendorRoutes);
+
 // 404 handler
 app.use((req, res) => {
     res.status(404).json({ 
