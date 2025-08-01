@@ -73,7 +73,8 @@ const monthlyRequestItemSchema = new mongoose.Schema({
     },
     notes: {
         type: String,
-        trim: true
+        trim: true,
+        required: false  // Make notes optional
     },
     tags: [{
         type: String,
@@ -218,16 +219,14 @@ const monthlyRequestSchema = new mongoose.Schema({
     },
     notes: {
         type: String,
-        trim: true
+        trim: true,
+        required: false  // Make notes optional
     },
     isTemplate: {
         type: Boolean,
         default: false
     },
-    templateName: {
-        type: String,
-        trim: true
-    },
+    // Remove redundant templateName (use title instead)
     templateDescription: {
         type: String,
         trim: true

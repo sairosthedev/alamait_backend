@@ -462,7 +462,6 @@ exports.createMonthlyRequest = async (req, res) => {
             isTemplate = false,
             historicalData = [], // New: historical cost data for templates
             itemHistory = [], // New: item change history for templates
-            templateName,
             templateDescription
         } = req.body;
 
@@ -579,14 +578,14 @@ exports.createMonthlyRequest = async (req, res) => {
                             cost: h.cost,
                             date: new Date(h.year, h.month - 1, 1),
                             note: h.note || `Historical cost from ${h.month}/${h.year}`,
-                            // Standardized fields to match current item structure
-                            title: h.title,
-                            description: h.description || item.description,
-                            quantity: h.quantity || 1,
-                            category: h.category || item.category || 'other',
-                            priority: h.priority || item.priority || 'medium',
-                            isRecurring: h.isRecurring !== undefined ? h.isRecurring : true,
-                            notes: h.notes || item.notes || ''
+                                                    // Standardized fields to match current item structure
+                        title: h.title,
+                        description: h.description || item.description,
+                        quantity: h.quantity || 1,
+                        category: h.category || item.category || 'other',
+                        priority: h.priority || item.priority || 'medium',
+                        isRecurring: isTemplate ? true : (h.isRecurring !== undefined ? h.isRecurring : true),
+                        notes: h.notes || item.notes || ''
                         }));
 
                         // Sort cost history by date (most recent first)
@@ -661,7 +660,7 @@ exports.createMonthlyRequest = async (req, res) => {
                             description: h.description || item.description,
                             category: h.category || item.category || 'other',
                             priority: h.priority || item.priority || 'medium',
-                            isRecurring: h.isRecurring !== undefined ? h.isRecurring : true,
+                            isRecurring: isTemplate ? true : (h.isRecurring !== undefined ? h.isRecurring : true),
                             notes: h.notes || item.notes || ''
                         }));
 
@@ -678,14 +677,14 @@ exports.createMonthlyRequest = async (req, res) => {
                                     cost: h.cost,
                                     date: new Date(h.year, h.month - 1, 1),
                                     note: `Cost changed during ${h.action} - ${h.note}`,
-                                    // Standardized fields
-                                    title: h.title,
-                                    description: h.description || item.description,
-                                    quantity: h.quantity || 1,
-                                    category: h.category || item.category || 'other',
-                                    priority: h.priority || item.priority || 'medium',
-                                    isRecurring: h.isRecurring !== undefined ? h.isRecurring : true,
-                                    notes: h.notes || item.notes || ''
+                                                                // Standardized fields
+                            title: h.title,
+                            description: h.description || item.description,
+                            quantity: h.quantity || 1,
+                            category: h.category || item.category || 'other',
+                            priority: h.priority || item.priority || 'medium',
+                            isRecurring: isTemplate ? true : (h.isRecurring !== undefined ? h.isRecurring : true),
+                            notes: h.notes || item.notes || ''
                                 });
                             }
                         });
@@ -697,7 +696,12 @@ exports.createMonthlyRequest = async (req, res) => {
                     }
                 }
 
-                // Update notes with historical information
+                // Auto-set isRecurring for templates
+                if (isTemplate) {
+                    processedItem.isRecurring = true;
+                }
+                
+                // Update notes with historical information (optional)
                 let historyNotes = [];
                 if (processedItem.costHistory.length > 0) {
                     historyNotes.push(`Cost history: ${processedItem.costHistory.length} entries, ${processedItem.costVariations.length} variations`);
@@ -749,7 +753,6 @@ exports.createMonthlyRequest = async (req, res) => {
                 creationDate: new Date(),
                 historicalDataProvided: historicalData.length,
                 itemHistoryProvided: itemHistory.length,
-                templateName: templateName,
                 templateDescription: templateDescription,
                 totalHistoricalEntries: processedItems.reduce((sum, item) => sum + (item.costHistory ? item.costHistory.length : 0), 0),
                 totalItemHistoryEntries: processedItems.reduce((sum, item) => sum + (item.itemHistory ? item.itemHistory.length : 0), 0)
