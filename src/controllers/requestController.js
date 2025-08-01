@@ -272,8 +272,19 @@ exports.createRequest = async (req, res) => {
                         
                         // If quotation has a file, upload it to S3
                         if (uploadedFile) {
+                            console.log(`🔄 Uploading file to S3: ${uploadedFile.originalname}`);
+                            console.log(`File details:`, {
+                                fieldname: uploadedFile.fieldname,
+                                originalname: uploadedFile.originalname,
+                                mimetype: uploadedFile.mimetype,
+                                size: uploadedFile.size,
+                                buffer: uploadedFile.buffer ? 'Buffer present' : 'No buffer'
+                            });
+                            
                             try {
                                 const s3Key = `request_quotations/${user._id}_${Date.now()}_${uploadedFile.originalname}`;
+                                console.log(`S3 Key: ${s3Key}`);
+                                
                                 const s3UploadParams = {
                                     Bucket: s3Configs.requestQuotations.bucket,
                                     Key: s3Key,
@@ -287,19 +298,36 @@ exports.createRequest = async (req, res) => {
                                     }
                                 };
                                 
+                                console.log(`S3 Upload params:`, {
+                                    Bucket: s3UploadParams.Bucket,
+                                    Key: s3UploadParams.Key,
+                                    ContentType: s3UploadParams.ContentType,
+                                    ACL: s3UploadParams.ACL
+                                });
+                                
                                 const s3Result = await s3.upload(s3UploadParams).promise();
+                                console.log(`✅ S3 Upload successful: ${s3Result.Location}`);
                                 
                                 // Update quotation with S3 URL
                                 quotation.fileUrl = s3Result.Location;
                                 quotation.fileName = uploadedFile.originalname;
                                 quotation.uploadedBy = user._id;
                                 quotation.uploadedAt = new Date();
+                                
+                                console.log(`📄 Quotation updated with fileUrl: ${quotation.fileUrl}`);
                             } catch (uploadError) {
-                                console.error('Error uploading quotation file to S3:', uploadError);
+                                console.error('❌ Error uploading quotation file to S3:', uploadError);
+                                console.error('Upload error details:', {
+                                    message: uploadError.message,
+                                    code: uploadError.code,
+                                    statusCode: uploadError.statusCode
+                                });
                                 return res.status(500).json({ 
                                     message: `Error uploading file for item ${i + 1}, quotation ${j + 1}` 
                                 });
                             }
+                        } else {
+                            console.log(`⚠️ No file found for item ${i}, quotation ${j}`);
                         }
 
                         // Parse quotation numeric values from FormData
