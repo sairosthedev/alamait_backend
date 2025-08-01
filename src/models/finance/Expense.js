@@ -52,19 +52,6 @@ const expenseSchema = new mongoose.Schema({
         ref: 'Maintenance',
         required: false
     },
-    monthlyRequestId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'MonthlyRequest',
-        required: false
-    },
-    itemIndex: {
-        type: Number,
-        required: false
-    },
-    quotationId: {
-        type: mongoose.Schema.Types.ObjectId,
-        required: false
-    },
     paidBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

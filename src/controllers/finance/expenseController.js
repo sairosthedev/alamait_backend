@@ -8,25 +8,28 @@ const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
 const { getPettyCashAccountByRole } = require('../../utils/pettyCashUtils');
 
-// Category to Account Name mapping for Expense linkage
-const CATEGORY_TO_ACCOUNT = {
-  'Maintenance': 'Repairs and Maintenance',
-  'Utilities': 'Utilities - Electricity', // Default to Electricity, can be improved
-  'Taxes': 'Licenses',
-  'Insurance': 'Medical aid', // Or another insurance-related account
-  'Salaries': 'Staff Salaries & Wages',
-  'Supplies': 'Administrative Expenses',
-  'Other': 'Administrative Expenses' // Fallback
+// Category to Account Code mapping for Expense linkage (updated to match chart of accounts)
+const CATEGORY_TO_ACCOUNT_CODE = {
+  'Maintenance': '5003', // Transportation Expense (for maintenance)
+  'Utilities': '5099', // Other Operating Expenses (for utilities)
+  'Taxes': '5099', // Other Operating Expenses (for taxes)
+  'Insurance': '5099', // Other Operating Expenses (for insurance)
+  'Salaries': '5099', // Other Operating Expenses (for salaries)
+  'Supplies': '5099', // Other Operating Expenses (for supplies)
+  'Other': '5099' // Other Operating Expenses (fallback)
 };
 
-// Payment method to Account Code mapping
+// Payment method to Account Code mapping (updated to match chart of accounts)
 const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
-  'Cash': '1000', // Bank - Main Account (assuming cash is handled here)
-  'Bank Transfer': '1000', // Bank - Main Account
-  'Ecocash': '3000', // Owner's Capital (placeholder, update if you have Ecocash account)
-  'Innbucks': '4000', // Rental Income - Residential (placeholder, update if you have Innbucks account)
-  // Petty Cash accounts will be determined by user role dynamically
-  // Add more as needed
+  'Cash': '1011', // Admin Petty Cash
+  'Bank Transfer': '1000', // Bank - Main Account (assuming this exists)
+  'Ecocash': '1011', // Admin Petty Cash
+  'Innbucks': '1011', // Admin Petty Cash
+  'Petty Cash': '1011', // Admin Petty Cash
+  'Online Payment': '1000', // Bank - Main Account
+  'MasterCard': '1000', // Bank - Main Account
+  'Visa': '1000', // Bank - Main Account
+  'PayPal': '1000' // Bank - Main Account
 };
 
 // Get all expenses
@@ -511,64 +514,77 @@ exports.approveExpense = async (req, res) => {
 
         const before = expense.toObject();
 
-        // Update expense status to Paid
+        // Update expense status to Approved (not Paid yet)
         const updatedExpense = await Expense.findByIdAndUpdate(
             id,
             { 
                 $set: { 
-                    paymentStatus: 'Paid',
+                    paymentStatus: 'Approved', // Changed from 'Paid' to 'Approved'
                     updatedBy: req.user._id,
-                    paidDate: new Date(),
                     notes: notes || expense.notes
-                } 
+                }
             },
             { new: true, runValidators: true }
         ).populate('residence', 'name')
          .populate('createdBy', 'firstName lastName email')
-         .populate('updatedBy', 'firstName lastName email')
-         .populate('paidBy', 'firstName lastName email');
+         .populate('updatedBy', 'firstName lastName email');
 
-        // --- Payment Transaction for Paid Expense ---
+        // --- Create Accounts Payable Entry for Approved Expense ---
         try {
-            console.log('[Payment] Attempting to create payment transaction for expense:', updatedExpense._id, 'category:', updatedExpense.category);
-            // Determine source account based on payment method
-            const paymentMethod = updatedExpense.paymentMethod || 'Bank Transfer';
-            let sourceAccount;
+            console.log('[AP] Creating accounts payable entry for approved expense:', updatedExpense._id);
             
-            if (paymentMethod === 'Petty Cash') {
-                // Get role-specific petty cash account
-                sourceAccount = await getPettyCashAccountByRole(req.user.role);
-            } else {
-                // Use the mapping for other payment methods
-                const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1000'; // Default to Bank
-                sourceAccount = await Account.findOne({ code: sourceAccountCode });
-            }
-            if (!sourceAccount) {
-                console.error('[Payment] Source account not found for payment method:', paymentMethod);
-                throw new Error('Source account not found for payment method: ' + paymentMethod);
-            }
-            let expenseAccount = null;
-            const mappedAccountName = CATEGORY_TO_ACCOUNT[expense.category] || expense.category;
-            expenseAccount = await Account.findOne({ name: new RegExp('^' + mappedAccountName + '$', 'i'), type: 'Expense' });
+            // Get expense account using the category mapping
+            const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[updatedExpense.category] || '5099';
+            const expenseAccount = await Account.findOne({ code: expenseAccountCode, type: 'Expense' });
+            
             if (!expenseAccount) {
-                console.error('[Payment] Expense account not found for category:', updatedExpense.category, 'using mapping:', mappedAccountName);
+                console.error('[AP] Expense account not found for category:', updatedExpense.category);
                 throw new Error('Expense account not found for category: ' + updatedExpense.category);
             }
+            
+            // Get or create general Accounts Payable account
+            let apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+            if (!apAccount) {
+                console.error('[AP] General Accounts Payable account not found');
+                throw new Error('General Accounts Payable account not found');
+            }
+            
+            // Create transaction for approval (creates AP liability)
             const txn = await Transaction.create({
-                date: updatedExpense.paidDate || new Date(),
-                description: `Expense Payment: ${updatedExpense.description}`,
+                date: new Date(),
+                description: `Expense Approval: ${updatedExpense.description}`,
                 reference: updatedExpense.expenseId,
                 residence: updatedExpense.residence?._id || updatedExpense.residence,
                 residenceName: updatedExpense.residence?.name || undefined
             });
+            
+            // Create double-entry transaction entries for AP creation
             const entries = await TransactionEntry.insertMany([
-                { transaction: txn._id, account: expenseAccount._id, debit: updatedExpense.amount, credit: 0, type: 'expense' },
-                { transaction: txn._id, account: sourceAccount._id, debit: 0, credit: updatedExpense.amount, type: sourceAccount.type.toLowerCase() }
+                { 
+                    transaction: txn._id, 
+                    account: expenseAccount._id, 
+                    debit: updatedExpense.amount, 
+                    credit: 0, 
+                    type: 'expense' 
+                },
+                { 
+                    transaction: txn._id, 
+                    account: apAccount._id, 
+                    debit: 0, 
+                    credit: updatedExpense.amount, 
+                    type: 'liability' 
+                }
             ]);
-            await Transaction.findByIdAndUpdate(txn._id, { $push: { entries: { $each: entries.map(e => e._id) } } });
+            
+            // Link entries to transaction
+            await Transaction.findByIdAndUpdate(txn._id, { 
+                $push: { entries: { $each: entries.map(e => e._id) } } 
+            });
+            
+            // Create audit log for the AP creation
             await AuditLog.create({
                 user: req.user._id,
-                action: `convert_to_${paymentMethod.replace(/\s+/g, '_').toLowerCase()}`,
+                action: 'expense_approved_ap_created',
                 collection: 'Transaction',
                 recordId: txn._id,
                 before: null,
@@ -577,24 +593,37 @@ exports.approveExpense = async (req, res) => {
                 details: {
                     source: 'Expense',
                     sourceId: updatedExpense._id,
-                    description: `Expense request converted to double-entry transaction via ${paymentMethod}`
+                    expenseCategory: updatedExpense.category,
+                    expenseAmount: updatedExpense.amount,
+                    apAccount: apAccount.code,
+                    expenseAccount: expenseAccount.code,
+                    description: `Expense approved - AP liability created for ${updatedExpense.description}`
                 }
             });
-            console.log('[Payment] Double-entry transaction created for expense:', updatedExpense._id, 'txn:', txn._id);
-        } catch (paymentError) {
-            console.error('[Payment] Failed to create double-entry transaction for expense:', updatedExpense._id, paymentError);
-            return res.status(500).json({ error: 'Failed to create double-entry transaction for paid expense', details: paymentError.message });
+            
+            console.log('[AP] Accounts payable entry created for expense:', updatedExpense._id, 'txn:', txn._id);
+            
+        } catch (apError) {
+            console.error('[AP] Failed to create accounts payable entry for expense:', updatedExpense._id, apError);
+            return res.status(500).json({ 
+                error: 'Failed to create accounts payable entry for approved expense', 
+                details: apError.message 
+            });
         }
-        // --- End Payment Transaction ---
+        // --- End AP Creation ---
 
-        // Audit log
+        // Audit log for expense update
         await AuditLog.create({
             user: req.user._id,
             action: 'approve',
             collection: 'Expense',
             recordId: updatedExpense._id,
             before,
-            after: updatedExpense.toObject()
+            after: updatedExpense.toObject(),
+            timestamp: new Date(),
+            details: {
+                description: `Expense approved - ${updatedExpense.description}`
+            }
         });
 
         res.status(200).json({
@@ -604,5 +633,183 @@ exports.approveExpense = async (req, res) => {
     } catch (error) {
         console.error('Error approving expense:', error);
         res.status(500).json({ error: 'Failed to approve expense' });
+    }
+};
+
+// Mark expense as paid
+exports.markExpenseAsPaid = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { paymentMethod, notes, paidDate } = req.body;
+
+        if (!validateMongoId(id)) {
+            return res.status(400).json({ error: 'Invalid expense ID format' });
+        }
+
+        // Validate payment method if provided
+        if (paymentMethod && !['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal', 'Petty Cash'].includes(paymentMethod)) {
+            return res.status(400).json({ error: 'Invalid payment method' });
+        }
+
+        // Find expense
+        const expense = await Expense.findById(id);
+        if (!expense) {
+            return res.status(404).json({ error: 'Expense not found' });
+        }
+
+        if (expense.paymentStatus === 'Paid') {
+            return res.status(400).json({ error: 'Expense is already marked as paid' });
+        }
+
+        const before = expense.toObject();
+
+        // Update expense status to Paid
+        const updateData = {
+            paymentStatus: 'Paid',
+            updatedBy: req.user._id,
+            paidDate: paidDate ? new Date(paidDate) : new Date(),
+            notes: notes || expense.notes
+        };
+
+        // Add payment method if provided
+        if (paymentMethod) {
+            updateData.paymentMethod = paymentMethod;
+        }
+
+        const updatedExpense = await Expense.findByIdAndUpdate(
+            id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        ).populate('residence', 'name')
+         .populate('createdBy', 'firstName lastName email')
+         .populate('updatedBy', 'firstName lastName email')
+         .populate('paidBy', 'firstName lastName email');
+
+        // --- Payment Transaction for Paid Expense ---
+        try {
+            console.log('[Payment] Attempting to create payment transaction for expense:', updatedExpense._id, 'category:', updatedExpense.category);
+            
+            // Determine source account based on payment method
+            const paymentMethod = updatedExpense.paymentMethod || 'Bank Transfer';
+            let sourceAccount;
+            
+            if (paymentMethod === 'Petty Cash') {
+                // Get role-specific petty cash account based on user role
+                sourceAccount = await getPettyCashAccountByRole(req.user.role);
+            } else {
+                // Use the mapping for other payment methods
+                const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1011'; // Default to Admin Petty Cash
+                sourceAccount = await Account.findOne({ code: sourceAccountCode });
+            }
+            
+            if (!sourceAccount) {
+                console.error('[Payment] Source account not found for payment method:', paymentMethod);
+                throw new Error('Source account not found for payment method: ' + paymentMethod);
+            }
+            
+            // Get expense account using the new code-based mapping
+            const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[updatedExpense.category] || '5099'; // Default to Other Operating Expenses
+            const expenseAccount = await Account.findOne({ code: expenseAccountCode, type: 'Expense' });
+            
+            if (!expenseAccount) {
+                console.error('[Payment] Expense account not found for category:', updatedExpense.category, 'using code:', expenseAccountCode);
+                throw new Error('Expense account not found for category: ' + updatedExpense.category);
+            }
+            
+            // Create transaction
+            const txn = await Transaction.create({
+                date: updatedExpense.paidDate || new Date(),
+                description: `Expense Payment: ${updatedExpense.description}`,
+                reference: updatedExpense.expenseId,
+                residence: updatedExpense.residence?._id || updatedExpense.residence,
+                residenceName: updatedExpense.residence?.name || undefined
+            });
+            
+            // Create double-entry transaction entries
+            const entries = await TransactionEntry.insertMany([
+                { 
+                    transaction: txn._id, 
+                    account: expenseAccount._id, 
+                    debit: updatedExpense.amount, 
+                    credit: 0, 
+                    type: 'expense' 
+                },
+                { 
+                    transaction: txn._id, 
+                    account: sourceAccount._id, 
+                    debit: 0, 
+                    credit: updatedExpense.amount, 
+                    type: sourceAccount.type.toLowerCase() 
+                }
+            ]);
+            
+            // Link entries to transaction
+            await Transaction.findByIdAndUpdate(txn._id, { 
+                $push: { entries: { $each: entries.map(e => e._id) } } 
+            });
+            
+            // Create audit log for the transaction
+            await AuditLog.create({
+                user: req.user._id,
+                action: `expense_payment_${paymentMethod.replace(/\s+/g, '_').toLowerCase()}`,
+                collection: 'Transaction',
+                recordId: txn._id,
+                before: null,
+                after: txn.toObject(),
+                timestamp: new Date(),
+                details: {
+                    source: 'Expense',
+                    sourceId: updatedExpense._id,
+                    expenseCategory: updatedExpense.category,
+                    expenseAmount: updatedExpense.amount,
+                    paymentMethod: paymentMethod,
+                    sourceAccount: sourceAccount.code,
+                    expenseAccount: expenseAccount.code,
+                    description: `Expense payment processed via ${paymentMethod} - ${updatedExpense.description}`
+                }
+            });
+            
+            console.log('[Payment] Double-entry transaction created for expense:', updatedExpense._id, 'txn:', txn._id);
+            console.log('[Payment] Transaction details:', {
+                expenseId: updatedExpense.expenseId,
+                amount: updatedExpense.amount,
+                category: updatedExpense.category,
+                paymentMethod: paymentMethod,
+                sourceAccount: sourceAccount.code,
+                expenseAccount: expenseAccount.code
+            });
+            
+        } catch (paymentError) {
+            console.error('[Payment] Failed to create double-entry transaction for expense:', updatedExpense._id, paymentError);
+            return res.status(500).json({ 
+                error: 'Failed to create double-entry transaction for paid expense', 
+                details: paymentError.message 
+            });
+        }
+        // --- End Payment Transaction ---
+
+        // Audit log for expense update
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'mark_paid',
+            collection: 'Expense',
+            recordId: updatedExpense._id,
+            before,
+            after: updatedExpense.toObject(),
+            timestamp: new Date(),
+            details: {
+                paymentMethod: updatedExpense.paymentMethod,
+                paidDate: updatedExpense.paidDate,
+                description: `Expense marked as paid - ${updatedExpense.description}`
+            }
+        });
+
+        res.status(200).json({
+            message: 'Expense marked as paid successfully',
+            expense: updatedExpense
+        });
+    } catch (error) {
+        console.error('Error marking expense as paid:', error);
+        res.status(500).json({ error: 'Failed to mark expense as paid' });
     }
 }; 

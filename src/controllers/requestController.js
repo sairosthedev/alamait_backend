@@ -1,6 +1,8 @@
 const Request = require('../models/Request');
 const Expense = require('../models/finance/Expense');
 const User = require('../models/User');
+const Vendor = require('../models/Vendor');
+const Account = require('../models/Account');
 const { generateUniqueId } = require('../utils/idGenerator');
 const { uploadToS3 } = require('../utils/fileStorage');
 const { s3, s3Configs } = require('../config/s3');
@@ -271,6 +273,54 @@ exports.createRequest = async (req, res) => {
                                 return res.status(500).json({ 
                                     message: `Error uploading file for item ${i + 1}, quotation ${j + 1}` 
                                 });
+                            }
+                        }
+
+                        // Auto-create vendor if provider name is provided and no vendorId exists
+                        if (quotation.provider && !quotation.vendorId) {
+                            try {
+                                // Determine category from request type or item description
+                                let vendorCategory = 'other';
+                                if (type === 'maintenance') {
+                                    vendorCategory = 'maintenance';
+                                } else if (item.description) {
+                                    const description = item.description.toLowerCase();
+                                    if (description.includes('plumbing') || description.includes('pipe') || description.includes('drain')) {
+                                        vendorCategory = 'plumbing';
+                                    } else if (description.includes('electrical') || description.includes('wiring') || description.includes('power')) {
+                                        vendorCategory = 'electrical';
+                                    } else if (description.includes('cleaning') || description.includes('clean')) {
+                                        vendorCategory = 'cleaning';
+                                    } else if (description.includes('security') || description.includes('guard')) {
+                                        vendorCategory = 'security';
+                                    } else if (description.includes('landscaping') || description.includes('garden')) {
+                                        vendorCategory = 'landscaping';
+                                    }
+                                }
+
+                                // Auto-create vendor
+                                const vendor = await autoCreateVendor(quotation.provider, user, vendorCategory);
+                                
+                                // Update quotation with vendor information
+                                quotation.vendorId = vendor._id;
+                                quotation.vendorCode = vendor.chartOfAccountsCode;
+                                quotation.vendorName = vendor.businessName;
+                                quotation.vendorType = vendor.vendorType;
+                                quotation.vendorContact = {
+                                    firstName: vendor.contactPerson.firstName,
+                                    lastName: vendor.contactPerson.lastName,
+                                    email: vendor.contactPerson.email,
+                                    phone: vendor.contactPerson.phone
+                                };
+                                quotation.expenseCategory = vendor.expenseCategory;
+                                // Add payment method information
+                                quotation.paymentMethod = determinePaymentMethod(vendor);
+                                quotation.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
+                                
+                                console.log(`Auto-linked quotation to vendor: ${vendor.businessName} (${vendor._id})`);
+                            } catch (vendorError) {
+                                console.error('Error auto-creating vendor:', vendorError);
+                                // Continue without vendor creation - don't fail the request
                             }
                         }
                     }
@@ -966,6 +1016,38 @@ exports.uploadQuotation = async (req, res) => {
             return res.status(400).json({ message: 'Maximum of 3 quotations allowed' });
         }
         
+        // Auto-create vendor if provider name is provided and no vendorId exists
+        let vendor = null;
+        if (provider && !req.body.vendorId) {
+            try {
+                // Determine category from request type or description
+                let vendorCategory = 'other';
+                if (request.type === 'maintenance') {
+                    vendorCategory = 'maintenance';
+                } else if (request.description) {
+                    const description = request.description.toLowerCase();
+                    if (description.includes('plumbing') || description.includes('pipe') || description.includes('drain')) {
+                        vendorCategory = 'plumbing';
+                    } else if (description.includes('electrical') || description.includes('wiring') || description.includes('power')) {
+                        vendorCategory = 'electrical';
+                    } else if (description.includes('cleaning') || description.includes('clean')) {
+                        vendorCategory = 'cleaning';
+                    } else if (description.includes('security') || description.includes('guard')) {
+                        vendorCategory = 'security';
+                    } else if (description.includes('landscaping') || description.includes('garden')) {
+                        vendorCategory = 'landscaping';
+                    }
+                }
+
+                // Auto-create vendor
+                vendor = await autoCreateVendor(provider, user, vendorCategory);
+                console.log(`Auto-created vendor for quotation: ${provider} (${vendor._id})`);
+            } catch (vendorError) {
+                console.error('Error auto-creating vendor:', vendorError);
+                // Continue without vendor creation - don't fail the quotation upload
+            }
+        }
+
         const quotation = {
             provider,
             amount: parseFloat(amount),
@@ -975,7 +1057,23 @@ exports.uploadQuotation = async (req, res) => {
             uploadedBy: user._id,
             uploadedAt: new Date(),
             validUntil: validUntil ? new Date(validUntil) : null,
-            terms
+            terms,
+            // Add vendor information if vendor was created
+            ...(vendor && {
+                vendorId: vendor._id,
+                vendorCode: vendor.chartOfAccountsCode,
+                vendorName: vendor.businessName,
+                vendorType: vendor.vendorType,
+                vendorContact: {
+                    firstName: vendor.contactPerson.firstName,
+                    lastName: vendor.contactPerson.lastName,
+                    email: vendor.contactPerson.email,
+                    phone: vendor.contactPerson.phone
+                },
+                expenseCategory: vendor.expenseCategory,
+                paymentMethod: determinePaymentMethod(vendor),
+                hasBankDetails: !!(vendor.bankDetails && vendor.bankDetails.bankName)
+            })
         };
         
         request.quotations.push(quotation);
@@ -1276,6 +1374,38 @@ exports.addItemQuotation = async (req, res) => {
             });
         }
         
+        // Auto-create vendor if provider name is provided and no vendorId exists
+        let vendor = null;
+        if (provider && !req.body.vendorId) {
+            try {
+                // Determine category from request type or item description
+                let vendorCategory = 'other';
+                if (request.type === 'maintenance') {
+                    vendorCategory = 'maintenance';
+                } else if (request.items[itemIndex].description) {
+                    const description = request.items[itemIndex].description.toLowerCase();
+                    if (description.includes('plumbing') || description.includes('pipe') || description.includes('drain')) {
+                        vendorCategory = 'plumbing';
+                    } else if (description.includes('electrical') || description.includes('wiring') || description.includes('power')) {
+                        vendorCategory = 'electrical';
+                    } else if (description.includes('cleaning') || description.includes('clean')) {
+                        vendorCategory = 'cleaning';
+                    } else if (description.includes('security') || description.includes('guard')) {
+                        vendorCategory = 'security';
+                    } else if (description.includes('landscaping') || description.includes('garden')) {
+                        vendorCategory = 'landscaping';
+                    }
+                }
+
+                // Auto-create vendor
+                vendor = await autoCreateVendor(provider, user, vendorCategory);
+                console.log(`Auto-created vendor for item quotation: ${provider} (${vendor._id})`);
+            } catch (vendorError) {
+                console.error('Error auto-creating vendor:', vendorError);
+                // Continue without vendor creation - don't fail the quotation upload
+            }
+        }
+
         // Add quotation to the specific item
         const quotation = {
             provider,
@@ -1285,7 +1415,23 @@ exports.addItemQuotation = async (req, res) => {
             fileName,
             uploadedBy: user._id,
             uploadedAt: new Date(),
-            isApproved: false
+            isApproved: false,
+            // Add vendor information if vendor was created
+            ...(vendor && {
+                vendorId: vendor._id,
+                vendorCode: vendor.chartOfAccountsCode,
+                vendorName: vendor.businessName,
+                vendorType: vendor.vendorType,
+                vendorContact: {
+                    firstName: vendor.contactPerson.firstName,
+                    lastName: vendor.contactPerson.lastName,
+                    email: vendor.contactPerson.email,
+                    phone: vendor.contactPerson.phone
+                },
+                expenseCategory: vendor.expenseCategory,
+                paymentMethod: determinePaymentMethod(vendor),
+                hasBankDetails: !!(vendor.bankDetails && vendor.bankDetails.bankName)
+            })
         };
         
         request.items[itemIndex].quotations.push(quotation);
@@ -1733,3 +1879,146 @@ exports.checkSimilarRequests = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// Helper function to determine payment method based on vendor bank details
+function determinePaymentMethod(vendor) {
+    // Check if vendor has bank details
+    if (vendor.bankDetails && vendor.bankDetails.bankName && vendor.bankDetails.accountNumber) {
+        return 'Bank Transfer';
+    }
+    
+    // Check if vendor has specific payment method preference
+    if (vendor.defaultPaymentMethod) {
+        return vendor.defaultPaymentMethod;
+    }
+    
+    // Default to cash for auto-generated vendors without bank details
+    return 'Cash';
+}
+
+// Helper function to auto-create vendor from quotation provider
+async function autoCreateVendor(providerName, user, category = 'other') {
+    try {
+        // Check if vendor already exists by business name
+        const existingVendor = await Vendor.findOne({ 
+            businessName: { $regex: new RegExp(providerName, 'i') } 
+        });
+        
+        if (existingVendor) {
+            return existingVendor;
+        }
+
+        // Auto-generate unique chart of accounts code for vendor
+        const vendorCount = await Vendor.countDocuments();
+        const chartOfAccountsCode = `200${(vendorCount + 1).toString().padStart(3, '0')}`;
+        
+        // Map category to expense category
+        const categoryExpenseMap = {
+            'maintenance': 'maintenance_expenses',
+            'utilities': 'utilities_expenses',
+            'supplies': 'supplies_expenses',
+            'equipment': 'equipment_expenses',
+            'services': 'services_expenses',
+            'cleaning': 'cleaning_expenses',
+            'security': 'security_expenses',
+            'landscaping': 'landscaping_expenses',
+            'electrical': 'electrical_expenses',
+            'plumbing': 'plumbing_expenses',
+            'carpentry': 'carpentry_expenses',
+            'painting': 'painting_expenses',
+            'other': 'other_expenses'
+        };
+        const expenseCategory = categoryExpenseMap[category] || 'other_expenses';
+        
+        // Determine vendor type based on category and description
+        let vendorType = 'other';
+        if (category === 'supplies' || category === 'equipment') {
+            vendorType = 'shop';
+        } else if (['maintenance', 'cleaning', 'security', 'landscaping', 'electrical', 'plumbing', 'carpentry', 'painting'].includes(category)) {
+            vendorType = 'contractor';
+        } else if (category === 'services') {
+            vendorType = 'service_provider';
+        }
+
+        // Create basic vendor data
+        const vendorData = {
+            businessName: providerName,
+            tradingName: providerName,
+            contactPerson: {
+                firstName: 'Auto',
+                lastName: 'Generated',
+                email: `auto-${Date.now()}@vendor.local`,
+                phone: '+27 00 000 0000'
+            },
+            businessAddress: {
+                street: 'Auto-generated address',
+                city: 'Johannesburg',
+                province: 'Gauteng',
+                postalCode: '0000',
+                country: 'South Africa'
+            },
+            category: category,
+            vendorType: vendorType,
+            businessScope: `${vendorType} specializing in ${category} services/products`,
+            chartOfAccountsCode: chartOfAccountsCode,
+            expenseCategory: expenseCategory,
+            // Bank details - empty for auto-generated vendors (will be paid in cash)
+            bankDetails: {
+                bankName: null,
+                accountNumber: null,
+                accountType: null,
+                branchCode: null,
+                swiftCode: null
+            },
+            // Payment method defaults to cash for auto-generated vendors (no bank details)
+            defaultPaymentMethod: 'Cash',
+            createdBy: user._id,
+            isAutoGenerated: true, // Flag to indicate this was auto-created
+            history: [{
+                action: 'Vendor auto-created',
+                description: `Vendor auto-created from request quotation: ${providerName}`,
+                user: user._id,
+                changes: ['Auto-generated from quotation', 'Payment method: Cash (no bank details)']
+            }]
+        };
+
+        // Create new vendor
+        const vendor = new Vendor(vendorData);
+        const savedVendor = await vendor.save();
+
+        // Create chart of accounts entries
+        await ensureChartOfAccountsEntries(chartOfAccountsCode, savedVendor);
+
+        console.log(`Auto-created vendor: ${providerName} with ID: ${savedVendor._id}`);
+        return savedVendor;
+
+    } catch (error) {
+        console.error('Error auto-creating vendor:', error);
+        throw error;
+    }
+}
+
+// Helper function to ensure chart of accounts entries exist
+async function ensureChartOfAccountsEntries(vendorCode, vendor) {
+    try {
+        // Check if vendor-specific AP account exists
+        let vendorAccount = await Account.findOne({ code: vendorCode });
+        if (!vendorAccount) {
+            vendorAccount = new Account({
+                code: vendorCode,
+                name: `Accounts Payable - ${vendor.businessName}`,
+                type: 'Liability'
+            });
+            await vendorAccount.save();
+            console.log(`Created vendor AP account: ${vendorCode} - ${vendor.businessName}`);
+        }
+
+        // Note: We don't create separate expense accounts for each vendor
+        // Instead, we use the existing chart of accounts structure
+        // The expenseCategory field helps identify which expense account to use
+
+    } catch (error) {
+        console.error('Error ensuring chart of accounts entries:', error);
+        // Don't throw error as this is not critical for vendor creation
+    }
+}

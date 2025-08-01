@@ -3,6 +3,35 @@ const mongoose = require('mongoose');
 const { generateUniqueId } = require('../../utils/idGenerator');
 const Residence = require('../../models/Residence');
 const Maintenance = require('../../models/Maintenance');
+const Transaction = require('../../models/Transaction');
+const TransactionEntry = require('../../models/TransactionEntry');
+const Account = require('../../models/Account');
+const AuditLog = require('../../models/AuditLog');
+const { getPettyCashAccountByRole } = require('../../utils/pettyCashUtils');
+
+// Category to Account Code mapping for Expense linkage (updated to match chart of accounts)
+const CATEGORY_TO_ACCOUNT_CODE = {
+  'Maintenance': '5003', // Transportation Expense (for maintenance)
+  'Utilities': '5099', // Other Operating Expenses (for utilities)
+  'Taxes': '5099', // Other Operating Expenses (for taxes)
+  'Insurance': '5099', // Other Operating Expenses (for insurance)
+  'Salaries': '5099', // Other Operating Expenses (for salaries)
+  'Supplies': '5099', // Other Operating Expenses (for supplies)
+  'Other': '5099' // Other Operating Expenses (fallback)
+};
+
+// Payment method to Account Code mapping (updated to match chart of accounts)
+const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
+  'Cash': '1011', // Admin Petty Cash
+  'Bank Transfer': '1000', // Bank - Main Account (assuming this exists)
+  'Ecocash': '1011', // Admin Petty Cash
+  'Innbucks': '1011', // Admin Petty Cash
+  'Petty Cash': '1011', // Admin Petty Cash
+  'Online Payment': '1000', // Bank - Main Account
+  'MasterCard': '1000', // Bank - Main Account
+  'Visa': '1000', // Bank - Main Account
+  'PayPal': '1000' // Bank - Main Account
+};
 
 // Get expenses with filters
 const getExpenses = async (req, res) => {
@@ -146,9 +175,7 @@ const addExpense = async (req, res) => {
         }
 
         // Generate unique expense ID
-        const timestamp = Date.now();
-        const randomNum = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-        const expenseId = `EXP-${timestamp}-${randomNum}`;
+        const expenseId = await generateUniqueId('EXP');
 
         // Create new expense
         const expense = new Expense({
@@ -167,6 +194,179 @@ const addExpense = async (req, res) => {
         });
 
         await expense.save();
+
+        // --- Create Transaction Entries for Expense ---
+        try {
+            console.log('[Admin Expense] Creating transaction entries for expense:', expense._id, 'category:', expense.category);
+            
+            // Get expense account using the category mapping
+            const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[expense.category] || '5099';
+            const expenseAccount = await Account.findOne({ code: expenseAccountCode, type: 'Expense' });
+            
+            if (!expenseAccount) {
+                console.error('[Admin Expense] Expense account not found for category:', expense.category);
+                throw new Error('Expense account not found for category: ' + expense.category);
+            }
+            
+            // If expense is marked as paid, create payment transaction
+            if (expense.paymentStatus === 'Paid') {
+                // Determine source account based on payment method
+                const finalPaymentMethod = expense.paymentMethod || 'Bank Transfer';
+                let sourceAccount;
+                
+                if (finalPaymentMethod === 'Petty Cash') {
+                    // Get role-specific petty cash account based on user role
+                    sourceAccount = await getPettyCashAccountByRole(req.user.role);
+                } else {
+                    // Use the mapping for other payment methods
+                    const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[finalPaymentMethod] || '1011';
+                    sourceAccount = await Account.findOne({ code: sourceAccountCode });
+                }
+                
+                if (!sourceAccount) {
+                    console.error('[Admin Expense] Source account not found for payment method:', finalPaymentMethod);
+                    throw new Error('Source account not found for payment method: ' + finalPaymentMethod);
+                }
+                
+                // Create transaction for paid expense
+                const txn = await Transaction.create({
+                    date: expense.paidDate || new Date(),
+                    description: `Admin Expense Payment: ${expense.description}`,
+                    reference: expense.expenseId,
+                    residence: expense.residence,
+                    residenceName: undefined // Will be populated if needed
+                });
+                
+                // Create double-entry transaction entries for paid expense
+                const entries = await TransactionEntry.insertMany([
+                    { 
+                        transaction: txn._id, 
+                        account: expenseAccount._id, 
+                        debit: expense.amount, 
+                        credit: 0, 
+                        type: 'expense' 
+                    },
+                    { 
+                        transaction: txn._id, 
+                        account: sourceAccount._id, 
+                        debit: 0, 
+                        credit: expense.amount, 
+                        type: sourceAccount.type.toLowerCase() 
+                    }
+                ]);
+                
+                // Link entries to transaction
+                await Transaction.findByIdAndUpdate(txn._id, { 
+                    $push: { entries: { $each: entries.map(e => e._id) } } 
+                });
+                
+                // Create audit log for the transaction
+                await AuditLog.create({
+                    user: req.user._id,
+                    action: `admin_expense_paid_${finalPaymentMethod.replace(/\s+/g, '_').toLowerCase()}`,
+                    collection: 'Transaction',
+                    recordId: txn._id,
+                    before: null,
+                    after: txn.toObject(),
+                    timestamp: new Date(),
+                    details: {
+                        source: 'Admin Expense',
+                        sourceId: expense._id,
+                        expenseCategory: expense.category,
+                        expenseAmount: expense.amount,
+                        paymentMethod: finalPaymentMethod,
+                        sourceAccount: sourceAccount.code,
+                        expenseAccount: expenseAccount.code,
+                        description: `Admin expense paid via ${finalPaymentMethod} - ${expense.description}`
+                    }
+                });
+                
+                console.log('[Admin Expense] Payment transaction created for expense:', expense._id, 'txn:', txn._id);
+                
+            } else {
+                // If expense is pending, create AP liability entry
+                const apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                if (!apAccount) {
+                    console.error('[Admin Expense] General Accounts Payable account not found');
+                    throw new Error('General Accounts Payable account not found');
+                }
+                
+                // Create transaction for pending expense (creates AP liability)
+                const txn = await Transaction.create({
+                    date: new Date(),
+                    description: `Admin Expense Created: ${expense.description}`,
+                    reference: expense.expenseId,
+                    residence: expense.residence,
+                    residenceName: undefined
+                });
+                
+                // Create double-entry transaction entries for AP creation
+                const entries = await TransactionEntry.insertMany([
+                    { 
+                        transaction: txn._id, 
+                        account: expenseAccount._id, 
+                        debit: expense.amount, 
+                        credit: 0, 
+                        type: 'expense' 
+                    },
+                    { 
+                        transaction: txn._id, 
+                        account: apAccount._id, 
+                        debit: 0, 
+                        credit: expense.amount, 
+                        type: 'liability' 
+                    }
+                ]);
+                
+                // Link entries to transaction
+                await Transaction.findByIdAndUpdate(txn._id, { 
+                    $push: { entries: { $each: entries.map(e => e._id) } } 
+                });
+                
+                // Create audit log for the AP creation
+                await AuditLog.create({
+                    user: req.user._id,
+                    action: 'admin_expense_created_ap_liability',
+                    collection: 'Transaction',
+                    recordId: txn._id,
+                    before: null,
+                    after: txn.toObject(),
+                    timestamp: new Date(),
+                    details: {
+                        source: 'Admin Expense',
+                        sourceId: expense._id,
+                        expenseCategory: expense.category,
+                        expenseAmount: expense.amount,
+                        apAccount: apAccount.code,
+                        expenseAccount: expenseAccount.code,
+                        description: `Admin expense created - AP liability created for ${expense.description}`
+                    }
+                });
+                
+                console.log('[Admin Expense] AP liability transaction created for expense:', expense._id, 'txn:', txn._id);
+            }
+            
+        } catch (transactionError) {
+            console.error('[Admin Expense] Failed to create transaction entries for expense:', expense._id, transactionError);
+            // Don't fail the request, but log the error
+            console.error('Transaction creation failed, but expense was saved:', transactionError.message);
+        }
+        // --- End Transaction Entries Creation ---
+
+        // Create audit log for expense creation
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'create',
+            collection: 'Expense',
+            recordId: expense._id,
+            before: null,
+            after: expense.toObject(),
+            timestamp: new Date(),
+            details: {
+                source: 'Admin',
+                description: `Admin expense created - ${expense.description}`
+            }
+        });
 
         // Return the created expense with populated fields
         const populatedExpense = await Expense.findById(expense._id)
@@ -408,12 +608,115 @@ const approveExpense = async (req, res) => {
             });
         }
 
+        const before = expense.toObject();
+
         // Update the expense
         expense.paymentStatus = 'Paid';
         expense.paymentMethod = paymentMethod;
         expense.paidDate = new Date();
         expense.paidBy = req.user._id;
         await expense.save();
+
+        // --- Create Payment Transaction for Approved Expense ---
+        try {
+            console.log('[Admin Approve] Creating payment transaction for expense:', expense._id, 'category:', expense.category);
+            
+            // Get expense account using the category mapping
+            const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[expense.category] || '5099';
+            const expenseAccount = await Account.findOne({ code: expenseAccountCode, type: 'Expense' });
+            
+            if (!expenseAccount) {
+                console.error('[Admin Approve] Expense account not found for category:', expense.category);
+                throw new Error('Expense account not found for category: ' + expense.category);
+            }
+            
+            // Get general Accounts Payable account for AP reduction
+            const apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+            if (!apAccount) {
+                console.error('[Admin Approve] General Accounts Payable account not found');
+                throw new Error('General Accounts Payable account not found');
+            }
+            
+            // Determine source account based on payment method
+            let sourceAccount;
+            if (paymentMethod === 'Petty Cash') {
+                // Get role-specific petty cash account based on user role
+                sourceAccount = await getPettyCashAccountByRole(req.user.role);
+            } else {
+                // Use the mapping for other payment methods
+                const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1011';
+                sourceAccount = await Account.findOne({ code: sourceAccountCode });
+            }
+            
+            if (!sourceAccount) {
+                console.error('[Admin Approve] Source account not found for payment method:', paymentMethod);
+                throw new Error('Source account not found for payment method: ' + paymentMethod);
+            }
+            
+            // Create transaction for payment (reduces AP liability)
+            const txn = await Transaction.create({
+                date: expense.paidDate || new Date(),
+                description: `Admin Expense Payment: ${expense.description}`,
+                reference: expense.expenseId,
+                residence: expense.residence,
+                residenceName: undefined
+            });
+            
+            // Create double-entry transaction entries for AP reduction
+            const entries = await TransactionEntry.insertMany([
+                { 
+                    transaction: txn._id, 
+                    account: apAccount._id, 
+                    debit: expense.amount, 
+                    credit: 0, 
+                    type: 'liability' 
+                },
+                { 
+                    transaction: txn._id, 
+                    account: sourceAccount._id, 
+                    debit: 0, 
+                    credit: expense.amount, 
+                    type: sourceAccount.type.toLowerCase() 
+                }
+            ]);
+            
+            // Link entries to transaction
+            await Transaction.findByIdAndUpdate(txn._id, { 
+                $push: { entries: { $each: entries.map(e => e._id) } } 
+            });
+            
+            // Create audit log for the transaction
+            await AuditLog.create({
+                user: req.user._id,
+                action: `admin_expense_approved_paid_${paymentMethod.replace(/\s+/g, '_').toLowerCase()}`,
+                collection: 'Transaction',
+                recordId: txn._id,
+                before: null,
+                after: txn.toObject(),
+                timestamp: new Date(),
+                details: {
+                    source: 'Admin Expense',
+                    sourceId: expense._id,
+                    expenseCategory: expense.category,
+                    expenseAmount: expense.amount,
+                    paymentMethod: paymentMethod,
+                    sourceAccount: sourceAccount.code,
+                    apAccount: apAccount.code,
+                    description: `Admin expense approved and paid via ${paymentMethod} - ${expense.description}`
+                }
+            });
+            
+            console.log('[Admin Approve] AP reduction transaction created for expense:', expense._id, 'txn:', txn._id);
+            
+        } catch (paymentError) {
+            console.error('[Admin Approve] Failed to create payment transaction for expense:', expense._id, paymentError);
+            return res.status(500).json({ 
+                success: false,
+                error: 'Failed to create payment transaction for approved expense', 
+                details: paymentError.message 
+            });
+        }
+        // --- End Payment Transaction ---
 
         // If this is a maintenance expense, update the maintenance request
         if (expense.category === 'Maintenance' && expense.maintenanceRequest) {
@@ -430,6 +733,22 @@ const approveExpense = async (req, res) => {
                 await maintenance.save();
             }
         }
+
+        // Create audit log for expense update
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'approve',
+            collection: 'Expense',
+            recordId: expense._id,
+            before,
+            after: expense.toObject(),
+            timestamp: new Date(),
+            details: {
+                paymentMethod: expense.paymentMethod,
+                paidDate: expense.paidDate,
+                description: `Admin expense approved and paid - ${expense.description}`
+            }
+        });
 
         // Send response
         res.json({

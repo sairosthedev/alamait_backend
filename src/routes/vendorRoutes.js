@@ -18,6 +18,12 @@ router.get('/',
     vendorController.getAllVendors
 );
 
+// Get vendors for quotation system (Admin and Finance only)
+router.get('/for-quotations', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    vendorController.getVendorsForQuotations
+);
+
 // Search vendors (for quotation system - Admin and Finance only)
 router.get('/search', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 

@@ -43,4 +43,10 @@ router.patch('/:id/approve',
     expenseController.approveExpense
 );
 
+// Mark expense as paid (finance users and admin)
+router.patch('/:id/mark-paid', 
+    checkRole('admin', 'finance_admin', 'finance_user'), 
+    expenseController.markExpenseAsPaid
+);
+
 module.exports = router; 

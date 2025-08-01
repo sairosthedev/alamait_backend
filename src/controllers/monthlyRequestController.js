@@ -1178,22 +1178,22 @@ exports.approveMonthlyRequest = async (req, res) => {
 
         } else {
             // For regular requests, update main status
-            if (monthlyRequest.status !== 'pending') {
-                return res.status(400).json({ message: 'Only pending requests can be approved' });
-            }
+        if (monthlyRequest.status !== 'pending') {
+            return res.status(400).json({ message: 'Only pending requests can be approved' });
+        }
 
-            monthlyRequest.status = approved ? 'approved' : 'rejected';
-            monthlyRequest.approvedBy = user._id;
-            monthlyRequest.approvedAt = new Date();
-            monthlyRequest.approvedByEmail = user.email;
-            monthlyRequest.notes = notes || monthlyRequest.notes;
+        monthlyRequest.status = approved ? 'approved' : 'rejected';
+        monthlyRequest.approvedBy = user._id;
+        monthlyRequest.approvedAt = new Date();
+        monthlyRequest.approvedByEmail = user.email;
+        monthlyRequest.notes = notes || monthlyRequest.notes;
 
-            monthlyRequest.requestHistory.push({
-                date: new Date(),
-                action: `Monthly request ${approved ? 'approved' : 'rejected'}`,
-                user: user._id,
-                changes: [`Status changed to ${approved ? 'approved' : 'rejected'}`]
-            });
+        monthlyRequest.requestHistory.push({
+            date: new Date(),
+            action: `Monthly request ${approved ? 'approved' : 'rejected'}`,
+            user: user._id,
+            changes: [`Status changed to ${approved ? 'approved' : 'rejected'}`]
+        });
         }
 
         await monthlyRequest.save();
@@ -1957,27 +1957,27 @@ async function convertRequestToExpenses(request, user) {
             for (let i = 0; i < request.items.length; i++) {
                 const item = request.items[i];
                 const approvedQuotation = item.quotations?.find(q => q.isApproved);
-                
-                if (approvedQuotation) {
-                    const expense = new Expense({
+                    
+                    if (approvedQuotation) {
+                        const expense = new Expense({
                         expenseId: `${expenseId}_item_${i}`,
                         title: `${request.title} - ${item.title}`,
-                        description: item.description,
-                        amount: approvedQuotation.amount,
+                            description: item.description,
+                            amount: approvedQuotation.amount,
                         category: mapCategory(item.category),
                         expenseDate: new Date(request.year, request.month - 1, 1),
                         period: 'monthly',
                         paymentStatus: 'Pending',
                         paymentMethod: 'Bank Transfer',
-                        monthlyRequestId: request._id,
+                            monthlyRequestId: request._id,
                         itemIndex: i,
                         quotationId: approvedQuotation._id,
                         createdBy: user._id,
                         notes: `Converted from monthly request item: ${item.title}`
-                    });
-                    
-                    await expense.save();
-                    createdExpenses.push(expense);
+                        });
+                        
+                        await expense.save();
+                        createdExpenses.push(expense);
                 } else {
                     // If no approved quotation, use estimated cost
                     const expense = new Expense({
@@ -2002,23 +2002,23 @@ async function convertRequestToExpenses(request, user) {
             }
             
             // Update request status to completed
-            request.status = 'completed';
-            request.requestHistory.push({
-                date: new Date(),
-                action: 'Converted to expense',
-                user: user._id,
+                        request.status = 'completed';
+                        request.requestHistory.push({
+                            date: new Date(),
+                            action: 'Converted to expense',
+                            user: user._id,
                 changes: [`${createdExpenses.length} items converted to expenses`]
-            });
-        }
-        
-        await request.save();
-        
-    } catch (error) {
-        errors.push({
-            requestId: request._id,
-            error: error.message
-        });
-    }
+                        });
+                }
+                
+                await request.save();
+                
+            } catch (error) {
+                errors.push({
+                    requestId: request._id,
+                    error: error.message
+                });
+            }
     
     return { expenses: createdExpenses, errors };
 }

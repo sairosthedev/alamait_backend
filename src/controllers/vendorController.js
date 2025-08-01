@@ -284,6 +284,46 @@ exports.deleteVendor = async (req, res) => {
     }
 };
 
+// Get vendors for quotation system (simplified list)
+exports.getVendorsForQuotations = async (req, res) => {
+    try {
+        const { category, search } = req.query;
+
+        const query = { status: 'active' };
+        
+        if (category) {
+            query.category = category;
+        }
+        
+        if (search) {
+            query.$or = [
+                { businessName: { $regex: search, $options: 'i' } },
+                { tradingName: { $regex: search, $options: 'i' } },
+                { 'contactPerson.firstName': { $regex: search, $options: 'i' } },
+                { 'contactPerson.lastName': { $regex: search, $options: 'i' } },
+                { vendorCode: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const vendors = await Vendor.find(query)
+            .select('vendorCode businessName tradingName contactPerson category vendorType expenseCategory defaultPaymentMethod hasBankDetails')
+            .sort({ businessName: 1 })
+            .limit(50);
+
+        res.status(200).json({
+            vendors,
+            total: vendors.length
+        });
+
+    } catch (error) {
+        console.error('Error getting vendors for quotations:', error);
+        res.status(500).json({ 
+            message: 'Error retrieving vendors for quotations',
+            error: error.message 
+        });
+    }
+};
+
 // Search vendors by name or email (for quotation system)
 exports.searchVendors = async (req, res) => {
     try {
