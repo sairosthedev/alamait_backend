@@ -220,18 +220,20 @@ exports.createRequest = async (req, res) => {
                 if (!item.description) {
                     return res.status(400).json({ message: `Item ${i + 1}: Description is required` });
                 }
+                
+                // Parse numeric values from FormData (they come as strings)
+                item.quantity = parseInt(item.quantity) || 0;
+                item.unitCost = parseFloat(item.unitCost) || 0;
+                item.totalCost = parseFloat(item.totalCost) || 0;
+                
                 if (!item.quantity || item.quantity < 1) {
                     return res.status(400).json({ message: `Item ${i + 1}: Quantity must be at least 1` });
                 }
-                // Unit cost validation removed - allowing any value including negative
                 
-                // Handle unitCost if it's undefined/null
-                if (item.unitCost === undefined || item.unitCost === null) {
-                    item.unitCost = 0;
+                // Calculate total cost for this item if not provided
+                if (!item.totalCost) {
+                    item.totalCost = item.unitCost * item.quantity;
                 }
-                
-                // Calculate total cost for this item
-                item.totalCost = (item.unitCost || 0) * item.quantity;
                 
                 // Handle quotations with file uploads
                 if (item.quotations && Array.isArray(item.quotations)) {
@@ -276,6 +278,11 @@ exports.createRequest = async (req, res) => {
                             }
                         }
 
+                        // Parse quotation numeric values from FormData
+                        quotation.amount = parseFloat(quotation.amount) || 0;
+                        quotation.isApproved = quotation.isApproved === "true" || quotation.isApproved === true;
+                        quotation.itemIndex = parseInt(quotation.itemIndex) || 0;
+                        
                         // Auto-create vendor if provider name is provided and no vendorId exists
                         if (quotation.provider && !quotation.vendorId) {
                             try {
@@ -385,8 +392,24 @@ exports.createRequest = async (req, res) => {
             // Calculate total estimated cost
             if (parsedItems && parsedItems.length > 0) {
                 requestData.totalEstimatedCost = parsedItems.reduce((total, item) => {
-                    return total + (item.estimatedCost * item.quantity);
+                    // Parse values to ensure they're numbers
+                    const quantity = parseInt(item.quantity) || 0;
+                    const unitCost = parseFloat(item.unitCost) || 0;
+                    const totalCost = parseFloat(item.totalCost) || 0;
+                    const estimatedCost = parseFloat(item.estimatedCost) || 0;
+                    
+                    // Use the most appropriate cost value
+                    const itemCost = totalCost || (unitCost * quantity) || estimatedCost || 0;
+                    
+                    return total + itemCost;
                 }, 0);
+            } else {
+                requestData.totalEstimatedCost = 0;
+            }
+            
+            // Ensure totalEstimatedCost is a valid number
+            if (isNaN(requestData.totalEstimatedCost)) {
+                requestData.totalEstimatedCost = 0;
             }
         }
         
