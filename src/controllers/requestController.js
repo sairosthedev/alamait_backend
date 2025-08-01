@@ -151,8 +151,8 @@ exports.createRequest = async (req, res) => {
         console.log('Request body keys:', Object.keys(req.body));
         console.log('Files received:', req.files ? req.files.map(f => ({ fieldname: f.fieldname, originalname: f.originalname, filename: f.filename, size: f.size })) : 'No files');
         console.log('Content-Type:', req.headers['content-type']);
-        console.log('Items type:', typeof items);
-        console.log('Items value:', items);
+        console.log('Items type:', typeof req.body.items);
+        console.log('Items value:', req.body.items);
         const { 
             title, 
             description, 
