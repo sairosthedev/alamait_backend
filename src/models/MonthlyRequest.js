@@ -191,6 +191,32 @@ const monthlyRequestSchema = new mongoose.Schema({
         enum: ['draft', 'pending', 'approved', 'rejected', 'completed'],
         default: 'draft'
     },
+    // Monthly approval status for templates
+    monthlyApprovals: [{
+        month: { type: Number, required: true, min: 1, max: 12 },
+        year: { type: Number, required: true, min: 2020 },
+        status: { 
+            type: String, 
+            enum: ['draft', 'pending', 'approved', 'rejected', 'completed'],
+            default: 'draft'
+        },
+        approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        approvedAt: { type: Date },
+        approvedByEmail: { type: String, trim: true },
+        items: [{
+            title: { type: String, required: true },
+            description: { type: String, required: true },
+            quantity: { type: Number, required: true, min: 1 },
+            estimatedCost: { type: Number, required: true, min: 0 },
+            category: { type: String, enum: ['utilities', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
+            priority: { type: String, enum: ['low', 'medium', 'high'] },
+            notes: { type: String, trim: true }
+        }],
+        totalCost: { type: Number, default: 0 },
+        notes: { type: String, trim: true },
+        submittedAt: { type: Date, default: Date.now },
+        submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    }],
     priority: {
         type: String,
         enum: ['low', 'medium', 'high'],

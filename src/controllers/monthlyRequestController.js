@@ -891,6 +891,7 @@ exports.updateMonthlyRequest = async (req, res) => {
 exports.sendToFinance = async (req, res) => {
     try {
         const user = req.user;
+        const { month, year } = req.body;
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
 
         if (!monthlyRequest) {
@@ -908,34 +909,98 @@ exports.sendToFinance = async (req, res) => {
             });
         }
 
-        // Check if request is in draft status
-        if (monthlyRequest.status !== 'draft') {
+        // For templates, require month and year
+        if (monthlyRequest.isTemplate && (!month || !year)) {
             return res.status(400).json({ 
                 success: false,
-                message: `Cannot send request to finance. Current status: ${monthlyRequest.status}. Only draft requests can be sent to finance.` 
+                message: 'Month and year are required for template submissions' 
             });
         }
 
-        // Update status to pending
-        monthlyRequest.status = 'pending';
-        
-        // Add to request history
-        monthlyRequest.requestHistory.push({
-            date: new Date(),
-            action: 'Sent to finance for approval',
-            user: user._id,
-            changes: ['Status changed from draft to pending']
-        });
+        // For templates, handle monthly-specific submission
+        if (monthlyRequest.isTemplate) {
+            // Check if monthly approval already exists
+            const existingApproval = monthlyRequest.monthlyApprovals.find(
+                approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+            );
+
+            if (existingApproval && existingApproval.status !== 'draft') {
+                return res.status(400).json({ 
+                    success: false,
+                    message: `Monthly request for ${month}/${year} is already ${existingApproval.status}` 
+                });
+            }
+
+            // Create or update monthly approval
+            const monthlyApproval = {
+                month: parseInt(month),
+                year: parseInt(year),
+                status: 'pending',
+                items: monthlyRequest.items.map(item => ({
+                    title: item.title,
+                    description: item.description,
+                    quantity: item.quantity,
+                    estimatedCost: item.estimatedCost,
+                    category: item.category,
+                    priority: item.priority,
+                    notes: item.notes
+                })),
+                totalCost: monthlyRequest.totalEstimatedCost,
+                submittedAt: new Date(),
+                submittedBy: user._id
+            };
+
+            if (existingApproval) {
+                // Update existing approval
+                const approvalIndex = monthlyRequest.monthlyApprovals.findIndex(
+                    approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+                );
+                monthlyRequest.monthlyApprovals[approvalIndex] = monthlyApproval;
+            } else {
+                // Add new monthly approval
+                monthlyRequest.monthlyApprovals.push(monthlyApproval);
+            }
+
+            // Add to request history
+            monthlyRequest.requestHistory.push({
+                date: new Date(),
+                action: `Sent ${month}/${year} monthly request to finance`,
+                user: user._id,
+                changes: [`Monthly request for ${month}/${year} sent to finance`]
+            });
+
+        } else {
+            // For regular requests, update main status
+            if (monthlyRequest.status !== 'draft') {
+                return res.status(400).json({ 
+                    success: false,
+                    message: `Cannot send request to finance. Current status: ${monthlyRequest.status}. Only draft requests can be sent to finance.` 
+                });
+            }
+
+            monthlyRequest.status = 'pending';
+            
+            // Add to request history
+            monthlyRequest.requestHistory.push({
+                date: new Date(),
+                action: 'Sent to finance for approval',
+                user: user._id,
+                changes: ['Status changed from draft to pending']
+            });
+        }
 
         await monthlyRequest.save();
 
         const updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
             .populate('residence', 'name')
-            .populate('submittedBy', 'firstName lastName email');
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('monthlyApprovals.approvedBy', 'firstName lastName email');
 
         res.status(200).json({
             success: true,
-            message: 'Request sent to finance successfully',
+            message: monthlyRequest.isTemplate 
+                ? `Monthly request for ${month}/${year} sent to finance successfully`
+                : 'Request sent to finance successfully',
             monthlyRequest: updatedRequest
         });
 
@@ -997,7 +1062,7 @@ exports.submitMonthlyRequest = async (req, res) => {
 exports.approveMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
-        const { approved, notes } = req.body;
+        const { approved, notes, month, year } = req.body;
 
         // Check permissions - only finance users can approve
         if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
@@ -1010,31 +1075,78 @@ exports.approveMonthlyRequest = async (req, res) => {
             return res.status(404).json({ message: 'Monthly request not found' });
         }
 
-        if (monthlyRequest.status !== 'pending') {
-            return res.status(400).json({ message: 'Only pending requests can be approved' });
+        // For templates, handle monthly-specific approval
+        if (monthlyRequest.isTemplate) {
+            if (!month || !year) {
+                return res.status(400).json({ message: 'Month and year are required for template approvals' });
+            }
+
+            const monthlyApproval = monthlyRequest.monthlyApprovals.find(
+                approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+            );
+
+            if (!monthlyApproval) {
+                return res.status(404).json({ 
+                    message: `No monthly request found for ${month}/${year}` 
+                });
+            }
+
+            if (monthlyApproval.status !== 'pending') {
+                return res.status(400).json({ 
+                    message: `Monthly request for ${month}/${year} is not pending. Current status: ${monthlyApproval.status}` 
+                });
+            }
+
+            // Update monthly approval status
+            monthlyApproval.status = approved ? 'approved' : 'rejected';
+            monthlyApproval.approvedBy = user._id;
+            monthlyApproval.approvedAt = new Date();
+            monthlyApproval.approvedByEmail = user.email;
+            monthlyApproval.notes = notes || monthlyApproval.notes;
+
+            // Add to request history
+            monthlyRequest.requestHistory.push({
+                date: new Date(),
+                action: `Monthly request for ${month}/${year} ${approved ? 'approved' : 'rejected'}`,
+                user: user._id,
+                changes: [`${month}/${year} status changed to ${approved ? 'approved' : 'rejected'}`]
+            });
+
+        } else {
+            // For regular requests, update main status
+            if (monthlyRequest.status !== 'pending') {
+                return res.status(400).json({ message: 'Only pending requests can be approved' });
+            }
+
+            monthlyRequest.status = approved ? 'approved' : 'rejected';
+            monthlyRequest.approvedBy = user._id;
+            monthlyRequest.approvedAt = new Date();
+            monthlyRequest.approvedByEmail = user.email;
+            monthlyRequest.notes = notes || monthlyRequest.notes;
+
+            monthlyRequest.requestHistory.push({
+                date: new Date(),
+                action: `Monthly request ${approved ? 'approved' : 'rejected'}`,
+                user: user._id,
+                changes: [`Status changed to ${approved ? 'approved' : 'rejected'}`]
+            });
         }
-
-        monthlyRequest.status = approved ? 'approved' : 'rejected';
-        monthlyRequest.approvedBy = user._id;
-        monthlyRequest.approvedAt = new Date();
-        monthlyRequest.approvedByEmail = user.email;
-        monthlyRequest.notes = notes || monthlyRequest.notes;
-
-        monthlyRequest.requestHistory.push({
-            date: new Date(),
-            action: `Monthly request ${approved ? 'approved' : 'rejected'}`,
-            user: user._id,
-            changes: [`Status changed to ${approved ? 'approved' : 'rejected'}`]
-        });
 
         await monthlyRequest.save();
 
         const updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
             .populate('residence', 'name')
             .populate('submittedBy', 'firstName lastName email')
-            .populate('approvedBy', 'firstName lastName email');
+            .populate('approvedBy', 'firstName lastName email')
+            .populate('monthlyApprovals.approvedBy', 'firstName lastName email');
 
-        res.status(200).json(updatedRequest);
+        res.status(200).json({
+            success: true,
+            message: monthlyRequest.isTemplate 
+                ? `Monthly request for ${month}/${year} ${approved ? 'approved' : 'rejected'} successfully`
+                : `Monthly request ${approved ? 'approved' : 'rejected'} successfully`,
+            monthlyRequest: updatedRequest
+        });
     } catch (error) {
         console.error('Error approving monthly request:', error);
         res.status(500).json({ message: error.message });
@@ -1600,7 +1712,12 @@ exports.convertToExpenses = async (req, res) => {
             return res.status(403).json({ message: 'Only finance users can convert monthly requests to expenses' });
         }
         
-        const { month, year, residence } = req.body;
+        const { month, year, residence, requestId } = req.body;
+        
+        // If requestId is provided, convert specific request
+        if (requestId) {
+            return await convertSpecificRequestToExpense(requestId, user, res);
+        }
         
         if (!month || !year) {
             return res.status(400).json({ message: 'Month and year are required' });
@@ -1633,45 +1750,12 @@ exports.convertToExpenses = async (req, res) => {
         // Convert each approved request to expenses
         for (const request of approvedRequests) {
             try {
-                // Create expense for each item with approved quotations
-                for (const item of request.items) {
-                    const approvedQuotation = item.quotations.find(q => q.isApproved);
-                    
-                    if (approvedQuotation) {
-                        const expense = new Expense({
-                            title: `${request.title} - ${item.description}`,
-                            description: item.description,
-                            amount: approvedQuotation.amount,
-                            category: item.category || 'monthly_request',
-                            type: 'expense',
-                            date: new Date(year, month - 1, 1), // First day of the month
-                            residence: request.residence,
-                            submittedBy: request.submittedBy,
-                            approvedBy: user._id,
-                            approvedAt: new Date(),
-                            status: 'approved',
-                            paymentMethod: 'monthly_budget',
-                            notes: `Converted from monthly request: ${request.title}`,
-                            monthlyRequestId: request._id,
-                            itemIndex: request.items.indexOf(item),
-                            quotationId: approvedQuotation._id
-                        });
-                        
-                        await expense.save();
-                        createdExpenses.push(expense);
-                        
-                        // Update monthly request status to completed
-                        request.status = 'completed';
-                        request.requestHistory.push({
-                            date: new Date(),
-                            action: 'Converted to expense',
-                            user: user._id,
-                            changes: [`Item "${item.description}" converted to expense`]
-                        });
-                    }
-                }
+                const result = await convertRequestToExpenses(request, user);
+                createdExpenses.push(...result.expenses);
                 
-                await request.save();
+                if (result.errors.length > 0) {
+                    errors.push(...result.errors);
+                }
                 
             } catch (error) {
                 errors.push({
@@ -1693,6 +1777,168 @@ exports.convertToExpenses = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// Helper function to convert a specific request to expenses
+async function convertSpecificRequestToExpense(requestId, user, res) {
+    try {
+        const request = await MonthlyRequest.findById(requestId)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email');
+        
+        if (!request) {
+            return res.status(404).json({ message: 'Monthly request not found' });
+        }
+        
+        if (request.status !== 'approved') {
+            return res.status(400).json({ 
+                message: `Cannot convert request with status: ${request.status}. Only approved requests can be converted.` 
+            });
+        }
+        
+        const result = await convertRequestToExpenses(request, user);
+        
+        res.status(200).json({
+            message: `Successfully converted ${result.expenses.length} items to expenses`,
+            createdExpenses: result.expenses.length,
+            requestId: request._id,
+            errors: result.errors.length > 0 ? result.errors : undefined
+        });
+        
+    } catch (error) {
+        console.error('Error converting specific request to expenses:', error);
+        res.status(500).json({ message: error.message });
+    }
+}
+
+// Helper function to convert a request to expenses
+async function convertRequestToExpenses(request, user) {
+    const createdExpenses = [];
+    const errors = [];
+    
+    try {
+        // Generate unique expense ID
+        const expenseId = generateExpenseId();
+        
+        // For templates, create one expense with total cost
+        if (request.isTemplate) {
+            const expense = new Expense({
+                expenseId: expenseId,
+                title: `Monthly Request - ${request.title}`,
+                description: request.description || `Monthly request for ${request.residence.name}`,
+                amount: request.totalEstimatedCost,
+                category: mapCategory(request.items[0]?.category || 'other'),
+                expenseDate: new Date(request.year || new Date().getFullYear(), (request.month || new Date().getMonth() + 1) - 1, 1),
+                period: 'monthly',
+                paymentStatus: 'Pending',
+                paymentMethod: 'Bank Transfer', // Default payment method
+                monthlyRequestId: request._id,
+                createdBy: user._id,
+                notes: `Converted from monthly request template: ${request.title}. Total items: ${request.items.length}`
+            });
+            
+            await expense.save();
+            createdExpenses.push(expense);
+            
+            // Update request status to completed
+            request.status = 'completed';
+            request.requestHistory.push({
+                date: new Date(),
+                action: 'Converted to expense',
+                user: user._id,
+                changes: [`Template converted to expense with total cost: $${request.totalEstimatedCost}`]
+            });
+            
+        } else {
+            // For regular monthly requests, create expense for each item
+            for (let i = 0; i < request.items.length; i++) {
+                const item = request.items[i];
+                const approvedQuotation = item.quotations?.find(q => q.isApproved);
+                
+                if (approvedQuotation) {
+                    const expense = new Expense({
+                        expenseId: `${expenseId}_item_${i}`,
+                        title: `${request.title} - ${item.title}`,
+                        description: item.description,
+                        amount: approvedQuotation.amount,
+                        category: mapCategory(item.category),
+                        expenseDate: new Date(request.year, request.month - 1, 1),
+                        period: 'monthly',
+                        paymentStatus: 'Pending',
+                        paymentMethod: 'Bank Transfer',
+                        monthlyRequestId: request._id,
+                        itemIndex: i,
+                        quotationId: approvedQuotation._id,
+                        createdBy: user._id,
+                        notes: `Converted from monthly request item: ${item.title}`
+                    });
+                    
+                    await expense.save();
+                    createdExpenses.push(expense);
+                } else {
+                    // If no approved quotation, use estimated cost
+                    const expense = new Expense({
+                        expenseId: `${expenseId}_item_${i}`,
+                        title: `${request.title} - ${item.title}`,
+                        description: item.description,
+                        amount: item.estimatedCost,
+                        category: mapCategory(item.category),
+                        expenseDate: new Date(request.year, request.month - 1, 1),
+                        period: 'monthly',
+                        paymentStatus: 'Pending',
+                        paymentMethod: 'Bank Transfer',
+                        monthlyRequestId: request._id,
+                        itemIndex: i,
+                        createdBy: user._id,
+                        notes: `Converted from monthly request item: ${item.title} (estimated cost)`
+                    });
+                    
+                    await expense.save();
+                    createdExpenses.push(expense);
+                }
+            }
+            
+            // Update request status to completed
+            request.status = 'completed';
+            request.requestHistory.push({
+                date: new Date(),
+                action: 'Converted to expense',
+                user: user._id,
+                changes: [`${createdExpenses.length} items converted to expenses`]
+            });
+        }
+        
+        await request.save();
+        
+    } catch (error) {
+        errors.push({
+            requestId: request._id,
+            error: error.message
+        });
+    }
+    
+    return { expenses: createdExpenses, errors };
+}
+
+// Helper function to generate unique expense ID
+function generateExpenseId() {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).substr(2, 5);
+    return `EXP_${timestamp}_${random}`.toUpperCase();
+}
+
+// Helper function to map monthly request categories to expense categories
+function mapCategory(monthlyRequestCategory) {
+    const categoryMap = {
+        'utilities': 'Utilities',
+        'maintenance': 'Maintenance',
+        'supplies': 'Supplies',
+        'equipment': 'Other',
+        'services': 'Other',
+        'other': 'Other'
+    };
+    
+    return categoryMap[monthlyRequestCategory] || 'Other';
+}
 
 // Get CEO monthly request dashboard
 exports.getCEOMonthlyRequests = async (req, res) => {
