@@ -478,28 +478,29 @@ exports.createMonthlyRequest = async (req, res) => {
             });
         }
 
-        // Process items with historical data if it's a template
-        let processedItems = items;
+        // Process items with historical data if provided
         if (isTemplate && (historicalData.length > 0 || itemHistory.length > 0)) {
             processedItems = items.map(item => {
                 const processedItem = {
                     title: item.title,
-                    description: item.description || item.title,
-                    estimatedCost: item.estimatedCost,
+                    description: item.description,
                     quantity: item.quantity || 1,
-                    category: item.category || 'general',
+                    estimatedCost: item.estimatedCost,
+                    category: item.category || 'other',
                     priority: item.priority || 'medium',
+                    isRecurring: item.isRecurring !== undefined ? item.isRecurring : true,
                     notes: item.notes || '',
                     tags: item.tags || [],
-                    isRecurring: item.isRecurring || false,
-                    itemHistory: [], // Track when this item was added/removed/modified
-                    costHistory: [] // Track cost changes
+                    costHistory: [],
+                    itemHistory: [],
+                    costVariations: [],
+                    costSummary: null
                 };
 
                 // Add cost history if provided
                 if (historicalData && Array.isArray(historicalData)) {
                     const itemHistory = historicalData.filter(h => 
-                        h.itemTitle && h.itemTitle.toLowerCase().trim() === item.title.toLowerCase().trim()
+                        h.title && h.title.toLowerCase().trim() === item.title.toLowerCase().trim()
                     );
 
                     if (itemHistory.length > 0) {
@@ -508,7 +509,15 @@ exports.createMonthlyRequest = async (req, res) => {
                             year: h.year,
                             cost: h.cost,
                             date: new Date(h.year, h.month - 1, 1),
-                            note: h.note || `Historical cost from ${h.month}/${h.year}`
+                            note: h.note || `Historical cost from ${h.month}/${h.year}`,
+                            // Standardized fields to match current item structure
+                            title: h.title,
+                            description: h.description || item.description,
+                            quantity: h.quantity || 1,
+                            category: h.category || item.category || 'other',
+                            priority: h.priority || item.priority || 'medium',
+                            isRecurring: h.isRecurring !== undefined ? h.isRecurring : true,
+                            notes: h.notes || item.notes || ''
                         }));
 
                         // Sort cost history by date (most recent first)
@@ -549,7 +558,7 @@ exports.createMonthlyRequest = async (req, res) => {
                 // Add item history if provided
                 if (itemHistory && Array.isArray(itemHistory)) {
                     const itemItemHistory = itemHistory.filter(h => 
-                        h.itemTitle && h.itemTitle.toLowerCase().trim() === item.title.toLowerCase().trim()
+                        h.title && h.title.toLowerCase().trim() === item.title.toLowerCase().trim()
                     );
 
                     if (itemItemHistory.length > 0) {
@@ -562,7 +571,14 @@ exports.createMonthlyRequest = async (req, res) => {
                             newValue: h.newValue,
                             note: h.note || `${h.action} in ${h.month}/${h.year}`,
                             cost: h.cost,
-                            quantity: h.quantity
+                            quantity: h.quantity,
+                            // Standardized fields to match current item structure
+                            title: h.title,
+                            description: h.description || item.description,
+                            category: h.category || item.category || 'other',
+                            priority: h.priority || item.priority || 'medium',
+                            isRecurring: h.isRecurring !== undefined ? h.isRecurring : true,
+                            notes: h.notes || item.notes || ''
                         }));
 
                         // Sort item history by date (most recent first)

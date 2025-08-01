@@ -50,27 +50,135 @@ async function testEnhancedTemplateSystem() {
                 }
             ],
             
-            // Historical cost data
+            // Historical cost data (standardized structure)
             historicalData: [
                 // WiFi Service cost history
-                { itemTitle: 'WiFi Service', month: 2, year: 2025, cost: 100, note: 'Initial WiFi cost' },
-                { itemTitle: 'WiFi Service', month: 3, year: 2025, cost: 100, note: 'WiFi cost maintained' },
-                { itemTitle: 'WiFi Service', month: 4, year: 2025, cost: 250, note: 'WiFi cost increased due to plan upgrade' },
-                { itemTitle: 'WiFi Service', month: 5, year: 2025, cost: 100, note: 'WiFi cost reverted to original plan' },
-                { itemTitle: 'WiFi Service', month: 6, year: 2025, cost: 100, note: 'WiFi cost stable' },
+                { 
+                    title: 'WiFi Service', 
+                    month: 2, 
+                    year: 2025, 
+                    cost: 100, 
+                    note: 'Initial WiFi cost',
+                    description: 'Monthly WiFi service for St Kilda',
+                    quantity: 1,
+                    category: 'utilities',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'Initial WiFi service'
+                },
+                { 
+                    title: 'WiFi Service', 
+                    month: 3, 
+                    year: 2025, 
+                    cost: 100, 
+                    note: 'WiFi cost maintained',
+                    description: 'Monthly WiFi service for St Kilda',
+                    quantity: 1,
+                    category: 'utilities',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'WiFi cost maintained'
+                },
+                { 
+                    title: 'WiFi Service', 
+                    month: 4, 
+                    year: 2025, 
+                    cost: 250, 
+                    note: 'WiFi cost increased due to plan upgrade',
+                    description: 'Monthly WiFi service for St Kilda',
+                    quantity: 1,
+                    category: 'utilities',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'WiFi plan upgraded'
+                },
+                { 
+                    title: 'WiFi Service', 
+                    month: 5, 
+                    year: 2025, 
+                    cost: 100, 
+                    note: 'WiFi cost reverted to original plan',
+                    description: 'Monthly WiFi service for St Kilda',
+                    quantity: 1,
+                    category: 'utilities',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'WiFi plan reverted'
+                },
+                { 
+                    title: 'WiFi Service', 
+                    month: 6, 
+                    year: 2025, 
+                    cost: 100, 
+                    note: 'WiFi cost stable',
+                    description: 'Monthly WiFi service for St Kilda',
+                    quantity: 1,
+                    category: 'utilities',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'WiFi cost stable'
+                },
                 
                 // Cleaning Service cost history
-                { itemTitle: 'Cleaning Service', month: 3, year: 2025, cost: 120, note: 'Cleaning service started' },
-                { itemTitle: 'Cleaning Service', month: 4, year: 2025, cost: 150, note: 'Cleaning cost increased for deep cleaning' },
-                { itemTitle: 'Cleaning Service', month: 5, year: 2025, cost: 150, note: 'Cleaning cost maintained' },
-                { itemTitle: 'Cleaning Service', month: 6, year: 2025, cost: 150, note: 'Cleaning cost stable' }
+                { 
+                    title: 'Cleaning Service', 
+                    month: 3, 
+                    year: 2025, 
+                    cost: 120, 
+                    note: 'Cleaning service started',
+                    description: 'Monthly cleaning service',
+                    quantity: 1,
+                    category: 'maintenance',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'Cleaning service started'
+                },
+                { 
+                    title: 'Cleaning Service', 
+                    month: 4, 
+                    year: 2025, 
+                    cost: 150, 
+                    note: 'Cleaning cost increased for deep cleaning',
+                    description: 'Monthly cleaning service',
+                    quantity: 1,
+                    category: 'maintenance',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'Deep cleaning added'
+                },
+                { 
+                    title: 'Cleaning Service', 
+                    month: 5, 
+                    year: 2025, 
+                    cost: 150, 
+                    note: 'Cleaning cost maintained',
+                    description: 'Monthly cleaning service',
+                    quantity: 1,
+                    category: 'maintenance',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'Cleaning cost maintained'
+                },
+                { 
+                    title: 'Cleaning Service', 
+                    month: 6, 
+                    year: 2025, 
+                    cost: 150, 
+                    note: 'Cleaning cost stable',
+                    description: 'Monthly cleaning service',
+                    quantity: 1,
+                    category: 'maintenance',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'Cleaning cost stable'
+                }
             ],
             
-            // Item history (when items were added/removed/modified)
+            // Item history (standardized structure)
             itemHistory: [
                 // WiFi Service item history
                 { 
-                    itemTitle: 'WiFi Service', 
+                    title: 'WiFi Service', 
                     month: 2, 
                     year: 2025, 
                     action: 'added', 
@@ -78,10 +186,15 @@ async function testEnhancedTemplateSystem() {
                     newValue: 'WiFi Service', 
                     cost: 100, 
                     quantity: 1,
-                    note: 'WiFi service added to monthly requests' 
+                    note: 'WiFi service added to monthly requests',
+                    description: 'Monthly WiFi service for St Kilda',
+                    category: 'utilities',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'WiFi service added'
                 },
                 { 
-                    itemTitle: 'WiFi Service', 
+                    title: 'WiFi Service', 
                     month: 4, 
                     year: 2025, 
                     action: 'modified', 
@@ -89,10 +202,15 @@ async function testEnhancedTemplateSystem() {
                     newValue: 250, 
                     cost: 250, 
                     quantity: 1,
-                    note: 'WiFi plan upgraded, cost increased' 
+                    note: 'WiFi plan upgraded, cost increased',
+                    description: 'Monthly WiFi service for St Kilda',
+                    category: 'utilities',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'WiFi plan upgraded'
                 },
                 { 
-                    itemTitle: 'WiFi Service', 
+                    title: 'WiFi Service', 
                     month: 5, 
                     year: 2025, 
                     action: 'modified', 
@@ -100,12 +218,17 @@ async function testEnhancedTemplateSystem() {
                     newValue: 100, 
                     cost: 100, 
                     quantity: 1,
-                    note: 'WiFi plan reverted to original, cost decreased' 
+                    note: 'WiFi plan reverted to original, cost decreased',
+                    description: 'Monthly WiFi service for St Kilda',
+                    category: 'utilities',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'WiFi plan reverted'
                 },
                 
                 // Cleaning Service item history
                 { 
-                    itemTitle: 'Cleaning Service', 
+                    title: 'Cleaning Service', 
                     month: 3, 
                     year: 2025, 
                     action: 'added', 
@@ -113,10 +236,15 @@ async function testEnhancedTemplateSystem() {
                     newValue: 'Cleaning Service', 
                     cost: 120, 
                     quantity: 1,
-                    note: 'Cleaning service added to monthly requests' 
+                    note: 'Cleaning service added to monthly requests',
+                    description: 'Monthly cleaning service',
+                    category: 'maintenance',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'Cleaning service added'
                 },
                 { 
-                    itemTitle: 'Cleaning Service', 
+                    title: 'Cleaning Service', 
                     month: 4, 
                     year: 2025, 
                     action: 'modified', 
@@ -124,7 +252,12 @@ async function testEnhancedTemplateSystem() {
                     newValue: 150, 
                     cost: 150, 
                     quantity: 1,
-                    note: 'Cleaning service upgraded to include deep cleaning' 
+                    note: 'Cleaning service upgraded to include deep cleaning',
+                    description: 'Monthly cleaning service',
+                    category: 'maintenance',
+                    priority: 'medium',
+                    isRecurring: true,
+                    notes: 'Deep cleaning added'
                 }
             ]
         };
