@@ -185,6 +185,70 @@ exports.createRequest = async (req, res) => {
                 console.error('Error parsing items:', error);
                 return res.status(400).json({ message: 'Invalid items format' });
             }
+        } else if (!items || !Array.isArray(items)) {
+            // If items is not provided as JSON, build it from FormData fields
+            console.log('Building items from FormData fields...');
+            parsedItems = [];
+            
+            // Find all item fields in the request body
+            const itemFields = Object.keys(req.body).filter(key => key.startsWith('items['));
+            const itemIndices = new Set();
+            
+            // Extract item indices
+            itemFields.forEach(field => {
+                const match = field.match(/items\[(\d+)\]/);
+                if (match) {
+                    itemIndices.add(parseInt(match[1]));
+                }
+            });
+            
+            // Build items array
+            Array.from(itemIndices).sort((a, b) => a - b).forEach(itemIndex => {
+                const item = {
+                    description: req.body[`items[${itemIndex}][description]`] || '',
+                    quantity: parseInt(req.body[`items[${itemIndex}][quantity]`]) || 0,
+                    unitCost: parseFloat(req.body[`items[${itemIndex}][unitCost]`]) || 0,
+                    totalCost: parseFloat(req.body[`items[${itemIndex}][totalCost]`]) || 0,
+                    purpose: req.body[`items[${itemIndex}][purpose]`] || '',
+                    quotations: []
+                };
+                
+                // Find quotation fields for this item
+                const quotationFields = Object.keys(req.body).filter(key => 
+                    key.startsWith(`items[${itemIndex}][quotations][`)
+                );
+                const quotationIndices = new Set();
+                
+                // Extract quotation indices
+                quotationFields.forEach(field => {
+                    const match = field.match(/items\[\d+\]\[quotations\]\[(\d+)\]/);
+                    if (match) {
+                        quotationIndices.add(parseInt(match[1]));
+                    }
+                });
+                
+                // Build quotations array
+                Array.from(quotationIndices).sort((a, b) => a - b).forEach(quotationIndex => {
+                    const quotation = {
+                        provider: req.body[`items[${itemIndex}][quotations][${quotationIndex}][provider]`] || '',
+                        amount: parseFloat(req.body[`items[${itemIndex}][quotations][${quotationIndex}][amount]`]) || 0,
+                        description: req.body[`items[${itemIndex}][quotations][${quotationIndex}][description]`] || '',
+                        quotationDate: req.body[`items[${itemIndex}][quotations][${quotationIndex}][quotationDate]`] || '',
+                        validUntil: req.body[`items[${itemIndex}][quotations][${quotationIndex}][validUntil]`] || '',
+                        notes: req.body[`items[${itemIndex}][quotations][${quotationIndex}][notes]`] || '',
+                        isApproved: req.body[`items[${itemIndex}][quotations][${quotationIndex}][isApproved]`] === 'true',
+                        uploadedBy: req.body[`items[${itemIndex}][quotations][${quotationIndex}][uploadedBy]`] || '',
+                        itemIndex: parseInt(req.body[`items[${itemIndex}][quotations][${quotationIndex}][itemIndex]`]) || itemIndex,
+                        fileName: req.body[`items[${itemIndex}][quotations][${quotationIndex}][fileName]`] || ''
+                    };
+                    
+                    item.quotations.push(quotation);
+                });
+                
+                parsedItems.push(item);
+            });
+            
+            console.log('Items built from FormData fields:', parsedItems.length, 'items');
         } else {
             console.log('Items received as object:', Array.isArray(items) ? items.length : 'not array');
         }
@@ -293,6 +357,9 @@ exports.createRequest = async (req, res) => {
                             console.log(`DEBUG: Looking for file with fieldname: ${exactFieldname}`);
                             console.log(`DEBUG: Available files:`, req.files.map(f => f.fieldname));
                             console.log(`DEBUG: Found file:`, uploadedFile ? uploadedFile.fieldname : 'NOT FOUND');
+                            
+                            // Additional debug for FormData structure
+                            console.log(`DEBUG: Item ${i}, Quotation ${j} - fileName from FormData:`, quotation.fileName);
                         }
                         
                         if (uploadedFile) {
