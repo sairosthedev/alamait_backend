@@ -650,6 +650,7 @@ exports.createMonthlyRequest = async (req, res) => {
                             year: h.year,
                             date: new Date(h.year, h.month - 1, 1),
                             action: h.action, // 'added', 'removed', 'modified'
+                            status: h.action === 'removed' ? 'inactive' : 'active', // Set status based on action
                             oldValue: h.oldValue,
                             newValue: h.newValue,
                             note: h.note || `${h.action} in ${h.month}/${h.year}`,
@@ -883,6 +884,72 @@ exports.updateMonthlyRequest = async (req, res) => {
     }
 };
 
+// Send monthly request to finance (admin only)
+exports.sendToFinance = async (req, res) => {
+    try {
+        const user = req.user;
+        const monthlyRequest = await MonthlyRequest.findById(req.params.id);
+
+        if (!monthlyRequest) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Monthly request not found' 
+            });
+        }
+
+        // Check permissions - only admin can send to finance
+        if (user.role !== 'admin') {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only admins can send requests to finance' 
+            });
+        }
+
+        // Check if request is in draft status
+        if (monthlyRequest.status !== 'draft') {
+            return res.status(400).json({ 
+                success: false,
+                message: `Cannot send request to finance. Current status: ${monthlyRequest.status}. Only draft requests can be sent to finance.` 
+            });
+        }
+
+        // Update status to pending
+        monthlyRequest.status = 'pending';
+        
+        // Add to request history
+        monthlyRequest.requestHistory.push({
+            date: new Date(),
+            action: 'Sent to finance for approval',
+            user: user._id,
+            changes: [{
+                field: 'status',
+                oldValue: 'draft',
+                newValue: 'pending'
+            }]
+        });
+
+        await monthlyRequest.save();
+
+        const updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email');
+
+        res.status(200).json({
+            success: true,
+            message: 'Request sent to finance successfully',
+            monthlyRequest: updatedRequest
+        });
+
+    } catch (error) {
+        console.error('Error sending request to finance:', error);
+        res.status(500).json({ 
+            success: false,
+            message: 'Error sending request to finance',
+            error: error.message 
+        });
+    }
+};
+
 // Submit monthly request for approval
 exports.submitMonthlyRequest = async (req, res) => {
     try {
@@ -972,6 +1039,78 @@ exports.approveMonthlyRequest = async (req, res) => {
     } catch (error) {
         console.error('Error approving monthly request:', error);
         res.status(500).json({ message: error.message });
+    }
+};
+
+// Reject monthly request (finance only)
+exports.rejectMonthlyRequest = async (req, res) => {
+    try {
+        const user = req.user;
+        const { rejectionReason } = req.body;
+        const monthlyRequest = await MonthlyRequest.findById(req.params.id);
+
+        if (!monthlyRequest) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Monthly request not found' 
+            });
+        }
+
+        // Check permissions - only finance users can reject
+        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only finance users can reject monthly requests' 
+            });
+        }
+
+        // Check if request is pending
+        if (monthlyRequest.status !== 'pending') {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Only pending requests can be rejected' 
+            });
+        }
+
+        // Update status to rejected
+        monthlyRequest.status = 'rejected';
+        monthlyRequest.approvedBy = user._id; // Using approvedBy field for consistency
+        monthlyRequest.approvedAt = new Date();
+        monthlyRequest.approvedByEmail = user.email;
+        monthlyRequest.notes = rejectionReason ? `Rejected: ${rejectionReason}` : 'Rejected by finance';
+
+        // Add to request history
+        monthlyRequest.requestHistory.push({
+            date: new Date(),
+            action: 'Monthly request rejected',
+            user: user._id,
+            changes: [{
+                field: 'status',
+                oldValue: 'pending',
+                newValue: 'rejected'
+            }]
+        });
+
+        await monthlyRequest.save();
+
+        const updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('approvedBy', 'firstName lastName email');
+
+        res.status(200).json({
+            success: true,
+            message: 'Monthly request rejected successfully',
+            monthlyRequest: updatedRequest
+        });
+
+    } catch (error) {
+        console.error('Error rejecting monthly request:', error);
+        res.status(500).json({ 
+            success: false,
+            message: 'Error rejecting monthly request',
+            error: error.message 
+        });
     }
 };
 

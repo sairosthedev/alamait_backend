@@ -99,6 +99,7 @@ const monthlyRequestItemSchema = new mongoose.Schema({
         year: { type: Number, required: true, min: 2020 },
         date: { type: Date, required: true },
         action: { type: String, enum: ['added', 'removed', 'modified'], required: true },
+        status: { type: String, enum: ['active', 'inactive'], default: 'active' }, // Status based on action
         oldValue: mongoose.Schema.Types.Mixed,
         newValue: mongoose.Schema.Types.Mixed,
         note: { type: String, trim: true },
