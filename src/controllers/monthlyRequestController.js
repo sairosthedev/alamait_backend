@@ -479,6 +479,7 @@ exports.createMonthlyRequest = async (req, res) => {
         }
 
         // Process items with historical data if provided
+        let processedItems = items;
         if (isTemplate && (historicalData.length > 0 || itemHistory.length > 0)) {
             processedItems = items.map(item => {
                 const processedItem = {

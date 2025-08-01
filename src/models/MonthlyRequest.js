@@ -79,6 +79,53 @@ const monthlyRequestItemSchema = new mongoose.Schema({
         type: String,
         trim: true
     }],
+    // Historical data tracking
+    costHistory: [{
+        month: { type: Number, required: true, min: 1, max: 12 },
+        year: { type: Number, required: true, min: 2020 },
+        cost: { type: Number, required: true, min: 0 },
+        date: { type: Date, required: true },
+        note: { type: String, trim: true },
+        title: { type: String, trim: true },
+        description: { type: String, trim: true },
+        quantity: { type: Number, min: 1 },
+        category: { type: String, enum: ['utilities', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
+        priority: { type: String, enum: ['low', 'medium', 'high'] },
+        isRecurring: { type: Boolean },
+        notes: { type: String, trim: true }
+    }],
+    itemHistory: [{
+        month: { type: Number, required: true, min: 1, max: 12 },
+        year: { type: Number, required: true, min: 2020 },
+        date: { type: Date, required: true },
+        action: { type: String, enum: ['added', 'removed', 'modified'], required: true },
+        oldValue: mongoose.Schema.Types.Mixed,
+        newValue: mongoose.Schema.Types.Mixed,
+        note: { type: String, trim: true },
+        cost: { type: Number, min: 0 },
+        quantity: { type: Number, min: 1 },
+        title: { type: String, trim: true },
+        description: { type: String, trim: true },
+        category: { type: String, enum: ['utilities', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
+        priority: { type: String, enum: ['low', 'medium', 'high'] },
+        isRecurring: { type: Boolean },
+        notes: { type: String, trim: true }
+    }],
+    costVariations: [{
+        from: { type: String, required: true },
+        to: { type: String, required: true },
+        oldCost: { type: Number, required: true },
+        newCost: { type: Number, required: true },
+        change: { type: Number, required: true },
+        changePercent: { type: String, required: true }
+    }],
+    costSummary: {
+        mostRecentCost: { type: Number },
+        mostRecentMonth: { type: String },
+        uniqueCosts: [{ type: Number }],
+        totalVariations: { type: Number },
+        averageCost: { type: String }
+    },
     // Template change tracking
     changeHistory: [{
         date: { type: Date, default: Date.now },
@@ -196,6 +243,10 @@ const monthlyRequestSchema = new mongoose.Schema({
     effectiveFrom: {
         type: Date,
         default: Date.now
+    },
+    templateMetadata: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
     },
     templateChanges: [{
         date: { type: Date, default: Date.now },
