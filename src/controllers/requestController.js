@@ -146,6 +146,11 @@ exports.getRequestById = async (req, res) => {
 // Create new request
 exports.createRequest = async (req, res) => {
     try {
+        console.log('=== CREATE REQUEST DEBUG ===');
+        console.log('Request headers:', req.headers);
+        console.log('Request body keys:', Object.keys(req.body));
+        console.log('Files received:', req.files ? req.files.map(f => ({ fieldname: f.fieldname, originalname: f.originalname, filename: f.filename, size: f.size })) : 'No files');
+        console.log('Content-Type:', req.headers['content-type']);
         const { 
             title, 
             description, 
@@ -241,10 +246,29 @@ exports.createRequest = async (req, res) => {
                         const quotation = item.quotations[j];
                         
                         // Find uploaded file for this quotation
-                        const uploadedFile = req.files ? req.files.find(file => 
-                            file.fieldname === `items[${i}].quotations[${j}].file` ||
-                            file.fieldname === `quotation_${i}_${j}`
-                        ) : null;
+                        console.log(`Looking for file for item ${i}, quotation ${j}`);
+                        console.log('Available files:', req.files ? req.files.map(f => f.fieldname) : 'No files');
+                        
+                        // Find any file for this quotation by checking all files
+                        console.log('All available files:', req.files ? req.files.map(f => f.fieldname) : 'No files');
+                        
+                        let uploadedFile = null;
+                        
+                        // Look for any file that contains the item and quotation indices
+                        if (req.files) {
+                            uploadedFile = req.files.find(file => 
+                                file.fieldname.includes(`items[${i}]`) && 
+                                file.fieldname.includes(`quotations[${j}]`)
+                            );
+                        }
+                        
+                        if (uploadedFile) {
+                            console.log(`Found file with fieldname: ${uploadedFile.fieldname}`);
+                        } else {
+                            console.log(`No file found for item ${i}, quotation ${j}`);
+                        }
+                        
+                        console.log(`File found for item ${i}, quotation ${j}:`, uploadedFile ? uploadedFile.fieldname : 'No file found');
                         
                         // If quotation has a file, upload it to S3
                         if (uploadedFile) {
@@ -282,7 +306,7 @@ exports.createRequest = async (req, res) => {
                         quotation.amount = parseFloat(quotation.amount) || 0;
                         quotation.isApproved = quotation.isApproved === "true" || quotation.isApproved === true;
                         quotation.itemIndex = parseInt(quotation.itemIndex) || 0;
-                        
+
                         // Auto-create vendor if provider name is provided and no vendorId exists
                         if (quotation.provider && !quotation.vendorId) {
                             try {
