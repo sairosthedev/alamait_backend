@@ -924,11 +924,7 @@ exports.sendToFinance = async (req, res) => {
             date: new Date(),
             action: 'Sent to finance for approval',
             user: user._id,
-            changes: [{
-                field: 'status',
-                oldValue: 'draft',
-                newValue: 'pending'
-            }]
+            changes: ['Status changed from draft to pending']
         });
 
         await monthlyRequest.save();
