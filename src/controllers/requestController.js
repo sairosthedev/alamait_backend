@@ -907,6 +907,25 @@ exports.financeApproval = async (req, res) => {
         });
         
         await request.save();
+
+        // Create double-entry transaction and itemized expense if approved
+        let financialResult = null;
+        if (approved) {
+            try {
+                const FinancialService = require('../services/financialService');
+                financialResult = await FinancialService.createApprovalTransaction(request, user);
+                
+                // Update request with expense reference
+                request.convertedToExpense = true;
+                request.expenseId = financialResult.expense._id;
+                await request.save();
+                
+                console.log('✅ Double-entry transaction created for request approval');
+            } catch (financialError) {
+                console.error('❌ Error creating financial transaction:', financialError);
+                // Don't fail the approval if financial transaction fails
+            }
+        }
         
         const updatedRequest = await Request.findById(request._id)
             .populate('submittedBy', 'firstName lastName email role')
@@ -917,7 +936,17 @@ exports.financeApproval = async (req, res) => {
             .populate('items.quotations.approvedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email');
         
-        res.status(200).json(updatedRequest);
+        const response = {
+            ...updatedRequest.toObject(),
+            financial: financialResult ? {
+                transactionId: financialResult.transaction.transactionId,
+                expenseId: financialResult.expense.expenseId,
+                entriesCount: financialResult.entries.length,
+                totalAmount: financialResult.transaction.amount
+            } : null
+        };
+        
+        res.status(200).json(response);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -2560,6 +2589,72 @@ exports.overrideQuotationSelection = async (req, res) => {
 
     } catch (error) {
         console.error('Error overriding quotation selection:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Mark expense as paid with double-entry bookkeeping
+exports.markExpenseAsPaid = async (req, res) => {
+    try {
+        const { expenseId } = req.params;
+        const { paymentMethod } = req.body;
+        const user = req.user;
+
+        // Validate user role (finance only)
+        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ message: 'Only finance users can mark expenses as paid' });
+        }
+
+        // Find the expense
+        const expense = await Expense.findById(expenseId)
+            .populate('residence', 'name')
+            .populate('items.selectedQuotation.vendorId');
+
+        if (!expense) {
+            return res.status(404).json({ message: 'Expense not found' });
+        }
+
+        // Check if expense is already paid
+        if (expense.paymentStatus === 'Paid') {
+            return res.status(400).json({ message: 'Expense is already marked as paid' });
+        }
+
+        // Mark expense as paid with double-entry bookkeeping
+        const FinancialService = require('../services/financialService');
+        const paymentResult = await FinancialService.markExpenseAsPaid(expense, user, paymentMethod);
+
+        // Update request status if linked
+        if (expense.requestId) {
+            await Request.findByIdAndUpdate(expense.requestId, {
+                $set: { 
+                    status: 'completed',
+                    'approval.finance.paymentStatus': 'Paid',
+                    'approval.finance.paidAt': new Date(),
+                    'approval.finance.paidBy': user._id
+                }
+            });
+        }
+
+        console.log('✅ Expense marked as paid with double-entry bookkeeping');
+
+        res.status(200).json({
+            message: 'Expense marked as paid successfully',
+            expense: {
+                expenseId: expense.expenseId,
+                paymentStatus: expense.paymentStatus,
+                paidBy: user.email,
+                paidAt: expense.paidDate,
+                paymentMethod: expense.paymentMethod
+            },
+            financial: {
+                paymentTransactionId: paymentResult.paymentTransaction.transactionId,
+                paymentEntriesCount: paymentResult.paymentEntries.length,
+                totalPaid: expense.amount
+            }
+        });
+
+    } catch (error) {
+        console.error('Error marking expense as paid:', error);
         res.status(500).json({ message: error.message });
     }
 };

@@ -195,4 +195,10 @@ router.post('/:requestId/items/:itemIndex/quotations/:quotationIndex/override',
     requestController.overrideQuotationSelection
 );
 
+// Mark expense as paid
+router.post('/expenses/:expenseId/mark-paid', 
+    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    requestController.markExpenseAsPaid
+);
+
 module.exports = router;
