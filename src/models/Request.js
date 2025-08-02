@@ -224,7 +224,7 @@ const requestItemSchema = new mongoose.Schema({
 const requestSchema = new mongoose.Schema({
     title: {
         type: String,
-        required: true,
+        required: function() { return this.type !== 'maintenance'; },
         trim: true
     },
     description: {
@@ -240,7 +240,7 @@ const requestSchema = new mongoose.Schema({
     submittedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: function() { return this.type !== 'maintenance'; }
     },
     residence: {
         type: mongoose.Schema.Types.ObjectId,
@@ -249,6 +249,16 @@ const requestSchema = new mongoose.Schema({
     },
     
     // Student-specific fields (for maintenance requests)
+    student: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: function() { return this.type === 'maintenance'; }
+    },
+    issue: {
+        type: String,
+        required: function() { return this.type === 'maintenance'; },
+        trim: true
+    },
     room: {
         type: String,
         trim: true
