@@ -634,7 +634,15 @@ exports.updateRequest = async (req, res) => {
                             role: assignedUser.role
                         };
                         
-                        if (JSON.stringify(request.assignedTo) !== JSON.stringify(assignedToData)) {
+                        // Check if the assignment is actually different
+                        const currentAssignedTo = request.assignedTo;
+                        const isDifferent = !currentAssignedTo || 
+                                          !currentAssignedTo._id || 
+                                          currentAssignedTo._id.toString() !== assignedUser._id.toString() ||
+                                          currentAssignedTo.name !== assignedUser.firstName ||
+                                          currentAssignedTo.surname !== assignedUser.lastName;
+                        
+                        if (isDifferent) {
                             updates[key] = assignedToData;
                             changes.push(`assignedTo updated to: ${assignedUser.firstName} ${assignedUser.lastName}`);
                         }
@@ -696,6 +704,7 @@ exports.updateRequest = async (req, res) => {
 
         // Update the request
         if (Object.keys(updates).length > 0) {
+            console.log('🔧 Applying updates:', updates);
             Object.assign(request, updates);
         }
 
@@ -709,7 +718,9 @@ exports.updateRequest = async (req, res) => {
             });
         }
 
+        console.log('💾 Saving request with assignedTo:', request.assignedTo);
         await request.save();
+        console.log('✅ Request saved successfully');
 
         // Populate and return updated request
         const updatedRequest = await Request.findById(id)
