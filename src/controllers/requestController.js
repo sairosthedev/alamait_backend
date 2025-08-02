@@ -1176,7 +1176,7 @@ exports.uploadQuotation = async (req, res) => {
             return res.status(400).json({ message: 'Maximum of 3 quotations allowed' });
         }
         
-        // Auto-create vendor if provider name is provided and no vendorId exists
+        // Find or create vendor if provider name is provided and no vendorId exists
         let vendor = null;
         if (provider && !req.body.vendorId) {
             try {
@@ -1199,11 +1199,11 @@ exports.uploadQuotation = async (req, res) => {
                     }
                 }
 
-                // Auto-create vendor
+                // Find existing vendor or auto-create new one
                 vendor = await autoCreateVendor(provider, user, vendorCategory);
-                console.log(`Auto-created vendor for quotation: ${provider} (${vendor._id})`);
+                console.log(`Found/created vendor for quotation: ${provider} (${vendor._id})`);
             } catch (vendorError) {
-                console.error('Error auto-creating vendor:', vendorError);
+                console.error('Error finding/creating vendor:', vendorError);
                 // Continue without vendor creation - don't fail the quotation upload
             }
         }
@@ -2065,6 +2065,7 @@ async function autoCreateVendor(providerName, user, category = 'other') {
         });
         
         if (existingVendor) {
+            console.log(`Found existing vendor: ${existingVendor.businessName} (${existingVendor._id})`);
             return existingVendor;
         }
 
@@ -2182,3 +2183,39 @@ async function ensureChartOfAccountsEntries(vendorCode, vendor) {
         // Don't throw error as this is not critical for vendor creation
     }
 }
+
+// Download quotation file
+exports.downloadQuotationFile = async (req, res) => {
+    try {
+        const { id, itemIndex, quotationIndex } = req.params;
+        const user = req.user;
+
+        const request = await Request.findById(id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        // Validate indices
+        if (!request.items || itemIndex < 0 || itemIndex >= request.items.length) {
+            return res.status(400).json({ message: 'Invalid item index' });
+        }
+
+        const item = request.items[itemIndex];
+        if (!item.quotations || quotationIndex < 0 || quotationIndex >= item.quotations.length) {
+            return res.status(400).json({ message: 'Invalid quotation index' });
+        }
+
+        const quotation = item.quotations[quotationIndex];
+        
+        if (!quotation.fileUrl) {
+            return res.status(404).json({ message: 'No file attached to this quotation' });
+        }
+
+        // Redirect to S3 URL for download
+        res.redirect(quotation.fileUrl);
+
+    } catch (error) {
+        console.error('Error downloading quotation file:', error);
+        res.status(500).json({ message: error.message });
+    }
+};

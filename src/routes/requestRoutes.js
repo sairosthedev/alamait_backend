@@ -173,4 +173,10 @@ router.put('/:id/items/:itemIndex/quotations/:quotationIndex',
 // Delete request (only by submitter or admin)
 router.delete('/:id', requestController.deleteRequest);
 
+// Download quotation file
+router.get('/:id/items/:itemIndex/quotations/:quotationIndex/download', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
+    requestController.downloadQuotationFile
+);
+
 module.exports = router;
