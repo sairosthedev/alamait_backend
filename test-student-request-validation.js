@@ -25,6 +25,7 @@ async function testStudentRequestValidation() {
             ceoStatus: 'pending'
         });
         
+        await studentRequest.validate();
         console.log('✅ Student request validation passed - no admin fields required');
         
         // Test 2: Create an admin request (should require admin fields)
@@ -42,6 +43,7 @@ async function testStudentRequestValidation() {
             financeStatus: 'pending'
         });
         
+        await adminRequest.validate();
         console.log('✅ Admin request validation passed - admin fields required');
         
         // Test 3: Try to create an admin request without required fields (should fail)

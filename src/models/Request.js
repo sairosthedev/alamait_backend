@@ -224,7 +224,7 @@ const requestItemSchema = new mongoose.Schema({
 const requestSchema = new mongoose.Schema({
     title: {
         type: String,
-        required: function() { return !this.student; }, // Required for non-student requests
+        required: false, // Will be validated in custom validation
         trim: true
     },
     description: {
@@ -235,12 +235,12 @@ const requestSchema = new mongoose.Schema({
     type: {
         type: String,
         enum: ['maintenance', 'financial', 'operational'],
-        required: function() { return !this.student; } // Required for non-student requests
+        required: false // Will be validated in custom validation
     },
     submittedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: function() { return !this.student; } // Required for non-student requests
+        required: false // Will be validated in custom validation
     },
     residence: {
         type: mongoose.Schema.Types.ObjectId,
@@ -252,11 +252,11 @@ const requestSchema = new mongoose.Schema({
     student: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: function() { return !this.type; } // Required if no type (student requests)
+        required: false // Will be validated in custom validation
     },
     issue: {
         type: String,
-        required: function() { return !!this.student; }, // Required for student requests
+        required: false, // Will be validated in custom validation
         trim: true
     },
     room: {
@@ -266,19 +266,19 @@ const requestSchema = new mongoose.Schema({
     category: {
         type: String,
         enum: ['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other'],
-        required: function() { return !!this.student; } // Required for student requests
+        required: false // Will be validated in custom validation
     },
     
     // Non-student specific fields
     department: {
         type: String,
         trim: true,
-        required: function() { return !this.student; } // Required for non-student requests
+        required: false // Will be validated in custom validation
     },
     requestedBy: {
         type: String,
         trim: true,
-        required: function() { return !this.student; } // Required for non-student requests
+        required: false // Will be validated in custom validation
     },
     items: [requestItemSchema], // Multiple items/services
     totalEstimatedCost: {
@@ -293,7 +293,7 @@ const requestSchema = new mongoose.Schema({
     deliveryLocation: {
         type: String,
         trim: true,
-        required: function() { return !this.student; } // Required for non-student requests
+        required: false // Will be validated in custom validation
     },
     
     // Common fields
@@ -493,6 +493,83 @@ requestSchema.index({
     partialFilterExpression: { 
         status: { $in: ['pending', 'assigned', 'in-progress'] } 
     }
+});
+
+// Custom validation for conditional field requirements
+requestSchema.pre('validate', function(next) {
+    const errors = [];
+    
+    // Determine if this is a student request or admin request
+    const isStudentRequest = !!this.student;
+    const isAdminRequest = !!this.type;
+    
+    if (isStudentRequest) {
+        // Student request validation
+        if (!this.issue) {
+            errors.push('issue: Issue is required for student requests');
+        }
+        if (!this.category) {
+            errors.push('category: Category is required for student requests');
+        }
+        if (this.title) {
+            errors.push('title: Title should not be provided for student requests');
+        }
+        if (this.type) {
+            errors.push('type: Type should not be provided for student requests');
+        }
+        if (this.submittedBy) {
+            errors.push('submittedBy: SubmittedBy should not be provided for student requests');
+        }
+        if (this.department) {
+            errors.push('department: Department should not be provided for student requests');
+        }
+        if (this.requestedBy) {
+            errors.push('requestedBy: RequestedBy should not be provided for student requests');
+        }
+        if (this.deliveryLocation) {
+            errors.push('deliveryLocation: DeliveryLocation should not be provided for student requests');
+        }
+    } else if (isAdminRequest) {
+        // Admin request validation
+        if (!this.title) {
+            errors.push('title: Title is required for admin requests');
+        }
+        if (!this.type) {
+            errors.push('type: Type is required for admin requests');
+        }
+        if (!this.submittedBy) {
+            errors.push('submittedBy: SubmittedBy is required for admin requests');
+        }
+        if (!this.department) {
+            errors.push('department: Department is required for admin requests');
+        }
+        if (!this.requestedBy) {
+            errors.push('requestedBy: RequestedBy is required for admin requests');
+        }
+        if (!this.deliveryLocation) {
+            errors.push('deliveryLocation: DeliveryLocation is required for admin requests');
+        }
+        if (this.student) {
+            errors.push('student: Student should not be provided for admin requests');
+        }
+        if (this.issue) {
+            errors.push('issue: Issue should not be provided for admin requests');
+        }
+        if (this.category) {
+            errors.push('category: Category should not be provided for admin requests');
+        }
+    } else {
+        // Neither student nor admin request - invalid
+        errors.push('Request must be either a student request (with student field) or admin request (with type field)');
+    }
+    
+    if (errors.length > 0) {
+        const error = new Error('Request validation failed: ' + errors.join(', '));
+        error.name = 'ValidationError';
+        return next(error);
+    }
+    
+    next();
 });
 
 // Pre-save middleware to update request history and calculate total cost
