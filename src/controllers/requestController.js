@@ -8,6 +8,62 @@ const { uploadToS3 } = require('../utils/fileStorage');
 const { s3, s3Configs } = require('../config/s3');
 const { findSimilarRequests, generateSimilarityQuery } = require('../utils/requestSimilarity');
 
+// Helper function to map status for students
+function mapStatusForStudent(originalStatus) {
+    switch (originalStatus) {
+        case 'pending':
+        case 'pending_finance_approval':
+        case 'pending_ceo_approval':
+        case 'pending_admin_approval':
+        case 'pending-finance-approval':
+        case 'pending-ceo-approval':
+        case 'pending-admin-approval':
+            return 'pending';
+        case 'in-progress':
+        case 'assigned':
+            return 'in-progress';
+        case 'completed':
+            return 'completed';
+        case 'rejected':
+            return 'rejected';
+        case 'waitlisted':
+            return 'waitlisted';
+        default:
+            return originalStatus;
+    }
+}
+
+// Helper function to map request data for students
+function mapRequestForStudent(request) {
+    const mappedRequest = request.toObject ? request.toObject() : { ...request };
+    
+    // Map status for students
+    mappedRequest.status = mapStatusForStudent(mappedRequest.status);
+    
+    // Add student-friendly status description
+    switch (mappedRequest.status) {
+        case 'pending':
+            mappedRequest.statusDescription = 'Your request is being reviewed';
+            break;
+        case 'in-progress':
+            mappedRequest.statusDescription = 'Work is in progress';
+            break;
+        case 'completed':
+            mappedRequest.statusDescription = 'Request completed';
+            break;
+        case 'rejected':
+            mappedRequest.statusDescription = 'Request was rejected';
+            break;
+        case 'waitlisted':
+            mappedRequest.statusDescription = 'Request is on waitlist';
+            break;
+        default:
+            mappedRequest.statusDescription = 'Status unknown';
+    }
+    
+    return mappedRequest;
+}
+
 // Get all requests (filtered by user role)
 exports.getAllRequests = async (req, res) => {
     try {
@@ -76,12 +132,17 @@ exports.getAllRequests = async (req, res) => {
         
         const requests = await Request.find(query)
             .populate('submittedBy', 'firstName lastName email role')
+            .populate('student', 'firstName lastName email role')
             .populate('assignedTo._id', 'firstName lastName email role')
             .populate('residence', 'name')
             .populate('quotations.uploadedBy', 'firstName lastName email')
             .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('quotations.selectedBy', 'firstName lastName email')
+            .populate('quotations.deselectedBy', 'firstName lastName email')
             .populate('items.quotations.uploadedBy', 'firstName lastName email')
             .populate('items.quotations.approvedBy', 'firstName lastName email')
+            .populate('items.quotations.selectedBy', 'firstName lastName email')
+            .populate('items.quotations.deselectedBy', 'firstName lastName email')
             .populate('approval.admin.approvedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email')
             .populate('approval.ceo.approvedBy', 'firstName lastName email')
@@ -91,8 +152,14 @@ exports.getAllRequests = async (req, res) => {
         
         const total = await Request.countDocuments(query);
         
+        // Map statuses for students
+        let mappedRequests = requests;
+        if (user.role === 'student') {
+            mappedRequests = requests.map(request => mapRequestForStudent(request));
+        }
+        
         res.status(200).json({
-            requests,
+            requests: mappedRequests,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(total / limit),
@@ -113,12 +180,17 @@ exports.getRequestById = async (req, res) => {
 
         const request = await Request.findById(id)
             .populate('submittedBy', 'firstName lastName email role')
+            .populate('student', 'firstName lastName email role')
             .populate('assignedTo._id', 'firstName lastName email role')
             .populate('residence', 'name')
             .populate('quotations.uploadedBy', 'firstName lastName email')
             .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('quotations.selectedBy', 'firstName lastName email')
+            .populate('quotations.deselectedBy', 'firstName lastName email')
             .populate('items.quotations.uploadedBy', 'firstName lastName email')
             .populate('items.quotations.approvedBy', 'firstName lastName email')
+            .populate('items.quotations.selectedBy', 'firstName lastName email')
+            .populate('items.quotations.deselectedBy', 'firstName lastName email')
             .populate('approval.admin.approvedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email')
             .populate('approval.ceo.approvedBy', 'firstName lastName email');
@@ -132,7 +204,13 @@ exports.getRequestById = async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
 
-        res.status(200).json({ request });
+        // Map status for students
+        let mappedRequest = request;
+        if (user.role === 'student') {
+            mappedRequest = mapRequestForStudent(request);
+        }
+
+        res.status(200).json({ request: mappedRequest });
     } catch (error) {
         console.error('Error getting request by ID:', error);
         res.status(500).json({ message: error.message });

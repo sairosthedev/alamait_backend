@@ -3,6 +3,49 @@ const { validationResult } = require('express-validator');
 const User = require('../../models/User');
 const Residence = require('../../models/Residence');
 
+// Helper function to map status for students
+function mapStatusForStudent(originalStatus) {
+    switch (originalStatus) {
+        case 'pending':
+        case 'pending_finance_approval':
+        case 'pending_ceo_approval':
+        case 'pending_admin_approval':
+        case 'pending-finance-approval':
+        case 'pending-ceo-approval':
+        case 'pending-admin-approval':
+            return 'pending';
+        case 'in-progress':
+        case 'assigned':
+            return 'in-progress';
+        case 'completed':
+            return 'completed';
+        case 'rejected':
+            return 'rejected';
+        case 'waitlisted':
+            return 'waitlisted';
+        default:
+            return originalStatus;
+    }
+}
+
+// Helper function to get status description
+function getStatusDescription(status) {
+    switch (status) {
+        case 'pending':
+            return 'Pending';
+        case 'in-progress':
+            return 'In Progress';
+        case 'completed':
+            return 'Completed';
+        case 'rejected':
+            return 'Rejected';
+        case 'waitlisted':
+            return 'Waitlisted';
+        default:
+            return status;
+    }
+}
+
 // Get all maintenance requests for a student
 exports.getMaintenanceRequests = async (req, res) => {
     try {
@@ -35,7 +78,8 @@ exports.getMaintenanceRequests = async (req, res) => {
             location: request.location,
             category: request.category,
             priority: request.priority,
-            status: request.status,
+            status: mapStatusForStudent(request.status), // Map status for students
+            statusDescription: getStatusDescription(mapStatusForStudent(request.status)), // Add status description
             requestDate: request.requestDate || request.createdAt,
             expectedCompletion: request.estimatedCompletion,
             residence: request.residence ? request.residence.name : 'Unknown', // Include residence name

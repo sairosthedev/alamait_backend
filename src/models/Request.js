@@ -224,7 +224,7 @@ const requestItemSchema = new mongoose.Schema({
 const requestSchema = new mongoose.Schema({
     title: {
         type: String,
-        required: function() { return this.type !== 'maintenance'; },
+        required: function() { return !this.student; }, // Required for non-student requests
         trim: true
     },
     description: {
@@ -235,12 +235,12 @@ const requestSchema = new mongoose.Schema({
     type: {
         type: String,
         enum: ['maintenance', 'financial', 'operational'],
-        required: true
+        required: function() { return !this.student; } // Required for non-student requests
     },
     submittedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: function() { return this.type !== 'maintenance'; }
+        required: function() { return !this.student; } // Required for non-student requests
     },
     residence: {
         type: mongoose.Schema.Types.ObjectId,
@@ -252,11 +252,11 @@ const requestSchema = new mongoose.Schema({
     student: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: function() { return this.type === 'maintenance'; }
+        required: function() { return !this.type; } // Required if no type (student requests)
     },
     issue: {
         type: String,
-        required: function() { return this.type === 'maintenance'; },
+        required: function() { return !!this.student; }, // Required for student requests
         trim: true
     },
     room: {
@@ -266,19 +266,19 @@ const requestSchema = new mongoose.Schema({
     category: {
         type: String,
         enum: ['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other'],
-        required: function() { return this.type === 'maintenance'; }
+        required: function() { return !!this.student; } // Required for student requests
     },
     
     // Non-student specific fields
     department: {
         type: String,
         trim: true,
-        required: function() { return this.type !== 'maintenance'; }
+        required: function() { return !this.student; } // Required for non-student requests
     },
     requestedBy: {
         type: String,
         trim: true,
-        required: function() { return this.type !== 'maintenance'; }
+        required: function() { return !this.student; } // Required for non-student requests
     },
     items: [requestItemSchema], // Multiple items/services
     totalEstimatedCost: {
@@ -293,7 +293,7 @@ const requestSchema = new mongoose.Schema({
     deliveryLocation: {
         type: String,
         trim: true,
-        required: function() { return this.type !== 'maintenance'; }
+        required: function() { return !this.student; } // Required for non-student requests
     },
     
     // Common fields
