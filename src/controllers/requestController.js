@@ -108,7 +108,10 @@ exports.getAllRequests = async (req, res) => {
 // Get request by ID
 exports.getRequestById = async (req, res) => {
     try {
-        const request = await Request.findById(req.params.id)
+        const { id } = req.params;
+        const user = req.user;
+
+        const request = await Request.findById(id)
             .populate('submittedBy', 'firstName lastName email role')
             .populate('assignedTo._id', 'firstName lastName email role')
             .populate('residence', 'name')
@@ -118,27 +121,20 @@ exports.getRequestById = async (req, res) => {
             .populate('items.quotations.approvedBy', 'firstName lastName email')
             .populate('approval.admin.approvedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email')
-            .populate('approval.ceo.approvedBy', 'firstName lastName email')
-            .populate('updates.author', 'firstName lastName email');
-        
+            .populate('approval.ceo.approvedBy', 'firstName lastName email');
+
         if (!request) {
             return res.status(404).json({ message: 'Request not found' });
         }
-        
-        // Check if user has permission to view this request
-        const user = req.user;
-        if (user.role === 'student') {
-            // Students can view their own requests or requests from their residence
-            if (request.submittedBy.toString() !== user._id.toString()) {
-                // Not their own request, check if it's from their residence
-                if (!user.residence || request.residence.toString() !== user.residence.toString()) {
-                    return res.status(403).json({ message: 'Access denied' });
-                }
-            }
+
+        // Check permissions
+        if (user.role === 'student' && request.submittedBy._id.toString() !== user._id.toString()) {
+            return res.status(403).json({ message: 'Access denied' });
         }
-        
-        res.status(200).json(request);
+
+        res.status(200).json({ request });
     } catch (error) {
+        console.error('Error getting request by ID:', error);
         res.status(500).json({ message: error.message });
     }
 };
@@ -600,50 +596,118 @@ exports.createRequest = async (req, res) => {
 // Update request (only if pending)
 exports.updateRequest = async (req, res) => {
     try {
-        const { title, description, room, category, priority, amount, dueDate, tags } = req.body;
+        const { id } = req.params;
         const user = req.user;
-        
-        const request = await Request.findById(req.params.id);
+        const updateData = req.body;
+
+        // Check if request exists
+        const request = await Request.findById(id);
         if (!request) {
             return res.status(404).json({ message: 'Request not found' });
         }
-        
-        // Check permissions
-        if (user.role === 'student' && request.submittedBy.toString() !== user._id.toString()) {
-            return res.status(403).json({ message: 'Access denied' });
+
+        // Validate allowed fields for update
+        const allowedFields = [
+            'status', 'assignedTo', 'adminResponse', 'priority', 
+            'category', 'description', 'title', 'selectedQuotation',
+            'estimatedCompletion', 'amount', 'financeStatus'
+        ];
+
+        const updates = {};
+        const changes = [];
+
+        // Process each field
+        for (const [key, value] of Object.entries(updateData)) {
+            if (allowedFields.includes(key)) {
+                if (request[key] !== value) {
+                    updates[key] = value;
+                    changes.push(`${key} updated to: ${value}`);
+                }
+            }
         }
-        
-        // Only allow updates if request is still pending
-        if (request.status !== 'pending') {
-            return res.status(400).json({ message: 'Cannot update request that is not pending' });
+
+        // Handle selectedQuotation specially
+        if (updateData.selectedQuotation) {
+            // Find the quotation and mark it as selected
+            let quotationFound = false;
+            
+            // Check request-level quotations
+            if (request.quotations && request.quotations.length > 0) {
+                for (const quotation of request.quotations) {
+                    if (quotation._id.toString() === updateData.selectedQuotation) {
+                        quotation.isSelected = true;
+                        quotation.selectedBy = user._id;
+                        quotation.selectedAt = new Date();
+                        quotation.selectedByEmail = user.email;
+                        quotationFound = true;
+                        changes.push(`Selected quotation: ${quotation.provider}`);
+                        break;
+                    }
+                }
+            }
+
+            // Check item-level quotations
+            if (!quotationFound && request.items && request.items.length > 0) {
+                for (const item of request.items) {
+                    if (item.quotations && item.quotations.length > 0) {
+                        for (const quotation of item.quotations) {
+                            if (quotation._id.toString() === updateData.selectedQuotation) {
+                                quotation.isSelected = true;
+                                quotation.selectedBy = user._id;
+                                quotation.selectedAt = new Date();
+                                quotation.selectedByEmail = user.email;
+                                quotationFound = true;
+                                changes.push(`Selected quotation: ${quotation.provider}`);
+                                break;
+                            }
+                        }
+                        if (quotationFound) break;
+                    }
+                }
+            }
+
+            if (!quotationFound) {
+                return res.status(400).json({ message: 'Selected quotation not found' });
+            }
         }
-        
-        // Update fields
-        if (title) request.title = title;
-        if (description) request.description = description;
-        if (room) request.room = room;
-        if (category) request.category = category;
-        if (priority) request.priority = priority;
-        if (amount !== undefined) request.amount = amount;
-        if (dueDate) request.dueDate = new Date(dueDate);
-        if (tags) request.tags = tags;
-        
+
+        // Update the request
+        if (Object.keys(updates).length > 0) {
+            Object.assign(request, updates);
+        }
+
         // Add to request history
-        request.requestHistory.push({
-            date: new Date(),
-            action: 'Request updated',
-            user: user._id,
-            changes: ['Request details modified']
-        });
-        
+        if (changes.length > 0) {
+            request.requestHistory.push({
+                date: new Date(),
+                action: 'Request Updated',
+                user: user._id,
+                changes: changes
+            });
+        }
+
         await request.save();
-        
-        const updatedRequest = await Request.findById(request._id)
+
+        // Populate and return updated request
+        const updatedRequest = await Request.findById(id)
             .populate('submittedBy', 'firstName lastName email role')
-            .populate('residence', 'name');
-        
-        res.status(200).json(updatedRequest);
+            .populate('assignedTo._id', 'firstName lastName email role')
+            .populate('residence', 'name')
+            .populate('quotations.uploadedBy', 'firstName lastName email')
+            .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.approvedBy', 'firstName lastName email')
+            .populate('approval.admin.approvedBy', 'firstName lastName email')
+            .populate('approval.finance.approvedBy', 'firstName lastName email')
+            .populate('approval.ceo.approvedBy', 'firstName lastName email');
+
+        res.status(200).json({
+            message: 'Request updated successfully',
+            request: updatedRequest,
+            changes: changes
+        });
     } catch (error) {
+        console.error('Error updating request:', error);
         res.status(500).json({ message: error.message });
     }
 };

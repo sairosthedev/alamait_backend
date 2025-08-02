@@ -64,6 +64,9 @@ router.get('/:id', requestController.getRequestById);
 // Get quotations for a request (CEO and Finance can view)
 router.get('/:id/quotations', requestController.getRequestQuotations);
 
+// Update entire request (admin only)
+router.put('/:id', checkRole(['admin']), requestController.updateRequest);
+
 // Create new request
 router.post('/', 
     (req, res, next) => {
