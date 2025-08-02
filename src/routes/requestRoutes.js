@@ -179,4 +179,20 @@ router.get('/:id/items/:itemIndex/quotations/:quotationIndex/download',
     requestController.downloadQuotationFile
 );
 
+// Quotation selection routes
+router.post('/:requestId/items/:itemIndex/quotations/:quotationIndex/select', 
+    checkRole(['admin']), 
+    requestController.selectItemQuotation
+);
+
+router.post('/:requestId/quotations/:quotationIndex/select', 
+    checkRole(['admin']), 
+    requestController.selectRequestQuotation
+);
+
+router.post('/:requestId/items/:itemIndex/quotations/:quotationIndex/override', 
+    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    requestController.overrideQuotationSelection
+);
+
 module.exports = router;

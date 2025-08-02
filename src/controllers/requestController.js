@@ -2219,3 +2219,347 @@ exports.downloadQuotationFile = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// Select quotation for an item (Admin only)
+exports.selectItemQuotation = async (req, res) => {
+    try {
+        const { requestId, itemIndex, quotationIndex } = req.params;
+        const { reason } = req.body;
+        const user = req.user;
+
+        // Validate user role (admin only)
+        if (user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can select quotations' });
+        }
+
+        const request = await Request.findById(requestId);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        // Validate item index
+        if (!request.items || itemIndex < 0 || itemIndex >= request.items.length) {
+            return res.status(400).json({ message: 'Invalid item index' });
+        }
+
+        const item = request.items[itemIndex];
+        
+        // Validate quotation index
+        if (!item.quotations || quotationIndex < 0 || quotationIndex >= item.quotations.length) {
+            return res.status(400).json({ message: 'Invalid quotation index' });
+        }
+
+        // Deselect all other quotations for this item
+        item.quotations.forEach((quotation, index) => {
+            if (index !== parseInt(quotationIndex)) {
+                quotation.isSelected = false;
+                quotation.deselectedBy = user._id;
+                quotation.deselectedAt = new Date();
+                quotation.deselectedByEmail = user.email;
+                
+                quotation.selectionHistory.push({
+                    action: 'deselected',
+                    user: user._id,
+                    userEmail: user.email,
+                    timestamp: new Date(),
+                    reason: `Deselected by admin when selecting quotation ${parseInt(quotationIndex) + 1}`
+                });
+            }
+        });
+
+        // Select the specified quotation
+        const selectedQuotation = item.quotations[quotationIndex];
+        selectedQuotation.isSelected = true;
+        selectedQuotation.selectedBy = user._id;
+        selectedQuotation.selectedAt = new Date();
+        selectedQuotation.selectedByEmail = user.email;
+        
+        selectedQuotation.selectionHistory.push({
+            action: 'selected',
+            user: user._id,
+            userEmail: user.email,
+            timestamp: new Date(),
+            reason: reason || 'Selected by admin'
+        });
+
+        // Update item total cost to match selected quotation
+        item.totalCost = selectedQuotation.amount;
+        item.unitCost = selectedQuotation.amount / item.quantity;
+
+        // Recalculate total estimated cost
+        let totalEstimatedCost = 0;
+        request.items.forEach(item => {
+            if (item.quotations && item.quotations.length > 0) {
+                const selectedQuotation = item.quotations.find(q => q.isSelected);
+                if (selectedQuotation) {
+                    totalEstimatedCost += selectedQuotation.amount;
+                } else {
+                    totalEstimatedCost += item.totalCost;
+                }
+            } else {
+                totalEstimatedCost += item.totalCost;
+            }
+        });
+
+        request.totalEstimatedCost = totalEstimatedCost;
+
+        // Add to request history
+        request.requestHistory.push({
+            date: new Date(),
+            action: 'Quotation selected',
+            user: user._id,
+            changes: [
+                `Admin selected quotation from ${selectedQuotation.provider} for item ${itemIndex + 1}`,
+                `Amount: $${selectedQuotation.amount}`,
+                `Reason: ${reason || 'No reason provided'}`
+            ]
+        });
+
+        await request.save();
+
+        const updatedRequest = await Request.findById(requestId)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.selectedBy', 'firstName lastName email')
+            .populate('items.quotations.deselectedBy', 'firstName lastName email')
+            .populate('residence', 'name');
+
+        res.status(200).json({
+            message: 'Quotation selected successfully',
+            request: updatedRequest,
+            selectedQuotation: {
+                provider: selectedQuotation.provider,
+                amount: selectedQuotation.amount,
+                selectedBy: user.email,
+                selectedAt: selectedQuotation.selectedAt
+            }
+        });
+
+    } catch (error) {
+        console.error('Error selecting quotation:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Select quotation for request-level quotations (Admin only)
+exports.selectRequestQuotation = async (req, res) => {
+    try {
+        const { requestId, quotationIndex } = req.params;
+        const { reason } = req.body;
+        const user = req.user;
+
+        // Validate user role (admin only)
+        if (user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can select quotations' });
+        }
+
+        const request = await Request.findById(requestId);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        // Validate quotation index
+        if (!request.quotations || quotationIndex < 0 || quotationIndex >= request.quotations.length) {
+            return res.status(400).json({ message: 'Invalid quotation index' });
+        }
+
+        // Deselect all other quotations
+        request.quotations.forEach((quotation, index) => {
+            if (index !== parseInt(quotationIndex)) {
+                quotation.isSelected = false;
+                quotation.deselectedBy = user._id;
+                quotation.deselectedAt = new Date();
+                quotation.deselectedByEmail = user.email;
+                
+                quotation.selectionHistory.push({
+                    action: 'deselected',
+                    user: user._id,
+                    userEmail: user.email,
+                    timestamp: new Date(),
+                    reason: `Deselected by admin when selecting quotation ${parseInt(quotationIndex) + 1}`
+                });
+            }
+        });
+
+        // Select the specified quotation
+        const selectedQuotation = request.quotations[quotationIndex];
+        selectedQuotation.isSelected = true;
+        selectedQuotation.selectedBy = user._id;
+        selectedQuotation.selectedAt = new Date();
+        selectedQuotation.selectedByEmail = user.email;
+        
+        selectedQuotation.selectionHistory.push({
+            action: 'selected',
+            user: user._id,
+            userEmail: user.email,
+            timestamp: new Date(),
+            reason: reason || 'Selected by admin'
+        });
+
+        // Update request amount
+        request.amount = selectedQuotation.amount;
+
+        // Add to request history
+        request.requestHistory.push({
+            date: new Date(),
+            action: 'Quotation selected',
+            user: user._id,
+            changes: [
+                `Admin selected quotation from ${selectedQuotation.provider}`,
+                `Amount: $${selectedQuotation.amount}`,
+                `Reason: ${reason || 'No reason provided'}`
+            ]
+        });
+
+        await request.save();
+
+        const updatedRequest = await Request.findById(requestId)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('quotations.uploadedBy', 'firstName lastName email')
+            .populate('quotations.selectedBy', 'firstName lastName email')
+            .populate('quotations.deselectedBy', 'firstName lastName email')
+            .populate('residence', 'name');
+
+        res.status(200).json({
+            message: 'Quotation selected successfully',
+            request: updatedRequest,
+            selectedQuotation: {
+                provider: selectedQuotation.provider,
+                amount: selectedQuotation.amount,
+                selectedBy: user.email,
+                selectedAt: selectedQuotation.selectedAt
+            }
+        });
+
+    } catch (error) {
+        console.error('Error selecting quotation:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Override quotation selection (Finance only)
+exports.overrideQuotationSelection = async (req, res) => {
+    try {
+        const { requestId, itemIndex, quotationIndex } = req.params;
+        const { reason } = req.body;
+        const user = req.user;
+
+        // Validate user role (finance only)
+        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ message: 'Only finance users can override quotation selections' });
+        }
+
+        const request = await Request.findById(requestId);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        // Validate item index
+        if (!request.items || itemIndex < 0 || itemIndex >= request.items.length) {
+            return res.status(400).json({ message: 'Invalid item index' });
+        }
+
+        const item = request.items[itemIndex];
+        
+        // Validate quotation index
+        if (!item.quotations || quotationIndex < 0 || quotationIndex >= item.quotations.length) {
+            return res.status(400).json({ message: 'Invalid quotation index' });
+        }
+
+        // Find previously selected quotation
+        const previouslySelected = item.quotations.find(q => q.isSelected);
+        let overrideMessage = '';
+
+        if (previouslySelected) {
+            // Deselect previously selected quotation
+            previouslySelected.isSelected = false;
+            previouslySelected.deselectedBy = user._id;
+            previouslySelected.deselectedAt = new Date();
+            previouslySelected.deselectedByEmail = user.email;
+            
+            previouslySelected.selectionHistory.push({
+                action: 'deselected',
+                user: user._id,
+                userEmail: user.email,
+                timestamp: new Date(),
+                reason: `Deselected by finance (${user.email}) - ${reason || 'Override selection'}`
+            });
+
+            overrideMessage = `Finance (${user.email}) deselected quotation from ${previouslySelected.selectedByEmail} and selected new quotation`;
+        }
+
+        // Select the new quotation
+        const selectedQuotation = item.quotations[quotationIndex];
+        selectedQuotation.isSelected = true;
+        selectedQuotation.selectedBy = user._id;
+        selectedQuotation.selectedAt = new Date();
+        selectedQuotation.selectedByEmail = user.email;
+        
+        selectedQuotation.selectionHistory.push({
+            action: 'selected',
+            user: user._id,
+            userEmail: user.email,
+            timestamp: new Date(),
+            reason: reason || 'Selected by finance'
+        });
+
+        // Update item total cost to match selected quotation
+        item.totalCost = selectedQuotation.amount;
+        item.unitCost = selectedQuotation.amount / item.quantity;
+
+        // Recalculate total estimated cost
+        let totalEstimatedCost = 0;
+        request.items.forEach(item => {
+            if (item.quotations && item.quotations.length > 0) {
+                const selectedQuotation = item.quotations.find(q => q.isSelected);
+                if (selectedQuotation) {
+                    totalEstimatedCost += selectedQuotation.amount;
+                } else {
+                    totalEstimatedCost += item.totalCost;
+                }
+            } else {
+                totalEstimatedCost += item.totalCost;
+            }
+        });
+
+        request.totalEstimatedCost = totalEstimatedCost;
+
+        // Add to request history
+        const historyMessage = overrideMessage || `Finance (${user.email}) selected quotation from ${selectedQuotation.provider}`;
+        request.requestHistory.push({
+            date: new Date(),
+            action: 'Quotation selection overridden',
+            user: user._id,
+            changes: [
+                historyMessage,
+                `Amount: $${selectedQuotation.amount}`,
+                `Reason: ${reason || 'Finance override'}`
+            ]
+        });
+
+        await request.save();
+
+        const updatedRequest = await Request.findById(requestId)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('items.quotations.uploadedBy', 'firstName lastName email')
+            .populate('items.quotations.selectedBy', 'firstName lastName email')
+            .populate('items.quotations.deselectedBy', 'firstName lastName email')
+            .populate('residence', 'name');
+
+        res.status(200).json({
+            message: 'Quotation selection overridden successfully',
+            request: updatedRequest,
+            selectedQuotation: {
+                provider: selectedQuotation.provider,
+                amount: selectedQuotation.amount,
+                selectedBy: user.email,
+                selectedAt: selectedQuotation.selectedAt,
+                override: !!previouslySelected
+            }
+        });
+
+    } catch (error) {
+        console.error('Error overriding quotation selection:', error);
+        res.status(500).json({ message: error.message });
+    }
+};

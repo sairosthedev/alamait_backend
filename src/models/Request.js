@@ -42,7 +42,58 @@ const quotationSchema = new mongoose.Schema({
     },
     approvedAt: {
         type: Date
-    }
+    },
+    // Quotation selection tracking
+    isSelected: {
+        type: Boolean,
+        default: false
+    },
+    selectedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    selectedAt: {
+        type: Date
+    },
+    selectedByEmail: {
+        type: String,
+        trim: true
+    },
+    deselectedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    deselectedAt: {
+        type: Date
+    },
+    deselectedByEmail: {
+        type: String,
+        trim: true
+    },
+    selectionHistory: [{
+        action: {
+            type: String,
+            enum: ['selected', 'deselected'],
+            required: true
+        },
+        user: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        userEmail: {
+            type: String,
+            required: true
+        },
+        timestamp: {
+            type: Date,
+            default: Date.now
+        },
+        reason: {
+            type: String,
+            trim: true
+        }
+    }]
 });
 
 // Schema for items/services in non-student requests
@@ -115,7 +166,58 @@ const requestItemSchema = new mongoose.Schema({
         },
         approvedAt: {
             type: Date
-        }
+        },
+        // Quotation selection tracking
+        isSelected: {
+            type: Boolean,
+            default: false
+        },
+        selectedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        selectedAt: {
+            type: Date
+        },
+        selectedByEmail: {
+            type: String,
+            trim: true
+        },
+        deselectedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        deselectedAt: {
+            type: Date
+        },
+        deselectedByEmail: {
+            type: String,
+            trim: true
+        },
+        selectionHistory: [{
+            action: {
+                type: String,
+                enum: ['selected', 'deselected'],
+                required: true
+            },
+            user: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User',
+                required: true
+            },
+            userEmail: {
+                type: String,
+                required: true
+            },
+            timestamp: {
+                type: Date,
+                default: Date.now
+            },
+            reason: {
+                type: String,
+                trim: true
+            }
+        }]
     }]
 });
 
