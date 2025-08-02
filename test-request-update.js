@@ -106,7 +106,22 @@ async function verifyUpdate() {
         console.log('📋 Updated request details:');
         console.log('  - Status:', request.status);
         console.log('  - Admin Response:', request.adminResponse);
-        console.log('  - Assigned To:', request.assignedTo);
+        
+        // Display assignedTo information properly
+        if (request.assignedTo) {
+            if (request.assignedTo._id) {
+                console.log('  - Assigned To:', {
+                    id: request.assignedTo._id,
+                    name: request.assignedTo.name,
+                    surname: request.assignedTo.surname,
+                    role: request.assignedTo.role
+                });
+            } else {
+                console.log('  - Assigned To:', request.assignedTo);
+            }
+        } else {
+            console.log('  - Assigned To: Not assigned');
+        }
         
         // Check if quotation was selected
         if (request.items && request.items.length > 0) {

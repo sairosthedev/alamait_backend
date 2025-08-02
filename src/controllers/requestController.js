@@ -619,7 +619,30 @@ exports.updateRequest = async (req, res) => {
         // Process each field
         for (const [key, value] of Object.entries(updateData)) {
             if (allowedFields.includes(key)) {
-                if (request[key] !== value) {
+                if (key === 'assignedTo' && typeof value === 'string') {
+                    // Handle assignedTo specially - fetch user details
+                    try {
+                        const assignedUser = await User.findById(value);
+                        if (!assignedUser) {
+                            return res.status(400).json({ message: 'Assigned user not found' });
+                        }
+                        
+                        const assignedToData = {
+                            _id: assignedUser._id,
+                            name: assignedUser.firstName,
+                            surname: assignedUser.lastName,
+                            role: assignedUser.role
+                        };
+                        
+                        if (JSON.stringify(request.assignedTo) !== JSON.stringify(assignedToData)) {
+                            updates[key] = assignedToData;
+                            changes.push(`assignedTo updated to: ${assignedUser.firstName} ${assignedUser.lastName}`);
+                        }
+                    } catch (error) {
+                        console.error('Error fetching assigned user:', error);
+                        return res.status(400).json({ message: 'Invalid assigned user ID' });
+                    }
+                } else if (request[key] !== value) {
                     updates[key] = value;
                     changes.push(`${key} updated to: ${value}`);
                 }
