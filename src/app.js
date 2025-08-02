@@ -317,6 +317,7 @@ app.use('/api/invoices', invoiceRoutes);
 
 // Request routes
 app.use('/api/requests', requestRoutes);
+app.use('/api/maintenance-requests', requestRoutes); // Alias for frontend compatibility
 app.use('/api/monthly-requests', monthlyRequestRoutes);
 
 // Vendor routes

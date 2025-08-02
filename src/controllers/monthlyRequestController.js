@@ -1489,7 +1489,7 @@ exports.approveItemQuotation = async (req, res) => {
 exports.updateItemQuotation = async (req, res) => {
     try {
         const { id, itemIndex, quotationIndex } = req.params;
-        const { provider, amount, description } = req.body;
+        const { provider, amount, description, isSelected } = req.body;
         const user = req.user;
 
         // Check permissions - only admin can update quotations
@@ -1539,6 +1539,80 @@ exports.updateItemQuotation = async (req, res) => {
             changes.push('Description updated');
         }
 
+        // Handle isSelected field update
+        if (isSelected !== undefined && isSelected !== quotation.isSelected) {
+            if (isSelected) {
+                // Deselect all other quotations for this item first
+                item.quotations.forEach((otherQuotation, index) => {
+                    if (index !== parseInt(quotationIndex) && otherQuotation.isSelected) {
+                        otherQuotation.isSelected = false;
+                        otherQuotation.deselectedBy = user._id;
+                        otherQuotation.deselectedAt = new Date();
+                        otherQuotation.deselectedByEmail = user.email;
+                        
+                        // Ensure selectionHistory is initialized
+                        if (!otherQuotation.selectionHistory) {
+                            otherQuotation.selectionHistory = [];
+                        }
+                        
+                        otherQuotation.selectionHistory.push({
+                            action: 'deselected',
+                            user: user._id,
+                            userEmail: user.email,
+                            timestamp: new Date(),
+                            reason: `Deselected by admin when updating quotation selection`
+                        });
+                    }
+                });
+
+                // Select this quotation
+                quotation.isSelected = true;
+                quotation.selectedBy = user._id;
+                quotation.selectedAt = new Date();
+                quotation.selectedByEmail = user.email;
+                
+                // Ensure selectionHistory is initialized
+                if (!quotation.selectionHistory) {
+                    quotation.selectionHistory = [];
+                }
+                
+                quotation.selectionHistory.push({
+                    action: 'selected',
+                    user: user._id,
+                    userEmail: user.email,
+                    timestamp: new Date(),
+                    reason: 'Selected by admin via quotation update'
+                });
+
+                // Update item total cost to match selected quotation
+                item.totalCost = quotation.amount;
+                item.unitCost = quotation.amount / item.quantity;
+
+                changes.push('Quotation selected and item cost updated');
+            } else {
+                // Deselect this quotation
+                quotation.isSelected = false;
+                quotation.deselectedBy = user._id;
+                quotation.deselectedAt = new Date();
+                quotation.deselectedByEmail = user.email;
+                
+                // Ensure selectionHistory is initialized
+                if (!quotation.selectionHistory) {
+                    quotation.selectionHistory = [];
+                }
+                
+                quotation.selectionHistory.push({
+                    action: 'deselected',
+                    user: user._id,
+                    userEmail: user.email,
+                    timestamp: new Date(),
+                    reason: 'Deselected by admin via quotation update'
+                });
+
+                changes.push('Quotation deselected');
+            }
+        }
+
         // Handle file upload if provided
         if (req.file) {
             try {
@@ -1565,6 +1639,30 @@ exports.updateItemQuotation = async (req, res) => {
             quotation.approvedBy = null;
             quotation.approvedAt = null;
             changes.push('Quotation unapproved due to modification');
+        }
+
+        // Recalculate total estimated cost if selection changed
+        if (isSelected !== undefined && isSelected !== quotation.isSelected) {
+            let totalEstimatedCost = 0;
+            
+            // Add cost from items with selected quotations
+            if (monthlyRequest.items && monthlyRequest.items.length > 0) {
+                monthlyRequest.items.forEach(item => {
+                    if (item.quotations && item.quotations.length > 0) {
+                        const selectedQuotation = item.quotations.find(q => q.isSelected);
+                        if (selectedQuotation) {
+                            totalEstimatedCost += selectedQuotation.amount;
+                        } else {
+                            totalEstimatedCost += item.totalCost || 0;
+                        }
+                    } else {
+                        totalEstimatedCost += item.totalCost || 0;
+                    }
+                });
+            }
+            
+            monthlyRequest.totalEstimatedCost = totalEstimatedCost;
+            changes.push(`Total estimated cost recalculated to: $${totalEstimatedCost}`);
         }
 
         // Add to request history
