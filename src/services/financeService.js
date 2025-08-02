@@ -94,4 +94,7 @@ class FinanceService {
     }
 }
 
-export default new FinanceService(); 
+const financeService = new FinanceService();
+
+export default financeService;
+export { financeService }; 
