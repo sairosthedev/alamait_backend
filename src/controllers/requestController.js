@@ -2286,6 +2286,11 @@ exports.selectItemQuotation = async (req, res) => {
                 quotation.deselectedAt = new Date();
                 quotation.deselectedByEmail = user.email;
                 
+                // Ensure selectionHistory is initialized as an array
+                if (!quotation.selectionHistory) {
+                    quotation.selectionHistory = [];
+                }
+                
                 quotation.selectionHistory.push({
                     action: 'deselected',
                     user: user._id,
@@ -2302,6 +2307,11 @@ exports.selectItemQuotation = async (req, res) => {
         selectedQuotation.selectedBy = user._id;
         selectedQuotation.selectedAt = new Date();
         selectedQuotation.selectedByEmail = user.email;
+        
+        // Ensure selectionHistory is initialized as an array
+        if (!selectedQuotation.selectionHistory) {
+            selectedQuotation.selectionHistory = [];
+        }
         
         selectedQuotation.selectionHistory.push({
             action: 'selected',
@@ -2344,6 +2354,12 @@ exports.selectItemQuotation = async (req, res) => {
             ]
         });
 
+        // Mark the arrays as modified to ensure they are saved
+        request.markModified('items');
+        
+        // Mark the arrays as modified to ensure they are saved
+        request.markModified('quotations');
+        
         await request.save();
 
         const updatedRequest = await Request.findById(requestId)
@@ -2400,6 +2416,11 @@ exports.selectRequestQuotation = async (req, res) => {
                 quotation.deselectedAt = new Date();
                 quotation.deselectedByEmail = user.email;
                 
+                // Ensure selectionHistory is initialized as an array
+                if (!quotation.selectionHistory) {
+                    quotation.selectionHistory = [];
+                }
+                
                 quotation.selectionHistory.push({
                     action: 'deselected',
                     user: user._id,
@@ -2416,6 +2437,11 @@ exports.selectRequestQuotation = async (req, res) => {
         selectedQuotation.selectedBy = user._id;
         selectedQuotation.selectedAt = new Date();
         selectedQuotation.selectedByEmail = user.email;
+        
+        // Ensure selectionHistory is initialized as an array
+        if (!selectedQuotation.selectionHistory) {
+            selectedQuotation.selectionHistory = [];
+        }
         
         selectedQuotation.selectionHistory.push({
             action: 'selected',
@@ -2440,6 +2466,9 @@ exports.selectRequestQuotation = async (req, res) => {
             ]
         });
 
+        // Mark the arrays as modified to ensure they are saved
+        request.markModified('quotations');
+        
         await request.save();
 
         const updatedRequest = await Request.findById(requestId)
@@ -2506,6 +2535,11 @@ exports.overrideQuotationSelection = async (req, res) => {
             previouslySelected.deselectedAt = new Date();
             previouslySelected.deselectedByEmail = user.email;
             
+            // Ensure selectionHistory is initialized as an array
+            if (!previouslySelected.selectionHistory) {
+                previouslySelected.selectionHistory = [];
+            }
+            
             previouslySelected.selectionHistory.push({
                 action: 'deselected',
                 user: user._id,
@@ -2523,6 +2557,11 @@ exports.overrideQuotationSelection = async (req, res) => {
         selectedQuotation.selectedBy = user._id;
         selectedQuotation.selectedAt = new Date();
         selectedQuotation.selectedByEmail = user.email;
+        
+        // Ensure selectionHistory is initialized as an array
+        if (!selectedQuotation.selectionHistory) {
+            selectedQuotation.selectionHistory = [];
+        }
         
         selectedQuotation.selectionHistory.push({
             action: 'selected',
@@ -2566,6 +2605,9 @@ exports.overrideQuotationSelection = async (req, res) => {
             ]
         });
 
+        // Mark the arrays as modified to ensure they are saved
+        request.markModified('items');
+        
         await request.save();
 
         const updatedRequest = await Request.findById(requestId)
