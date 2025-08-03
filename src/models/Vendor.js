@@ -227,17 +227,40 @@ vendorSchema.index({ chartOfAccountsCode: 1 });
 // Pre-save middleware to generate vendor code if not provided
 vendorSchema.pre('save', async function(next) {
     if (!this.vendorCode) {
-        this.vendorCode = await generateVendorCode();
+        this.vendorCode = await generateVendorCode(this.constructor);
     }
     next();
 });
 
 // Generate unique vendor code
-async function generateVendorCode() {
-    const count = await mongoose.model('Vendor').countDocuments();
-    const year = new Date().getFullYear().toString().substr(-2);
-    const sequence = (count + 1).toString().padStart(4, '0');
-    return `V${year}${sequence}`;
+async function generateVendorCode(VendorModel) {
+    try {
+        // Use timestamp + random to ensure uniqueness
+        const timestamp = Date.now().toString().substr(-8);
+        const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+        const year = new Date().getFullYear().toString().substr(-2);
+        
+        let vendorCode = `V${year}${timestamp}${random}`;
+        
+        // Check if this code already exists (very unlikely but safe)
+        let existingVendor = await VendorModel.findOne({ vendorCode });
+        let attempts = 0;
+        
+        while (existingVendor && attempts < 10) {
+            const newRandom = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+            vendorCode = `V${year}${timestamp}${newRandom}`;
+            existingVendor = await VendorModel.findOne({ vendorCode });
+            attempts++;
+        }
+        
+        return vendorCode;
+    } catch (error) {
+        console.error('Error generating vendor code:', error);
+        // Fallback to simple timestamp-based code
+        const timestamp = Date.now().toString().substr(-8);
+        const year = new Date().getFullYear().toString().substr(-2);
+        return `V${year}${timestamp}`;
+    }
 }
 
 // Virtual for full contact person name
