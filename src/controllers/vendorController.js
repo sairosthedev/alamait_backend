@@ -76,18 +76,11 @@ exports.createVendor = async (req, res) => {
         // Generate vendor code manually to ensure it's created
         let vendorCode = req.body.vendorCode;
         if (!vendorCode) {
-            const lastVendor = await Vendor.findOne({}, { vendorCode: 1 }).sort({ vendorCode: -1 });
-            let nextNumber = 1;
-            if (lastVendor && lastVendor.vendorCode) {
-                const match = lastVendor.vendorCode.match(/V\d{6}$/);
-                if (match) {
-                    const currentNumber = parseInt(lastVendor.vendorCode.substring(1));
-                    nextNumber = currentNumber + 1;
-                }
-            }
+            // Use timestamp + random to ensure uniqueness
+            const timestamp = Date.now().toString().substr(-8);
+            const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
             const year = new Date().getFullYear().toString().substr(-2);
-            const sequence = nextNumber.toString().padStart(4, '0');
-            vendorCode = `V${year}${sequence}`;
+            vendorCode = `V${year}${timestamp}${random}`;
         }
 
         // Create new vendor

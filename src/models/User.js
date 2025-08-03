@@ -229,14 +229,23 @@ userSchema.methods.createStudentAccount = async function() {
         
     } catch (error) {
         console.error(`❌ Error creating student account for ${this.firstName} ${this.lastName}:`, error);
-        throw error;
+        // Don't throw error to prevent user creation from failing
+        return null;
     }
 };
 
 // Method to create tenant account
 userSchema.methods.createTenantAccount = async function() {
     try {
-        const TenantAccount = require('./TenantAccount');
+        // Check if TenantAccount model exists
+        let TenantAccount;
+        try {
+            TenantAccount = require('./TenantAccount');
+        } catch (error) {
+            console.log('TenantAccount model not found, skipping tenant account creation');
+            return null;
+        }
+        
         const Account = require('./Account');
         
         // Check if account already exists
@@ -270,7 +279,8 @@ userSchema.methods.createTenantAccount = async function() {
         
     } catch (error) {
         console.error(`❌ Error creating tenant account for ${this.firstName} ${this.lastName}:`, error);
-        throw error;
+        // Don't throw error to prevent user creation from failing
+        return null;
     }
 };
 
