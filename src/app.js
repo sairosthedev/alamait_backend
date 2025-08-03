@@ -265,6 +265,10 @@ app.use('/api/ceo', ceoRoutes);
 const leaseRoutes = require('./routes/leaseRoutes');
 app.use('/api/leases', leaseRoutes);
 
+// Lease download routes (for ZIP downloads)
+const leaseDownloadRoutes = require('./routes/leaseDownloadRoutes');
+app.use('/api/lease-downloads', leaseDownloadRoutes);
+
 // Student routes - specific routes first
 app.use('/api/student/dashboard', studentDashboardRoutes);
 app.use('/api/student/residences', studentResidenceRoutes);
