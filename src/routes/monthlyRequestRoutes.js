@@ -133,6 +133,23 @@ router.patch('/:id/approve',
     monthlyRequestController.approveMonthlyRequest
 );
 
+// Submit template for specific month approval (admin only)
+router.post('/:id/submit-month', 
+    checkRole(['admin']), 
+    monthlyRequestController.submitTemplateForMonth
+);
+
+// Approve/reject template for specific month (finance only)
+router.post('/:id/approve-month', 
+    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    monthlyRequestController.approveTemplateForMonth
+);
+
+// Get monthly approval status for specific month
+router.get('/:id/approval-status/:month/:year', 
+    monthlyRequestController.getMonthlyApprovalStatus
+);
+
 // Reject monthly request (finance only)
 router.patch('/:id/reject', 
     checkRole(['finance', 'finance_admin', 'finance_user']), 
@@ -170,5 +187,11 @@ router.put('/:id/items/:itemIndex/quotations/:quotationIndex',
 
 // Delete monthly request (admin or submitter only)
 router.delete('/:id', monthlyRequestController.deleteMonthlyRequest);
+
+// Add monthly submission endpoint
+router.post('/:id/submit-month', auth, checkRole(['admin', 'finance']), monthlyRequestController.submitTemplateForMonth);
+
+// Add monthly approval endpoint
+router.post('/:id/approve-month', auth, checkRole(['admin', 'finance']), monthlyRequestController.approveTemplateMonth);
 
 module.exports = router; 

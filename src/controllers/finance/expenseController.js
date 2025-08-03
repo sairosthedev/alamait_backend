@@ -842,6 +842,8 @@ exports.recordExpensePayment = async (req, res) => {
 
         // Check if expense has vendor information
         let vendorSpecificAccount = null;
+        let expenseAccountCode = null;
+        
         if (expense.vendorId) {
             const Vendor = require('../../models/Vendor');
             const vendor = await Vendor.findById(expense.vendorId);
@@ -849,6 +851,10 @@ exports.recordExpensePayment = async (req, res) => {
                 vendorSpecificAccount = vendor.chartOfAccountsCode;
                 console.log(`Found vendor-specific account: ${vendorSpecificAccount} for vendor: ${vendor.businessName}`);
             }
+        } else if (expense.expenseAccountCode) {
+            // For items without quotations, use the expense account code
+            expenseAccountCode = expense.expenseAccountCode;
+            console.log(`Found expense account code: ${expenseAccountCode} for item without vendor`);
         }
 
         // Validate payment amount
@@ -870,6 +876,15 @@ exports.recordExpensePayment = async (req, res) => {
                 console.log(`Using vendor-specific account: ${vendorSpecificAccount} instead of generic: ${receivingAccount}`);
             } else {
                 console.log(`Vendor account ${vendorSpecificAccount} not found, using generic: ${receivingAccount}`);
+            }
+        } else if (expenseAccountCode) {
+            // For items without quotations, use the expense account code
+            const expenseAccount = await Account.findOne({ code: expenseAccountCode });
+            if (expenseAccount) {
+                finalReceivingAccount = expenseAccountCode;
+                console.log(`Using expense account: ${expenseAccountCode} for item without vendor`);
+            } else {
+                console.log(`Expense account ${expenseAccountCode} not found, using generic: ${receivingAccount}`);
             }
         }
 

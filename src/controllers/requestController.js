@@ -1176,6 +1176,25 @@ async function createItemizedExpensesForRequest(request, user) {
                 // Item without quotation - create expense with estimated cost (default to cash)
                 const expenseId = await generateUniqueId('EXP');
                 
+                // Map category to expense account code
+                const categoryExpenseMap = {
+                    'maintenance': '5000', // Repairs and Maintenance
+                    'utilities': '5001',   // Utilities - Water
+                    'supplies': '5013',    // Administrative Expenses
+                    'equipment': '5000',   // Repairs and Maintenance
+                    'services': '5013',    // Administrative Expenses
+                    'cleaning': '5010',    // House keeping
+                    'security': '5011',    // Security Costs
+                    'landscaping': '5000', // Repairs and Maintenance
+                    'electrical': '5002',  // Utilities - Electricity
+                    'plumbing': '5000',    // Repairs and Maintenance
+                    'carpentry': '5000',   // Repairs and Maintenance
+                    'painting': '5000',    // Repairs and Maintenance
+                    'other': '5013'        // Administrative Expenses
+                };
+                
+                const expenseAccountCode = categoryExpenseMap[item.category] || '5013';
+                
                 const expenseData = {
                     expenseId,
                     requestId: request._id,
@@ -1192,7 +1211,8 @@ async function createItemizedExpensesForRequest(request, user) {
                     approvedAt: new Date(),
                     approvedByEmail: user.email,
                     itemIndex: i,
-                    notes: `Item: ${item.description} | Estimated cost: $${item.estimatedCost || item.totalCost || 0} | Payment: Cash`
+                    expenseAccountCode: expenseAccountCode, // Set expense account code for items without quotations
+                    notes: `Item: ${item.description} | Estimated cost: $${item.estimatedCost || item.totalCost || 0} | Payment: Cash | Account: ${expenseAccountCode}`
                 };
                 
                 const newExpense = new Expense(expenseData);

@@ -51,7 +51,7 @@ const transactionEntrySchema = new mongoose.Schema({
   // Source
   source: {
     type: String,
-    enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment'],
+    enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment', 'expense_payment'],
     required: true
   },
   sourceId: {
@@ -60,7 +60,7 @@ const transactionEntrySchema = new mongoose.Schema({
   },
   sourceModel: {
     type: String,
-    enum: ['Payment', 'Invoice', 'Manual', 'Vendor'],
+    enum: ['Payment', 'Invoice', 'Manual', 'Vendor', 'Expense'],
     required: true
   },
   

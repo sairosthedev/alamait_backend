@@ -157,7 +157,42 @@ const expenseSchema = new mongoose.Schema({
         ref: 'User'
     },
     approvedAt: Date,
-    approvedByEmail: String
+    approvedByEmail: String,
+    
+    // Vendor information for items with quotations
+    vendorId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Vendor',
+        required: false
+    },
+    vendorCode: {
+        type: String,
+        required: false
+    },
+    vendorName: {
+        type: String,
+        required: false
+    },
+    vendorType: {
+        type: String,
+        required: false
+    },
+    
+    // Item and quotation tracking
+    itemIndex: {
+        type: Number,
+        required: false
+    },
+    quotationId: {
+        type: mongoose.Schema.Types.ObjectId,
+        required: false
+    },
+    
+    // Expense account for items without quotations
+    expenseAccountCode: {
+        type: String,
+        required: false
+    }
 }, {
     timestamps: true
 });
@@ -171,6 +206,10 @@ expenseSchema.index({ paymentStatus: 1 });
 expenseSchema.index({ expenseDate: -1 });
 expenseSchema.index({ period: 1 });
 expenseSchema.index({ transactionId: 1 });
+expenseSchema.index({ vendorId: 1 });
+expenseSchema.index({ vendorCode: 1 });
+expenseSchema.index({ itemIndex: 1 });
+expenseSchema.index({ quotationId: 1 });
 
 // Virtual for total amount from items
 expenseSchema.virtual('totalFromItems').get(function() {
