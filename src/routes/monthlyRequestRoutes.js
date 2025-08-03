@@ -140,8 +140,13 @@ router.put('/:id', monthlyRequestController.updateMonthlyRequest);
 // Submit monthly request for approval
 router.patch('/:id/submit', monthlyRequestController.submitMonthlyRequest);
 
-// Send monthly request to finance (admin only)
+// Send monthly request to finance (admin only) - support both PUT and POST
 router.put('/:id/send-to-finance', 
+    checkRole(['admin']), 
+    monthlyRequestController.sendToFinance
+);
+
+router.post('/:id/send-to-finance', 
     checkRole(['admin']), 
     monthlyRequestController.sendToFinance
 );

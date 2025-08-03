@@ -362,10 +362,24 @@ exports.getAllMonthlyRequests = async (req, res) => {
             query.residence = residence;
         }
 
-        // Filter by month/year
+        // Filter by month/year - handle templates differently
         if (month && year) {
-            query.month = parseInt(month);
-            query.year = parseInt(year);
+            if (isTemplate === 'true') {
+                // For templates, we'll filter by monthlyApprovals later
+                // Don't add month/year to query for templates
+            } else if (isTemplate === 'false') {
+                // For non-templates (monthly requests), filter by month/year
+                query.month = parseInt(month);
+                query.year = parseInt(year);
+            } else {
+                // If isTemplate is not specified, show both templates and non-templates
+                // For templates, we'll filter by monthlyApprovals later
+                // For non-templates, filter by month/year
+                query.$or = [
+                    { month: parseInt(month), year: parseInt(year) },
+                    { isTemplate: true }
+                ];
+            }
         }
 
         // Filter by status
@@ -404,6 +418,8 @@ exports.getAllMonthlyRequests = async (req, res) => {
             .limit(parseInt(limit));
 
         const total = await MonthlyRequest.countDocuments(query);
+
+
 
         // Process monthly requests to include monthly approval status for templates
         const processedRequests = [];
@@ -1171,6 +1187,42 @@ exports.sendToFinance = async (req, res) => {
                 changes: [`Monthly request for ${month}/${year} sent to finance`]
             });
 
+            // Automatically create a monthly request for this specific month
+            let createdMonthlyRequest = null;
+            try {
+                const monthlyRequestData = {
+                    title: `${monthlyRequest.title} - ${month}/${year}`,
+                    description: formatDescriptionWithMonth(monthlyRequest.description, month, year),
+                    residence: monthlyRequest.residence,
+                    month: parseInt(month),
+                    year: parseInt(year),
+                    items: monthlyRequest.items.map(item => ({
+                        title: item.title,
+                        description: item.description,
+                        quantity: item.quantity,
+                        estimatedCost: item.estimatedCost,
+                        category: item.category,
+                        priority: item.priority,
+                        notes: item.notes
+                    })),
+                    totalEstimatedCost: monthlyRequest.totalEstimatedCost,
+                    status: 'pending',
+                    submittedBy: user._id,
+                    isTemplate: false,
+                    createdFromTemplate: true,
+                    templateId: monthlyRequest._id,
+                    notes: `Created from template: ${monthlyRequest.title}`
+                };
+
+                const newMonthlyRequest = new MonthlyRequest(monthlyRequestData);
+                createdMonthlyRequest = await newMonthlyRequest.save();
+
+                console.log(`Created monthly request for ${month}/${year} from template:`, createdMonthlyRequest._id);
+            } catch (error) {
+                console.error('Error creating monthly request from template:', error);
+                // Don't fail the main operation if monthly request creation fails
+            }
+
         } else {
             // For regular requests, update main status
             if (monthlyRequest.status !== 'draft') {
@@ -1267,7 +1319,14 @@ exports.sendToFinance = async (req, res) => {
                 ? `Monthly request for ${targetMonth}/${targetYear} sent to finance successfully`
                 : 'Request sent to finance successfully',
             monthlyRequest: updatedRequest,
-            autoApproval: autoApprovalResult
+            autoApproval: autoApprovalResult,
+            createdMonthlyRequest: createdMonthlyRequest ? {
+                id: createdMonthlyRequest._id,
+                title: createdMonthlyRequest.title,
+                month: createdMonthlyRequest.month,
+                year: createdMonthlyRequest.year,
+                status: createdMonthlyRequest.status
+            } : null
         });
 
     } catch (error) {
