@@ -1450,6 +1450,17 @@ exports.approveMonthlyRequest = async (req, res) => {
             newStatus: approved ? 'approved' : 'rejected'
         });
 
+        // Ensure all approval fields exist (for requests created before schema changes)
+        if (!monthlyRequest.approvedBy) {
+            monthlyRequest.approvedBy = user._id;
+        }
+        if (!monthlyRequest.approvedAt) {
+            monthlyRequest.approvedAt = new Date();
+        }
+        if (!monthlyRequest.approvedByEmail) {
+            monthlyRequest.approvedByEmail = user.email;
+        }
+
         monthlyRequest.status = approved ? 'approved' : 'rejected';
         monthlyRequest.approvedBy = user._id;
         monthlyRequest.approvedAt = new Date();
