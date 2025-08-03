@@ -307,6 +307,10 @@ app.use('/api/finance/maintenance', financeMaintenanceRoutes);
 // Finance index routes (for student-specific endpoints) - last to avoid conflicts
 app.use('/api/finance', financeIndexRoutes);
 
+// Finance student account management routes
+const studentAccountRoutes = require('./routes/finance/studentAccountRoutes');
+app.use('/api/finance/student-accounts', studentAccountRoutes);
+
 // Monitoring routes
 app.use('/api/monitoring', monitoringRoutes);
 
