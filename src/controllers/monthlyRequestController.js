@@ -1028,9 +1028,9 @@ exports.updateMonthlyRequest = async (req, res) => {
             return res.status(404).json({ message: 'Monthly request not found' });
         }
 
-        // Check permissions - only admin or the submitter can update
-        if (user.role !== 'admin' && monthlyRequest.submittedBy.toString() !== user._id.toString()) {
-            return res.status(403).json({ message: 'Only admins or the submitter can update monthly requests' });
+        // Check permissions - allow admin, finance users, or the submitter to update
+        if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role) && monthlyRequest.submittedBy.toString() !== user._id.toString()) {
+            return res.status(403).json({ message: 'Only admins, finance users, or the submitter can update monthly requests' });
         }
 
         // Only allow updates if status is draft or pending
@@ -1389,9 +1389,9 @@ exports.approveMonthlyRequest = async (req, res) => {
         const user = req.user;
         const { approved, notes, month, year } = req.body;
 
-        // Check permissions - only finance users can approve
-        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
-            return res.status(403).json({ message: 'Only finance users can approve monthly requests' });
+        // Check permissions - allow admin and finance users to approve
+        if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ message: 'Only admin and finance users can approve monthly requests' });
         }
 
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
@@ -1532,11 +1532,11 @@ exports.rejectMonthlyRequest = async (req, res) => {
             });
         }
 
-        // Check permissions - only finance users can reject
-        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+        // Check permissions - allow admin and finance users to reject
+        if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
             return res.status(403).json({ 
                 success: false,
-                message: 'Only finance users can reject monthly requests' 
+                message: 'Only admin and finance users can reject monthly requests' 
             });
         }
 
