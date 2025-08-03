@@ -39,26 +39,19 @@ router.use(requestLogger);
 // Get all monthly requests (filtered by user role and residence)
 router.get('/', monthlyRequestController.getAllMonthlyRequests);
 
+// Get monthly requests with enhanced filtering for templates and monthly approvals
+router.get('/filtered', monthlyRequestController.getMonthlyRequestsWithFiltering);
+
 // Get finance-specific monthly requests (only shows requests with changes in current month)
 router.get('/finance/dashboard', 
-    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     monthlyRequestController.getFinanceMonthlyRequests
 );
 
 // Get finance pending approvals (only requests that need approval)
 router.get('/finance/pending-approvals', 
-    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     monthlyRequestController.getFinancePendingApprovals
-);
-
-// Add the missing /approvals route that redirects to finance/pending-approvals
-router.get('/approvals', 
-    checkRole(['finance', 'finance_admin', 'finance_user']), 
-    (req, res) => {
-        // Redirect to the correct endpoint
-        req.url = '/finance/pending-approvals' + req.url.replace('/approvals', '');
-        monthlyRequestController.getFinancePendingApprovals(req, res);
-    }
 );
 
 // Get CEO monthly request dashboard
@@ -69,7 +62,7 @@ router.get('/ceo/dashboard',
 
 // Convert approved monthly requests to expenses
 router.post('/convert-to-expenses', 
-    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     monthlyRequestController.convertToExpenses
 );
 
@@ -121,9 +114,15 @@ router.delete('/templates/:templateId/items/:itemIndex', monthlyRequestControlle
 // Update entire template (Admin only)
 router.put('/templates/:templateId', monthlyRequestController.updateTemplate);
 
-// Template change approval routes (Finance only)
-router.post('/templates/:templateId/changes/:changeIndex/approve', monthlyRequestController.approveTemplateChanges);
-router.post('/templates/:templateId/changes/:changeIndex/reject', monthlyRequestController.rejectTemplateChanges);
+// Template change approval routes (Finance and Admin)
+router.post('/templates/:templateId/changes/:changeIndex/approve', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    monthlyRequestController.approveTemplateChanges
+);
+router.post('/templates/:templateId/changes/:changeIndex/reject', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    monthlyRequestController.rejectTemplateChanges
+);
 
 // Update monthly request (admin or submitter only)
 router.put('/:id', monthlyRequestController.updateMonthlyRequest);
@@ -137,9 +136,9 @@ router.put('/:id/send-to-finance',
     monthlyRequestController.sendToFinance
 );
 
-// Approve monthly request (finance only)
+// Approve monthly request (finance and admin)
 router.patch('/:id/approve', 
-    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     monthlyRequestController.approveMonthlyRequest
 );
 
@@ -149,9 +148,9 @@ router.post('/:id/submit-month',
     monthlyRequestController.submitTemplateForMonth
 );
 
-// Approve/reject template for specific month (finance only)
+// Approve/reject template for specific month (finance and admin)
 router.post('/:id/approve-month', 
-    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     monthlyRequestController.approveTemplateForMonth
 );
 
@@ -160,9 +159,9 @@ router.get('/:id/approval-status/:month/:year',
     monthlyRequestController.getMonthlyApprovalStatus
 );
 
-// Reject monthly request (finance only)
+// Reject monthly request (finance and admin)
 router.patch('/:id/reject', 
-    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     monthlyRequestController.rejectMonthlyRequest
 );
 
@@ -197,5 +196,11 @@ router.put('/:id/items/:itemIndex/quotations/:quotationIndex',
 
 // Delete monthly request (admin or submitter only)
 router.delete('/:id', monthlyRequestController.deleteMonthlyRequest);
+
+// Add monthly submission endpoint
+router.post('/:id/submit-month', auth, checkRole(['admin', 'finance']), monthlyRequestController.submitTemplateForMonth);
+
+// Add monthly approval endpoint
+router.post('/:id/approve-month', auth, checkRole(['admin', 'finance']), monthlyRequestController.approveTemplateMonth);
 
 module.exports = router; 

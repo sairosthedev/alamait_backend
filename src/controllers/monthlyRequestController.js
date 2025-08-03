@@ -386,12 +386,10 @@ exports.getAllMonthlyRequests = async (req, res) => {
             ];
         }
 
-        // Role-based filtering - Students cannot access monthly requests
+        // Remove role-based filtering - Allow all authenticated users to access monthly requests
+        // Only block students from accessing monthly requests
         if (user.role === 'student') {
             return res.status(403).json({ message: 'Students do not have access to monthly requests' });
-        } else if (user.role === 'finance' || user.role === 'finance_admin' || user.role === 'finance_user') {
-            // Finance users can see all approved requests
-            query.status = { $in: ['approved', 'completed'] };
         }
 
         const skip = (page - 1) * limit;
@@ -400,14 +398,80 @@ exports.getAllMonthlyRequests = async (req, res) => {
             .populate('residence', 'name')
             .populate('submittedBy', 'firstName lastName email')
             .populate('approvedBy', 'firstName lastName email')
+            .populate('monthlyApprovals.approvedBy', 'firstName lastName email')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit));
 
         const total = await MonthlyRequest.countDocuments(query);
 
+        // Process monthly requests to include monthly approval status for templates
+        const processedRequests = [];
+        
+        monthlyRequests.forEach(request => {
+            if (request.isTemplate) {
+                // For templates, create entries for each month that has monthly approvals
+                if (month && year) {
+                    // If specific month/year is requested, only show that month
+                    const monthlyApproval = request.monthlyApprovals?.find(
+                        approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+                    );
+                    
+                    if (monthlyApproval) {
+                        const processedRequest = {
+                            ...request.toObject(),
+                            // Use monthly approval status as the finance status for this specific month
+                            financeStatus: monthlyApproval.status,
+                            effectiveStatus: monthlyApproval.status,
+                            effectiveItems: monthlyApproval.items || request.items,
+                            effectiveTotalCost: monthlyApproval.totalCost || request.totalEstimatedCost,
+                            monthlyApproval: monthlyApproval,
+                            month: parseInt(month),
+                            year: parseInt(year),
+                            isMonthlyEntry: true
+                        };
+                        processedRequests.push(processedRequest);
+                    }
+                } else {
+                    // If no specific month/year, show all monthly approvals
+                    request.monthlyApprovals?.forEach(approval => {
+                        const processedRequest = {
+                            ...request.toObject(),
+                            // Use monthly approval status as the finance status for this specific month
+                            financeStatus: approval.status,
+                            effectiveStatus: approval.status,
+                            effectiveItems: approval.items || request.items,
+                            effectiveTotalCost: approval.totalCost || request.totalEstimatedCost,
+                            monthlyApproval: approval,
+                            month: approval.month,
+                            year: approval.year,
+                            isMonthlyEntry: true
+                        };
+                        processedRequests.push(processedRequest);
+                    });
+                }
+            } else {
+                // For non-templates, use the request status as finance status
+                const processedRequest = {
+                    ...request.toObject(),
+                    financeStatus: request.status,
+                    effectiveStatus: request.status,
+                    effectiveItems: request.items,
+                    effectiveTotalCost: request.totalEstimatedCost,
+                    isMonthlyEntry: false
+                };
+                processedRequests.push(processedRequest);
+            }
+        });
+
+        // Apply status filter to processed requests
+        let filteredRequests = processedRequests;
+        if (status) {
+            filteredRequests = processedRequests.filter(request => request.financeStatus === status);
+        }
+
         res.status(200).json({
-            monthlyRequests,
+            monthlyRequests: filteredRequests,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(total / limit),
@@ -417,6 +481,141 @@ exports.getAllMonthlyRequests = async (req, res) => {
         });
     } catch (error) {
         console.error('Error getting monthly requests:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Get monthly requests with enhanced filtering for templates and monthly approvals
+exports.getMonthlyRequestsWithFiltering = async (req, res) => {
+    try {
+        const user = req.user;
+        const { 
+            residence, 
+            month, 
+            year, 
+            status, 
+            isTemplate,
+            page = 1, 
+            limit = 10,
+            search 
+        } = req.query;
+
+        let query = {};
+
+        // Filter by residence
+        if (residence) {
+            query.residence = residence;
+        }
+
+        // Filter by template
+        if (isTemplate !== undefined) {
+            query.isTemplate = isTemplate === 'true';
+        }
+
+        // Search in title and description
+        if (search) {
+            query.$or = [
+                { title: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Remove role-based filtering - Allow all authenticated users to access monthly requests
+        // Only block students from accessing monthly requests
+        if (user.role === 'student') {
+            return res.status(403).json({ message: 'Students do not have access to monthly requests' });
+        }
+
+        const skip = (page - 1) * limit;
+        
+        // Get all templates and monthly requests
+        const allRequests = await MonthlyRequest.find(query)
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('approvedBy', 'firstName lastName email')
+            .populate('monthlyApprovals.approvedBy', 'firstName lastName email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        const total = await MonthlyRequest.countDocuments(query);
+
+        // Process requests to create monthly-specific entries
+        const processedRequests = [];
+        
+        allRequests.forEach(request => {
+            if (request.isTemplate) {
+                // For templates, create entries for each month that has monthly approvals
+                if (month && year) {
+                    // If specific month/year is requested, only show that month
+                    const monthlyApproval = request.monthlyApprovals?.find(
+                        approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+                    );
+                    
+                    if (monthlyApproval) {
+                        const processedRequest = {
+                            ...request.toObject(),
+                            // Use monthly approval status as the finance status for this specific month
+                            financeStatus: monthlyApproval.status,
+                            effectiveStatus: monthlyApproval.status,
+                            effectiveItems: monthlyApproval.items || request.items,
+                            effectiveTotalCost: monthlyApproval.totalCost || request.totalEstimatedCost,
+                            monthlyApproval: monthlyApproval,
+                            month: parseInt(month),
+                            year: parseInt(year),
+                            isMonthlyEntry: true
+                        };
+                        processedRequests.push(processedRequest);
+                    }
+                } else {
+                    // If no specific month/year, show all monthly approvals
+                    request.monthlyApprovals?.forEach(approval => {
+                        const processedRequest = {
+                            ...request.toObject(),
+                            // Use monthly approval status as the finance status for this specific month
+                            financeStatus: approval.status,
+                            effectiveStatus: approval.status,
+                            effectiveItems: approval.items || request.items,
+                            effectiveTotalCost: approval.totalCost || request.totalEstimatedCost,
+                            monthlyApproval: approval,
+                            month: approval.month,
+                            year: approval.year,
+                            isMonthlyEntry: true
+                        };
+                        processedRequests.push(processedRequest);
+                    });
+                }
+            } else {
+                // For non-templates, use the request status as finance status
+                const processedRequest = {
+                    ...request.toObject(),
+                    financeStatus: request.status,
+                    effectiveStatus: request.status,
+                    effectiveItems: request.items,
+                    effectiveTotalCost: request.totalEstimatedCost,
+                    isMonthlyEntry: false
+                };
+                processedRequests.push(processedRequest);
+            }
+        });
+
+        // Apply status filter to processed requests
+        let filteredRequests = processedRequests;
+        if (status) {
+            filteredRequests = processedRequests.filter(request => request.financeStatus === status);
+        }
+
+        res.status(200).json({
+            monthlyRequests: filteredRequests,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / limit),
+                totalItems: total,
+                itemsPerPage: parseInt(limit)
+            }
+        });
+    } catch (error) {
+        console.error('Error getting monthly requests with filtering:', error);
         res.status(500).json({ message: error.message });
     }
 };
