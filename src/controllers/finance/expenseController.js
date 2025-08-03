@@ -835,6 +835,11 @@ exports.recordExpensePayment = async (req, res) => {
             return res.status(404).json({ message: 'Expense not found' });
         }
 
+        // Use maintenanceRequestId as requestId if requestId is missing
+        if (!expense.requestId && expense.maintenanceRequestId) {
+            expense.requestId = expense.maintenanceRequestId;
+        }
+
         // Validate payment amount
         if (amount <= 0) {
             return res.status(400).json({ message: 'Payment amount must be greater than 0' });
@@ -879,9 +884,9 @@ exports.recordExpensePayment = async (req, res) => {
         expense.balanceDue = expense.amount - totalPaid;
         
         if (expense.balanceDue <= 0) {
-            expense.paymentStatus = 'paid';
+            expense.paymentStatus = 'Paid'; // Changed from 'paid' to 'Paid'
         } else {
-            expense.paymentStatus = 'partial';
+            expense.paymentStatus = 'Pending'; // Changed from 'partial' to 'Pending'
         }
 
         await expense.save();

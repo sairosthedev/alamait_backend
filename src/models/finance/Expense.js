@@ -76,7 +76,7 @@ const expenseSchema = new mongoose.Schema({
     requestId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Request',
-        required: true
+        required: false // Changed from true to false since some expenses come from maintenance requests
     },
     residence: {
         type: mongoose.Schema.Types.ObjectId,
