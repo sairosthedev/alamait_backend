@@ -116,7 +116,7 @@ const paymentValidation = [
 
 // All routes below require admin/finance/ceo roles
 router.use(auth);
-router.use(checkRole('admin', 'finance_admin', 'finance_user', 'ceo'));
+router.use(checkRole('admin', 'finance', 'finance_admin', 'finance_user', 'ceo'));
 
 // Dashboard routes
 router.get('/dashboard/stats', getDashboardStats);

@@ -15,16 +15,16 @@ router.use((req, res, next) => {
 // Route to handle GET and POST requests for expenses
 router
     .route('/')
-    .get(checkRole('admin', 'finance_admin', 'finance_user'), getExpenses) // Allow finance roles to view
-    .post(checkRole('admin','finance_admin', 'finance_user'), addExpense); // Only admins and financecan add expenses
+    .get(checkRole('admin', 'finance', 'finance_admin', 'finance_user'), getExpenses) // Allow finance roles to view
+    .post(checkRole('admin', 'finance', 'finance_admin', 'finance_user'), addExpense); // Only admins and finance can add expenses
 
 // Route to handle expense updates
-router.put('/:expenseId', checkRole('admin', 'finance_admin', 'finance_user'), updateExpense);
+router.put('/:expenseId', checkRole('admin', 'finance', 'finance_admin', 'finance_user'), updateExpense);
 
 // Route to handle expense status updates
-router.put('/:expenseId/status', checkRole('admin', 'finance_admin', 'finance_user'), updateExpenseStatus);
+router.put('/:expenseId/status', checkRole('admin', 'finance', 'finance_admin', 'finance_user'), updateExpenseStatus);
 
 // Route to handle expense approval
-router.patch('/:id/approve', checkRole('admin', 'ceo'), approveExpense);
+router.patch('/:id/approve', checkRole('admin', 'finance', 'ceo'), approveExpense);
 
 module.exports = router;

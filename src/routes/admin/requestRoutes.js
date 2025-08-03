@@ -13,9 +13,9 @@ const rejectionValidation = [
     check('notes').notEmpty().trim().withMessage('Rejection notes are required')
 ];
 
-// All routes require admin or CEO role
+// All routes require admin, finance, or CEO role
 router.use(auth);
-router.use(checkRole('admin', 'ceo'));
+router.use(checkRole('admin', 'finance', 'finance_admin', 'finance_user', 'ceo'));
 
 // Get all requests (view access for both admin and CEO)
 router.get('/', requestController.getAllRequests);
