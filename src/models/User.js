@@ -170,6 +170,110 @@ userSchema.pre('save', async function(next) {
   }
 });
 
+// Pre-save middleware to automatically create accounts for students and tenants
+userSchema.pre('save', async function(next) {
+    try {
+        // Only run this for new users
+        if (this.isNew) {
+            // Auto-create student account if role is student
+            if (this.role === 'student') {
+                await this.createStudentAccount();
+            }
+            
+            // Auto-create tenant account if role is tenant
+            if (this.role === 'tenant') {
+                await this.createTenantAccount();
+            }
+        }
+        next();
+    } catch (error) {
+        console.error('Error in user pre-save middleware:', error);
+        next(error);
+    }
+});
+
+// Method to create student account
+userSchema.methods.createStudentAccount = async function() {
+    try {
+        const StudentAccount = require('./StudentAccount');
+        const Account = require('./Account');
+        
+        // Check if account already exists
+        const existingAccount = await StudentAccount.findOne({ student: this._id });
+        if (existingAccount) {
+            console.log(`Student account already exists for ${this.firstName} ${this.lastName}`);
+            return existingAccount;
+        }
+        
+        // Create student account
+        const studentAccount = new StudentAccount({
+            student: this._id,
+            balance: 0,
+            notes: `Auto-created account for student ${this.firstName} ${this.lastName}`,
+            createdBy: this._id // Self-created
+        });
+        
+        await studentAccount.save();
+        
+        // Create corresponding chart of accounts entry
+        const chartAccount = new Account({
+            code: studentAccount.accountCode,
+            name: `Student Account - ${this.firstName} ${this.lastName}`,
+            type: 'Asset'
+        });
+        
+        await chartAccount.save();
+        
+        console.log(`✅ Auto-created student account for ${this.firstName} ${this.lastName} (${studentAccount.accountCode})`);
+        return studentAccount;
+        
+    } catch (error) {
+        console.error(`❌ Error creating student account for ${this.firstName} ${this.lastName}:`, error);
+        throw error;
+    }
+};
+
+// Method to create tenant account
+userSchema.methods.createTenantAccount = async function() {
+    try {
+        const TenantAccount = require('./TenantAccount');
+        const Account = require('./Account');
+        
+        // Check if account already exists
+        const existingAccount = await TenantAccount.findOne({ tenant: this._id });
+        if (existingAccount) {
+            console.log(`Tenant account already exists for ${this.firstName} ${this.lastName}`);
+            return existingAccount;
+        }
+        
+        // Create tenant account
+        const tenantAccount = new TenantAccount({
+            tenant: this._id,
+            balance: 0,
+            notes: `Auto-created account for tenant ${this.firstName} ${this.lastName}`,
+            createdBy: this._id // Self-created
+        });
+        
+        await tenantAccount.save();
+        
+        // Create corresponding chart of accounts entry
+        const chartAccount = new Account({
+            code: tenantAccount.accountCode,
+            name: `Tenant Account - ${this.firstName} ${this.lastName}`,
+            type: 'Asset'
+        });
+        
+        await chartAccount.save();
+        
+        console.log(`✅ Auto-created tenant account for ${this.firstName} ${this.lastName} (${tenantAccount.accountCode})`);
+        return tenantAccount;
+        
+    } catch (error) {
+        console.error(`❌ Error creating tenant account for ${this.firstName} ${this.lastName}:`, error);
+        throw error;
+    }
+};
+
 // Method to compare password
 userSchema.methods.comparePassword = async function(candidatePassword) {
   try {

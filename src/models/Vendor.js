@@ -227,48 +227,28 @@ vendorSchema.index({ chartOfAccountsCode: 1 });
 // Pre-save middleware to generate vendor code if not provided
 vendorSchema.pre('save', async function(next) {
     try {
-        // Generate vendor code if not provided
         if (!this.vendorCode) {
-            this.vendorCode = await generateVendorCode(this.constructor);
+            this.vendorCode = await generateVendorCode();
         }
         
-        // Generate chart of accounts code if not provided
+        // Also generate chart of accounts code if not provided
         if (!this.chartOfAccountsCode) {
-            const vendorCount = await this.constructor.countDocuments();
+            const vendorCount = await mongoose.model('Vendor').countDocuments();
             this.chartOfAccountsCode = `200${(vendorCount + 1).toString().padStart(3, '0')}`;
-        }
-        
-        // Generate expense account code if not provided
-        if (!this.expenseAccountCode) {
-            const categoryExpenseMap = {
-                'maintenance': '5000',
-                'utilities': '5001',
-                'supplies': '5000',
-                'equipment': '5000',
-                'services': '5000',
-                'cleaning': '5010',
-                'security': '5011',
-                'landscaping': '5000',
-                'electrical': '5000',
-                'plumbing': '5000',
-                'carpentry': '5000',
-                'painting': '5000',
-                'other': '5013'
-            };
-            this.expenseAccountCode = categoryExpenseMap[this.category] || '5013';
         }
         
         next();
     } catch (error) {
+        console.error('Error in vendor pre-save middleware:', error);
         next(error);
     }
 });
 
 // Generate unique vendor code
-async function generateVendorCode(model) {
+async function generateVendorCode() {
     try {
         // Get the highest vendor code to ensure uniqueness
-        const lastVendor = await model
+        const lastVendor = await mongoose.model('Vendor')
             .findOne({}, { vendorCode: 1 })
             .sort({ vendorCode: -1 });
         
