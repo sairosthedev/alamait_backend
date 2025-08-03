@@ -813,3 +813,152 @@ exports.markExpenseAsPaid = async (req, res) => {
         res.status(500).json({ error: 'Failed to mark expense as paid' });
     }
 }; 
+
+// Record payment for expense and create transaction entries
+exports.recordExpensePayment = async (req, res) => {
+    try {
+        const user = req.user;
+        const { expenseId } = req.params;
+        const {
+            amount,
+            paymentMethod,
+            reference,
+            notes,
+            payingAccount,
+            receivingAccount,
+            doubleEntry
+        } = req.body;
+
+        // Validate expense exists
+        const expense = await Expense.findById(expenseId);
+        if (!expense) {
+            return res.status(404).json({ message: 'Expense not found' });
+        }
+
+        // Validate payment amount
+        if (amount <= 0) {
+            return res.status(400).json({ message: 'Payment amount must be greater than 0' });
+        }
+
+        if (amount > expense.amount) {
+            return res.status(400).json({ message: 'Payment amount cannot exceed expense amount' });
+        }
+
+        // Validate accounts exist
+        const payingAcc = await Account.findOne({ code: payingAccount });
+        const receivingAcc = await Account.findOne({ code: receivingAccount });
+        
+        if (!payingAcc || !receivingAcc) {
+            return res.status(400).json({ message: 'Invalid account codes' });
+        }
+
+        // Generate payment ID
+        const paymentId = `EXP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+
+        // Create payment record
+        const payment = {
+            paymentId,
+            amount: parseFloat(amount),
+            paymentMethod,
+            reference,
+            notes,
+            paymentDate: new Date(),
+            status: 'confirmed',
+            processedBy: user._id,
+            recordedBy: user.email,
+            recordedAt: new Date()
+        };
+
+        // Add payment to expense
+        expense.payments = expense.payments || [];
+        expense.payments.push(payment);
+
+        // Update expense payment status
+        const totalPaid = expense.payments.reduce((sum, p) => sum + p.amount, 0);
+        expense.amountPaid = totalPaid;
+        expense.balanceDue = expense.amount - totalPaid;
+        
+        if (expense.balanceDue <= 0) {
+            expense.paymentStatus = 'paid';
+        } else {
+            expense.paymentStatus = 'partial';
+        }
+
+        await expense.save();
+
+        // Create double-entry transaction
+        const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+        
+        const transactionEntry = new TransactionEntry({
+            transactionId,
+            date: new Date(),
+            description: `Payment for Expense ${expense.expenseId} - ${expense.description}`,
+            reference: reference || paymentId,
+            entries: [
+                {
+                    accountCode: receivingAccount,
+                    accountName: receivingAcc.name,
+                    accountType: receivingAcc.type,
+                    debit: 0,
+                    credit: parseFloat(amount),
+                    description: `Payment received for expense ${expense.expenseId}`
+                },
+                {
+                    accountCode: payingAccount,
+                    accountName: payingAcc.name,
+                    accountType: payingAcc.type,
+                    debit: parseFloat(amount),
+                    credit: 0,
+                    description: `Payment made for expense ${expense.expenseId}`
+                }
+            ],
+            totalDebit: parseFloat(amount),
+            totalCredit: parseFloat(amount),
+            source: 'expense_payment',
+            sourceId: expense._id,
+            sourceModel: 'Expense',
+            createdBy: user.email,
+            createdAt: new Date(),
+            metadata: {
+                expenseId: expense.expenseId,
+                expenseDescription: expense.description,
+                paymentMethod,
+                reference
+            }
+        });
+
+        await transactionEntry.save();
+
+        // Populate expense details for response
+        await expense.populate('residence', 'name address');
+        await expense.populate('createdBy', 'firstName lastName email');
+
+        res.status(201).json({
+            message: 'Expense payment recorded successfully with transaction entry',
+            payment,
+            transactionEntry: {
+                transactionId: transactionEntry.transactionId,
+                totalDebit: transactionEntry.totalDebit,
+                totalCredit: transactionEntry.totalCredit,
+                date: transactionEntry.date
+            },
+            expense: {
+                _id: expense._id,
+                expenseId: expense.expenseId,
+                description: expense.description,
+                amount: expense.amount,
+                amountPaid: expense.amountPaid,
+                balanceDue: expense.balanceDue,
+                paymentStatus: expense.paymentStatus,
+                residence: expense.residence
+            }
+        });
+
+    } catch (error) {
+        console.error('Error recording expense payment:', error);
+        res.status(500).json({
+            message: 'Error recording expense payment',
+            error: error.message
+        });
+    }
+}; 

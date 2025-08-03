@@ -6,6 +6,12 @@ const { auth, checkRole } = require('../middleware/auth');
 // All routes require authentication
 router.use(auth);
 
+// Dashboard and reports
+router.get('/dashboard', 
+    checkRole(['admin', 'finance_admin', 'finance_user']), 
+    invoiceController.getDashboardReport
+);
+
 // Invoice CRUD operations
 router.post('/', 
     checkRole(['admin', 'finance_admin', 'finance_user']), 

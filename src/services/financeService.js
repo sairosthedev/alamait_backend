@@ -1,100 +1,104 @@
-import axios from 'axios';
-import { API_BASE_URL } from '../config';
+import api from './api';
 
-class FinanceService {
-    constructor() {
-        this.baseURL = `${API_BASE_URL}/api/finance`;
-    }
+// Get transaction entries with filters
+export const getTransactionEntries = async (filters = {}) => {
+  try {
+    const params = new URLSearchParams();
+    
+    Object.keys(filters).forEach(key => {
+      if (filters[key] && filters[key] !== '') {
+        params.append(key, filters[key]);
+      }
+    });
 
-    // Get all balance sheet entries
-    async getBalanceSheetEntries() {
-        try {
-            const [assetsResponse, liabilitiesResponse, equityResponse] = await Promise.all([
-                axios.get(`${this.baseURL}/balance-sheets/assets`),
-                axios.get(`${this.baseURL}/balance-sheets/liabilities`),
-                axios.get(`${this.baseURL}/balance-sheets/equity`)
-            ]);
+    const response = await api.get(`/transactions/entries?${params.toString()}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching transaction entries:', error);
+    throw error;
+  }
+};
 
-            return {
-                assets: assetsResponse.data.assets || [],
-                liabilities: liabilitiesResponse.data.liabilities || [],
-                equity: equityResponse.data.equity || []
-            };
-        } catch (error) {
-            console.error('Error fetching balance sheet entries:', error);
-            throw new Error('Failed to fetch balance sheet entries');
-        }
-    }
+// Get transaction summary
+export const getTransactionSummary = async (filters = {}) => {
+  try {
+    const params = new URLSearchParams();
+    
+    Object.keys(filters).forEach(key => {
+      if (filters[key] && filters[key] !== '') {
+        params.append(key, filters[key]);
+      }
+    });
 
-    // Add a new entry
-    async addBalanceSheetEntry(entryData) {
-        try {
-            const { type, amount, category, description, entity } = entryData;
-            const data = {
-                amount: parseFloat(amount),
-                category,
-                description,
-                entity,
-                type
-            };
-            
-            console.log('Adding balance sheet entry:', { data, entryType: type });
-            
-            const response = await axios.post(`${this.baseURL}/balance-sheets/${type}`, data);
-            return response.data;
-        } catch (error) {
-            console.error('Error adding balance sheet entry:', error);
-            throw new Error(error.response?.data?.error || 'Failed to add entry');
-        }
-    }
+    const response = await api.get(`/transactions/summary?${params.toString()}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching transaction summary:', error);
+    throw error;
+  }
+};
 
-    // Update an existing entry
-    async updateBalanceSheetEntry(entryId, entryData) {
-        try {
-            const { type, amount, category, description, entity } = entryData;
-            const data = {
-                amount: parseFloat(amount),
-                category,
-                description,
-                entity,
-                type
-            };
-            
-            console.log('Updating balance sheet entry:', { id: entryId, data, entryType: type });
-            
-            const response = await axios.put(`${this.baseURL}/balance-sheets/${type}/${entryId}`, data);
-            return response.data;
-        } catch (error) {
-            console.error('Error updating balance sheet entry:', error);
-            throw new Error(error.response?.data?.error || 'Failed to update entry');
-        }
-    }
+// Get single transaction entry
+export const getTransactionEntry = async (id) => {
+  try {
+    const response = await api.get(`/transactions/entries/${id}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching transaction entry:', error);
+    throw error;
+  }
+};
 
-    // Delete an entry
-    async deleteBalanceSheetEntry(entryId, type) {
-        try {
-            console.log('Deleting balance sheet entry:', { id: entryId, type });
-            const response = await axios.delete(`${this.baseURL}/balance-sheets/${type}/${entryId}`);
-            return response.data;
-        } catch (error) {
-            console.error('Error deleting balance sheet entry:', error);
-            throw new Error(error.response?.data?.error || 'Failed to delete entry');
-        }
-    }
+// Create manual transaction entry
+export const createTransactionEntry = async (transactionData) => {
+  try {
+    const response = await api.post('/transactions/entries', transactionData);
+    return response.data;
+  } catch (error) {
+    console.error('Error creating transaction entry:', error);
+    throw error;
+  }
+};
 
-    // Get latest balance sheet
-    async getLatestBalanceSheet() {
-        try {
-            const response = await axios.get(`${this.baseURL}/balance-sheets/latest`);
-            return response.data;
-        } catch (error) {
-            console.error('Error fetching latest balance sheet:', error);
-            throw new Error(error.response?.data?.error || 'Failed to fetch latest balance sheet');
-        }
-    }
-}
+// Get accounts for dropdown
+export const getAccounts = async () => {
+  try {
+    const response = await api.get('/transactions/accounts');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching accounts:', error);
+    throw error;
+  }
+};
 
-const financeService = new FinanceService();
+// Export transactions to CSV
+export const exportTransactions = async (filters = {}) => {
+  try {
+    const params = new URLSearchParams();
+    
+    Object.keys(filters).forEach(key => {
+      if (filters[key] && filters[key] !== '') {
+        params.append(key, filters[key]);
+      }
+    });
 
-export default financeService;
-export { financeService }; 
+    const response = await api.get(`/transactions/export?${params.toString()}`, {
+      responseType: 'blob'
+    });
+    
+    // Create download link
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `transactions_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error exporting transactions:', error);
+    throw error;
+  }
+}; 

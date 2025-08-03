@@ -1,65 +1,117 @@
 const mongoose = require('mongoose');
 
-const TransactionEntrySchema = new mongoose.Schema({
-  transaction: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction', required: true },
-  account: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', required: true },
-  debit: { type: Number, default: 0 },
-  credit: { type: Number, default: 0 },
-  type: {
+const transactionEntrySchema = new mongoose.Schema({
+  // Transaction Info
+  transactionId: {
     type: String,
-    enum: [
-      'income', 'expense', 'other income', 'other expense',
-      'operating', 'investing', 'financing',
-      'asset', 'liability', 'equity'
-    ],
-    required: true
+    required: true,
+    unique: true
   },
-  // Additional tracking fields
+  date: {
+    type: Date,
+    required: true,
+    default: Date.now
+  },
   description: {
     type: String,
-    trim: true
+    required: true
   },
-  reference: {
+  reference: String,
+  
+  // Double-Entry Details
+  entries: [{
+    accountCode: {
+      type: String,
+      required: true,
+      ref: 'Account'
+    },
+    accountName: String,
+    accountType: String,
+    debit: {
+      type: Number,
+      default: 0
+    },
+    credit: {
+      type: Number,
+      default: 0
+    },
+    description: String
+  }],
+  
+  // Total amounts
+  totalDebit: {
+    type: Number,
+    required: true
+  },
+  totalCredit: {
+    type: Number,
+    required: true
+  },
+  
+  // Source
+  source: {
     type: String,
-    trim: true
+    enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment'],
+    required: true
   },
-  metadata: {
-    type: mongoose.Schema.Types.Mixed,
-    default: {}
+  sourceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    refPath: 'sourceModel'
   },
-  // Timestamps
+  sourceModel: {
+    type: String,
+    enum: ['Payment', 'Invoice', 'Manual', 'Vendor'],
+    required: true
+  },
+  
+  // Audit Trail
+  createdBy: {
+    type: String, // User email
+    required: true
+  },
   createdAt: {
     type: Date,
     default: Date.now
   },
-  updatedAt: {
+  approvedBy: {
+    type: String, // User email
+    default: null
+  },
+  approvedAt: {
     type: Date,
-    default: Date.now
+    default: null
+  },
+  
+  // Status
+  status: {
+    type: String,
+    enum: ['draft', 'posted', 'reversed'],
+    default: 'posted'
+  },
+
+  // Metadata for additional info
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   }
 }, {
   timestamps: true
 });
 
-// Indexes for performance
-TransactionEntrySchema.index({ transaction: 1 });
-TransactionEntrySchema.index({ account: 1 });
-TransactionEntrySchema.index({ type: 1 });
-TransactionEntrySchema.index({ reference: 1 });
-TransactionEntrySchema.index({ createdAt: -1 });
-
-// Virtual for balance
-TransactionEntrySchema.virtual('balance').get(function() {
-  return this.debit - this.credit;
+// Ensure debits equal credits
+transactionEntrySchema.pre('save', function(next) {
+  if (this.totalDebit !== this.totalCredit) {
+    return next(new Error('Total debits must equal total credits'));
+  }
+  next();
 });
 
-// Method to get formatted amount
-TransactionEntrySchema.methods.getFormattedAmount = function() {
-  if (this.debit > 0) {
-    return `Dr ${this.debit.toFixed(2)}`;
-  } else if (this.credit > 0) {
-    return `Cr ${this.credit.toFixed(2)}`;
+// Generate transaction ID if not provided
+transactionEntrySchema.pre('save', function(next) {
+  if (!this.transactionId) {
+    this.transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
   }
-  return '0.00';
-};
+  next();
+});
 
-module.exports = mongoose.model('TransactionEntry', TransactionEntrySchema); 
+module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 

@@ -15,6 +15,7 @@ exports.createInvoice = async (req, res) => {
             student,
             residence,
             room,
+            unit, // Frontend sends 'unit' instead of 'room'
             roomType,
             billingPeriod,
             billingStartDate,
@@ -29,10 +30,13 @@ exports.createInvoice = async (req, res) => {
             gracePeriod
         } = req.body;
 
+        // Use 'unit' if 'room' is not provided (frontend compatibility)
+        const roomNumber = room || unit;
+
         // Validate required fields
-        if (!student || !residence || !room || !billingPeriod || !dueDate) {
+        if (!student || !residence || !roomNumber || !billingPeriod || !dueDate) {
             return res.status(400).json({
-                message: 'Missing required fields: student, residence, room, billingPeriod, dueDate'
+                message: 'Missing required fields: student, residence, room/unit, billingPeriod, dueDate'
             });
         }
 
@@ -42,7 +46,7 @@ exports.createInvoice = async (req, res) => {
             return res.status(404).json({ message: 'Student not found' });
         }
 
-        // Check if residence exists
+        // Check if residence exists and get full details
         const residenceExists = await Residence.findById(residence);
         if (!residenceExists) {
             return res.status(404).json({ message: 'Residence not found' });
@@ -56,7 +60,7 @@ exports.createInvoice = async (req, res) => {
             invoiceNumber,
             student,
             residence,
-            room,
+            room: roomNumber, // Use the mapped room number
             roomType,
             billingPeriod,
             billingStartDate: new Date(billingStartDate),
@@ -79,13 +83,69 @@ exports.createInvoice = async (req, res) => {
 
         const savedInvoice = await invoice.save();
 
-        // Populate student and residence details
+        // Populate student and residence details for preview
         await savedInvoice.populate('student', 'firstName lastName email phone');
-        await savedInvoice.populate('residence', 'name address');
+        await savedInvoice.populate('residence', 'name address city state postalCode');
+
+        // Calculate totals for preview
+        let subtotal = 0;
+        let taxAmount = 0;
+        
+        if (charges && charges.length > 0) {
+            charges.forEach(charge => {
+                const chargeAmount = (charge.amount || 0);
+                subtotal += chargeAmount;
+                
+                // Calculate tax if applicable
+                if (charge.taxRate && charge.taxRate > 0) {
+                    taxAmount += (chargeAmount * charge.taxRate / 100);
+                }
+            });
+        }
+
+        const totalAmount = subtotal + taxAmount;
+
+        // Create preview response with all details
+        const invoicePreview = {
+            ...savedInvoice.toObject(),
+            subtotal,
+            taxAmount,
+            totalAmount,
+            balanceDue: totalAmount, // Initially balance equals total
+            amountPaid: 0,
+            residenceDetails: {
+                name: residenceExists.name,
+                address: residenceExists.address,
+                city: residenceExists.city,
+                state: residenceExists.state,
+                postalCode: residenceExists.postalCode
+            },
+            studentDetails: {
+                firstName: studentExists.firstName,
+                lastName: studentExists.lastName,
+                email: studentExists.email,
+                phone: studentExists.phone
+            },
+            createdByDetails: {
+                firstName: user.firstName,
+                lastName: user.lastName,
+                email: user.email
+            }
+        };
 
         res.status(201).json({
             message: 'Invoice created successfully',
-            invoice: savedInvoice
+            invoice: invoicePreview,
+            preview: {
+                invoiceNumber: invoiceNumber,
+                studentName: `${studentExists.firstName} ${studentExists.lastName}`,
+                residenceName: residenceExists.name,
+                roomNumber: roomNumber,
+                billingPeriod: billingPeriod,
+                totalAmount: totalAmount,
+                dueDate: new Date(dueDate).toLocaleDateString(),
+                chargesCount: charges ? charges.length : 0
+            }
         });
 
     } catch (error) {
@@ -637,6 +697,41 @@ exports.bulkSendReminders = async (req, res) => {
         console.error('Error in bulk reminder operation:', error);
         res.status(500).json({
             message: 'Error in bulk reminder operation',
+            error: error.message
+        });
+    }
+};
+
+// Get dashboard report
+exports.getDashboardReport = async (req, res) => {
+    try {
+        console.log('Dashboard endpoint called'); // Debug log
+        
+        // For now, return a simple response to avoid aggregation errors
+        const dashboardData = {
+            summary: {
+                totalInvoices: 0,
+                totalAmount: 0,
+                totalPaid: 0,
+                totalOutstanding: 0,
+                overdueAmount: 0
+            },
+            recentInvoices: [],
+            overdueInvoices: [],
+            statusDistribution: [],
+            monthlyTrends: []
+        };
+
+        res.status(200).json({
+            success: true,
+            data: dashboardData
+        });
+
+    } catch (error) {
+        console.error('Error getting dashboard report:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error getting dashboard report',
             error: error.message
         });
     }

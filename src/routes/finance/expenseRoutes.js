@@ -32,6 +32,12 @@ router.delete('/:id',
     expenseController.deleteExpense
 );
 
+// Record payment for expense (creates transaction entries)
+router.post('/:id/payments', 
+    checkRole('admin', 'finance_admin', 'finance_user'), 
+    expenseController.recordExpensePayment
+);
+
 // Get expense summary
 router.get('/summary/summary', 
     expenseController.getExpenseSummary
