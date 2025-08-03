@@ -1,4 +1,5 @@
 const TransactionEntry = require('../models/TransactionEntry');
+const Transaction = require('../models/Transaction');
 const Account = require('../models/Account');
 
 // Get transaction entries with filters
@@ -14,6 +15,8 @@ exports.getTransactionEntries = async (req, res) => {
       status
     } = req.query;
 
+    console.log('🔍 Transaction entries query params:', req.query);
+
     const query = {};
 
     // Date range filter
@@ -25,22 +28,19 @@ exports.getTransactionEntries = async (req, res) => {
 
     // Account filter
     if (account && account !== 'all') {
-      query['entries.accountCode'] = account;
-    }
-
-    // Status filter
-    if (status) {
-      query.status = status;
+      query.account = account;
     }
 
     // Type filter (debit/credit)
     if (type && type !== 'all') {
       if (type === 'debit') {
-        query['entries.debit'] = { $gt: 0 };
+        query.debit = { $gt: 0 };
       } else if (type === 'credit') {
-        query['entries.credit'] = { $gt: 0 };
+        query.credit = { $gt: 0 };
       }
     }
+
+    console.log('🔍 Database query:', JSON.stringify(query, null, 2));
 
     const options = {
       sort: { date: -1 },
@@ -48,58 +48,90 @@ exports.getTransactionEntries = async (req, res) => {
       skip: (parseInt(page) - 1) * parseInt(limit)
     };
 
+    // Get transaction entries
     const transactionEntries = await TransactionEntry.find(query, null, options);
     const total = await TransactionEntry.countDocuments(query);
 
+    console.log(`🔍 Found ${transactionEntries.length} transaction entries, total: ${total}`);
+
     // Transform data for frontend
-    const transformedTransactions = transactionEntries.map(entry => {
-      // Flatten entries for table display
-      const transactions = [];
+    const transformedTransactions = [];
+    
+    for (const entry of transactionEntries) {
+      console.log(`🔍 Processing entry: ${entry._id}, debit: ${entry.debit}, credit: ${entry.credit}`);
       
-      entry.entries.forEach(entryItem => {
-        if (entryItem.debit > 0) {
-          transactions.push({
-            _id: `${entry._id}_debit_${entryItem.accountCode}`,
-            transactionId: entry.transactionId,
-            timestamp: entry.date,
-            type: 'debit',
-            accountName: entryItem.accountName,
-            accountType: entryItem.accountType,
-            accountCode: entryItem.accountCode,
-            amount: entryItem.debit,
-            description: entryItem.description || entry.description,
-            reference: entry.reference,
-            referenceType: entry.source,
-            referenceId: entry.sourceId,
-            createdByEmail: entry.createdBy,
-            createdAt: entry.createdAt,
-            metadata: entry.metadata
-          });
-        }
-        
-        if (entryItem.credit > 0) {
-          transactions.push({
-            _id: `${entry._id}_credit_${entryItem.accountCode}`,
-            transactionId: entry.transactionId,
-            timestamp: entry.date,
-            type: 'credit',
-            accountName: entryItem.accountName,
-            accountType: entryItem.accountType,
-            accountCode: entryItem.accountCode,
-            amount: entryItem.credit,
-            description: entryItem.description || entry.description,
-            reference: entry.reference,
-            referenceType: entry.source,
-            referenceId: entry.sourceId,
-            createdByEmail: entry.createdBy,
-            createdAt: entry.createdAt,
-            metadata: entry.metadata
-          });
-        }
-      });
+      // Get account details
+      let accountName = 'Unknown Account';
+      let accountType = 'unknown';
       
-      return transactions;
-    }).flat();
+      try {
+        const account = await Account.findById(entry.account);
+        if (account) {
+          accountName = account.name;
+          accountType = account.type;
+        }
+      } catch (error) {
+        console.log(`⚠️ Could not find account ${entry.account}`);
+      }
+
+      // Get transaction details
+      let transactionDescription = 'No description';
+      let transactionReference = 'N/A';
+      
+      try {
+        const transaction = await Transaction.findById(entry.transaction);
+        if (transaction) {
+          transactionDescription = transaction.description || 'No description';
+          transactionReference = transaction.reference || 'N/A';
+        }
+      } catch (error) {
+        console.log(`⚠️ Could not find transaction ${entry.transaction}`);
+      }
+
+      // Create debit entry if debit > 0
+      if (entry.debit > 0) {
+        transformedTransactions.push({
+          _id: `${entry._id}_debit`,
+          transactionId: entry.transaction,
+          timestamp: entry.date,
+          type: 'debit',
+          accountName: accountName,
+          accountType: accountType,
+          accountCode: entry.account,
+          amount: entry.debit,
+          description: transactionDescription,
+          reference: transactionReference,
+          referenceType: 'transaction',
+          referenceId: entry.transaction,
+          createdByEmail: 'System',
+          createdAt: entry.date,
+          metadata: { entryType: entry.type }
+        });
+      }
+      
+      // Create credit entry if credit > 0
+      if (entry.credit > 0) {
+        transformedTransactions.push({
+          _id: `${entry._id}_credit`,
+          transactionId: entry.transaction,
+          timestamp: entry.date,
+          type: 'credit',
+          accountName: accountName,
+          accountType: accountType,
+          accountCode: entry.account,
+          amount: entry.credit,
+          description: transactionDescription,
+          reference: transactionReference,
+          referenceType: 'transaction',
+          referenceId: entry.transaction,
+          createdByEmail: 'System',
+          createdAt: entry.date,
+          metadata: { entryType: entry.type }
+        });
+      }
+    }
+
+    console.log(`🔍 Transformed ${transformedTransactions.length} transactions for frontend`);
 
     res.status(200).json({
       success: true,
@@ -113,7 +145,7 @@ exports.getTransactionEntries = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching transaction entries:', error);
+    console.error('❌ Error fetching transaction entries:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching transaction entries',
@@ -144,12 +176,16 @@ exports.getTransactionSummary = async (req, res) => {
 
     // Account filter
     if (account && account !== 'all') {
-      query['entries.accountCode'] = account;
+      query.account = account;
     }
 
-    // Status filter
-    if (status) {
-      query.status = status;
+    // Type filter (debit/credit)
+    if (type && type !== 'all') {
+      if (type === 'debit') {
+        query.debit = { $gt: 0 };
+      } else if (type === 'credit') {
+        query.credit = { $gt: 0 };
+      }
     }
 
     const transactionEntries = await TransactionEntry.find(query);
@@ -158,14 +194,16 @@ exports.getTransactionSummary = async (req, res) => {
     let totalCredits = 0;
     let transactionCount = 0;
 
+    // Count unique transactions
+    const uniqueTransactions = new Set();
+
     transactionEntries.forEach(entry => {
-      entry.entries.forEach(entryItem => {
-        totalDebits += entryItem.debit || 0;
-        totalCredits += entryItem.credit || 0;
-      });
-      transactionCount++;
+      totalDebits += entry.debit || 0;
+      totalCredits += entry.credit || 0;
+      uniqueTransactions.add(entry.transaction.toString());
     });
 
+    transactionCount = uniqueTransactions.size;
     const netAmount = totalCredits - totalDebits;
 
     res.status(200).json({
@@ -256,39 +294,48 @@ exports.createTransactionEntry = async (req, res) => {
       });
     }
 
-    // Validate accounts exist
+    // Create transaction first
+    const transaction = new Transaction({
+      date: new Date(),
+      description,
+      reference
+    });
+
+    await transaction.save();
+
+    // Create transaction entries
+    const transactionEntries = [];
+
     for (const entry of entries) {
-      const account = await Account.findOne({ code: entry.accountCode });
+      // Validate account exists
+      const account = await Account.findById(entry.accountCode);
       if (!account) {
         return res.status(400).json({
           success: false,
           message: `Account with code ${entry.accountCode} not found`
         });
       }
-      // Add account name and type to entry
-      entry.accountName = account.name;
-      entry.accountType = account.type;
+
+      const transactionEntry = new TransactionEntry({
+        transaction: transaction._id,
+        account: entry.accountCode,
+        debit: entry.debit || 0,
+        credit: entry.credit || 0,
+        type: account.type,
+        date: transaction.date
+      });
+
+      await transactionEntry.save();
+      transactionEntries.push(transactionEntry);
     }
-
-    const transactionEntry = new TransactionEntry({
-      description,
-      reference,
-      entries,
-      totalDebit,
-      totalCredit,
-      source,
-      sourceId,
-      sourceModel,
-      createdBy: user.email,
-      metadata
-    });
-
-    await transactionEntry.save();
 
     res.status(201).json({
       success: true,
       message: 'Transaction entry created successfully',
-      data: transactionEntry
+      data: {
+        transaction,
+        entries: transactionEntries
+      }
     });
 
   } catch (error) {
