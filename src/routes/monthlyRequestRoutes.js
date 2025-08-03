@@ -197,10 +197,4 @@ router.put('/:id/items/:itemIndex/quotations/:quotationIndex',
 // Delete monthly request (admin or submitter only)
 router.delete('/:id', monthlyRequestController.deleteMonthlyRequest);
 
-// Add monthly submission endpoint
-router.post('/:id/submit-month', auth, checkRole(['admin', 'finance']), monthlyRequestController.submitTemplateForMonth);
-
-// Add monthly approval endpoint
-router.post('/:id/approve-month', auth, checkRole(['admin', 'finance']), monthlyRequestController.approveTemplateMonth);
-
 module.exports = router; 
