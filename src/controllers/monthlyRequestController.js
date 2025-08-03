@@ -1948,9 +1948,9 @@ exports.getFinanceMonthlyRequests = async (req, res) => {
     try {
         const user = req.user;
         
-        // Only finance users can access this endpoint
-        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
-            return res.status(403).json({ message: 'Only finance users can access this endpoint' });
+        // Allow admin and finance users to access this endpoint
+        if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ message: 'Only admin and finance users can access this endpoint' });
         }
         
         const { month, year, status, page = 1, limit = 10 } = req.query;
@@ -2423,9 +2423,9 @@ exports.getFinancePendingApprovals = async (req, res) => {
     try {
         const user = req.user;
         
-        // Only finance users can access this endpoint
-        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
-            return res.status(403).json({ message: 'Only finance users can access this endpoint' });
+        // Allow admin and finance users to access this endpoint
+        if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ message: 'Only admin and finance users can access this endpoint' });
         }
         
         const { month, year, page = 1, limit = 10 } = req.query;
