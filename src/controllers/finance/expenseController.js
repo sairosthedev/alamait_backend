@@ -840,6 +840,17 @@ exports.recordExpensePayment = async (req, res) => {
             expense.requestId = expense.maintenanceRequestId;
         }
 
+        // Check if expense has vendor information
+        let vendorSpecificAccount = null;
+        if (expense.vendorId) {
+            const Vendor = require('../../models/Vendor');
+            const vendor = await Vendor.findById(expense.vendorId);
+            if (vendor && vendor.chartOfAccountsCode) {
+                vendorSpecificAccount = vendor.chartOfAccountsCode;
+                console.log(`Found vendor-specific account: ${vendorSpecificAccount} for vendor: ${vendor.businessName}`);
+            }
+        }
+
         // Validate payment amount
         if (amount <= 0) {
             return res.status(400).json({ message: 'Payment amount must be greater than 0' });
@@ -849,12 +860,33 @@ exports.recordExpensePayment = async (req, res) => {
             return res.status(400).json({ message: 'Payment amount cannot exceed expense amount' });
         }
 
+        // Determine the correct receiving account
+        let finalReceivingAccount = receivingAccount;
+        if (vendorSpecificAccount) {
+            // Use vendor-specific accounts payable if available
+            const vendorAccount = await Account.findOne({ code: vendorSpecificAccount });
+            if (vendorAccount) {
+                finalReceivingAccount = vendorSpecificAccount;
+                console.log(`Using vendor-specific account: ${vendorSpecificAccount} instead of generic: ${receivingAccount}`);
+            } else {
+                console.log(`Vendor account ${vendorSpecificAccount} not found, using generic: ${receivingAccount}`);
+            }
+        }
+
         // Validate accounts exist
         const payingAcc = await Account.findOne({ code: payingAccount });
-        const receivingAcc = await Account.findOne({ code: receivingAccount });
+        const receivingAcc = await Account.findOne({ code: finalReceivingAccount });
         
         if (!payingAcc || !receivingAcc) {
-            return res.status(400).json({ message: 'Invalid account codes' });
+            return res.status(400).json({ 
+                message: 'Invalid account codes',
+                details: {
+                    payingAccount: payingAccount,
+                    receivingAccount: finalReceivingAccount,
+                    vendorSpecificAccount: vendorSpecificAccount,
+                    vendorId: expense.vendorId
+                }
+            });
         }
 
         // Generate payment ID
@@ -901,7 +933,7 @@ exports.recordExpensePayment = async (req, res) => {
             reference: reference || paymentId,
             entries: [
                 {
-                    accountCode: receivingAccount,
+                    accountCode: finalReceivingAccount,
                     accountName: receivingAcc.name,
                     accountType: receivingAcc.type,
                     debit: 0,
