@@ -66,12 +66,24 @@ exports.downloadMultipleLeases = async (req, res) => {
         const { leaseIds } = req.body;
         const user = req.user;
 
+        console.log('🔍 Multiple lease download request:', {
+            requestedIds: leaseIds,
+            count: leaseIds?.length || 0,
+            user: user.email
+        });
+
         if (!leaseIds || !Array.isArray(leaseIds) || leaseIds.length === 0) {
             return res.status(400).json({ error: 'Please provide an array of lease IDs' });
         }
 
         // Find all requested leases
         const leases = await Lease.find({ _id: { $in: leaseIds } });
+        
+        console.log('📊 Found leases in database:', {
+            requested: leaseIds.length,
+            found: leases.length,
+            leaseIds: leases.map(l => l._id.toString())
+        });
 
         if (leases.length === 0) {
             return res.status(404).json({ error: 'No leases found' });
@@ -94,40 +106,87 @@ exports.downloadMultipleLeases = async (req, res) => {
         const archive = archiver('zip', { zlib: { level: 9 } });
         archive.pipe(res);
 
+        let addedFiles = 0;
+        let skippedFiles = 0;
+
         // Add each lease to the ZIP
         for (const lease of leases) {
-            if (lease.path && lease.path.startsWith('http')) {
+            console.log(`📁 Processing lease ${lease._id}:`, {
+                hasPath: !!lease.path,
+                pathStartsWithHttp: lease.path?.startsWith('http'),
+                pathStartsWithSlash: lease.path?.startsWith('/'),
+                filename: lease.originalname || lease.filename,
+                studentName: lease.studentName
+            });
+
+            if (lease.path) {
                 try {
-                    // Extract S3 key from the URL
-                    const urlParts = lease.path.split('/');
-                    const s3Key = urlParts.slice(3).join('/');
+                    let fileBuffer;
+                    let s3Key;
 
-                    // Get file from S3
-                    const s3Params = {
-                        Bucket: process.env.AWS_S3_BUCKET || 'alamait-uploads',
-                        Key: s3Key
-                    };
+                    if (lease.path.startsWith('http')) {
+                        // S3 path - extract key and fetch from S3
+                        const urlParts = lease.path.split('/');
+                        s3Key = urlParts.slice(3).join('/');
+                        console.log(`   📤 Fetching from S3: ${s3Key}`);
 
-                    const s3Object = await s3.getObject(s3Params).promise();
-                    
+                        const s3Params = {
+                            Bucket: process.env.AWS_S3_BUCKET || 'alamait-uploads',
+                            Key: s3Key
+                        };
+
+                        const s3Object = await s3.getObject(s3Params).promise();
+                        fileBuffer = s3Object.Body;
+
+                    } else if (lease.path.startsWith('/uploads/')) {
+                        // Local file path - read from local filesystem
+                        const fs = require('fs');
+                        const path = require('path');
+                        
+                        // Convert relative path to absolute path
+                        const localPath = path.join(__dirname, '..', '..', lease.path);
+                        console.log(`   📁 Reading local file: ${localPath}`);
+
+                        if (fs.existsSync(localPath)) {
+                            fileBuffer = fs.readFileSync(localPath);
+                        } else {
+                            console.log(`   ❌ Local file not found: ${localPath}`);
+                            skippedFiles++;
+                            continue;
+                        }
+                    } else {
+                        console.log(`   ⚠️ Unknown path format: ${lease.path}`);
+                        skippedFiles++;
+                        continue;
+                    }
+
                     // Create a meaningful filename for the ZIP
                     const fileName = `${lease.studentName || 'Student'}_${lease.residenceName || 'Residence'}_${lease.originalname || lease.filename}`;
                     
+                    console.log(`   ✅ Adding to ZIP: ${fileName}`);
+                    
                     // Add file to archive
-                    archive.append(s3Object.Body, { name: fileName });
+                    archive.append(fileBuffer, { name: fileName });
+                    addedFiles++;
 
-                } catch (s3Error) {
-                    console.error(`Error fetching lease ${lease._id} from S3:`, s3Error);
+                } catch (error) {
+                    console.error(`❌ Error processing lease ${lease._id}:`, error.message);
+                    skippedFiles++;
                     // Continue with other files even if one fails
                 }
+            } else {
+                console.log(`   ⚠️ Skipping lease ${lease._id} - no path`);
+                skippedFiles++;
             }
         }
+
+        console.log(`📦 ZIP Summary: ${addedFiles} files added, ${skippedFiles} files skipped`);
 
         // Finalize the archive
         await archive.finalize();
 
     } catch (error) {
-        console.error('Error creating ZIP download:', error);
+        console.error('❌ Error creating ZIP download:', error);
         res.status(500).json({ error: 'Server error' });
     }
 };
@@ -158,32 +217,60 @@ exports.downloadResidenceLeases = async (req, res) => {
         const archive = archiver('zip', { zlib: { level: 9 } });
         archive.pipe(res);
 
+        let addedFiles = 0;
+        let skippedFiles = 0;
+
         // Add each lease to the ZIP
         for (const lease of leases) {
-            if (lease.path && lease.path.startsWith('http')) {
+            if (lease.path) {
                 try {
-                    // Extract S3 key from the URL
-                    const urlParts = lease.path.split('/');
-                    const s3Key = urlParts.slice(3).join('/');
+                    let fileBuffer;
 
-                    // Get file from S3
-                    const s3Params = {
-                        Bucket: process.env.AWS_S3_BUCKET || 'alamait-uploads',
-                        Key: s3Key
-                    };
+                    if (lease.path.startsWith('http')) {
+                        // S3 path - extract key and fetch from S3
+                        const urlParts = lease.path.split('/');
+                        const s3Key = urlParts.slice(3).join('/');
 
-                    const s3Object = await s3.getObject(s3Params).promise();
-                    
+                        const s3Params = {
+                            Bucket: process.env.AWS_S3_BUCKET || 'alamait-uploads',
+                            Key: s3Key
+                        };
+
+                        const s3Object = await s3.getObject(s3Params).promise();
+                        fileBuffer = s3Object.Body;
+
+                    } else if (lease.path.startsWith('/uploads/')) {
+                        // Local file path - read from local filesystem
+                        const fs = require('fs');
+                        const path = require('path');
+                        
+                        const localPath = path.join(__dirname, '..', '..', lease.path);
+
+                        if (fs.existsSync(localPath)) {
+                            fileBuffer = fs.readFileSync(localPath);
+                        } else {
+                            skippedFiles++;
+                            continue;
+                        }
+                    } else {
+                        skippedFiles++;
+                        continue;
+                    }
+
                     // Create a meaningful filename for the ZIP
                     const fileName = `${lease.studentName || 'Student'}_${lease.originalname || lease.filename}`;
                     
                     // Add file to archive
-                    archive.append(s3Object.Body, { name: fileName });
+                    archive.append(fileBuffer, { name: fileName });
+                    addedFiles++;
 
-                } catch (s3Error) {
-                    console.error(`Error fetching lease ${lease._id} from S3:`, s3Error);
+                } catch (error) {
+                    console.error(`Error processing lease ${lease._id}:`, error.message);
+                    skippedFiles++;
                     // Continue with other files even if one fails
                 }
+            } else {
+                skippedFiles++;
             }
         }
 
@@ -221,32 +308,60 @@ exports.downloadAllLeases = async (req, res) => {
         const archive = archiver('zip', { zlib: { level: 9 } });
         archive.pipe(res);
 
+        let addedFiles = 0;
+        let skippedFiles = 0;
+
         // Add each lease to the ZIP
         for (const lease of leases) {
-            if (lease.path && lease.path.startsWith('http')) {
+            if (lease.path) {
                 try {
-                    // Extract S3 key from the URL
-                    const urlParts = lease.path.split('/');
-                    const s3Key = urlParts.slice(3).join('/');
+                    let fileBuffer;
 
-                    // Get file from S3
-                    const s3Params = {
-                        Bucket: process.env.AWS_S3_BUCKET || 'alamait-uploads',
-                        Key: s3Key
-                    };
+                    if (lease.path.startsWith('http')) {
+                        // S3 path - extract key and fetch from S3
+                        const urlParts = lease.path.split('/');
+                        const s3Key = urlParts.slice(3).join('/');
 
-                    const s3Object = await s3.getObject(s3Params).promise();
-                    
+                        const s3Params = {
+                            Bucket: process.env.AWS_S3_BUCKET || 'alamait-uploads',
+                            Key: s3Key
+                        };
+
+                        const s3Object = await s3.getObject(s3Params).promise();
+                        fileBuffer = s3Object.Body;
+
+                    } else if (lease.path.startsWith('/uploads/')) {
+                        // Local file path - read from local filesystem
+                        const fs = require('fs');
+                        const path = require('path');
+                        
+                        const localPath = path.join(__dirname, '..', '..', lease.path);
+
+                        if (fs.existsSync(localPath)) {
+                            fileBuffer = fs.readFileSync(localPath);
+                        } else {
+                            skippedFiles++;
+                            continue;
+                        }
+                    } else {
+                        skippedFiles++;
+                        continue;
+                    }
+
                     // Create a meaningful filename for the ZIP
                     const fileName = `${lease.residenceName || 'Residence'}/${lease.studentName || 'Student'}_${lease.originalname || lease.filename}`;
                     
                     // Add file to archive
-                    archive.append(s3Object.Body, { name: fileName });
+                    archive.append(fileBuffer, { name: fileName });
+                    addedFiles++;
 
-                } catch (s3Error) {
-                    console.error(`Error fetching lease ${lease._id} from S3:`, s3Error);
+                } catch (error) {
+                    console.error(`Error processing lease ${lease._id}:`, error.message);
+                    skippedFiles++;
                     // Continue with other files even if one fails
                 }
+            } else {
+                skippedFiles++;
             }
         }
 

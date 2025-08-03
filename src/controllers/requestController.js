@@ -800,6 +800,31 @@ exports.updateRequest = async (req, res) => {
         await request.save();
         console.log('✅ Request saved successfully');
 
+        // Create expenses if financeStatus is being set to 'approved'
+        if (updateData.financeStatus === 'approved' && !request.convertedToExpense) {
+            try {
+                console.log('💰 Creating expenses for approved request:', request._id);
+                
+                // Check if request has items to process
+                if (request.items && request.items.length > 0) {
+                    // Handle complex requests with items and quotations
+                    await createItemizedExpensesForRequest(request, user);
+                } else {
+                    // Handle simple requests without items (legacy maintenance requests)
+                    await createSimpleExpenseForRequest(request, user);
+                }
+                
+                // Mark request as converted to expense
+                request.convertedToExpense = true;
+                await request.save();
+                
+                console.log('✅ Expenses created successfully for request:', request._id);
+            } catch (expenseError) {
+                console.error('❌ Error creating expenses for request:', expenseError);
+                // Don't fail the update if expense creation fails
+            }
+        }
+
         // Populate and return updated request
         const updatedRequest = await Request.findById(id)
             .populate('submittedBy', 'firstName lastName email role')
@@ -924,14 +949,7 @@ exports.adminApproval = async (req, res) => {
 // Finance approval for requests
 exports.financeApproval = async (req, res) => {
     try {
-        const { 
-            approved, 
-            notes, 
-            rejected, 
-            waitlisted, 
-            quotationUpdates,
-            selectedQuotationId 
-        } = req.body;
+        const { approved, rejected, waitlisted, notes } = req.body;
         const user = req.user;
         
         const request = await Request.findById(req.params.id);
@@ -944,142 +962,38 @@ exports.financeApproval = async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
         
-        // Check if admin has approved first
-        if (!request.approval.admin.approved) {
-            return res.status(400).json({ message: 'Admin approval required before finance approval' });
-        }
-        
         // Check if request is in correct status
         if (request.status !== 'pending') {
             return res.status(400).json({ message: 'Request is not pending approval' });
         }
         
-        // Build approval object based on action type
-        const approvalData = {
-            approved: approved || false,
+        // Update finance approval
+        request.approval.finance = {
+            approved,
+            rejected,
+            waitlisted,
             approvedBy: user._id,
             approvedByEmail: user.email,
             approvedAt: new Date(),
             notes
         };
         
-        // Add rejection data if rejected
-        if (rejected) {
-            approvalData.rejected = true;
-            approvalData.rejectedBy = user._id;
-            approvalData.rejectedAt = new Date();
-            approvalData.rejectedByEmail = user.email;
-        }
-        
-        // Add waitlist data if waitlisted
-        if (waitlisted) {
-            approvalData.waitlisted = true;
-            approvalData.waitlistedBy = user._id;
-            approvalData.waitlistedAt = new Date();
-            approvalData.waitlistedByEmail = user.email;
-        }
-        
-        request.approval.finance = approvalData;
-        
-        // Update financeStatus field
+        // Update finance status
         if (approved) {
             request.financeStatus = 'approved';
-            request.status = 'pending-ceo-approval';
         } else if (rejected) {
             request.financeStatus = 'rejected';
-            request.status = 'rejected';
         } else if (waitlisted) {
             request.financeStatus = 'waitlisted';
-            request.status = 'waitlisted';
-        }
-        
-        // Handle quotation updates if provided
-        if (quotationUpdates && Array.isArray(quotationUpdates)) {
-            for (const update of quotationUpdates) {
-                const { quotationId, isApproved, approvedBy, approvedAt } = update;
-                
-                // Find and update request-level quotations
-                const requestQuotation = request.quotations.id(quotationId);
-                if (requestQuotation) {
-                    requestQuotation.isApproved = isApproved;
-                    requestQuotation.approvedBy = approvedBy || user._id;
-                    requestQuotation.approvedAt = approvedAt ? new Date(approvedAt) : new Date();
-                    
-                    // Update request amount if quotation is approved
-                    if (isApproved) {
-                        request.amount = requestQuotation.amount;
-                    }
-                }
-                
-                // Find and update item-level quotations
-                if (request.items && request.items.length > 0) {
-                    for (const item of request.items) {
-                        if (item.quotations && item.quotations.length > 0) {
-                            const itemQuotation = item.quotations.id(quotationId);
-                            if (itemQuotation) {
-                                itemQuotation.isApproved = isApproved;
-                                itemQuotation.approvedBy = approvedBy || user._id;
-                                itemQuotation.approvedAt = approvedAt ? new Date(approvedAt) : new Date();
-                                
-                                // Update item's estimated cost if quotation is approved
-                                if (isApproved) {
-                                    item.estimatedCost = itemQuotation.amount;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Recalculate total estimated cost
-                    request.totalEstimatedCost = request.items.reduce((total, item) => {
-                        return total + (item.estimatedCost * item.quantity);
-                    }, 0);
-                }
-            }
-        }
-        
-        // Handle selected quotation if provided (for backward compatibility)
-        if (selectedQuotationId && approved) {
-            // Unapprove all quotations first
-            if (request.quotations && request.quotations.length > 0) {
-                request.quotations.forEach(quotation => {
-                    quotation.isApproved = false;
-                    quotation.approvedBy = null;
-                    quotation.approvedAt = null;
-                });
-            }
-            
-            if (request.items && request.items.length > 0) {
-                request.items.forEach(item => {
-                    if (item.quotations && item.quotations.length > 0) {
-                        item.quotations.forEach(quotation => {
-                            quotation.isApproved = false;
-                            quotation.approvedBy = null;
-                            quotation.approvedAt = null;
-                        });
-                    }
-                });
-            }
-            
-            // Approve the selected quotation
-            const selectedQuotation = request.quotations.id(selectedQuotationId);
-            if (selectedQuotation) {
-                selectedQuotation.isApproved = true;
-                selectedQuotation.approvedBy = user._id;
-                selectedQuotation.approvedAt = new Date();
-                request.amount = selectedQuotation.amount;
-            }
         }
         
         // Add to request history
-        let actionDescription = 'Finance approval';
-        if (rejected) actionDescription = 'Finance rejection';
-        if (waitlisted) actionDescription = 'Finance waitlist';
-        
+        const actionDescription = approved ? 'approved' : rejected ? 'rejected' : waitlisted ? 'waitlisted' : 'updated';
         request.requestHistory.push({
             date: new Date(),
-            action: actionDescription,
+            action: `Finance ${actionDescription}`,
             user: user._id,
-            changes: [`Finance ${approved ? 'approved' : rejected ? 'rejected' : waitlisted ? 'waitlisted' : 'updated'} the request`]
+            changes: [`Finance ${actionDescription} the request`]
         });
         
         await request.save();
@@ -1088,15 +1002,25 @@ exports.financeApproval = async (req, res) => {
         let financialResult = null;
         if (approved) {
             try {
-                const FinancialService = require('../services/financialService');
-                financialResult = await FinancialService.createApprovalTransaction(request, user);
-                
-                // Update request with expense reference
-                request.convertedToExpense = true;
-                request.expenseId = financialResult.expense._id;
-                await request.save();
-                
-                console.log('✅ Double-entry transaction created for request approval');
+                // Check if request has items to process
+                if (request.items && request.items.length > 0) {
+                    const FinancialService = require('../services/financialService');
+                    financialResult = await FinancialService.createApprovalTransaction(request, user);
+                    
+                    // Update request with expense reference
+                    request.convertedToExpense = true;
+                    request.expenseId = financialResult.expense._id;
+                    await request.save();
+                    
+                    console.log('✅ Itemized expense created for request approval');
+                } else {
+                    // Handle simple requests without items (legacy maintenance requests)
+                    await createSimpleExpenseForRequest(request, user);
+                    request.convertedToExpense = true;
+                    await request.save();
+                    
+                    console.log('✅ Simple expense created for request approval');
+                }
             } catch (financialError) {
                 console.error('❌ Error creating financial transaction:', financialError);
                 // Don't fail the approval if financial transaction fails
@@ -1105,11 +1029,16 @@ exports.financeApproval = async (req, res) => {
         
         const updatedRequest = await Request.findById(request._id)
             .populate('submittedBy', 'firstName lastName email role')
+            .populate('student', 'firstName lastName email role')
             .populate('residence', 'name')
             .populate('quotations.uploadedBy', 'firstName lastName email')
             .populate('quotations.approvedBy', 'firstName lastName email')
+            .populate('quotations.selectedBy', 'firstName lastName email')
+            .populate('quotations.deselectedBy', 'firstName lastName email')
             .populate('items.quotations.uploadedBy', 'firstName lastName email')
             .populate('items.quotations.approvedBy', 'firstName lastName email')
+            .populate('items.quotations.selectedBy', 'firstName lastName email')
+            .populate('items.quotations.deselectedBy', 'firstName lastName email')
             .populate('approval.finance.approvedBy', 'firstName lastName email');
         
         const response = {
@@ -1127,6 +1056,161 @@ exports.financeApproval = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// Helper function to create simple expense for legacy maintenance requests
+async function createSimpleExpenseForRequest(request, user) {
+    try {
+        const Expense = require('../models/finance/Expense');
+        
+        // Delete any existing expense for this request
+        await Expense.deleteMany({ requestId: request._id });
+        
+        // Generate unique expense ID
+        const expenseId = await generateUniqueId('EXP');
+        
+        // Calculate total amount from request
+        let totalAmount = 0;
+        if (request.amount && request.amount > 0) {
+            totalAmount = request.amount;
+        } else if (request.items && request.items.length > 0) {
+            totalAmount = request.items.reduce((sum, item) => sum + (item.totalCost || 0), 0);
+        }
+        
+        // Create expense data
+        const expenseData = {
+            expenseId,
+            requestId: request._id,
+            residence: request.residence,
+            category: 'Maintenance',
+            amount: totalAmount,
+            description: request.title || `Request: ${request.issue || 'Maintenance Request'}`,
+            expenseDate: new Date(),
+            paymentStatus: 'Pending',
+            createdBy: user._id,
+            period: 'monthly',
+            paymentMethod: 'Cash', // Default to cash for simple maintenance requests
+            approvedBy: user._id,
+            approvedAt: new Date(),
+            approvedByEmail: user.email
+        };
+        
+        // Create the expense
+        const newExpense = new Expense(expenseData);
+        await newExpense.save();
+        
+        console.log(`Simple expense created for request ${request._id}: ${expenseId} (Payment: Cash)`);
+        return newExpense;
+        
+    } catch (error) {
+        console.error('Error creating simple expense for request:', error);
+        throw error;
+    }
+}
+
+// Helper function to create itemized expenses for requests with items and quotations
+async function createItemizedExpensesForRequest(request, user) {
+    try {
+        const Expense = require('../models/finance/Expense');
+        const Vendor = require('../models/Vendor');
+        
+        // Delete any existing expenses for this request
+        await Expense.deleteMany({ requestId: request._id });
+        
+        const createdExpenses = [];
+        
+        // Process each item in the request
+        for (let i = 0; i < request.items.length; i++) {
+            const item = request.items[i];
+            
+            // Find selected quotation for this item
+            const selectedQuotation = item.quotations?.find(q => q.isSelected);
+            
+            if (selectedQuotation) {
+                // Item has selected quotation - create expense with quotation details
+                const expenseId = await generateUniqueId('EXP');
+                
+                // Determine payment method based on vendor bank details
+                let paymentMethod = 'Cash'; // Default to cash
+                if (selectedQuotation.vendorId) {
+                    try {
+                        const vendor = await Vendor.findById(selectedQuotation.vendorId);
+                        if (vendor && vendor.bankDetails && vendor.bankDetails.accountNumber) {
+                            paymentMethod = 'Bank Transfer';
+                        }
+                    } catch (vendorError) {
+                        console.warn('Could not fetch vendor details for payment method determination:', vendorError.message);
+                    }
+                }
+                
+                const expenseData = {
+                    expenseId,
+                    requestId: request._id,
+                    residence: request.residence,
+                    category: item.category || 'Other',
+                    amount: selectedQuotation.amount,
+                    description: `${request.title || 'Request'} - ${item.description}`,
+                    expenseDate: new Date(),
+                    paymentStatus: 'Pending',
+                    createdBy: user._id,
+                    period: 'monthly',
+                    paymentMethod: paymentMethod,
+                    approvedBy: user._id,
+                    approvedAt: new Date(),
+                    approvedByEmail: user.email,
+                    itemIndex: i,
+                    quotationId: selectedQuotation._id,
+                    vendorId: selectedQuotation.vendorId,
+                    vendorCode: selectedQuotation.vendorCode,
+                    vendorName: selectedQuotation.vendorName,
+                    vendorType: selectedQuotation.vendorType,
+                    notes: `Item: ${item.description} | Provider: ${selectedQuotation.provider} | Amount: $${selectedQuotation.amount} | Payment: ${paymentMethod}`
+                };
+                
+                const newExpense = new Expense(expenseData);
+                await newExpense.save();
+                createdExpenses.push(newExpense);
+                
+                console.log(`✅ Expense created for item ${i} with selected quotation: ${expenseId} (Payment: ${paymentMethod})`);
+                
+            } else {
+                // Item without quotation - create expense with estimated cost (default to cash)
+                const expenseId = await generateUniqueId('EXP');
+                
+                const expenseData = {
+                    expenseId,
+                    requestId: request._id,
+                    residence: request.residence,
+                    category: item.category || 'Other',
+                    amount: item.estimatedCost || item.totalCost || 0,
+                    description: `${request.title || 'Request'} - ${item.description}`,
+                    expenseDate: new Date(),
+                    paymentStatus: 'Pending',
+                    createdBy: user._id,
+                    period: 'monthly',
+                    paymentMethod: 'Cash', // Default to cash for items without quotations
+                    approvedBy: user._id,
+                    approvedAt: new Date(),
+                    approvedByEmail: user.email,
+                    itemIndex: i,
+                    notes: `Item: ${item.description} | Estimated cost: $${item.estimatedCost || item.totalCost || 0} | Payment: Cash`
+                };
+                
+                const newExpense = new Expense(expenseData);
+                await newExpense.save();
+                createdExpenses.push(newExpense);
+                
+                console.log(`✅ Expense created for item ${i} without quotation: ${expenseId} (Payment: Cash)`);
+            }
+        }
+        
+        console.log(`✅ Created ${createdExpenses.length} expenses for request ${request._id}`);
+        return createdExpenses;
+        
+    } catch (error) {
+        console.error('Error creating itemized expenses for request:', error);
+        throw error;
+    }
+}
 
 // CEO approval for requests
 exports.ceoApproval = async (req, res) => {

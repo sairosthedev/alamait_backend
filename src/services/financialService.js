@@ -263,13 +263,29 @@ class FinancialService {
             const expenseItems = request.items.map((item, index) => {
                 const selectedQuotation = item.quotations?.find(q => q.isSelected);
                 
+                // Calculate item amount based on selected quotation or estimated cost
+                let itemAmount = 0;
+                let itemDescription = item.description;
+                let itemCategory = item.category || 'Other';
+                
+                if (selectedQuotation) {
+                    // Item has selected quotation - use quotation amount
+                    itemAmount = selectedQuotation.amount;
+                    itemDescription = `${item.description} - ${selectedQuotation.provider}`;
+                    itemCategory = selectedQuotation.expenseCategory || item.category || 'Other';
+                } else {
+                    // Item without quotation - use estimated cost
+                    itemAmount = item.estimatedCost || item.totalCost || 0;
+                }
+                
                 return {
                     itemIndex: index,
-                    description: item.description,
-                    quantity: item.quantity,
-                    unitCost: item.unitCost,
-                    totalCost: item.totalCost,
+                    description: itemDescription,
+                    quantity: item.quantity || 1,
+                    unitCost: item.unitCost || itemAmount,
+                    totalCost: itemAmount,
                     purpose: item.purpose,
+                    category: itemCategory,
                     selectedQuotation: selectedQuotation ? {
                         provider: selectedQuotation.provider,
                         amount: selectedQuotation.amount,
@@ -288,13 +304,16 @@ class FinancialService {
                 };
             });
 
+            // Calculate total amount from all items
+            const totalAmount = expenseItems.reduce((sum, item) => sum + item.totalCost, 0);
+
             const expense = new Expense({
                 expenseId,
                 requestId: request._id,
                 residence: request.residence,
                 category: 'Other', // Default category
-                amount: request.totalEstimatedCost,
-                description: request.title,
+                amount: totalAmount,
+                description: request.title || `Request: ${request.issue || 'Maintenance Request'}`,
                 expenseDate: new Date(),
                 paymentStatus: 'Pending',
                 period: 'monthly',
@@ -308,6 +327,11 @@ class FinancialService {
 
             await expense.save();
             console.log('✅ Itemized expense created:', expense.expenseId);
+            console.log(`   - Total items: ${expenseItems.length}`);
+            console.log(`   - Total amount: $${totalAmount}`);
+            console.log(`   - Items with quotations: ${expenseItems.filter(item => item.selectedQuotation).length}`);
+            console.log(`   - Items without quotations: ${expenseItems.filter(item => !item.selectedQuotation).length}`);
+            
             return expense;
 
         } catch (error) {
