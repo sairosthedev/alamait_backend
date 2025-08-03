@@ -1464,14 +1464,22 @@ exports.approveMonthlyRequest = async (req, res) => {
         });
         }
 
-        await monthlyRequest.save();
-
-        console.log('Request saved with new status:', {
-            requestId: monthlyRequest._id,
-            newStatus: monthlyRequest.status,
-            approvedBy: monthlyRequest.approvedBy,
-            approvedAt: monthlyRequest.approvedAt
-        });
+        try {
+            await monthlyRequest.save();
+            console.log('Request saved with new status:', {
+                requestId: monthlyRequest._id,
+                newStatus: monthlyRequest.status,
+                approvedBy: monthlyRequest.approvedBy,
+                approvedAt: monthlyRequest.approvedAt
+            });
+        } catch (saveError) {
+            console.error('Error saving monthly request:', saveError);
+            return res.status(500).json({
+                success: false,
+                message: 'Error saving approval changes',
+                error: saveError.message
+            });
+        }
 
         // Auto-convert to expenses if approved
         let expenseConversionResult = null;
@@ -1509,18 +1517,36 @@ exports.approveMonthlyRequest = async (req, res) => {
             }
         }
 
-        const updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
-            .populate('residence', 'name')
-            .populate('submittedBy', 'firstName lastName email')
-            .populate('approvedBy', 'firstName lastName email')
-            .populate('monthlyApprovals.approvedBy', 'firstName lastName email');
+        let updatedRequest;
+        try {
+            updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
+                .populate('residence', 'name')
+                .populate('submittedBy', 'firstName lastName email')
+                .populate('approvedBy', 'firstName lastName email')
+                .populate('monthlyApprovals.approvedBy', 'firstName lastName email');
 
-        console.log('Updated request status:', {
-            requestId: updatedRequest._id,
-            status: updatedRequest.status,
-            approvedBy: updatedRequest.approvedBy,
-            approvedAt: updatedRequest.approvedAt
-        });
+            if (!updatedRequest) {
+                console.error('Could not find updated request after save');
+                return res.status(500).json({
+                    success: false,
+                    message: 'Error retrieving updated request'
+                });
+            }
+
+            console.log('Updated request status:', {
+                requestId: updatedRequest._id,
+                status: updatedRequest.status,
+                approvedBy: updatedRequest.approvedBy,
+                approvedAt: updatedRequest.approvedAt
+            });
+        } catch (queryError) {
+            console.error('Error querying updated request:', queryError);
+            return res.status(500).json({
+                success: false,
+                message: 'Error retrieving updated request',
+                error: queryError.message
+            });
+        }
 
         const response = {
             success: true,
