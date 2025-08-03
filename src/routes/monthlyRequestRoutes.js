@@ -94,6 +94,16 @@ router.post('/residence/:residenceId/create-template-from-historical', monthlyRe
 // Route for creating template with manual historical data
 router.post('/residence/:residenceId/create-template-with-history', auth, checkRole(['admin', 'finance']), monthlyRequestController.createTemplateWithHistory);
 
+// Add the missing /approvals route that redirects to finance/pending-approvals
+// Allow all authenticated users to access approvals
+router.get('/approvals', 
+    (req, res) => {
+        // Redirect to the correct endpoint
+        req.url = '/finance/pending-approvals' + req.url.replace('/approvals', '');
+        monthlyRequestController.getFinancePendingApprovals(req, res);
+    }
+);
+
 // Get monthly request by ID
 router.get('/:id', monthlyRequestController.getMonthlyRequestById);
 
