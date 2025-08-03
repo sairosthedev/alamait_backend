@@ -1528,6 +1528,9 @@ exports.approveMonthlyRequest = async (req, res) => {
                 ? `Monthly request for ${month}/${year} ${approved ? 'approved' : 'rejected'} successfully`
                 : `Monthly request ${approved ? 'approved' : 'rejected'} successfully`,
             monthlyRequest: updatedRequest,
+            status: updatedRequest.status,
+            approved: approved,
+            requestId: updatedRequest._id,
             expenseConversion: approved && expenseConversionResult ? {
                 converted: expenseConversionResult?.expenses?.length || 0,
                 errors: expenseConversionResult?.errors?.length > 0 ? expenseConversionResult.errors : undefined
