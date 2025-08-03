@@ -913,7 +913,10 @@ exports.sendToFinance = async (req, res) => {
         if (monthlyRequest.isTemplate && (!month || !year)) {
             return res.status(400).json({ 
                 success: false,
-                message: 'Month and year are required for template submissions' 
+                message: 'Month and year are required for template submissions',
+                requiresMonthYear: true,
+                currentMonth: new Date().getMonth() + 1,
+                currentYear: new Date().getFullYear()
             });
         }
 
@@ -993,20 +996,20 @@ exports.sendToFinance = async (req, res) => {
 
         // Auto-approve and convert to expenses for past/current months
         let autoApprovalResult = null;
-        if (monthlyRequest.isTemplate && month && year) {
+        if (monthlyRequest.isTemplate && targetMonth && targetYear) {
             const currentDate = new Date();
             const currentMonth = currentDate.getMonth() + 1;
             const currentYear = currentDate.getFullYear();
             
             // Auto-approve past/current months
-            const isPastOrCurrent = (parseInt(year) < currentYear) || 
-                                  (parseInt(year) === currentYear && parseInt(month) <= currentMonth);
+            const isPastOrCurrent = (parseInt(targetYear) < currentYear) || 
+                                  (parseInt(targetYear) === currentYear && parseInt(targetMonth) <= currentMonth);
             
             if (isPastOrCurrent) {
                 try {
                     // Find the monthly approval we just created
                     const monthlyApproval = monthlyRequest.monthlyApprovals.find(
-                        approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+                        approval => approval.month === parseInt(targetMonth) && approval.year === parseInt(targetYear)
                     );
                     
                     if (monthlyApproval) {
@@ -1020,9 +1023,9 @@ exports.sendToFinance = async (req, res) => {
                         // Add to request history
                         monthlyRequest.requestHistory.push({
                             date: new Date(),
-                            action: `Auto-approved ${month}/${year} monthly request`,
+                            action: `Auto-approved ${targetMonth}/${targetYear} monthly request`,
                             user: user._id,
-                            changes: [`${month}/${year} auto-approved for past/current month`]
+                            changes: [`${targetMonth}/${targetYear} auto-approved for past/current month`]
                         });
                         
                         await monthlyRequest.save();
@@ -1045,7 +1048,7 @@ exports.sendToFinance = async (req, res) => {
                             errors: expenseConversionResult.errors.length > 0 ? expenseConversionResult.errors : undefined
                         };
                         
-                        console.log(`Auto-approved and converted ${expenseConversionResult.expenses.length} expenses for ${month}/${year}: ${monthlyRequest._id}`);
+                        console.log(`Auto-approved and converted ${expenseConversionResult.expenses.length} expenses for ${targetMonth}/${targetYear}: ${monthlyRequest._id}`);
                     }
                 } catch (autoApprovalError) {
                     console.error('Error auto-approving past/current month:', autoApprovalError);
@@ -1062,7 +1065,7 @@ exports.sendToFinance = async (req, res) => {
         res.status(200).json({
             success: true,
             message: monthlyRequest.isTemplate 
-                ? `Monthly request for ${month}/${year} sent to finance successfully`
+                ? `Monthly request for ${targetMonth}/${targetYear} sent to finance successfully`
                 : 'Request sent to finance successfully',
             monthlyRequest: updatedRequest,
             autoApproval: autoApprovalResult

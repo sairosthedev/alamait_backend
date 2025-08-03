@@ -71,6 +71,50 @@ export const getAccounts = async () => {
   }
 };
 
+// Get transaction accounts (alias for getAccounts)
+export const getTransactionAccounts = async () => {
+  try {
+    const response = await api.get('/transactions/accounts');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching transaction accounts:', error);
+    throw error;
+  }
+};
+
+// Get transaction by ID
+export const getTransactionById = async (id) => {
+  try {
+    const response = await api.get(`/transactions/entries/${id}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching transaction by ID:', error);
+    throw error;
+  }
+};
+
+// Get transaction accounts (alias for getAccounts)
+export const getTransactionAccounts = async () => {
+  try {
+    const response = await api.get('/transactions/accounts');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching transaction accounts:', error);
+    throw error;
+  }
+};
+
+// Get transaction by ID
+export const getTransactionById = async (id) => {
+  try {
+    const response = await api.get(`/transactions/entries/${id}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching transaction by ID:', error);
+    throw error;
+  }
+};
+
 // Export transactions to CSV
 export const exportTransactions = async (filters = {}) => {
   try {

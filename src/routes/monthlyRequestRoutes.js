@@ -51,6 +51,16 @@ router.get('/finance/pending-approvals',
     monthlyRequestController.getFinancePendingApprovals
 );
 
+// Add the missing /approvals route that redirects to finance/pending-approvals
+router.get('/approvals', 
+    checkRole(['finance', 'finance_admin', 'finance_user']), 
+    (req, res) => {
+        // Redirect to the correct endpoint
+        req.url = '/finance/pending-approvals' + req.url.replace('/approvals', '');
+        monthlyRequestController.getFinancePendingApprovals(req, res);
+    }
+);
+
 // Get CEO monthly request dashboard
 router.get('/ceo/dashboard', 
     checkRole(['ceo']), 
