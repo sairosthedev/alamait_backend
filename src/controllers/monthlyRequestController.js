@@ -3459,4 +3459,228 @@ exports.updateTemplate = async (req, res) => {
         console.error('Error updating template:', error);
         res.status(500).json({ message: error.message });
     }
+};
+
+// Submit template for specific month approval
+exports.submitTemplateForMonth = async (req, res) => {
+    try {
+        const { month, year, submittedBy, submittedByEmail, items, totalEstimatedCost } = req.body;
+        const { id } = req.params;
+
+        const template = await MonthlyRequest.findById(id);
+        if (!template || !template.isTemplate) {
+            return res.status(404).json({ success: false, message: 'Template not found' });
+        }
+
+        // Check if month already has an approval
+        const existingApproval = template.monthlyApprovals.find(
+            approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+        );
+
+        if (existingApproval && existingApproval.status === 'approved') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Month ${month}/${year} already approved` 
+            });
+        }
+
+        // Create or update monthly approval
+        const monthlyApproval = {
+            month: parseInt(month),
+            year: parseInt(year),
+            status: 'pending',
+            items: items || template.items,
+            totalCost: totalEstimatedCost || template.totalEstimatedCost,
+            submittedAt: new Date(),
+            submittedBy: submittedBy || req.user._id,
+            submittedByEmail: submittedByEmail || req.user.email,
+            notes: `Submitted for ${month}/${year} approval`
+        };
+
+        // Update existing or add new
+        if (existingApproval) {
+            Object.assign(existingApproval, monthlyApproval);
+        } else {
+            if (!template.monthlyApprovals) template.monthlyApprovals = [];
+            template.monthlyApprovals.push(monthlyApproval);
+        }
+
+        // Add to request history
+        if (!template.requestHistory) template.requestHistory = [];
+        template.requestHistory.push({
+            date: new Date(),
+            action: `Template submitted for ${month}/${year} approval`,
+            user: req.user._id,
+            changes: [`Submitted template for ${month}/${year} approval`]
+        });
+
+        await template.save();
+
+        res.json({
+            success: true,
+            message: `Template submitted for ${month}/${year} approval`,
+            data: template
+        });
+
+    } catch (error) {
+        console.error('Error submitting month:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
 }; 
+
+// Approve/reject template for specific month
+exports.approveTemplateForMonth = async (req, res) => {
+    try {
+        const { month, year, status, notes } = req.body;
+        const { id } = req.params;
+
+        const template = await MonthlyRequest.findById(id);
+        if (!template || !template.isTemplate) {
+            return res.status(404).json({ success: false, message: 'Template not found' });
+        }
+
+        // Find the monthly approval
+        const monthlyApproval = template.monthlyApprovals.find(
+            approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+        );
+
+        if (!monthlyApproval) {
+            return res.status(404).json({ 
+                success: false, 
+                message: `No submission found for ${month}/${year}` 
+            });
+        }
+
+        // Update approval
+        monthlyApproval.status = status;
+        monthlyApproval.notes = notes || monthlyApproval.notes;
+        monthlyApproval.approvedBy = req.user._id;
+        monthlyApproval.approvedAt = new Date();
+        monthlyApproval.approvedByEmail = req.user.email;
+
+        // If rejected, mark future months as pending
+        if (status === 'rejected') {
+            const currentDate = new Date(parseInt(year), parseInt(month) - 1, 1);
+            
+            template.monthlyApprovals.forEach(approval => {
+                const approvalDate = new Date(approval.year, approval.month - 1, 1);
+                if (approvalDate > currentDate && approval.status !== 'approved') {
+                    approval.status = 'pending';
+                    approval.notes = 'Pending due to previous month rejection';
+                    approval.approvedBy = null;
+                    approval.approvedAt = null;
+                    approval.approvedByEmail = null;
+                }
+            });
+        }
+
+        // Add to request history
+        if (!template.requestHistory) template.requestHistory = [];
+        template.requestHistory.push({
+            date: new Date(),
+            action: `Template ${status} for ${month}/${year}`,
+            user: req.user._id,
+            changes: [`Template ${status} for ${month}/${year}`]
+        });
+
+        await template.save();
+
+        // If approved, create expense
+        if (status === 'approved') {
+            try {
+                // Create a temporary request object for conversion
+                const tempRequest = {
+                    ...template.toObject(),
+                    items: monthlyApproval.items,
+                    totalEstimatedCost: monthlyApproval.totalCost,
+                    month: monthlyApproval.month,
+                    year: monthlyApproval.year,
+                    status: 'approved'
+                };
+                
+                const expenseConversionResult = await convertRequestToExpenses(tempRequest, req.user);
+                console.log(`Auto-converted ${expenseConversionResult.expenses.length} expenses for approved month: ${month}/${year}`);
+            } catch (conversionError) {
+                console.error('Error auto-converting to expenses:', conversionError);
+                // Don't fail the approval if expense conversion fails
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Template ${status} for ${month}/${year}`,
+            data: template
+        });
+
+    } catch (error) {
+        console.error('Error approving month:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+// Get monthly approval status for specific month
+exports.getMonthlyApprovalStatus = async (req, res) => {
+    try {
+        const { id, month, year } = req.params;
+        const monthNum = parseInt(month);
+        const yearNum = parseInt(year);
+
+        const template = await MonthlyRequest.findById(id);
+        if (!template) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Template not found' 
+            });
+        }
+
+        // Find approval for the specified month
+        const approval = template.monthlyApprovals.find(
+            approval => approval.month === monthNum && approval.year === yearNum
+        );
+
+        if (approval) {
+            return res.json({
+                success: true,
+                data: approval
+            });
+        }
+
+        // Check if there's a rejected month before the requested month
+        const currentDate = new Date(yearNum, monthNum - 1, 1);
+        const hasRejectedPreviousMonth = template.monthlyApprovals.some(approval => {
+            const approvalDate = new Date(approval.year, approval.month - 1, 1);
+            return approvalDate < currentDate && approval.status === 'rejected';
+        });
+
+        if (hasRejectedPreviousMonth) {
+            return res.json({
+                success: true,
+                data: {
+                    month: monthNum,
+                    year: yearNum,
+                    status: 'pending',
+                    notes: 'Pending due to previous month rejection',
+                    totalCost: template.totalEstimatedCost
+                }
+            });
+        }
+
+        // No approval found and no previous rejection
+        return res.json({
+            success: true,
+            data: {
+                month: monthNum,
+                year: yearNum,
+                status: 'draft',
+                totalCost: template.totalEstimatedCost
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting approval status:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
+    }
+};
