@@ -1443,6 +1443,13 @@ exports.approveMonthlyRequest = async (req, res) => {
             return res.status(400).json({ message: 'Only pending requests can be approved' });
         }
 
+        console.log('Approving regular request:', {
+            requestId: monthlyRequest._id,
+            currentStatus: monthlyRequest.status,
+            approved: approved,
+            newStatus: approved ? 'approved' : 'rejected'
+        });
+
         monthlyRequest.status = approved ? 'approved' : 'rejected';
         monthlyRequest.approvedBy = user._id;
         monthlyRequest.approvedAt = new Date();
@@ -1458,6 +1465,13 @@ exports.approveMonthlyRequest = async (req, res) => {
         }
 
         await monthlyRequest.save();
+
+        console.log('Request saved with new status:', {
+            requestId: monthlyRequest._id,
+            newStatus: monthlyRequest.status,
+            approvedBy: monthlyRequest.approvedBy,
+            approvedAt: monthlyRequest.approvedAt
+        });
 
         // Auto-convert to expenses if approved
         let expenseConversionResult = null;
@@ -1487,7 +1501,7 @@ exports.approveMonthlyRequest = async (req, res) => {
                     expenseConversionResult = await convertRequestToExpenses(monthlyRequest, user);
                 }
                 
-                console.log(`Auto-converted ${expenseConversionResult.expenses.length} expenses for approved request: ${monthlyRequest._id}`);
+                console.log(`Auto-converted ${expenseConversionResult?.expenses?.length || 0} expenses for approved request: ${monthlyRequest._id}`);
             } catch (conversionError) {
                 console.error('Error auto-converting to expenses:', conversionError);
                 // Don't fail the approval if expense conversion fails
@@ -1501,20 +1515,34 @@ exports.approveMonthlyRequest = async (req, res) => {
             .populate('approvedBy', 'firstName lastName email')
             .populate('monthlyApprovals.approvedBy', 'firstName lastName email');
 
-        res.status(200).json({
+        console.log('Updated request status:', {
+            requestId: updatedRequest._id,
+            status: updatedRequest.status,
+            approvedBy: updatedRequest.approvedBy,
+            approvedAt: updatedRequest.approvedAt
+        });
+
+        const response = {
             success: true,
             message: monthlyRequest.isTemplate 
                 ? `Monthly request for ${month}/${year} ${approved ? 'approved' : 'rejected'} successfully`
                 : `Monthly request ${approved ? 'approved' : 'rejected'} successfully`,
             monthlyRequest: updatedRequest,
-            expenseConversion: approved ? {
-                converted: expenseConversionResult.expenses.length,
-                errors: expenseConversionResult.errors.length > 0 ? expenseConversionResult.errors : undefined
+            expenseConversion: approved && expenseConversionResult ? {
+                converted: expenseConversionResult?.expenses?.length || 0,
+                errors: expenseConversionResult?.errors?.length > 0 ? expenseConversionResult.errors : undefined
             } : undefined
-        });
+        };
+
+        console.log('Approval response:', JSON.stringify(response, null, 2));
+        res.status(200).json(response);
     } catch (error) {
         console.error('Error approving monthly request:', error);
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ 
+            success: false,
+            message: 'Error approving monthly request',
+            error: error.message 
+        });
     }
 };
 
