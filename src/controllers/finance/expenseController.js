@@ -818,7 +818,7 @@ exports.markExpenseAsPaid = async (req, res) => {
 exports.recordExpensePayment = async (req, res) => {
     try {
         const user = req.user;
-        const { expenseId } = req.params;
+        const { id } = req.params; // Changed from expenseId to id to match route parameter
         const {
             amount,
             paymentMethod,
@@ -830,7 +830,7 @@ exports.recordExpensePayment = async (req, res) => {
         } = req.body;
 
         // Validate expense exists
-        const expense = await Expense.findById(expenseId);
+        const expense = await Expense.findById(id);
         if (!expense) {
             return res.status(404).json({ message: 'Expense not found' });
         }
