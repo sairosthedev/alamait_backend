@@ -73,9 +73,27 @@ exports.createVendor = async (req, res) => {
             expenseAccountCode = categoryExpenseMap[req.body.category] || '5013';
         }
 
+        // Generate vendor code manually to ensure it's created
+        let vendorCode = req.body.vendorCode;
+        if (!vendorCode) {
+            const lastVendor = await Vendor.findOne({}, { vendorCode: 1 }).sort({ vendorCode: -1 });
+            let nextNumber = 1;
+            if (lastVendor && lastVendor.vendorCode) {
+                const match = lastVendor.vendorCode.match(/V\d{6}$/);
+                if (match) {
+                    const currentNumber = parseInt(lastVendor.vendorCode.substring(1));
+                    nextNumber = currentNumber + 1;
+                }
+            }
+            const year = new Date().getFullYear().toString().substr(-2);
+            const sequence = nextNumber.toString().padStart(4, '0');
+            vendorCode = `V${year}${sequence}`;
+        }
+
         // Create new vendor
         const vendor = new Vendor({
             ...req.body,
+            vendorCode,
             chartOfAccountsCode,
             expenseAccountCode,
             createdBy: user._id,

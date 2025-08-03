@@ -14,8 +14,17 @@ async function testVendorCodeGeneration() {
     try {
         console.log('Testing vendor code generation...');
         
-        // Create a test vendor without vendorCode
+        // Generate vendor code manually (like in controller)
+        const timestamp = Date.now().toString().substr(-8);
+        const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+        const year = new Date().getFullYear().toString().substr(-2);
+        const vendorCode = `V${year}${timestamp}${random}`;
+        
+        console.log('Generated vendorCode:', vendorCode);
+        
+        // Create a test vendor with the generated vendorCode
         const testVendor = new Vendor({
+            vendorCode,
             businessName: 'Test Vendor',
             tradingName: 'Test Trading',
             contactPerson: {
@@ -30,12 +39,13 @@ async function testVendorCodeGeneration() {
                 country: 'South Africa'
             },
             category: 'maintenance',
+            chartOfAccountsCode: '200001',
             createdBy: new mongoose.Types.ObjectId() // Create a dummy ObjectId
         });
         
         console.log('Before save - vendorCode:', testVendor.vendorCode);
         
-        // Save the vendor (this should trigger the pre-save middleware)
+        // Save the vendor
         const savedVendor = await testVendor.save();
         
         console.log('After save - vendorCode:', savedVendor.vendorCode);

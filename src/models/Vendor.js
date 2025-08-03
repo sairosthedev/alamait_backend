@@ -226,38 +226,69 @@ vendorSchema.index({ chartOfAccountsCode: 1 });
 
 // Pre-save middleware to generate vendor code if not provided
 vendorSchema.pre('save', async function(next) {
-    if (!this.vendorCode) {
-        this.vendorCode = await generateVendorCode(this.constructor);
+    try {
+        // Generate vendor code if not provided
+        if (!this.vendorCode) {
+            this.vendorCode = await generateVendorCode(this.constructor);
+        }
+        
+        // Generate chart of accounts code if not provided
+        if (!this.chartOfAccountsCode) {
+            const vendorCount = await this.constructor.countDocuments();
+            this.chartOfAccountsCode = `200${(vendorCount + 1).toString().padStart(3, '0')}`;
+        }
+        
+        // Generate expense account code if not provided
+        if (!this.expenseAccountCode) {
+            const categoryExpenseMap = {
+                'maintenance': '5000',
+                'utilities': '5001',
+                'supplies': '5000',
+                'equipment': '5000',
+                'services': '5000',
+                'cleaning': '5010',
+                'security': '5011',
+                'landscaping': '5000',
+                'electrical': '5000',
+                'plumbing': '5000',
+                'carpentry': '5000',
+                'painting': '5000',
+                'other': '5013'
+            };
+            this.expenseAccountCode = categoryExpenseMap[this.category] || '5013';
+        }
+        
+        next();
+    } catch (error) {
+        next(error);
     }
-    next();
 });
 
 // Generate unique vendor code
-async function generateVendorCode(VendorModel) {
+async function generateVendorCode(model) {
     try {
-        // Use timestamp + random to ensure uniqueness
-        const timestamp = Date.now().toString().substr(-8);
-        const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-        const year = new Date().getFullYear().toString().substr(-2);
+        // Get the highest vendor code to ensure uniqueness
+        const lastVendor = await model
+            .findOne({}, { vendorCode: 1 })
+            .sort({ vendorCode: -1 });
         
-        let vendorCode = `V${year}${timestamp}${random}`;
-        
-        // Check if this code already exists (very unlikely but safe)
-        let existingVendor = await VendorModel.findOne({ vendorCode });
-        let attempts = 0;
-        
-        while (existingVendor && attempts < 10) {
-            const newRandom = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-            vendorCode = `V${year}${timestamp}${newRandom}`;
-            existingVendor = await VendorModel.findOne({ vendorCode });
-            attempts++;
+        let nextNumber = 1;
+        if (lastVendor && lastVendor.vendorCode) {
+            // Extract number from existing code (e.g., "V250001" -> 250001)
+            const match = lastVendor.vendorCode.match(/V\d{6}$/);
+            if (match) {
+                const currentNumber = parseInt(lastVendor.vendorCode.substring(1));
+                nextNumber = currentNumber + 1;
+            }
         }
         
-        return vendorCode;
+        const year = new Date().getFullYear().toString().substr(-2);
+        const sequence = nextNumber.toString().padStart(4, '0');
+        return `V${year}${sequence}`;
     } catch (error) {
         console.error('Error generating vendor code:', error);
-        // Fallback to simple timestamp-based code
-        const timestamp = Date.now().toString().substr(-8);
+        // Fallback to timestamp-based code
+        const timestamp = Date.now().toString().substr(-6);
         const year = new Date().getFullYear().toString().substr(-2);
         return `V${year}${timestamp}`;
     }
