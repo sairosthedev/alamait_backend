@@ -308,15 +308,15 @@ app.use('/api/expenses', financeExpenseRoutes);
 const financeMaintenanceRoutes = require('./routes/finance/maintenanceRoutes');
 app.use('/api/finance/maintenance', financeMaintenanceRoutes);
 
-// Finance index routes (for student-specific endpoints) - last to avoid conflicts
-app.use('/api/finance', financeIndexRoutes);
+// Debtor routes (Accounts Receivable) - must be before finance index routes
+app.use('/api/finance/debtors', debtorRoutes);
 
 // Finance student account management routes
 const studentAccountRoutes = require('./routes/finance/studentAccountRoutes');
 app.use('/api/finance/student-accounts', studentAccountRoutes);
 
-// Debtor routes (Accounts Receivable)
-app.use('/api/finance/debtors', debtorRoutes);
+// Finance index routes (for student-specific endpoints) - last to avoid conflicts
+app.use('/api/finance', financeIndexRoutes);
 
 // Monitoring routes
 app.use('/api/monitoring', monitoringRoutes);
