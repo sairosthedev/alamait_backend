@@ -3421,6 +3421,9 @@ exports.createTemplateFromHistorical = async (req, res) => {
 // Create template with manual historical cost data
 exports.createTemplateWithHistory = async (req, res) => {
     try {
+        console.log('createTemplateWithHistory called with params:', req.params);
+        console.log('createTemplateWithHistory called with body:', JSON.stringify(req.body, null, 2));
+        
         const { residenceId } = req.params;
         const { 
             title, 
@@ -3434,6 +3437,7 @@ exports.createTemplateWithHistory = async (req, res) => {
 
         // Validate required fields
         if (!title || !residenceId || !items || !Array.isArray(items)) {
+            console.log('Validation failed:', { title, residenceId, items, isArray: Array.isArray(items) });
             return res.status(400).json({
                 success: false,
                 message: 'Title, residenceId, and items array are required'
@@ -3443,11 +3447,13 @@ exports.createTemplateWithHistory = async (req, res) => {
         // Validate residence exists
         const residence = await Residence.findById(residenceId);
         if (!residence) {
+            console.log('Residence not found:', residenceId);
             return res.status(404).json({
                 success: false,
                 message: 'Residence not found'
             });
         }
+        console.log('Residence found:', residence.name);
 
         // Process items with historical data
         const processedItems = items.map(item => {
@@ -3456,7 +3462,7 @@ exports.createTemplateWithHistory = async (req, res) => {
                 description: item.description || item.title,
                 estimatedCost: item.estimatedCost,
                 quantity: item.quantity || 1,
-                category: item.category || 'general',
+                category: item.category || 'other', // Changed from 'general' to 'other' to match schema enum
                 priority: item.priority || 'medium',
                 notes: item.notes || '',
                 tags: item.tags || [],
@@ -3598,14 +3604,12 @@ exports.createTemplateWithHistory = async (req, res) => {
             date: new Date(),
             action: 'Template created with manual historical data',
             user: req.user._id,
-            changes: [{
-                field: 'template_creation',
-                oldValue: null,
-                newValue: 'Template created with cost and item history'
-            }]
+            changes: ['Template created with cost and item history']
         });
 
+        console.log('Template created successfully, saving...');
         await template.save();
+        console.log('Template saved successfully');
 
         res.status(201).json({
             success: true,
@@ -3623,6 +3627,7 @@ exports.createTemplateWithHistory = async (req, res) => {
 
     } catch (error) {
         console.error('Error creating template with history:', error);
+        console.error('Error stack:', error.stack);
         res.status(500).json({
             success: false,
             message: 'Error creating template with historical data',
