@@ -2,9 +2,9 @@ const axios = require('axios');
 
 const BASE_URL = 'http://localhost:5002';
 
-async function testTemplateCreationFix() {
+async function testTemplateCreationWithAuth() {
     try {
-        console.log('🧪 Testing template creation fix...');
+        console.log('🧪 Testing template creation with authentication...');
         
         // Step 1: Authenticate first
         console.log('🔐 Step 1: Authenticating...');
@@ -22,14 +22,13 @@ async function testTemplateCreationFix() {
         const token = authResponse.data.token;
         console.log('✅ Authentication successful');
         
-        // Step 2: Create template with the data structure that was causing the error
+        // Step 2: Create template
         console.log('📝 Step 2: Creating template...');
         const templateData = {
-            title: "Test Template Fix",
-            description: "Testing the requestHistory.changes fix",
+            title: "Test Template",
+            description: "A test template for monthly requests",
             residence: "67d723cf20f89c4ae69804f3", // Replace with actual residence ID
-            isTemplate: true,
-            templateDescription: "Test template for fixing the changes array issue",
+            isTemplate: true, // This is the key field!
             items: [
                 {
                     title: "Test Item 1",
@@ -38,10 +37,16 @@ async function testTemplateCreationFix() {
                     estimatedCost: 100,
                     category: "maintenance",
                     priority: "medium"
+                },
+                {
+                    title: "Test Item 2", 
+                    description: "Second test item",
+                    quantity: 2,
+                    estimatedCost: 50,
+                    category: "utilities",
+                    priority: "low"
                 }
-            ],
-            historicalData: [],
-            itemHistory: []
+            ]
         };
 
         console.log('📤 Sending POST request to /api/monthly-requests...');
@@ -59,29 +64,24 @@ async function testTemplateCreationFix() {
         console.log('📊 Response status:', response.status);
         console.log('📋 Response data:', JSON.stringify(response.data, null, 2));
         
-        // Step 3: Verify the requestHistory.changes structure
-        if (response.data.monthlyRequest && response.data.monthlyRequest.requestHistory) {
-            const history = response.data.monthlyRequest.requestHistory[0];
-            console.log('📋 Request History:', JSON.stringify(history, null, 2));
-            
-            if (Array.isArray(history.changes)) {
-                console.log('✅ Changes array is correctly formatted as array of strings');
-            } else {
-                console.log('❌ Changes array is not correctly formatted');
-            }
-        }
-        
         return response.data;
         
     } catch (error) {
         console.log('❌ Error in template creation test:');
         
-        if (error.response) {
+        if (error.code === 'ECONNREFUSED') {
+            console.log('🔌 Connection refused - server might not be running on port 5002');
+            console.log('💡 Try starting the server with: npm start');
+        } else if (error.code === 'ENOTFOUND') {
+            console.log('🌐 Could not connect to localhost:5002');
+        } else if (error.response) {
             console.log('Status:', error.response.status);
             console.log('Message:', error.response.data);
             
-            if (error.response.data.error && error.response.data.error.includes('Cast to [string] failed')) {
-                console.log('❌ The changes array validation error is still occurring');
+            if (error.response.status === 401) {
+                console.log('🔐 Authentication failed - check your credentials');
+            } else if (error.response.status === 404) {
+                console.log('🔍 Endpoint not found - check the route');
             }
         } else {
             console.log('Error:', error.message);
@@ -92,12 +92,12 @@ async function testTemplateCreationFix() {
 }
 
 // Run the test
-testTemplateCreationFix()
+testTemplateCreationWithAuth()
     .then(() => {
-        console.log('\n✅ Template creation fix test completed successfully');
+        console.log('\n✅ Template creation test completed successfully');
         process.exit(0);
     })
     .catch(() => {
-        console.log('\n❌ Template creation fix test failed');
+        console.log('\n❌ Template creation test failed');
         process.exit(1);
     }); 

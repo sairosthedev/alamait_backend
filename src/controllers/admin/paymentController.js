@@ -472,6 +472,50 @@ const createPayment = async (req, res) => {
             after: payment.toObject()
         });
 
+        // Auto-generate receipt for confirmed payments
+        if (status === 'confirmed') {
+            try {
+                const { createReceipt } = require('../receiptController');
+                
+                // Create receipt data
+                const receiptData = {
+                    paymentId: payment._id,
+                    items: [{
+                        description: `Payment for ${paymentMonth || 'accommodation'}`,
+                        quantity: 1,
+                        unitPrice: totalAmount,
+                        totalPrice: totalAmount
+                    }],
+                    notes: `Payment confirmed for ${studentExists.firstName} ${studentExists.lastName}`,
+                    template: 'default'
+                };
+
+                // Create receipt (we'll call the controller function directly)
+                const receiptReq = {
+                    body: receiptData,
+                    user: req.user
+                };
+                
+                const receiptRes = {
+                    status: (code) => ({
+                        json: (data) => {
+                            if (code === 201) {
+                                console.log(`Receipt generated for payment ${payment.paymentId}`);
+                            } else {
+                                console.error('Failed to generate receipt:', data);
+                            }
+                        }
+                    })
+                };
+
+                await createReceipt(receiptReq, receiptRes);
+                
+            } catch (receiptError) {
+                console.error('Error auto-generating receipt:', receiptError);
+                // Don't fail the payment creation if receipt generation fails
+            }
+        }
+
         // --- Payment Transaction for Rentals Received ---
         // Always create a transaction for every payment
         let receivingAccount = null;
