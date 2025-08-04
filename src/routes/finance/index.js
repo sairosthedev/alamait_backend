@@ -9,6 +9,7 @@ const auditLogRoutes = require('./auditLogRoutes');
 const pettyCashRoutes = require('./pettyCashRoutes');
 const vendorRoutes = require('./vendorRoutes');
 const transactionRoutes = require('./transactionRoutes');
+const accountRoutes = require('./accountRoutes');
 const { getAllStudentAccounts } = require('../../controllers/finance/studentAccountController');
 const Lease = require('../../models/Lease');
 const Payment = require('../../models/Payment');
@@ -20,6 +21,7 @@ router.use('/audit-log', auditLogRoutes);
 router.use('/petty-cash', pettyCashRoutes);
 router.use('/vendors', vendorRoutes);
 router.use('/transactions', transactionRoutes);
+router.use('/accounts', accountRoutes);
 
 // Get all users (for finance)
 router.get('/users', async (req, res) => {

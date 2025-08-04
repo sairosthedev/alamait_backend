@@ -13,6 +13,7 @@ const Transaction = require('../../models/Transaction');
 const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
 const Debtor = require('../../models/Debtor');
+const { sendEmail } = require('../../utils/email');
 
 // Configure multer for S3 file uploads
 const upload = multer({
@@ -27,6 +28,20 @@ const upload = multer({
     },
     fileFilter: fileFilter([...fileTypes.images, 'application/pdf'])
 }).single('proofOfPayment');
+
+// Configure multer for receipt uploads
+const uploadReceipt = multer({
+    storage: multerS3({
+        s3: s3,
+        bucket: s3Configs.receipts.bucket,
+        acl: s3Configs.receipts.acl,
+        key: s3Configs.receipts.key
+    }),
+    limits: {
+        fileSize: 10 * 1024 * 1024 // 10MB limit for PDFs
+    },
+    fileFilter: fileFilter(['application/pdf'])
+}).single('file');
 
 // Get all payments
 const getPayments = async (req, res) => {
@@ -472,6 +487,50 @@ const createPayment = async (req, res) => {
             after: payment.toObject()
         });
 
+        // Auto-generate receipt for confirmed payments
+        if (status === 'confirmed') {
+            try {
+                const { createReceipt } = require('../receiptController');
+                
+                // Create receipt data
+                const receiptData = {
+                    paymentId: payment._id,
+                    items: [{
+                        description: `Payment for ${paymentMonth || 'accommodation'}`,
+                        quantity: 1,
+                        unitPrice: totalAmount,
+                        totalPrice: totalAmount
+                    }],
+                    notes: `Payment confirmed for ${studentExists.firstName} ${studentExists.lastName}`,
+                    template: 'default'
+                };
+
+                // Create receipt (we'll call the controller function directly)
+                const receiptReq = {
+                    body: receiptData,
+                    user: req.user
+                };
+                
+                const receiptRes = {
+                    status: (code) => ({
+                        json: (data) => {
+                            if (code === 201) {
+                                console.log(`Receipt generated for payment ${payment.paymentId}`);
+                            } else {
+                                console.error('Failed to generate receipt:', data);
+                            }
+                        }
+                    })
+                };
+
+                await createReceipt(receiptReq, receiptRes);
+                
+            } catch (receiptError) {
+                console.error('Error auto-generating receipt:', receiptError);
+                // Don't fail the payment creation if receipt generation fails
+            }
+        }
+
         // --- Payment Transaction for Rentals Received ---
         // Always create a transaction for every payment
         let receivingAccount = null;
@@ -571,6 +630,77 @@ const createPayment = async (req, res) => {
     }
 };
 
+// Send receipt email
+const sendReceiptEmail = async (req, res) => {
+    try {
+        const { to, subject, html } = req.body;
+
+        if (!to || !subject || !html) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields: to, subject, html'
+            });
+        }
+
+        // Send email using the email utility
+        await sendEmail({
+            to,
+            subject,
+            html
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Receipt email sent successfully'
+        });
+    } catch (error) {
+        console.error('Error sending receipt email:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to send receipt email',
+            error: error.message
+        });
+    }
+};
+
+// Upload receipt to S3
+const uploadReceiptHandler = async (req, res) => {
+    uploadReceipt(req, res, async function(err) {
+        if (err) {
+            return res.status(400).json({ 
+                success: false,
+                error: err.message 
+            });
+        }
+
+        try {
+            if (!req.file) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'No file uploaded' 
+                });
+            }
+
+            // The file is already uploaded to S3 by multer-s3
+            const fileUrl = req.file.location;
+
+            res.status(200).json({
+                success: true,
+                message: 'Receipt uploaded successfully',
+                url: fileUrl,
+                fileName: req.file.originalname
+            });
+        } catch (error) {
+            console.error('Error uploading receipt:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to upload receipt',
+                error: error.message
+            });
+        }
+    });
+};
+
 // Export all functions
 module.exports = {
     getPayments,
@@ -579,5 +709,7 @@ module.exports = {
     uploadProofOfPayment,
     verifyProofOfPayment,
     getPaymentTotals,
-    createPayment
+    createPayment,
+    sendReceiptEmail,
+    uploadReceipt: uploadReceiptHandler
 }; 

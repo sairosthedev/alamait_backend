@@ -56,94 +56,88 @@ const server = app.listen(PORT, async () => {
     });
 });
 
+const axios = require('axios');
+
+const BASE_URL = 'http://localhost:5002';
+
 async function testTemplateCreation() {
-    const axios = require('axios');
-    const BASE_URL = `http://localhost:${PORT}/api`;
-    
-    console.log('\n🧪 Testing Template Creation...\n');
-    
-    // Test 1: Create a template without month/year
     try {
-        console.log('1️⃣ Testing template creation without month/year...');
+        console.log('🧪 Testing template creation...');
+        
         const templateData = {
-            title: "Monthly Requests St Kilda",
-            description: "Monthly Requests St Kilda",
-            residence: "", // Empty residence for template
-            isTemplate: true,
-            templateName: "St Kilda Monthly Template",
-            templateDescription: "Template for St Kilda monthly requests",
+            title: "Test Template",
+            description: "A test template for monthly requests",
+            residence: "67d723cf20f89c4ae69804f3", // Replace with actual residence ID
+            isTemplate: true, // This is the key field!
             items: [
                 {
-                    title: "Wifi",
-                    description: "Wifi Payment",
-                    priority: "high",
+                    title: "Test Item 1",
+                    description: "First test item",
+                    quantity: 1,
                     estimatedCost: 100,
-                    category: "maintenance"
+                    category: "maintenance",
+                    priority: "medium"
                 },
                 {
-                    title: "Electricity",
-                    description: "Electricity for St Kilda",
-                    priority: "high",
-                    estimatedCost: 200,
-                    category: "utilities"
-                }
-            ]
-        };
-        
-        const response = await axios.post(`${BASE_URL}/monthly-requests`, templateData);
-        console.log('✅ Template created successfully!');
-        console.log(`   Template ID: ${response.data._id}`);
-        console.log(`   Title: ${response.data.title}`);
-        console.log(`   Is Template: ${response.data.isTemplate}`);
-        console.log(`   Month: ${response.data.month}`);
-        console.log(`   Year: ${response.data.year}`);
-        console.log(`   Residence: ${response.data.residence}`);
-        
-        // Clean up - delete the test template
-        await axios.delete(`${BASE_URL}/monthly-requests/${response.data._id}`);
-        console.log('✅ Test template cleaned up');
-        
-    } catch (error) {
-        console.error('❌ Template creation failed:', error.response?.data || error.message);
-    }
-    
-    // Test 2: Create a regular monthly request (should still work)
-    try {
-        console.log('\n2️⃣ Testing regular monthly request creation...');
-        const regularRequestData = {
-            title: "Test Monthly Request",
-            description: "Test description",
-            residence: "67c13eb8425a2e078f61d00e", // Belvedere ID
-            month: 1,
-            year: 2025,
-            isTemplate: false,
-            items: [
-                {
-                    title: "Test Item",
-                    description: "Test item description",
-                    priority: "medium",
+                    title: "Test Item 2", 
+                    description: "Second test item",
+                    quantity: 2,
                     estimatedCost: 50,
-                    category: "utilities"
+                    category: "utilities",
+                    priority: "low"
                 }
             ]
         };
+
+        console.log('📤 Sending POST request to /api/monthly-requests...');
+        console.log('📋 Request data:', JSON.stringify(templateData, null, 2));
         
-        const response = await axios.post(`${BASE_URL}/monthly-requests`, regularRequestData);
-        console.log('✅ Regular request created successfully!');
-        console.log(`   Request ID: ${response.data._id}`);
-        console.log(`   Title: ${response.data.title}`);
-        console.log(`   Is Template: ${response.data.isTemplate}`);
-        console.log(`   Month: ${response.data.month}`);
-        console.log(`   Year: ${response.data.year}`);
-        console.log(`   Residence: ${response.data.residence}`);
+        const response = await axios.post(`${BASE_URL}/api/monthly-requests`, templateData, {
+            headers: {
+                'Authorization': 'Bearer test-token',
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000 // 10 second timeout
+        });
         
-        // Clean up - delete the test request
-        await axios.delete(`${BASE_URL}/monthly-requests/${response.data._id}`);
-        console.log('✅ Test request cleaned up');
+        console.log('✅ Template created successfully!');
+        console.log('📊 Response status:', response.status);
+        console.log('📋 Response data:', JSON.stringify(response.data, null, 2));
+        
+        return response.data;
         
     } catch (error) {
-        console.error('❌ Regular request creation failed:', error.response?.data || error.message);
+        console.log('❌ Error creating template:');
+        
+        if (error.code === 'ECONNREFUSED') {
+            console.log('🔌 Connection refused - server might not be running on port 5002');
+            console.log('💡 Try starting the server with: npm start');
+        } else if (error.code === 'ENOTFOUND') {
+            console.log('🌐 Could not connect to localhost:5002');
+        } else if (error.response) {
+            console.log('Status:', error.response.status);
+            console.log('Message:', error.response.data);
+        } else {
+            console.log('Error:', error.message);
+        }
+        
+        if (error.response?.status === 404) {
+            console.log('\n🔍 The 404 error suggests the endpoint might not be registered properly.');
+            console.log('📋 Make sure you are using: POST /api/monthly-requests');
+            console.log('📋 And include isTemplate: true in the request body');
+        }
+        
+        throw error;
     }
-    
-    console.log('\n🎉 Template creation tests completed!');
-} 
+}
+
+// Run the test
+testTemplateCreation()
+    .then(() => {
+        console.log('\n✅ Template creation test completed');
+        process.exit(0);
+    })
+    .catch(() => {
+        console.log('\n❌ Template creation test failed');
+        process.exit(1);
+    }); 

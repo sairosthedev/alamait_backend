@@ -16,6 +16,7 @@ const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 const AuditLog = require('../../models/AuditLog');
 const Lease = require('../../models/Lease');
 const bcrypt = require('bcryptjs');
+const { createDebtorForStudent } = require('../../services/debtorService');
 
 // Get all students with pagination and filters
 exports.getStudents = async (req, res) => {
@@ -118,6 +119,18 @@ exports.createStudent = async (req, res) => {
         student.password = await bcrypt.hash(tempPassword, salt);
 
         await student.save();
+
+        // Automatically create debtor account for the new student
+        try {
+            await createDebtorForStudent(student, {
+                residenceId: residenceId,
+                createdBy: req.user._id
+            });
+            console.log(`Debtor account created for student ${student.email}`);
+        } catch (debtorError) {
+            console.error('Failed to create debtor account:', debtorError);
+            // Continue with student creation even if debtor creation fails
+        }
 
         await createAuditLog({
             action: 'CREATE',
@@ -972,6 +985,19 @@ exports.manualAddStudent = async (req, res) => {
         // Update student with current booking
         student.currentBooking = booking._id;
         await student.save();
+
+        // Automatically create debtor account for the new student
+        try {
+            await createDebtorForStudent(student, {
+                residenceId: residenceId,
+                roomNumber: roomNumber,
+                createdBy: req.user._id
+            });
+            console.log(`✅ Debtor account created for manually added student ${student.email}`);
+        } catch (debtorError) {
+            console.error('❌ Failed to create debtor account for manually added student:', debtorError);
+            // Continue with student creation even if debtor creation fails
+        }
 
         // Prepare lease agreement attachment (following existing logic)
         let attachments = [];

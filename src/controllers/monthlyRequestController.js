@@ -981,11 +981,7 @@ exports.createMonthlyRequest = async (req, res) => {
             date: new Date(),
             action: isTemplate ? 'Template created with historical data' : 'Monthly request created',
             user: req.user._id,
-            changes: [{
-                field: isTemplate ? 'template_creation' : 'request_creation',
-                oldValue: null,
-                newValue: isTemplate ? 'Template created with historical data' : 'Monthly request created'
-            }]
+            changes: [isTemplate ? 'Template created with historical data' : 'Monthly request created']
         });
 
         await monthlyRequest.save();
