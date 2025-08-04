@@ -4,6 +4,7 @@ const User = require('../../models/User');
 const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const Lease = require('../../models/Lease');
+const Debtor = require('../../models/Debtor');
 
 /**
  * Get all student payments with pagination and filtering

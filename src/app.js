@@ -77,6 +77,7 @@ const financeOtherIncomeRoutes = require('./routes/finance/otherIncomeRoutes');
 const financeOtherExpenseRoutes = require('./routes/finance/otherExpenseRoutes');
 const financeIndexRoutes = require('./routes/finance/index');
 const financeUsersRoutes = require('./routes/finance/users');
+const debtorRoutes = require('./routes/finance/debtorRoutes');
 
 const monitoringRoutes = require('./routes/monitoring');
 const accountRoutes = require('./routes/accountRoutes');
@@ -313,6 +314,9 @@ app.use('/api/finance', financeIndexRoutes);
 // Finance student account management routes
 const studentAccountRoutes = require('./routes/finance/studentAccountRoutes');
 app.use('/api/finance/student-accounts', studentAccountRoutes);
+
+// Debtor routes (Accounts Receivable)
+app.use('/api/finance/debtors', debtorRoutes);
 
 // Monitoring routes
 app.use('/api/monitoring', monitoringRoutes);

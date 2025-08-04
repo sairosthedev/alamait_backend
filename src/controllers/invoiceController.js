@@ -2,6 +2,7 @@ const Invoice = require('../models/Invoice');
 const User = require('../models/User');
 const Residence = require('../models/Residence');
 const Payment = require('../models/Payment');
+const Debtor = require('../models/Debtor');
 const { generateInvoicePdf } = require('../utils/invoicePdf');
 const emailService = require('../services/emailService');
 const whatsappService = require('../services/whatsappService');
@@ -157,6 +158,36 @@ exports.createInvoice = async (req, res) => {
         });
 
         const savedInvoice = await invoice.save();
+
+        // Check if debtor account exists, create if not
+        let debtor = await Debtor.findOne({ user: studentId });
+        if (!debtor) {
+            // Create debtor account automatically
+            const debtorCode = await Debtor.generateDebtorCode();
+            const accountCode = await Debtor.generateAccountCode();
+            
+            debtor = new Debtor({
+                debtorCode,
+                user: studentId,
+                accountCode,
+                residence: residence,
+                roomNumber: roomNumber,
+                contactInfo: {
+                    name: `${studentDetails.firstName} ${studentDetails.lastName}`,
+                    email: studentDetails.email,
+                    phone: studentDetails.phone
+                },
+                createdBy: user._id
+            });
+            
+            await debtor.save();
+            console.log(`Created debtor account for student: ${studentDetails.firstName} ${studentDetails.lastName}`);
+        }
+
+        // Add charge to debtor account
+        if (debtor) {
+            await debtor.addCharge(totalAmount, `Invoice ${invoiceNumber} - ${billingPeriod}`);
+        }
 
         // Populate student and residence details for preview
         await savedInvoice.populate('student', 'firstName lastName email phone');

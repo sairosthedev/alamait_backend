@@ -12,6 +12,7 @@ const AuditLog = require('../../models/AuditLog');
 const Transaction = require('../../models/Transaction');
 const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
+const Debtor = require('../../models/Debtor');
 
 // Configure multer for S3 file uploads
 const upload = multer({
@@ -430,6 +431,36 @@ const createPayment = async (req, res) => {
         });
 
         await payment.save();
+
+        // Update debtor account if exists, create if not
+        let debtor = await Debtor.findOne({ user: student });
+        if (!debtor) {
+            // Create debtor account automatically
+            const debtorCode = await Debtor.generateDebtorCode();
+            const accountCode = await Debtor.generateAccountCode();
+            
+            debtor = new Debtor({
+                debtorCode,
+                user: student,
+                accountCode,
+                residence: residence,
+                roomNumber: room,
+                contactInfo: {
+                    name: `${studentExists.firstName} ${studentExists.lastName}`,
+                    email: studentExists.email,
+                    phone: studentExists.phone
+                },
+                createdBy: req.user._id
+            });
+            
+            await debtor.save();
+            console.log(`Created debtor account for student: ${studentExists.firstName} ${studentExists.lastName}`);
+        }
+
+        // Add payment to debtor account
+        if (debtor) {
+            await debtor.addPayment(totalAmount, `Payment ${paymentId} - ${paymentMonth}`);
+        }
 
         // Audit log
         await AuditLog.create({
