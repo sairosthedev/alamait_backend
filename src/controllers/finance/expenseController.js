@@ -241,7 +241,8 @@ exports.createExpense = async (req, res) => {
             expenseDate: date,
             paymentStatus: paymentStatus || 'Pending',
             createdBy: req.user._id,
-            period
+            period,
+            notes: req.body.provider ? `Provider: ${req.body.provider}` : undefined
         });
 
         // Add optional fields if provided

@@ -322,7 +322,8 @@ class FinancialService {
                 createdBy: user._id,
                 approvedBy: user._id,
                 approvedAt: new Date(),
-                approvedByEmail: user.email
+                approvedByEmail: user.email,
+                notes: request.provider ? `Provider: ${request.provider}` : undefined
             });
 
             await expense.save();

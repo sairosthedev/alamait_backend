@@ -152,7 +152,8 @@ exports.updateMaintenance = async (req, res) => {
                     period: 'monthly',
                     paymentMethod: paymentMethod || maintenance.paymentMethod || 'Bank Transfer',
                     paymentIcon: paymentIcon || maintenance.paymentIcon,
-                    maintenanceRequestId: maintenance._id
+                    maintenanceRequestId: maintenance._id,
+                    notes: `Converted from maintenance request${maintenance.provider ? ` - Provider: ${maintenance.provider}` : ''}`
                 };
 
                 // Create the expense

@@ -76,6 +76,11 @@ const monthlyRequestItemSchema = new mongoose.Schema({
         trim: true,
         required: false  // Make notes optional
     },
+    provider: {
+        type: String,
+        trim: true,
+        required: false  // Optional provider name linked to their accounts
+    },
     tags: [{
         type: String,
         trim: true
@@ -210,7 +215,8 @@ const monthlyRequestSchema = new mongoose.Schema({
             estimatedCost: { type: Number, required: true, min: 0 },
             category: { type: String, enum: ['utilities', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
             priority: { type: String, enum: ['low', 'medium', 'high'] },
-            notes: { type: String, trim: true }
+            notes: { type: String, trim: true },
+            provider: { type: String, trim: true, required: false }
         }],
         totalCost: { type: Number, default: 0 },
         notes: { type: String, trim: true },

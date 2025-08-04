@@ -190,7 +190,8 @@ const addExpense = async (req, res) => {
             paymentMethod: paymentStatus === 'Paid' ? paymentMethod : undefined,
             paidDate: paymentStatus === 'Paid' ? new Date(paidDate) : undefined,
             paidBy: paymentStatus === 'Paid' ? req.user._id : undefined,
-            createdBy: req.user._id
+            createdBy: req.user._id,
+            notes: req.body.provider ? `Provider: ${req.body.provider}` : undefined
         });
 
         await expense.save();

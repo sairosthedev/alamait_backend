@@ -151,6 +151,11 @@ const maintenanceSchema = new mongoose.Schema({
         type: String,
         required: false
     },
+    provider: {
+        type: String,
+        trim: true,
+        required: false  // Optional provider name linked to their accounts
+    },
     images: [{
         url: {
             type: String,

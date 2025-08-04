@@ -2363,8 +2363,9 @@ async function convertRequestToExpenses(request, user) {
                 paymentStatus: 'Pending',
                 paymentMethod: 'Bank Transfer', // Default payment method
                 monthlyRequestId: request._id,
+                residence: request.residence, // Add residence field
                 createdBy: user._id,
-                notes: `Converted from monthly request template: ${request.title}. Total items: ${request.items.length}`
+                notes: `Converted from monthly request template: ${request.title}. Total items: ${request.items.length}${request.items.some(item => item.provider) ? ` - Providers: ${request.items.filter(item => item.provider).map(item => item.provider).join(', ')}` : ''}`
             });
             
             await expense.save();
@@ -2399,8 +2400,9 @@ async function convertRequestToExpenses(request, user) {
                             monthlyRequestId: request._id,
                         itemIndex: i,
                         quotationId: approvedQuotation._id,
+                        residence: request.residence, // Add residence field
                         createdBy: user._id,
-                        notes: `Converted from monthly request item: ${item.title}`
+                        notes: `Converted from monthly request item: ${item.title}${item.provider ? ` - Provider: ${item.provider}` : ''}`
                         });
                         
                         await expense.save();
@@ -2419,8 +2421,9 @@ async function convertRequestToExpenses(request, user) {
                         paymentMethod: 'Bank Transfer',
                         monthlyRequestId: request._id,
                         itemIndex: i,
+                        residence: request.residence, // Add residence field
                         createdBy: user._id,
-                        notes: `Converted from monthly request item: ${item.title} (estimated cost)`
+                        notes: `Converted from monthly request item: ${item.title} (estimated cost)${item.provider ? ` - Provider: ${item.provider}` : ''}`
                     });
                     
                     await expense.save();
