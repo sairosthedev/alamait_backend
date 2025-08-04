@@ -369,8 +369,8 @@ exports.getAllMonthlyRequests = async (req, res) => {
                 // Don't add month/year to query for templates
             } else if (isTemplate === 'false') {
                 // For non-templates (monthly requests), filter by month/year
-                query.month = parseInt(month);
-                query.year = parseInt(year);
+            query.month = parseInt(month);
+            query.year = parseInt(year);
             } else {
                 // If isTemplate is not specified, show both templates and non-templates
                 // For templates, we'll filter by monthlyApprovals later
@@ -1476,7 +1476,7 @@ exports.approveMonthlyRequest = async (req, res) => {
         }
 
         try {
-            await monthlyRequest.save();
+        await monthlyRequest.save();
             console.log('Request saved with new status:', {
                 requestId: monthlyRequest._id,
                 newStatus: monthlyRequest.status,
@@ -1531,10 +1531,10 @@ exports.approveMonthlyRequest = async (req, res) => {
         let updatedRequest;
         try {
             updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
-                .populate('residence', 'name')
-                .populate('submittedBy', 'firstName lastName email')
-                .populate('approvedBy', 'firstName lastName email')
-                .populate('monthlyApprovals.approvedBy', 'firstName lastName email');
+            .populate('residence', 'name')
+            .populate('submittedBy', 'firstName lastName email')
+            .populate('approvedBy', 'firstName lastName email')
+            .populate('monthlyApprovals.approvedBy', 'firstName lastName email');
 
             if (!updatedRequest) {
                 console.error('Could not find updated request after save');
