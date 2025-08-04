@@ -99,6 +99,24 @@ exports.createInvoice = async (req, res) => {
             ? charges.find(charge => charge.category === 'rent')?.amount || charges[0]?.amount || 0
             : 0;
 
+        // Calculate total amount from charges
+        let subtotal = 0;
+        let taxAmount = 0;
+        
+        if (charges && charges.length > 0) {
+            charges.forEach(charge => {
+                const chargeAmount = (charge.amount || 0);
+                subtotal += chargeAmount;
+                
+                // Calculate tax if applicable
+                if (charge.taxRate && charge.taxRate > 0) {
+                    taxAmount += (chargeAmount * charge.taxRate / 100);
+                }
+            });
+        }
+
+        const totalAmount = subtotal + taxAmount;
+
         // Create invoice with complete details
         const invoice = new Invoice({
             invoiceNumber,
@@ -108,6 +126,13 @@ exports.createInvoice = async (req, res) => {
             roomType,
             billingPeriod,
             roomPrice, // Add room price
+            subtotal: subtotal, // Add subtotal
+            taxAmount: taxAmount, // Add tax amount
+            totalAmount: totalAmount, // Use calculated total amount
+            balanceDue: totalAmount, // Initially balance equals total
+            amountPaid: 0, // No payments initially
+            status: 'sent', // Set initial status
+            paymentStatus: 'unpaid', // Set initial payment status
             studentName: `${studentDetails.firstName} ${studentDetails.lastName}`,
             studentEmail: studentDetails.email,
             studentPhone: studentDetails.phone,
@@ -137,23 +162,8 @@ exports.createInvoice = async (req, res) => {
         await savedInvoice.populate('student', 'firstName lastName email phone');
         await savedInvoice.populate('residence', 'name address city state postalCode');
 
-        // Calculate totals for preview
-        let subtotal = 0;
-        let taxAmount = 0;
-        
-        if (charges && charges.length > 0) {
-            charges.forEach(charge => {
-                const chargeAmount = (charge.amount || 0);
-                subtotal += chargeAmount;
-                
-                // Calculate tax if applicable
-                if (charge.taxRate && charge.taxRate > 0) {
-                    taxAmount += (chargeAmount * charge.taxRate / 100);
-                }
-            });
-        }
-
-        const totalAmount = subtotal + taxAmount;
+        // Use the already calculated totals from above
+        // subtotal and taxAmount are already calculated in the invoice creation section
 
         // Create preview response with all details
         const invoicePreview = {
