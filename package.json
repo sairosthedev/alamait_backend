@@ -5,8 +5,8 @@
   "main": "main.js",
   "scripts": {
     "test": "jest",
-    "start": "node src/server.js",
-    "dev": "nodemon server.js",
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
     "create-admin": "node scripts/createAdmin.js",
     "save-stkilda": "node scripts/saveStKildaProperty.js",
     "save-belvedere": "node scripts/saveBelvedereProperty.js",

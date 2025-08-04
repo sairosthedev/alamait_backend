@@ -3,6 +3,9 @@ const router = express.Router();
 const transactionController = require('../controllers/transactionController');
 const { auth, checkRole } = require('../middleware/auth');
 
+// Get all transactions with entries (for frontend compatibility)
+router.get('/all', auth, transactionController.getAllTransactions);
+
 // Get transaction entries with filters
 router.get('/entries', auth, transactionController.getTransactionEntries);
 
