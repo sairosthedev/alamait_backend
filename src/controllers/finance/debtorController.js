@@ -5,6 +5,9 @@ const Transaction = require('../../models/Transaction');
 const TransactionEntry = require('../../models/TransactionEntry');
 const Invoice = require('../../models/Invoice');
 const Payment = require('../../models/Payment');
+const Residence = require('../../models/Residence');
+const Application = require('../../models/Application');
+const Booking = require('../../models/Booking');
 
 // Create a new debtor account for a student/tenant
 exports.createDebtor = async (req, res) => {
@@ -539,4 +542,398 @@ exports.deleteDebtor = async (req, res) => {
             error: error.message
         });
     }
+};
+
+// Get comprehensive debtor data with all related collections
+exports.getDebtorComprehensiveData = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { includeHistory = true, months = 12 } = req.query;
+
+        const debtor = await Debtor.findById(id)
+            .populate('user', 'firstName lastName email phone')
+            .populate('residence', 'name address city state zipCode')
+            .populate('createdBy', 'firstName lastName email');
+
+        if (!debtor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Debtor not found'
+            });
+        }
+
+        // Get all payments for this debtor (student)
+        const payments = await Payment.find({
+            student: debtor.user._id
+        })
+        .populate('residence', 'name address')
+        .populate('student', 'firstName lastName email')
+        .sort({ date: -1 });
+
+        // Get all transactions related to this debtor
+        const transactions = await Transaction.find({
+            $or: [
+                { 'entries.account': debtor.accountCode },
+                { 'entries.debtorId': debtor._id },
+                { reference: { $regex: debtor.debtorCode, $options: 'i' } }
+            ]
+        })
+        .populate('entries')
+        .populate('residence', 'name address')
+        .sort({ date: -1 });
+
+        // Get residence details
+        const residence = await Residence.findById(debtor.residence)
+            .populate('rooms');
+
+        // Get application data for this student
+        const applications = await Application.find({
+            student: debtor.user._id
+        })
+        .populate('residence', 'name address')
+        .sort({ createdAt: -1 });
+
+        // Get booking data for this student
+        const bookings = await Booking.find({
+            student: debtor.user._id
+        })
+        .populate('residence', 'name address')
+        .populate('room')
+        .sort({ startDate: -1 });
+
+        // Calculate payment statistics
+        const paymentStats = calculatePaymentStatistics(payments, months);
+        
+        // Calculate transaction statistics
+        const transactionStats = calculateTransactionStatistics(transactions, months);
+
+        // Get room details if available
+        const roomDetails = residence?.rooms?.find(room => 
+            room.roomNumber === debtor.roomNumber
+        );
+
+        const response = {
+            success: true,
+            debtor: {
+                ...debtor.toObject(),
+                roomDetails
+            },
+            residence: residence,
+            payments: {
+                data: includeHistory ? payments : [],
+                statistics: paymentStats
+            },
+            transactions: {
+                data: includeHistory ? transactions : [],
+                statistics: transactionStats
+            },
+            applications: includeHistory ? applications : [],
+            bookings: includeHistory ? bookings : [],
+            summary: {
+                totalPayments: payments.length,
+                totalTransactions: transactions.length,
+                totalApplications: applications.length,
+                totalBookings: bookings.length,
+                currentBalance: debtor.currentBalance,
+                totalOwed: debtor.totalOwed,
+                totalPaid: debtor.totalPaid,
+                overdueAmount: debtor.overdueAmount,
+                daysOverdue: debtor.daysOverdue
+            }
+        };
+
+        res.status(200).json(response);
+
+    } catch (error) {
+        console.error('Error fetching comprehensive debtor data:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching comprehensive debtor data',
+            error: error.message
+        });
+    }
+};
+
+// Get all debtors with comprehensive data mapping
+exports.getAllDebtorsComprehensive = async (req, res) => {
+    try {
+        const {
+            page = 1,
+            limit = 10,
+            status,
+            residence,
+            search,
+            sortBy = 'createdAt',
+            sortOrder = 'desc',
+            overdue,
+            includeDetails = false
+        } = req.query;
+
+        // Build query
+        const query = {};
+
+        if (status) query.status = status;
+        if (residence) query.residence = residence;
+        if (overdue === 'true') query.currentBalance = { $gt: 0 };
+
+        // Search functionality
+        if (search) {
+            query.$or = [
+                { 'contactInfo.name': { $regex: search, $options: 'i' } },
+                { 'contactInfo.email': { $regex: search, $options: 'i' } },
+                { debtorCode: { $regex: search, $options: 'i' } },
+                { accountCode: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Calculate pagination
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const total = await Debtor.countDocuments(query);
+
+        // Get debtors with basic population
+        const debtors = await Debtor.find(query)
+            .populate('user', 'firstName lastName email phone')
+            .populate('residence', 'name address city')
+            .populate('createdBy', 'firstName lastName email')
+            .sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        // If includeDetails is true, fetch additional data for each debtor
+        let debtorsWithDetails = debtors;
+        if (includeDetails === 'true') {
+            debtorsWithDetails = await Promise.all(
+                debtors.map(async (debtor) => {
+                    // Get recent payments (last 5)
+                    const recentPayments = await Payment.find({
+                        student: debtor.user._id
+                    })
+                    .sort({ date: -1 })
+                    .limit(5);
+
+                    // Get recent transactions (last 5)
+                    const recentTransactions = await Transaction.find({
+                        $or: [
+                            { 'entries.account': debtor.accountCode },
+                            { 'entries.debtorId': debtor._id }
+                        ]
+                    })
+                    .sort({ date: -1 })
+                    .limit(5);
+
+                    // Get current application
+                    const currentApplication = await Application.findOne({
+                        student: debtor.user._id,
+                        status: 'approved'
+                    })
+                    .populate('residence', 'name address');
+
+                    // Get current booking
+                    const currentBooking = await Booking.findOne({
+                        student: debtor.user._id,
+                        status: 'active'
+                    })
+                    .populate('residence', 'name address')
+                    .populate('room');
+
+                    return {
+                        ...debtor.toObject(),
+                        recentPayments,
+                        recentTransactions,
+                        currentApplication,
+                        currentBooking
+                    };
+                })
+            );
+        }
+
+        // Calculate summary statistics
+        const totalOwed = await Debtor.aggregate([
+            { $match: query },
+            { $group: { _id: null, total: { $sum: '$totalOwed' } } }
+        ]);
+
+        const totalPaid = await Debtor.aggregate([
+            { $match: query },
+            { $group: { _id: null, total: { $sum: '$totalPaid' } } }
+        ]);
+
+        const totalBalance = await Debtor.aggregate([
+            { $match: query },
+            { $group: { _id: null, total: { $sum: '$currentBalance' } } }
+        ]);
+
+        const overdueCount = await Debtor.countDocuments({
+            ...query,
+            currentBalance: { $gt: 0 }
+        });
+
+        res.status(200).json({
+            success: true,
+            debtors: debtorsWithDetails,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / limit),
+                totalItems: total,
+                itemsPerPage: parseInt(limit)
+            },
+            summary: {
+                totalOwed: totalOwed[0]?.total || 0,
+                totalPaid: totalPaid[0]?.total || 0,
+                totalBalance: totalBalance[0]?.total || 0,
+                totalDebtors: total,
+                overdueCount
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching comprehensive debtors:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching comprehensive debtors',
+            error: error.message
+        });
+    }
+};
+
+// Get debtor payment history with detailed mapping
+exports.getDebtorPaymentHistory = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { startDate, endDate, status, method } = req.query;
+
+        const debtor = await Debtor.findById(id)
+            .populate('user', 'firstName lastName email phone');
+
+        if (!debtor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Debtor not found'
+            });
+        }
+
+        // Build payment query
+        const paymentQuery = { student: debtor.user._id };
+        
+        if (startDate && endDate) {
+            paymentQuery.date = {
+                $gte: new Date(startDate),
+                $lte: new Date(endDate)
+            };
+        }
+        
+        if (status) paymentQuery.status = status;
+        if (method) paymentQuery.method = method;
+
+        const payments = await Payment.find(paymentQuery)
+            .populate('residence', 'name address')
+            .populate('student', 'firstName lastName email')
+            .sort({ date: -1 });
+
+        // Calculate payment statistics
+        const totalAmount = payments.reduce((sum, payment) => sum + payment.totalAmount, 0);
+        const confirmedPayments = payments.filter(p => p.status === 'Confirmed');
+        const pendingPayments = payments.filter(p => p.status === 'Pending');
+        
+        const methodBreakdown = payments.reduce((acc, payment) => {
+            acc[payment.method] = (acc[payment.method] || 0) + payment.totalAmount;
+            return acc;
+        }, {});
+
+        const monthlyBreakdown = payments.reduce((acc, payment) => {
+            const month = new Date(payment.date).toISOString().slice(0, 7); // YYYY-MM
+            acc[month] = (acc[month] || 0) + payment.totalAmount;
+            return acc;
+        }, {});
+
+        res.status(200).json({
+            success: true,
+            debtor: {
+                _id: debtor._id,
+                debtorCode: debtor.debtorCode,
+                name: debtor.contactInfo.name,
+                email: debtor.contactInfo.email
+            },
+            payments,
+            statistics: {
+                totalPayments: payments.length,
+                totalAmount,
+                confirmedAmount: confirmedPayments.reduce((sum, p) => sum + p.totalAmount, 0),
+                pendingAmount: pendingPayments.reduce((sum, p) => sum + p.totalAmount, 0),
+                methodBreakdown,
+                monthlyBreakdown
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching debtor payment history:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching debtor payment history',
+            error: error.message
+        });
+    }
+};
+
+// Helper function to calculate payment statistics
+const calculatePaymentStatistics = (payments, months = 12) => {
+    const now = new Date();
+    const monthsAgo = new Date(now.getFullYear(), now.getMonth() - months, 1);
+    
+    const recentPayments = payments.filter(payment => 
+        new Date(payment.date) >= monthsAgo
+    );
+
+    const totalAmount = recentPayments.reduce((sum, payment) => sum + payment.totalAmount, 0);
+    const confirmedPayments = recentPayments.filter(p => p.status === 'Confirmed');
+    const pendingPayments = recentPayments.filter(p => p.status === 'Pending');
+
+    const methodBreakdown = recentPayments.reduce((acc, payment) => {
+        acc[payment.method] = (acc[payment.method] || 0) + payment.totalAmount;
+        return acc;
+    }, {});
+
+    return {
+        totalPayments: recentPayments.length,
+        totalAmount,
+        confirmedAmount: confirmedPayments.reduce((sum, p) => sum + p.totalAmount, 0),
+        pendingAmount: pendingPayments.reduce((sum, p) => sum + p.totalAmount, 0),
+        methodBreakdown,
+        averagePayment: recentPayments.length > 0 ? totalAmount / recentPayments.length : 0
+    };
+};
+
+// Helper function to calculate transaction statistics
+const calculateTransactionStatistics = (transactions, months = 12) => {
+    const now = new Date();
+    const monthsAgo = new Date(now.getFullYear(), now.getMonth() - months, 1);
+    
+    const recentTransactions = transactions.filter(transaction => 
+        new Date(transaction.date) >= monthsAgo
+    );
+
+    const totalDebit = recentTransactions.reduce((sum, transaction) => {
+        return sum + (transaction.entries?.reduce((entrySum, entry) => 
+            entrySum + (entry.debit || 0), 0) || 0);
+    }, 0);
+
+    const totalCredit = recentTransactions.reduce((sum, transaction) => {
+        return sum + (transaction.entries?.reduce((entrySum, entry) => 
+            entrySum + (entry.credit || 0), 0) || 0);
+    }, 0);
+
+    const typeBreakdown = recentTransactions.reduce((acc, transaction) => {
+        acc[transaction.type] = (acc[transaction.type] || 0) + 1;
+        return acc;
+    }, {});
+
+    return {
+        totalTransactions: recentTransactions.length,
+        totalDebit,
+        totalCredit,
+        netAmount: totalDebit - totalCredit,
+        typeBreakdown,
+        averageTransaction: recentTransactions.length > 0 ? 
+            (totalDebit + totalCredit) / recentTransactions.length : 0
+    };
 }; 

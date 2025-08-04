@@ -30,6 +30,15 @@ router.post('/:id/payment', debtorController.addPayment);
 // Get debtor balance and history
 router.get('/:id/balance', debtorController.getDebtorBalance);
 
+// Get comprehensive debtor data with all related collections
+router.get('/:id/comprehensive', debtorController.getDebtorComprehensiveData);
+
+// Get debtor payment history with detailed mapping
+router.get('/:id/payment-history', debtorController.getDebtorPaymentHistory);
+
+// Get all debtors with comprehensive data mapping
+router.get('/comprehensive/all', debtorController.getAllDebtorsComprehensive);
+
 // Delete debtor account (only if no outstanding balance)
 router.delete('/:id', debtorController.deleteDebtor);
 
