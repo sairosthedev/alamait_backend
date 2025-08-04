@@ -1,10 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const accountController = require('../../controllers/finance/accountController');
-const { checkRole } = require('../../middleware/auth');
+const { checkRole, financeAccess } = require('../../middleware/auth');
 
 // Apply finance access middleware to all routes
-const financeAccess = require('../../middleware/financeAccess');
 router.use(financeAccess);
 
 // Get all accounts with filtering and pagination
