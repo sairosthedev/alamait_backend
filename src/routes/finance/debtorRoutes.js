@@ -39,6 +39,12 @@ router.get('/:id/payment-history', debtorController.getDebtorPaymentHistory);
 // Get all debtors with comprehensive data mapping
 router.get('/comprehensive/all', debtorController.getAllDebtorsComprehensive);
 
+// Create debtor for existing student
+router.post('/student/:userId', debtorController.createDebtorForExistingStudent);
+
+// Bulk create debtors for all students
+router.post('/bulk-create', debtorController.bulkCreateDebtors);
+
 // Delete debtor account (only if no outstanding balance)
 router.delete('/:id', debtorController.deleteDebtor);
 

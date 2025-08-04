@@ -8,6 +8,7 @@ const Payment = require('../../models/Payment');
 const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const Booking = require('../../models/Booking');
+const { createDebtorForStudent } = require('../../services/debtorService');
 
 // Create a new debtor account for a student/tenant
 exports.createDebtor = async (req, res) => {
@@ -870,6 +871,107 @@ exports.getDebtorPaymentHistory = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error fetching debtor payment history',
+            error: error.message
+        });
+    }
+};
+
+// Create debtor for existing student who doesn't have one
+exports.createDebtorForExistingStudent = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { residenceId, roomNumber } = req.body;
+
+        // Check if user exists and is a student
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        if (user.role !== 'student') {
+            return res.status(400).json({
+                success: false,
+                message: 'User is not a student'
+            });
+        }
+
+        // Check if debtor already exists
+        const existingDebtor = await Debtor.findOne({ user: userId });
+        if (existingDebtor) {
+            return res.status(400).json({
+                success: false,
+                message: 'Debtor account already exists for this student'
+            });
+        }
+
+        // Create debtor
+        const debtor = await createDebtorForStudent(user, {
+            residenceId,
+            roomNumber,
+            createdBy: req.user._id
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Debtor account created successfully',
+            debtor: {
+                _id: debtor._id,
+                debtorCode: debtor.debtorCode,
+                accountCode: debtor.accountCode,
+                status: debtor.status,
+                user: {
+                    _id: user._id,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    email: user.email
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error creating debtor for existing student:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error creating debtor account',
+            error: error.message
+        });
+    }
+};
+
+// Bulk create debtors for all students without debtor accounts
+exports.bulkCreateDebtors = async (req, res) => {
+    try {
+        const { createdBy } = req.body;
+
+        // Create debtors for all students without debtor accounts
+        const result = await createDebtorsForAllStudents({
+            createdBy: createdBy || req.user._id
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Bulk debtor creation completed',
+            summary: {
+                totalCreated: result.createdDebtors.length,
+                totalErrors: result.errors.length,
+                createdDebtors: result.createdDebtors.map(debtor => ({
+                    _id: debtor._id,
+                    debtorCode: debtor.debtorCode,
+                    accountCode: debtor.accountCode,
+                    user: debtor.user
+                })),
+                errors: result.errors
+            }
+        });
+
+    } catch (error) {
+        console.error('Error in bulk debtor creation:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error in bulk debtor creation',
             error: error.message
         });
     }

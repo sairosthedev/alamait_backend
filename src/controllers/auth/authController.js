@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../../models/User');
 const { sendVerificationEmail, sendPasswordResetEmail } = require('../../services/emailService');
+const { createDebtorForStudent } = require('../../services/debtorService');
 
 // Register new user
 exports.register = async (req, res) => {
@@ -39,6 +40,19 @@ exports.register = async (req, res) => {
         ('User saved successfully:', email);
         ('Saved user role:', user.role);
         ('Password after save:', user.password.substring(0, 10) + '...');
+
+        // Automatically create debtor account for students
+        if (user.role === 'student') {
+            try {
+                await createDebtorForStudent(user, {
+                    createdBy: user._id
+                });
+                ('Debtor account created for student:', email);
+            } catch (debtorError) {
+                console.error('Failed to create debtor account:', debtorError);
+                // Continue with registration even if debtor creation fails
+            }
+        }
 
         // Send verification email
         // try {
