@@ -39,7 +39,9 @@ const {
 const {
     getPayments,
     updatePaymentStatus,
-    createPayment
+    createPayment,
+    sendReceiptEmail,
+    uploadReceipt
 } = require('../../controllers/admin/paymentController');
 
 const adminController = require('../../controllers/admin/adminController');
@@ -146,6 +148,8 @@ router.delete('/maintenance/maintenance_staff/:staffId', removeMaintenanceStaff)
 router.get('/payments', getPayments);
 router.put('/payments/:paymentId', updatePaymentStatus);
 router.post('/payments', paymentValidation, createPayment);
+router.post('/send-receipt-email', sendReceiptEmail);
+router.post('/upload-receipt', uploadReceipt);
 
 // Add route for fetching all leases from all students (unified logic)
 router.get('/leases2', leaseController.listAllLeases);

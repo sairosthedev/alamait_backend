@@ -68,6 +68,13 @@ const s3Configs = {
     bucket: bucketName,
     key: (req, file) => `general/${Date.now()}_${file.originalname}`,
     acl: 'private'
+  },
+  
+  // For receipts
+  receipts: {
+    bucket: bucketName,
+    key: (req, file) => `receipts/${Date.now()}_${file.originalname}`,
+    acl: 'public-read'
   }
 };
 
