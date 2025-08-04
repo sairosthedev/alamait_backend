@@ -25,6 +25,12 @@ router.put('/requests/:id/finance',
     maintenanceController.updateMaintenanceRequestFinance
 );
 
+// Approve maintenance request (admin and finance_admin only)
+router.patch('/requests/:id/approve',
+    checkRole('admin', 'finance_admin'),
+    maintenanceController.approveMaintenance
+);
+
 // Get maintenance requests by finance status
 router.get('/requests/status/:status',
     maintenanceController.getMaintenanceRequestsByFinanceStatus
