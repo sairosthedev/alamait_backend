@@ -1,0 +1,725 @@
+[{
+  "_id": {
+    "$oid": "686faeb8991066842501dbbe"
+  },
+  "expenseId": "EXP-1752149688594-3029",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "category": "Maintenance",
+  "amount": 50,
+  "description": "Maintenance: Electricity: Plugs not working - Electricity: Plugs not working",
+  "expenseDate": {
+    "$date": "2025-07-10T12:14:48.594Z"
+  },
+  "paymentStatus": "Pending",
+  "period": "monthly",
+  "paymentMethod": "Innbucks",
+  "maintenanceRequestId": {
+    "$oid": "686fad37991066842501d583"
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "createdAt": {
+    "$date": "2025-07-10T12:14:48.596Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-10T12:14:48.596Z"
+  },
+  "__v": 0,
+  "approvedAt": null,
+  "approvedBy": null,
+  "approvedByEmail": null,
+  "expenseAccountCode": null,
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "6874f745e56972d3019bda61"
+  },
+  "expenseId": "EXP-1752495941218-3323",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "category": "Maintenance",
+  "amount": 100,
+  "description": "Maintenance: Toilet is blocked - Please help us with the matter",
+  "expenseDate": {
+    "$date": "2025-07-14T12:25:41.219Z"
+  },
+  "paymentStatus": "Paid",
+  "period": "monthly",
+  "paymentMethod": "Bank Transfer",
+  "maintenanceRequestId": {
+    "$oid": "686d82f576fac16e629eae5a"
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "createdAt": {
+    "$date": "2025-07-14T12:25:41.223Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-24T12:16:50.746Z"
+  },
+  "__v": 0,
+  "paidDate": {
+    "$date": "2025-07-24T12:16:47.821Z"
+  },
+  "updatedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedAt": null,
+  "approvedBy": null,
+  "approvedByEmail": null,
+  "expenseAccountCode": null,
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688981669afd9155255a4470"
+  },
+  "expenseId": "EXP-1753842022590-2239",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "category": "Maintenance",
+  "amount": 136,
+  "description": "Maintenance: lights not working - they are not switching on",
+  "expenseDate": {
+    "$date": "2025-07-30T02:20:22.590Z"
+  },
+  "paymentStatus": "Pending",
+  "period": "monthly",
+  "paymentMethod": "Cash",
+  "maintenanceRequestId": {
+    "$oid": "686e7bc0913b15e1760d8178"
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "createdAt": {
+    "$date": "2025-07-30T02:20:22.592Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-30T02:20:22.592Z"
+  },
+  "__v": 0,
+  "approvedAt": null,
+  "approvedBy": null,
+  "approvedByEmail": null,
+  "expenseAccountCode": null,
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688981f79afd9155255a4621"
+  },
+  "expenseId": "EXP-1753842167323-9841",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "category": "Maintenance",
+  "amount": 224,
+  "description": "Maintenance: Toilet is blocked - please",
+  "expenseDate": {
+    "$date": "2025-07-30T02:22:47.323Z"
+  },
+  "paymentStatus": "Pending",
+  "period": "monthly",
+  "paymentMethod": "Ecocash",
+  "maintenanceRequestId": {
+    "$oid": "686ee3e86af01f8b9f54ed14"
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "createdAt": {
+    "$date": "2025-07-30T02:22:47.324Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-30T02:22:47.324Z"
+  },
+  "__v": 0,
+  "approvedAt": null,
+  "approvedBy": null,
+  "approvedByEmail": null,
+  "expenseAccountCode": null,
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688abb6888733afeb85b854c"
+  },
+  "expenseId": "EXP-1753922408941-5389",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "category": "Maintenance",
+  "amount": 150,
+  "description": "Maintenance: gazebo construction - gazebo construction request",
+  "expenseDate": {
+    "$date": "2025-07-31T00:40:08.941Z"
+  },
+  "paymentStatus": "Paid",
+  "period": "monthly",
+  "paymentMethod": "Bank Transfer",
+  "maintenanceRequestId": {
+    "$oid": "688a4e45c0f30f13fe683751"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "createdAt": {
+    "$date": "2025-07-31T00:40:08.943Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-03T15:49:19.020Z"
+  },
+  "__v": 1,
+  "items": [],
+  "requestId": {
+    "$oid": "688a4e45c0f30f13fe683751"
+  },
+  "approvedAt": null,
+  "approvedBy": null,
+  "approvedByEmail": null,
+  "expenseAccountCode": null,
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688af9d550bd768117b9c262"
+  },
+  "expenseId": "EXP-1753938389319-8097",
+  "residence": {
+    "$oid": "6848258b1149b66fc94a261d"
+  },
+  "category": "Maintenance",
+  "amount": 450,
+  "description": "Maintenance: undefined - hapana",
+  "expenseDate": {
+    "$date": "2025-07-31T05:06:29.319Z"
+  },
+  "paymentStatus": "Pending",
+  "period": "monthly",
+  "paymentMethod": "Bank Transfer",
+  "maintenanceRequestId": {
+    "$oid": "688aea2850bd768117b99e82"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "createdAt": {
+    "$date": "2025-07-31T05:06:29.320Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T05:06:29.320Z"
+  },
+  "__v": 0,
+  "approvedAt": null,
+  "approvedBy": null,
+  "approvedByEmail": null,
+  "expenseAccountCode": null,
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688c65c77d29e6e533fcdd62"
+  },
+  "expenseId": "EXP_MDSH3PGQ_5NMHD",
+  "title": "Monthly Request - Monthly Requests",
+  "description": "Monthly Requests 1ACP for January 2025",
+  "amount": 280,
+  "category": "Maintenance",
+  "expenseDate": {
+    "$date": "2024-12-31T22:00:00.000Z"
+  },
+  "period": "monthly",
+  "paymentStatus": "Pending",
+  "paymentMethod": "Bank Transfer",
+  "monthlyRequestId": {
+    "$oid": "688c449e57271825c8910fcf"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "notes": "Converted from approved monthly request: January 2025",
+  "createdAt": {
+    "$date": "2025-08-01T06:59:19.850Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T06:59:19.850Z"
+  },
+  "approvedAt": {
+    "$date": "2025-08-03T16:56:00.201Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "expenseAccountCode": "5013",
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688c65c77d29e6e533fcdd63"
+  },
+  "expenseId": "EXP_MDSH3PJZ_ZJEC0",
+  "title": "Monthly Request - Monthly Requests",
+  "description": "Monthly Requests 1ACP for February 2025",
+  "amount": 280,
+  "category": "Maintenance",
+  "expenseDate": {
+    "$date": "2025-01-31T22:00:00.000Z"
+  },
+  "period": "monthly",
+  "paymentStatus": "Pending",
+  "paymentMethod": "Bank Transfer",
+  "monthlyRequestId": {
+    "$oid": "688c449e57271825c8910fcf"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "notes": "Converted from approved monthly request: February 2025",
+  "createdAt": {
+    "$date": "2025-08-01T06:59:19.967Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T06:59:19.967Z"
+  },
+  "approvedAt": {
+    "$date": "2025-08-03T16:56:00.201Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "expenseAccountCode": "5013",
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688c65c87d29e6e533fcdd64"
+  },
+  "expenseId": "EXP_MDSH3PMF_VTZFY",
+  "title": "Monthly Request - Monthly Requests",
+  "description": "Monthly Requests 1ACP for March 2025",
+  "amount": 280,
+  "category": "Maintenance",
+  "expenseDate": {
+    "$date": "2025-02-28T22:00:00.000Z"
+  },
+  "period": "monthly",
+  "paymentStatus": "Pending",
+  "paymentMethod": "Bank Transfer",
+  "monthlyRequestId": {
+    "$oid": "688c449e57271825c8910fcf"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "notes": "Converted from approved monthly request: March 2025",
+  "createdAt": {
+    "$date": "2025-08-01T06:59:20.055Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T06:59:20.055Z"
+  },
+  "approvedAt": {
+    "$date": "2025-08-03T16:56:00.201Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "expenseAccountCode": "5013",
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688c65c87d29e6e533fcdd65"
+  },
+  "expenseId": "EXP_MDSH3POZ_DF9IG",
+  "title": "Monthly Request - Monthly Requests",
+  "description": "Monthly Requests 1ACP for April 2025",
+  "amount": 280,
+  "category": "Maintenance",
+  "expenseDate": {
+    "$date": "2025-03-31T22:00:00.000Z"
+  },
+  "period": "monthly",
+  "paymentStatus": "Pending",
+  "paymentMethod": "Bank Transfer",
+  "monthlyRequestId": {
+    "$oid": "688c449e57271825c8910fcf"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "notes": "Converted from approved monthly request: April 2025",
+  "createdAt": {
+    "$date": "2025-08-01T06:59:20.147Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T06:59:20.147Z"
+  },
+  "approvedAt": {
+    "$date": "2025-08-03T16:56:00.201Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "expenseAccountCode": "5013",
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688c65c87d29e6e533fcdd66"
+  },
+  "expenseId": "EXP_MDSH3PR7_YQEV0",
+  "title": "Monthly Request - Monthly Requests",
+  "description": "Monthly Requests 1ACP for May 2025",
+  "amount": 280,
+  "category": "Maintenance",
+  "expenseDate": {
+    "$date": "2025-04-30T22:00:00.000Z"
+  },
+  "period": "monthly",
+  "paymentStatus": "Pending",
+  "paymentMethod": "Bank Transfer",
+  "monthlyRequestId": {
+    "$oid": "688c449e57271825c8910fcf"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "notes": "Converted from approved monthly request: May 2025",
+  "createdAt": {
+    "$date": "2025-08-01T06:59:20.227Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T06:59:20.227Z"
+  },
+  "approvedAt": {
+    "$date": "2025-08-03T16:56:00.201Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "expenseAccountCode": "5013",
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688c65c87d29e6e533fcdd67"
+  },
+  "expenseId": "EXP_MDSH3PTL_IAG7P",
+  "title": "Monthly Request - Monthly Requests",
+  "description": "Monthly Requests 1ACP for June 2025",
+  "amount": 280,
+  "category": "Maintenance",
+  "expenseDate": {
+    "$date": "2025-05-31T22:00:00.000Z"
+  },
+  "period": "monthly",
+  "paymentStatus": "Pending",
+  "paymentMethod": "Bank Transfer",
+  "monthlyRequestId": {
+    "$oid": "688c449e57271825c8910fcf"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "notes": "Converted from approved monthly request: June 2025",
+  "createdAt": {
+    "$date": "2025-08-01T06:59:20.313Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T06:59:20.313Z"
+  },
+  "approvedAt": {
+    "$date": "2025-08-03T16:56:00.201Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "expenseAccountCode": "5013",
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688c65c87d29e6e533fcdd68"
+  },
+  "expenseId": "EXP_MDSH3PW0_OYM53",
+  "title": "Monthly Request - Monthly Requests",
+  "description": "Monthly Requests 1ACP for July 2025",
+  "amount": 280,
+  "category": "Maintenance",
+  "expenseDate": {
+    "$date": "2025-06-30T22:00:00.000Z"
+  },
+  "period": "monthly",
+  "paymentStatus": "Pending",
+  "paymentMethod": "Bank Transfer",
+  "monthlyRequestId": {
+    "$oid": "688c449e57271825c8910fcf"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "notes": "Converted from approved monthly request: July 2025",
+  "createdAt": {
+    "$date": "2025-08-01T06:59:20.400Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T06:59:20.400Z"
+  },
+  "approvedAt": {
+    "$date": "2025-08-03T16:56:00.201Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "expenseAccountCode": "5013",
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "688c65c87d29e6e533fcdd69"
+  },
+  "expenseId": "EXP_MDSH3PYI_VUFGJ",
+  "title": "Monthly Request - Monthly Requests",
+  "description": "Monthly Requests 1ACP for August 2025",
+  "amount": 280,
+  "category": "Maintenance",
+  "expenseDate": {
+    "$date": "2025-07-31T22:00:00.000Z"
+  },
+  "period": "monthly",
+  "paymentStatus": "Pending",
+  "paymentMethod": "Bank Transfer",
+  "monthlyRequestId": {
+    "$oid": "688c449e57271825c8910fcf"
+  },
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "notes": "Converted from approved monthly request: August 2025",
+  "createdAt": {
+    "$date": "2025-08-01T06:59:20.490Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T06:59:20.490Z"
+  },
+  "approvedAt": {
+    "$date": "2025-08-03T16:56:00.201Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "expenseAccountCode": "5013",
+  "itemIndex": null,
+  "quotationId": null,
+  "transactionId": null,
+  "vendorCode": null,
+  "vendorId": null,
+  "vendorName": null,
+  "vendorType": null
+},
+{
+  "_id": {
+    "$oid": "689014e42e7c647c942c2944"
+  },
+  "expenseId": "EXP-1754272996697-0056",
+  "requestId": {
+    "$oid": "68901028796b964b360dc0b5"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "category": "Other",
+  "amount": 10,
+  "description": "Cleaning - Brooms",
+  "expenseDate": {
+    "$date": "2025-08-04T02:03:16.697Z"
+  },
+  "paymentStatus": "Pending",
+  "period": "monthly",
+  "paymentMethod": "Cash",
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedAt": {
+    "$date": "2025-08-04T02:03:16.697Z"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "itemIndex": 0,
+  "expenseAccountCode": "5013",
+  "items": [],
+  "createdAt": {
+    "$date": "2025-08-04T02:03:16.699Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T02:03:16.699Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "689014e42e7c647c942c2946"
+  },
+  "expenseId": "EXP-1754272996981-5394",
+  "requestId": {
+    "$oid": "68901028796b964b360dc0b5"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "category": "Other",
+  "amount": 240,
+  "description": "Cleaning - Handy Andy",
+  "expenseDate": {
+    "$date": "2025-08-04T02:03:16.981Z"
+  },
+  "paymentStatus": "Paid",
+  "period": "monthly",
+  "paymentMethod": "Cash",
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedAt": {
+    "$date": "2025-08-04T02:03:16.981Z"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "itemIndex": 1,
+  "expenseAccountCode": "5013",
+  "items": [],
+  "createdAt": {
+    "$date": "2025-08-04T02:03:16.983Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T02:25:43.803Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68901c772e7c647c942c4288"
+  },
+  "expenseId": "EXP_MDWI036O_433JN",
+  "residence": {
+    "$oid": "6848258b1149b66fc94a261d"
+  },
+  "category": "Other",
+  "amount": 280,
+  "description": "Monthly Requests 1ACP",
+  "expenseDate": {
+    "$date": "2025-08-01T00:00:00.000Z"
+  },
+  "paymentStatus": "Pending",
+  "period": "monthly",
+  "paymentMethod": "Bank Transfer",
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "items": [],
+  "createdAt": {
+    "$date": "2025-08-04T02:35:35.330Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T02:35:35.330Z"
+  },
+  "__v": 0
+}]

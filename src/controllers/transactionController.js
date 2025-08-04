@@ -2,6 +2,64 @@ const TransactionEntry = require('../models/TransactionEntry');
 const Transaction = require('../models/Transaction');
 const Account = require('../models/Account');
 
+// Get all transactions with entries (for frontend compatibility)
+exports.getAllTransactions = async (req, res) => {
+  try {
+    console.log('🔍 Fetching all transactions with entries');
+    
+    // Get all transaction entries (this is the main model that contains the data)
+    const transactionEntries = await TransactionEntry.find({}).sort({ date: -1 });
+    
+    console.log(`🔍 Found ${transactionEntries.length} transaction entries`);
+    
+    // Transform the data to match frontend expectations
+    const transactionsWithEntries = transactionEntries.map(entry => {
+      // Transform entries to match frontend expectations
+      const transformedEntries = (entry.entries || []).map(entryItem => ({
+        _id: `${entry._id}_${entryItem.accountCode}`,
+        account: {
+          code: entryItem.accountCode,
+          name: entryItem.accountName,
+          type: entryItem.accountType
+        },
+        debit: entryItem.debit || 0,
+        credit: entryItem.credit || 0,
+        type: entryItem.accountType,
+        date: entry.date
+      }));
+      
+      return {
+        _id: entry._id,
+        date: entry.date,
+        description: entry.description,
+        reference: entry.reference,
+        entries: transformedEntries,
+        // Add source information for debugging
+        source: entry.source,
+        sourceModel: entry.sourceModel,
+        sourceId: entry.sourceId
+      };
+    });
+    
+    console.log(`🔍 Returning ${transactionsWithEntries.length} transactions with entries`);
+    
+    // Debug: Log first transaction structure
+    if (transactionsWithEntries.length > 0) {
+      console.log('🔍 First transaction structure:', JSON.stringify(transactionsWithEntries[0], null, 2));
+    }
+    
+    res.status(200).json(transactionsWithEntries);
+    
+  } catch (error) {
+    console.error('❌ Error fetching all transactions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching all transactions',
+      error: error.message
+    });
+  }
+};
+
 // Get transaction entries with filters
 exports.getTransactionEntries = async (req, res) => {
   try {
