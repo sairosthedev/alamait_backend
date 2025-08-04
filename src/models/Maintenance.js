@@ -124,6 +124,11 @@ const maintenanceSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    updatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: false
+    },
     paymentMethod: {
         type: String,
         enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal', 'bank transfer', 'cash', 'online payment', 'ecocash', 'innbucks', 'mastercard', 'visa', 'paypal'],

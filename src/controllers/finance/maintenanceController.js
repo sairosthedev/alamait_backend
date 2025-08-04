@@ -1,5 +1,11 @@
 const Maintenance = require('../../models/Maintenance');
 const { validationResult } = require('express-validator');
+const AuditLog = require('../../models/AuditLog');
+const Transaction = require('../../models/Transaction');
+const TransactionEntry = require('../../models/TransactionEntry');
+const Account = require('../../models/Account');
+const { validateMongoId } = require('../../utils/validators');
+const { generateUniqueId } = require('../../utils/idGenerator');
 
 // Get all maintenance requests with financial details
 exports.getAllMaintenanceRequests = async (req, res) => {
@@ -185,5 +191,203 @@ exports.getMaintenanceFinancialStats = async (req, res) => {
     } catch (error) {
         console.error('Error in getMaintenanceFinancialStats:', error);
         res.status(500).json({ error: 'Error retrieving maintenance financial statistics' });
+    }
+};
+
+// Approve maintenance request
+exports.approveMaintenance = async (req, res) => {
+    try {
+        console.log('[MAINTENANCE] Approve maintenance request called with:', {
+            id: req.params.id,
+            body: req.body,
+            user: req.user?._id || 'No user'
+        });
+        
+        const { id } = req.params;
+        const { notes, amount, maintenanceAccount, apAccount } = req.body;
+
+        if (!validateMongoId(id)) {
+            return res.status(400).json({ error: 'Invalid maintenance request ID format' });
+        }
+
+        // Find maintenance request
+        const maintenance = await Maintenance.findById(id);
+        if (!maintenance) {
+            return res.status(404).json({ error: 'Maintenance request not found' });
+        }
+
+        if (maintenance.financeStatus === 'approved') {
+            return res.status(400).json({ error: 'Maintenance request is already approved' });
+        }
+
+        // Use provided amount or fall back to maintenance request amount
+        const approvalAmount = amount || maintenance.amount;
+        if (!approvalAmount || approvalAmount <= 0) {
+            return res.status(400).json({ error: 'Maintenance request must have a valid amount to approve' });
+        }
+
+        const before = maintenance.toObject();
+
+        // Update maintenance status to approved
+        const updatedMaintenance = await Maintenance.findByIdAndUpdate(
+            id,
+            {
+                $set: {
+                    financeStatus: 'approved',
+                    financeNotes: notes || maintenance.financeNotes,
+                    amount: approvalAmount, // Update amount if provided
+                    updatedBy: req.user?._id || null
+                }
+            },
+            { new: true, runValidators: true }
+        ).populate('residence', 'name')
+         .populate('requestedBy', 'firstName lastName email')
+         .populate('updatedBy', 'firstName lastName email');
+
+        // --- Create Accounts Payable Entry for Approved Maintenance ---
+        try {
+            console.log('[AP] Creating accounts payable entry for approved maintenance:', updatedMaintenance._id);
+            console.log('[AP] Using accounts - maintenanceAccount:', maintenanceAccount, 'apAccount:', apAccount);
+
+                        // Get maintenance expense account (use provided account or default to 5099)
+            let expenseAccount;
+            if (maintenanceAccount) {
+                expenseAccount = await Account.findById(maintenanceAccount);
+            } else {
+                expenseAccount = await Account.findOne({ code: '5099', type: 'Expense' });
+            }
+            
+            if (!expenseAccount) {
+                console.error('[AP] Maintenance expense account not found');
+                throw new Error('Maintenance expense account not found');
+            }
+            
+            // Get or create general Accounts Payable account (use provided account or default to 2000)
+            let payableAccount;
+            if (apAccount) {
+                payableAccount = await Account.findById(apAccount);
+            } else {
+                payableAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+            }
+            
+            if (!payableAccount) {
+                console.error('[AP] General Accounts Payable account not found');
+                throw new Error('General Accounts Payable account not found');
+            }
+
+            // Generate unique transaction ID
+            const transactionId = await generateUniqueId('TXN');
+
+            // Create transaction for approval (creates AP liability)
+            const txn = await Transaction.create({
+                transactionId: transactionId,
+                date: new Date(),
+                description: `Maintenance Approval: ${updatedMaintenance.issue} - ${updatedMaintenance.description}`,
+                reference: `MAINT-${updatedMaintenance._id}`,
+                residence: updatedMaintenance.residence?._id || updatedMaintenance.residence,
+                residenceName: updatedMaintenance.residence?.name || undefined,
+                type: 'approval',
+                createdBy: req.user?._id || null
+            });
+
+            // Create double-entry transaction entry with nested entries
+            const transactionEntry = await TransactionEntry.create({
+                transactionId: transactionId,
+                date: new Date(),
+                description: `Maintenance Approval: ${updatedMaintenance.issue}`,
+                reference: `MAINT-${updatedMaintenance._id}`,
+                entries: [
+                    {
+                        accountCode: expenseAccount.code,
+                        accountName: expenseAccount.name,
+                        accountType: expenseAccount.type,
+                        debit: approvalAmount,
+                        credit: 0,
+                        description: `Maintenance expense: ${updatedMaintenance.issue}`
+                    },
+                    {
+                        accountCode: payableAccount.code,
+                        accountName: payableAccount.name,
+                        accountType: payableAccount.type,
+                        debit: 0,
+                        credit: approvalAmount,
+                        description: `Accounts payable for maintenance: ${updatedMaintenance.issue}`
+                    }
+                ],
+                totalDebit: approvalAmount,
+                totalCredit: approvalAmount,
+                source: 'manual',
+                sourceId: updatedMaintenance._id,
+                sourceModel: 'Expense',
+                createdBy: req.user?.email || req.user?.firstName + ' ' + req.user?.lastName || 'Finance User',
+                status: 'posted'
+            });
+
+            // Link transaction entry to transaction
+            await Transaction.findByIdAndUpdate(txn._id, {
+                $push: { entries: transactionEntry._id }
+            });
+
+            // Create audit log for the AP creation
+            await AuditLog.create({
+                user: req.user?._id || null,
+                action: 'maintenance_approved_ap_created',
+                collection: 'Transaction',
+                recordId: txn._id,
+                before: null,
+                after: txn.toObject(),
+                timestamp: new Date(),
+                details: {
+                    source: 'Expense',
+                    sourceId: updatedMaintenance._id,
+                    maintenanceIssue: updatedMaintenance.issue,
+                    maintenanceAmount: approvalAmount,
+                    apAccount: payableAccount.code,
+                    maintenanceAccount: expenseAccount.code,
+                    description: `Maintenance approved - AP liability created for ${updatedMaintenance.issue}`
+                }
+            });
+
+            console.log('[AP] Accounts payable entry created for maintenance:', updatedMaintenance._id, 'txn:', txn._id, 'entry:', transactionEntry._id);
+
+        } catch (apError) {
+            console.error('[AP] Failed to create accounts payable entry for maintenance:', updatedMaintenance._id, apError);
+            return res.status(500).json({
+                error: 'Failed to create accounts payable entry for approved maintenance',
+                details: apError.message
+            });
+        }
+        // --- End AP Creation ---
+
+        // Audit log for maintenance approval
+        await AuditLog.create({
+            user: req.user?._id || null,
+            action: 'approve',
+            collection: 'Maintenance',
+            recordId: updatedMaintenance._id,
+            before,
+            after: updatedMaintenance.toObject(),
+            timestamp: new Date(),
+            details: {
+                description: `Maintenance approved - ${updatedMaintenance.issue}`,
+                amount: updatedMaintenance.amount
+            }
+        });
+
+        // Add update to maintenance history
+        updatedMaintenance.updates.push({
+            date: new Date(),
+            message: `Maintenance request approved by finance - Amount: $${updatedMaintenance.amount}`,
+            author: req.user?._id || null
+        });
+        await updatedMaintenance.save();
+
+        res.status(200).json({
+            message: 'Maintenance request approved successfully',
+            maintenance: updatedMaintenance
+        });
+    } catch (error) {
+        console.error('Error approving maintenance request:', error);
+        res.status(500).json({ error: 'Failed to approve maintenance request' });
     }
 }; 
