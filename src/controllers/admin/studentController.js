@@ -986,6 +986,19 @@ exports.manualAddStudent = async (req, res) => {
         student.currentBooking = booking._id;
         await student.save();
 
+        // Automatically create debtor account for the new student
+        try {
+            await createDebtorForStudent(student, {
+                residenceId: residenceId,
+                roomNumber: roomNumber,
+                createdBy: req.user._id
+            });
+            console.log(`✅ Debtor account created for manually added student ${student.email}`);
+        } catch (debtorError) {
+            console.error('❌ Failed to create debtor account for manually added student:', debtorError);
+            // Continue with student creation even if debtor creation fails
+        }
+
         // Prepare lease agreement attachment (following existing logic)
         let attachments = [];
         const leaseFile = getLeaseTemplateFile(residence.name);

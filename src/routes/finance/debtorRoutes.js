@@ -45,6 +45,12 @@ router.post('/student/:userId', debtorController.createDebtorForExistingStudent)
 // Bulk create debtors for all students
 router.post('/bulk-create', debtorController.bulkCreateDebtors);
 
+// Check which students don't have debtor accounts
+router.get('/check/students-without-debtors', debtorController.checkStudentsWithoutDebtors);
+
+// Bulk create debtor accounts for students without debtors
+router.post('/bulk-create-for-students', debtorController.bulkCreateDebtorsForStudents);
+
 // Delete debtor account (only if no outstanding balance)
 router.delete('/:id', debtorController.deleteDebtor);
 

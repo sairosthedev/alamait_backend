@@ -944,16 +944,15 @@ exports.createDebtorForExistingStudent = async (req, res) => {
 // Bulk create debtors for all students without debtor accounts
 exports.bulkCreateDebtors = async (req, res) => {
     try {
-        const { createdBy } = req.body;
-
-        // Create debtors for all students without debtor accounts
+        const { createDebtorsForAllStudents } = require('../../services/debtorService');
+        
         const result = await createDebtorsForAllStudents({
-            createdBy: createdBy || req.user._id
+            createdBy: req.user._id
         });
-
+        
         res.status(200).json({
             success: true,
-            message: 'Bulk debtor creation completed',
+            message: `Successfully created ${result.createdDebtors.length} debtor accounts`,
             summary: {
                 totalCreated: result.createdDebtors.length,
                 totalErrors: result.errors.length,
@@ -966,13 +965,103 @@ exports.bulkCreateDebtors = async (req, res) => {
                 errors: result.errors
             }
         });
-
     } catch (error) {
         console.error('Error in bulk debtor creation:', error);
         res.status(500).json({
             success: false,
             message: 'Error in bulk debtor creation',
             error: error.message
+        });
+    }
+};
+
+/**
+ * Bulk create debtor accounts for students without debtors
+ */
+exports.bulkCreateDebtorsForStudents = async (req, res) => {
+    try {
+        const { createDebtorsForAllStudents } = require('../../services/debtorService');
+        
+        const result = await createDebtorsForAllStudents({
+            createdBy: req.user._id
+        });
+        
+        res.json({
+            success: true,
+            message: `Successfully created ${result.createdDebtors.length} debtor accounts`,
+            created: result.createdDebtors.length,
+            errors: result.errors.length,
+            details: {
+                createdDebtors: result.createdDebtors.map(d => ({
+                    debtorCode: d.debtorCode,
+                    accountCode: d.accountCode,
+                    user: d.user
+                })),
+                errors: result.errors
+            }
+        });
+    } catch (error) {
+        console.error('Error in bulkCreateDebtorsForStudents:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to create debtor accounts',
+            details: error.message 
+        });
+    }
+};
+
+/**
+ * Check which students don't have debtor accounts
+ */
+exports.checkStudentsWithoutDebtors = async (req, res) => {
+    try {
+        const User = require('../../models/User');
+        const Debtor = require('../../models/Debtor');
+        
+        // Find all students
+        const students = await User.find({ role: 'student' });
+        
+        const studentsWithoutDebtors = [];
+        const studentsWithDebtors = [];
+        
+        // Check each student for debtor account
+        for (const student of students) {
+            const debtor = await Debtor.findOne({ user: student._id });
+            if (debtor) {
+                studentsWithDebtors.push({
+                    studentId: student._id,
+                    email: student.email,
+                    firstName: student.firstName,
+                    lastName: student.lastName,
+                    debtorCode: debtor.debtorCode,
+                    accountCode: debtor.accountCode
+                });
+            } else {
+                studentsWithoutDebtors.push({
+                    studentId: student._id,
+                    email: student.email,
+                    firstName: student.firstName,
+                    lastName: student.lastName
+                });
+            }
+        }
+        
+        res.json({
+            success: true,
+            summary: {
+                totalStudents: students.length,
+                withDebtors: studentsWithDebtors.length,
+                withoutDebtors: studentsWithoutDebtors.length
+            },
+            studentsWithoutDebtors,
+            studentsWithDebtors
+        });
+    } catch (error) {
+        console.error('Error in checkStudentsWithoutDebtors:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to check students',
+            details: error.message 
         });
     }
 };
