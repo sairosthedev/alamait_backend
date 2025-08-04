@@ -64,8 +64,8 @@ router.get('/:id', requestController.getRequestById);
 // Get quotations for a request (CEO and Finance can view)
 router.get('/:id/quotations', requestController.getRequestQuotations);
 
-// Update entire request (admin only)
-router.put('/:id', checkRole(['admin']), requestController.updateRequest);
+// Update entire request (admin and finance)
+router.put('/:id', checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), requestController.updateRequest);
 
 // Create new request
 router.post('/', 
@@ -85,11 +85,11 @@ router.post('/',
 // Add update message to request
 router.post('/:id/updates', requestController.addUpdate);
 
-// Update request status (admin only - for maintenance requests)
-router.patch('/:id/status', checkRole(['admin']), requestController.updateRequestStatus);
+// Update request status (admin and finance - for maintenance requests)
+router.patch('/:id/status', checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), requestController.updateRequestStatus);
 
 // Admin approval for admin requests
-router.patch('/:id/admin-approval', checkRole(['admin']), requestController.adminApproval);
+router.patch('/:id/admin-approval', checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), requestController.adminApproval);
 
 // Finance approval for admin requests
 router.patch('/:id/finance-approval', checkRole(['finance', 'finance_admin', 'finance_user']), requestController.financeApproval);
@@ -97,9 +97,9 @@ router.patch('/:id/finance-approval', checkRole(['finance', 'finance_admin', 'fi
 // CEO approval for admin requests
 router.patch('/:id/ceo-approval', checkRole(['ceo']), requestController.ceoApproval);
 
-// Upload quotation (admin only) - handles both FormData and JSON
+// Upload quotation (admin and finance) - handles both FormData and JSON
 router.post('/:id/quotations', 
-    checkRole(['admin']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     (req, res, next) => {
         // Check if this is a multipart request (file upload)
         if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
@@ -141,9 +141,9 @@ router.patch('/:id/items/:itemIndex/quotations/:quotationIndex/approve',
     requestController.approveItemQuotation
 );
 
-// Update request-level quotation (admin only) - handles both FormData and JSON
+// Update request-level quotation (admin and finance) - handles both FormData and JSON
 router.put('/:id/quotations/:quotationId', 
-    checkRole(['admin']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     (req, res, next) => {
         // Check if this is a multipart request (file upload)
         if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
@@ -157,9 +157,9 @@ router.put('/:id/quotations/:quotationId',
     requestController.updateRequestQuotation
 );
 
-// Update item-level quotation (admin only) - handles both FormData and JSON
+// Update item-level quotation (admin and finance) - handles both FormData and JSON
 router.put('/:id/items/:itemIndex/quotations/:quotationIndex', 
-    checkRole(['admin']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     (req, res, next) => {
         // Check if this is a multipart request (file upload)
         if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
@@ -184,12 +184,12 @@ router.get('/:id/items/:itemIndex/quotations/:quotationIndex/download',
 
 // Quotation selection routes
 router.post('/:requestId/items/:itemIndex/quotations/:quotationIndex/select', 
-    checkRole(['admin']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     requestController.selectItemQuotation
 );
 
 router.post('/:requestId/quotations/:quotationIndex/select', 
-    checkRole(['admin']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     requestController.selectRequestQuotation
 );
 
