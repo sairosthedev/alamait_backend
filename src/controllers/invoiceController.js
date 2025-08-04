@@ -13,6 +13,7 @@ exports.createInvoice = async (req, res) => {
         const user = req.user;
         const {
             student,
+            tenant, // Frontend might send 'tenant' instead of 'student'
             residence,
             room,
             unit, // Frontend sends 'unit' instead of 'room'
@@ -30,18 +31,44 @@ exports.createInvoice = async (req, res) => {
             gracePeriod
         } = req.body;
 
+        // Use 'tenant' if 'student' is not provided (frontend compatibility)
+        const studentId = student || tenant;
+        
         // Use 'unit' if 'room' is not provided (frontend compatibility)
         const roomNumber = room || unit;
 
-        // Validate required fields
-        if (!student || !residence || !roomNumber || !billingPeriod || !dueDate) {
+        // Validate required fields - make them more flexible
+        if (!studentId) {
             return res.status(400).json({
-                message: 'Missing required fields: student, residence, room/unit, billingPeriod, dueDate'
+                message: 'Missing required field: student/tenant'
+            });
+        }
+
+        if (!residence) {
+            return res.status(400).json({
+                message: 'Missing required field: residence'
+            });
+        }
+
+        // Room/unit can be optional for some cases
+        if (!roomNumber) {
+            console.log('Warning: No room/unit provided, using default');
+        }
+
+        if (!billingPeriod) {
+            return res.status(400).json({
+                message: 'Missing required field: billingPeriod'
+            });
+        }
+
+        if (!dueDate) {
+            return res.status(400).json({
+                message: 'Missing required field: dueDate'
             });
         }
 
         // Check if student exists
-        const studentExists = await User.findById(student);
+        const studentExists = await User.findById(studentId);
         if (!studentExists) {
             return res.status(404).json({ message: 'Student not found' });
         }
@@ -55,14 +82,37 @@ exports.createInvoice = async (req, res) => {
         // Generate invoice number
         const invoiceNumber = await Invoice.generateInvoiceNumber();
 
-        // Create invoice
+        // Get student details for invoice
+        const studentDetails = await User.findById(studentId).select('firstName lastName email phone');
+        if (!studentDetails) {
+            return res.status(404).json({ message: 'Student details not found' });
+        }
+
+        // Get residence details
+        const residenceDetails = await Residence.findById(residence).select('name address city state postalCode');
+        if (!residenceDetails) {
+            return res.status(404).json({ message: 'Residence details not found' });
+        }
+
+        // Calculate room price from charges (assuming rent is the main charge)
+        const roomPrice = charges && charges.length > 0 
+            ? charges.find(charge => charge.category === 'rent')?.amount || charges[0]?.amount || 0
+            : 0;
+
+        // Create invoice with complete details
         const invoice = new Invoice({
             invoiceNumber,
-            student,
+            student: studentId,
             residence,
             room: roomNumber, // Use the mapped room number
             roomType,
             billingPeriod,
+            roomPrice, // Add room price
+            studentName: `${studentDetails.firstName} ${studentDetails.lastName}`,
+            studentEmail: studentDetails.email,
+            studentPhone: studentDetails.phone,
+            residenceName: residenceDetails.name,
+            residenceAddress: `${residenceDetails.address}, ${residenceDetails.city}`,
             billingStartDate: new Date(billingStartDate),
             billingEndDate: new Date(billingEndDate),
             dueDate: new Date(dueDate),
