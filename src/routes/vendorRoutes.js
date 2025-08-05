@@ -36,28 +36,16 @@ router.get('/category/:category',
     vendorController.getVendorsByCategory
 );
 
-// Get vendor by ID (Admin and Finance only)
-router.get('/:id', 
+// Get vendor transactions (ledger) - Admin and Finance only (must be before /:id route)
+router.get('/:id/transactions', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
-    vendorController.getVendorById
-);
-
-// Update vendor (Admin and Finance only)
-router.put('/:id', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
-    vendorController.updateVendor
+    vendorController.getVendorTransactions
 );
 
 // Update vendor performance (Admin and Finance only)
 router.patch('/:id/performance', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     vendorController.updateVendorPerformance
-);
-
-// Delete vendor (Admin only)
-router.delete('/:id', 
-    checkRole(['admin']), 
-    vendorController.deleteVendor
 );
 
 // Get creditors (vendors) - Admin and Finance only
@@ -76,6 +64,24 @@ router.get('/debtors',
 router.get('/creditors/:vendorId/summary', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     vendorController.getCreditorSummary
+);
+
+// Get vendor by ID (Admin and Finance only) - This must be last to avoid catching other routes
+router.get('/:id', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    vendorController.getVendorById
+);
+
+// Update vendor (Admin and Finance only)
+router.put('/:id', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    vendorController.updateVendor
+);
+
+// Delete vendor (Admin only)
+router.delete('/:id', 
+    checkRole(['admin']), 
+    vendorController.deleteVendor
 );
 
 module.exports = router; 

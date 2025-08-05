@@ -132,10 +132,12 @@ exports.getAllDebtors = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const total = await Debtor.countDocuments(query);
 
-        // Get debtors with population
+        // Get debtors with full population
         const debtors = await Debtor.find(query)
             .populate('user', 'firstName lastName email phone')
-            .populate('residence', 'name address')
+            .populate('residence', 'name address roomPrice')
+            .populate('application', 'startDate endDate roomNumber status')
+            .populate('payments', 'date amount rentAmount adminFee deposit status')
             .populate('createdBy', 'firstName lastName email')
             .sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 })
             .skip(skip)
@@ -191,7 +193,9 @@ exports.getDebtorById = async (req, res) => {
 
         const debtor = await Debtor.findById(id)
             .populate('user', 'firstName lastName email phone')
-            .populate('residence', 'name address')
+            .populate('residence', 'name address roomPrice')
+            .populate('application', 'startDate endDate roomNumber status')
+            .populate('payments', 'date amount rentAmount adminFee deposit status')
             .populate('createdBy', 'firstName lastName email')
             .populate('updatedBy', 'firstName lastName email');
 

@@ -1,6 +1,55 @@
 const Vendor = require('../models/Vendor');
 const Account = require('../models/Account');
+const TransactionEntry = require('../models/TransactionEntry');
 const mongoose = require('mongoose');
+
+// Helper function to calculate vendor totals from transactions
+async function calculateVendorTotals(vendorId, chartOfAccountsCode) {
+    try {
+        const transactions = await TransactionEntry.find({
+            'entries.accountCode': chartOfAccountsCode
+        }).sort({ date: 1 });
+
+        let totalSpent = 0;
+        let totalPaid = 0;
+
+        transactions.forEach(transaction => {
+            const vendorEntry = transaction.entries.find(entry => 
+                entry.accountCode === chartOfAccountsCode
+            );
+
+            if (vendorEntry) {
+                const amount = vendorEntry.debit || vendorEntry.credit || 0;
+                const isDebit = vendorEntry.debit > 0;
+                
+                if (isDebit) {
+                    // Debit to vendor account = payment made to vendor (reducing payable)
+                    totalPaid += amount;
+                } else {
+                    // Credit to vendor account = expense/purchase from vendor (increasing payable)
+                    totalSpent += amount;
+                }
+            }
+        });
+
+        const outstandingAmount = totalSpent - totalPaid;
+
+        return {
+            totalSpent,
+            totalPaid,
+            outstandingAmount,
+            currentBalance: outstandingAmount
+        };
+    } catch (error) {
+        console.error('Error calculating vendor totals:', error);
+        return {
+            totalSpent: 0,
+            totalPaid: 0,
+            outstandingAmount: 0,
+            currentBalance: 0
+        };
+    }
+}
 
 // Create new vendor
 exports.createVendor = async (req, res) => {
@@ -160,11 +209,24 @@ exports.getAllVendors = async (req, res) => {
             .skip((page - 1) * limit)
             .exec();
 
+        // Calculate totals for each vendor
+        const vendorsWithTotals = await Promise.all(
+            vendors.map(async (vendor) => {
+                const totals = await calculateVendorTotals(vendor._id, vendor.chartOfAccountsCode);
+                return {
+                    ...vendor.toObject(),
+                    totalSpent: totals.totalSpent,
+                    outstandingAmount: totals.outstandingAmount,
+                    currentBalance: totals.currentBalance
+                };
+            })
+        );
+
         // Get total count
         const total = await Vendor.countDocuments(query);
 
         res.status(200).json({
-            vendors,
+            vendors: vendorsWithTotals,
             totalPages: Math.ceil(total / limit),
             currentPage: page,
             totalVendors: total
@@ -191,7 +253,17 @@ exports.getVendorById = async (req, res) => {
             return res.status(404).json({ message: 'Vendor not found' });
         }
 
-        res.status(200).json(vendor);
+        // Calculate totals for this vendor
+        const totals = await calculateVendorTotals(vendor._id, vendor.chartOfAccountsCode);
+        
+        const vendorWithTotals = {
+            ...vendor.toObject(),
+            totalSpent: totals.totalSpent,
+            outstandingAmount: totals.outstandingAmount,
+            currentBalance: totals.currentBalance
+        };
+
+        res.status(200).json(vendorWithTotals);
 
     } catch (error) {
         console.error('Error getting vendor:', error);
@@ -591,14 +663,14 @@ exports.getCreditorSummary = async (req, res) => {
             return res.status(404).json({ message: 'Vendor not found' });
         }
 
-        // Get recent transactions for this vendor (you'll need to implement this based on your transaction system)
-        // const recentTransactions = await Transaction.find({ 
-        //     'entries.accountCode': vendor.chartOfAccountsCode 
-        // }).sort({ date: -1 }).limit(10);
+        // Get recent transactions for this vendor
+        const recentTransactions = await TransactionEntry.find({ 
+            'entries.accountCode': vendor.chartOfAccountsCode 
+        }).sort({ date: -1 }).limit(10);
 
         res.status(200).json({
             vendor,
-            // recentTransactions,
+            recentTransactions,
             summary: {
                 currentBalance: vendor.currentBalance,
                 creditLimit: vendor.creditLimit,
@@ -612,6 +684,92 @@ exports.getCreditorSummary = async (req, res) => {
         console.error('Error getting creditor summary:', error);
         res.status(500).json({ 
             message: 'Error retrieving creditor summary',
+            error: error.message 
+        });
+    }
+};
+
+// Get vendor transactions (ledger)
+exports.getVendorTransactions = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { page = 1, limit = 20, startDate, endDate } = req.query;
+
+        const vendor = await Vendor.findById(id)
+            .select('vendorCode businessName tradingName chartOfAccountsCode');
+
+        if (!vendor) {
+            return res.status(404).json({ message: 'Vendor not found' });
+        }
+
+        // Build query for transactions involving this vendor
+        const query = {
+            'entries.accountCode': vendor.chartOfAccountsCode
+        };
+
+        // Add date range filter if provided
+        if (startDate || endDate) {
+            query.date = {};
+            if (startDate) query.date.$gte = new Date(startDate);
+            if (endDate) query.date.$lte = new Date(endDate);
+        }
+
+        // Get transactions with pagination
+        const transactions = await TransactionEntry.find(query)
+            .sort({ date: -1 })
+            .limit(parseInt(limit))
+            .skip((parseInt(page) - 1) * parseInt(limit));
+
+        // Get total count for pagination
+        const total = await TransactionEntry.countDocuments(query);
+
+        // Transform transactions for frontend
+        const transformedTransactions = transactions.map(transaction => {
+            // Find the vendor-specific entry
+            const vendorEntry = transaction.entries.find(entry => 
+                entry.accountCode === vendor.chartOfAccountsCode
+            );
+
+            return {
+                _id: transaction._id,
+                date: transaction.date,
+                description: transaction.description,
+                reference: transaction.reference,
+                amount: vendorEntry ? (vendorEntry.debit || vendorEntry.credit) : 0,
+                type: vendorEntry ? (vendorEntry.debit > 0 ? 'debit' : 'credit') : 'unknown',
+                accountCode: vendorEntry ? vendorEntry.accountCode : '',
+                accountName: vendorEntry ? vendorEntry.accountName : '',
+                source: transaction.source,
+                sourceId: transaction.sourceId,
+                status: transaction.status,
+                createdBy: transaction.createdBy,
+                createdAt: transaction.createdAt
+            };
+        });
+
+        res.status(200).json({
+            success: true,
+            vendor: {
+                _id: vendor._id,
+                vendorCode: vendor.vendorCode,
+                businessName: vendor.businessName,
+                tradingName: vendor.tradingName
+            },
+            transactions: transformedTransactions,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(total / limit),
+                totalTransactions: total,
+                hasNextPage: parseInt(page) < Math.ceil(total / limit),
+                hasPrevPage: parseInt(page) > 1
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting vendor transactions:', error);
+        res.status(500).json({ 
+            success: false,
+            message: 'Error retrieving vendor transactions',
             error: error.message 
         });
     }
