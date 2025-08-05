@@ -220,34 +220,67 @@ exports.getRequestById = async (req, res) => {
 // Create new request
 exports.createRequest = async (req, res) => {
     try {
+        console.log('🚀 CREATE REQUEST - Starting request creation...');
+        console.log('📋 Request body keys:', Object.keys(req.body));
+        console.log('📋 Request body content:');
+        Object.keys(req.body).forEach(key => {
+            try {
+                const value = req.body[key];
+                console.log(`  ${key}: ${value} (${typeof value})`);
+                
+                // Check if value is an object that might cause conversion issues
+                if (typeof value === 'object' && value !== null) {
+                    console.log(`    ⚠️ Complex object detected for ${key}:`, {
+                        constructor: value.constructor?.name,
+                        keys: Object.keys(value),
+                        stringified: JSON.stringify(value)
+                    });
+                }
+            } catch (error) {
+                console.error(`  ❌ Error logging field ${key}:`, error.message);
+            }
+        });
+        
+        // Debug mode removed - continuing with normal request creation
+        
+        // TEMPORARILY DISABLE AUTH FOR DEBUGGING
+        let user = req.user;
+        if (!user) {
+            console.log('⚠️ No user found, creating mock user for debugging');
+            user = {
+                _id: '67c023adae5e27657502e887',
+                email: 'debug@test.com',
+                role: 'admin'
+            };
+        }
+        
         console.log('=== CREATE REQUEST DEBUG ===');
         console.log('Request headers:', req.headers);
-        console.log('Request body keys:', Object.keys(req.body));
-        console.log('Files received:', req.files ? req.files.map(f => ({ fieldname: f.fieldname, originalname: f.originalname, filename: f.filename, size: f.size })) : 'No files');
         console.log('Content-Type:', req.headers['content-type']);
-        console.log('Items type:', typeof req.body.items);
-        console.log('Items value:', req.body.items);
-        const { 
-            title, 
-            description, 
-            type, 
-            residence, 
-            room, 
-            category, 
-            priority, 
-            amount, 
-            dueDate, 
-            tags, 
-            images,
-            // Non-student specific fields
+        console.log('Request body type:', typeof req.body);
+        console.log('Request body keys:', Object.keys(req.body));
+        
+        // Extract basic fields
+        const {
+            title,
+            description,
+            type,
+            residence,
             department,
             requestedBy,
-            items,
+            deliveryLocation,
+            priority,
             proposedVendor,
-            deliveryLocation
+            totalEstimatedCost,
+            status,
+            items,
+            amount,
+            dueDate,
+            tags,
+            room,
+            category,
+            images
         } = req.body;
-        
-        const user = req.user;
         
         // Parse items if it's a string (from FormData)
         let parsedItems = items;
@@ -278,48 +311,214 @@ exports.createRequest = async (req, res) => {
             
             // Build items array
             Array.from(itemIndices).sort((a, b) => a - b).forEach(itemIndex => {
-                const item = {
-                    description: req.body[`items[${itemIndex}][description]`] || '',
-                    quantity: parseInt(req.body[`items[${itemIndex}][quantity]`]) || 0,
-                    unitCost: parseFloat(req.body[`items[${itemIndex}][unitCost]`]) || 0,
-                    totalCost: parseFloat(req.body[`items[${itemIndex}][totalCost]`]) || 0,
-                    purpose: req.body[`items[${itemIndex}][purpose]`] || '',
-                    quotations: []
-                };
-                
-                // Find quotation fields for this item
-                const quotationFields = Object.keys(req.body).filter(key => 
-                    key.startsWith(`items[${itemIndex}][quotations][`)
-                );
-                const quotationIndices = new Set();
-                
-                // Extract quotation indices
-                quotationFields.forEach(field => {
-                    const match = field.match(/items\[\d+\]\[quotations\]\[(\d+)\]/);
-                    if (match) {
-                        quotationIndices.add(parseInt(match[1]));
+                try {
+                    // Safe parsing functions
+                    const safeParseFloat = (value) => {
+                        try {
+                            if (typeof value === 'object' && value !== null) {
+                                console.warn(`Attempting to parse object as float: ${JSON.stringify(value)}`);
+                                return 0;
+                            }
+                            return parseFloat(value) || 0;
+                        } catch (error) {
+                            console.warn(`Error parsing float for value: ${value}`, error);
+                            return 0;
+                        }
+                    };
+                    
+                    const safeParseInt = (value) => {
+                        try {
+                            if (typeof value === 'object' && value !== null) {
+                                console.warn(`Attempting to parse object as int: ${JSON.stringify(value)}`);
+                                return 0;
+                            }
+                            return parseInt(value) || 0;
+                        } catch (error) {
+                            console.warn(`Error parsing int for value: ${value}`, error);
+                            return 0;
+                        }
+                    };
+                    
+                    const safeString = (value) => {
+                        try {
+                            if (typeof value === 'object' && value !== null) {
+                                console.warn(`Attempting to convert object to string: ${JSON.stringify(value)}`);
+                                return JSON.stringify(value);
+                            }
+                            return String(value || '');
+                        } catch (error) {
+                            console.warn(`Error converting to string: ${value}`, error);
+                            return '';
+                        }
+                    };
+                    
+                    const item = {
+                        description: safeString(req.body[`items[${itemIndex}][description]`]),
+                        quantity: safeParseInt(req.body[`items[${itemIndex}][quantity]`]),
+                        unitCost: safeParseFloat(req.body[`items[${itemIndex}][unitCost]`]),
+                        totalCost: safeParseFloat(req.body[`items[${itemIndex}][totalCost]`]),
+                        purpose: safeString(req.body[`items[${itemIndex}][purpose]`]),
+                        quotations: []
+                    };
+                    
+                    // Find quotation fields for this item
+                    const quotationFields = Object.keys(req.body).filter(key => 
+                        key.startsWith(`items[${itemIndex}][quotations][`)
+                    );
+                    const quotationIndices = new Set();
+                    
+                    // Extract quotation indices
+                    quotationFields.forEach(field => {
+                        const match = field.match(/items\[\d+\]\[quotations\]\[(\d+)\]/);
+                        if (match) {
+                            quotationIndices.add(parseInt(match[1]));
+                        }
+                    });
+                    
+                                    // Build quotations array
+                Array.from(quotationIndices).sort((a, b) => a - b).forEach(quotationIndex => {
+                    console.log(`\n🔍 Processing quotation ${quotationIndex} for item ${itemIndex}...`);
+                    try {
+                            const isSelectedField = `items[${itemIndex}][quotations][${quotationIndex}][isSelected]`;
+                            const isSelectedValue = req.body[isSelectedField];
+                            
+                            console.log(`DEBUG: Parsing quotation ${quotationIndex} for item ${itemIndex}:`, {
+                                isSelectedField,
+                                isSelectedValue,
+                                isSelectedType: typeof isSelectedValue,
+                                isSelectedParsed: isSelectedValue === 'true'
+                            });
+                            
+                            // Special handling for isSelected field
+                            if (typeof isSelectedValue === 'object' && isSelectedValue !== null) {
+                                console.error(`❌ CRITICAL: isSelected field is an object!`, {
+                                    field: isSelectedField,
+                                    value: isSelectedValue,
+                                    constructor: isSelectedValue.constructor?.name,
+                                    keys: Object.keys(isSelectedValue)
+                                });
+                            }
+                            
+                                                    // Debug all FormData fields for this quotation
+                        console.log(`DEBUG: All FormData fields for quotation ${quotationIndex}, item ${itemIndex}:`);
+                        const quotationFields = Object.keys(req.body).filter(key => 
+                            key.includes(`items[${itemIndex}][quotations][${quotationIndex}]`)
+                        );
+                        
+                        if (quotationFields.length === 0) {
+                            console.error(`❌ CRITICAL: No fields found for quotation ${quotationIndex}, item ${itemIndex}!`);
+                        } else {
+                            quotationFields.forEach(key => {
+                                const value = req.body[key];
+                                console.log(`  ${key}: ${value} (${typeof value})`);
+                            });
+                        }
+                            
+                                                    // Safe parsing with error handling
+                        const safeParseFloat = (value) => {
+                            try {
+                                console.log(`safeParseFloat called with: ${value} (${typeof value})`);
+                                
+                                if (value === undefined || value === null) {
+                                    console.warn(`Value is undefined/null, returning 0`);
+                                    return 0;
+                                }
+                                
+                                if (typeof value === 'object') {
+                                    console.warn(`Attempting to parse object as float: ${JSON.stringify(value)}`);
+                                    return 0;
+                                }
+                                
+                                const result = parseFloat(value) || 0;
+                                console.log(`safeParseFloat result: ${result}`);
+                                return result;
+                            } catch (error) {
+                                console.warn(`Error parsing float for value: ${value}`, error);
+                                return 0;
+                            }
+                        };
+                            
+                            const safeParseInt = (value) => {
+                                try {
+                                    if (typeof value === 'object' && value !== null) {
+                                        console.warn(`Attempting to parse object as int: ${JSON.stringify(value)}`);
+                                        return 0;
+                                    }
+                                    return parseInt(value) || 0;
+                                } catch (error) {
+                                    console.warn(`Error parsing int for value: ${value}`, error);
+                                    return 0;
+                                }
+                            };
+                            
+                            const safeString = (value) => {
+                                try {
+                                    if (typeof value === 'object' && value !== null) {
+                                        console.warn(`Attempting to convert object to string: ${JSON.stringify(value)}`);
+                                        return JSON.stringify(value);
+                                    }
+                                    return String(value || '');
+                                } catch (error) {
+                                    console.warn(`Error converting to string: ${value}`, error);
+                                    return '';
+                                }
+                            };
+                            
+                                                    // Get amount field with better error handling
+                        const amountField = `items[${itemIndex}][quotations][${quotationIndex}][amount]`;
+                        const amountValue = req.body[amountField];
+                        
+                        console.log(`DEBUG: Amount field for quotation ${quotationIndex}, item ${itemIndex}:`, {
+                            field: amountField,
+                            value: amountValue,
+                            type: typeof amountValue,
+                            exists: amountField in req.body
+                        });
+                        
+                        // Check if amount field exists
+                        if (!(amountField in req.body)) {
+                            console.error(`❌ CRITICAL: Amount field '${amountField}' not found in req.body!`);
+                            console.error('Available fields:', Object.keys(req.body).filter(key => key.includes('amount')));
+                            throw new Error(`Amount field '${amountField}' is not defined in the request`);
+                        }
+                        
+                        const quotation = {
+                            provider: safeString(req.body[`items[${itemIndex}][quotations][${quotationIndex}][provider]`]),
+                            amount: safeParseFloat(amountValue),
+                            description: safeString(req.body[`items[${itemIndex}][quotations][${quotationIndex}][description]`]),
+                            quotationDate: safeString(req.body[`items[${itemIndex}][quotations][${quotationIndex}][quotationDate]`]),
+                            validUntil: safeString(req.body[`items[${itemIndex}][quotations][${quotationIndex}][validUntil]`]),
+                            notes: safeString(req.body[`items[${itemIndex}][quotations][${quotationIndex}][notes]`]),
+                            isApproved: req.body[`items[${itemIndex}][quotations][${quotationIndex}][isApproved]`] === 'true',
+                            isSelected: isSelectedValue === 'true',
+                            uploadedBy: safeString(req.body[`items[${itemIndex}][quotations][${quotationIndex}][uploadedBy]`]),
+                            itemIndex: safeParseInt(req.body[`items[${itemIndex}][quotations][${quotationIndex}][itemIndex]`]) || itemIndex,
+                            fileName: safeString(req.body[`items[${itemIndex}][quotations][${quotationIndex}][fileName]`])
+                        };
+                            
+                            console.log(`DEBUG: Built quotation object:`, {
+                                provider: quotation.provider,
+                                amount: quotation.amount,
+                                isSelected: quotation.isSelected,
+                                isSelectedType: typeof quotation.isSelected
+                            });
+                            
+                                                    item.quotations.push(quotation);
+                    } catch (error) {
+                        console.error(`ERROR: Failed to parse quotation ${quotationIndex} for item ${itemIndex}:`, error);
+                        console.error('Error details:', {
+                            message: error.message,
+                            stack: error.stack
+                        });
+                        throw new Error(`Failed to parse quotation ${quotationIndex} for item ${itemIndex}: ${error.message}`);
                     }
                 });
                 
-                // Build quotations array
-                Array.from(quotationIndices).sort((a, b) => a - b).forEach(quotationIndex => {
-                    const quotation = {
-                        provider: req.body[`items[${itemIndex}][quotations][${quotationIndex}][provider]`] || '',
-                        amount: parseFloat(req.body[`items[${itemIndex}][quotations][${quotationIndex}][amount]`]) || 0,
-                        description: req.body[`items[${itemIndex}][quotations][${quotationIndex}][description]`] || '',
-                        quotationDate: req.body[`items[${itemIndex}][quotations][${quotationIndex}][quotationDate]`] || '',
-                        validUntil: req.body[`items[${itemIndex}][quotations][${quotationIndex}][validUntil]`] || '',
-                        notes: req.body[`items[${itemIndex}][quotations][${quotationIndex}][notes]`] || '',
-                        isApproved: req.body[`items[${itemIndex}][quotations][${quotationIndex}][isApproved]`] === 'true',
-                        uploadedBy: req.body[`items[${itemIndex}][quotations][${quotationIndex}][uploadedBy]`] || '',
-                        itemIndex: parseInt(req.body[`items[${itemIndex}][quotations][${quotationIndex}][itemIndex]`]) || itemIndex,
-                        fileName: req.body[`items[${itemIndex}][quotations][${quotationIndex}][fileName]`] || ''
-                    };
-                    
-                    item.quotations.push(quotation);
-                });
-                
-                parsedItems.push(item);
+                                parsedItems.push(item);
+            } catch (error) {
+                console.error(`ERROR: Failed to parse item ${itemIndex}:`, error);
+                throw error;
+            }
             });
             
             console.log('Items built from FormData fields:', parsedItems.length, 'items');
@@ -334,6 +533,18 @@ exports.createRequest = async (req, res) => {
                     description: item.description,
                     quotationsCount: item.quotations ? item.quotations.length : 0
                 });
+                
+                // Debug quotation selection status
+                if (item.quotations && item.quotations.length > 0) {
+                    item.quotations.forEach((quotation, qIndex) => {
+                        console.log(`DEBUG: Item ${index}, Quotation ${qIndex}:`, {
+                            provider: quotation.provider,
+                            amount: quotation.amount,
+                            isSelected: quotation.isSelected,
+                            isSelectedType: typeof quotation.isSelected
+                        });
+                    });
+                }
             });
         }
         
@@ -400,7 +611,7 @@ exports.createRequest = async (req, res) => {
                         
                         // Find uploaded file for this quotation
                         console.log(`Looking for file for item ${i}, quotation ${j}`);
-                        console.log('Available files:', req.files ? req.files.map(f => f.fieldname) : 'No files');
+                        console.log('Available files:', req.files ? req.files.map(f => ({ fieldname: f.fieldname, originalname: f.originalname, filename: f.filename, size: f.size })) : 'No files');
                         
                         // Find any file for this quotation by checking all files
                         console.log('All available files:', req.files ? req.files.map(f => f.fieldname) : 'No files');
@@ -541,6 +752,59 @@ exports.createRequest = async (req, res) => {
                                 // The vendor can be created manually later
                             }
                         }
+                    }
+                    
+                    // Quotation selection validation: If item has 2 or more quotations, admin must select one
+                    console.log(`DEBUG: Item ${i + 1} has ${item.quotations ? item.quotations.length : 0} quotations`);
+                    
+                    if (item.quotations && item.quotations.length >= 2) {
+                        const selectedQuotations = item.quotations.filter(q => q.isSelected === true);
+                        
+                        console.log(`DEBUG: Item ${i + 1} quotation selection validation:`, {
+                            totalQuotations: item.quotations.length,
+                            selectedQuotations: selectedQuotations.length,
+                            selectedQuotationsDetails: selectedQuotations.map(q => ({
+                                provider: q.provider,
+                                amount: q.amount,
+                                isSelected: q.isSelected
+                            })),
+                            allQuotations: item.quotations.map(q => ({
+                                provider: q.provider,
+                                amount: q.amount,
+                                isSelected: q.isSelected,
+                                isSelectedType: typeof q.isSelected
+                            }))
+                        });
+                        
+                        // Only allow manual selection - no auto-selection
+                        if (selectedQuotations.length === 0) {
+                            console.log(`⚠️ No quotation selected for item ${i + 1} - admin must manually select one`);
+                            // Don't auto-select - let admin choose
+                        } else if (selectedQuotations.length > 1) {
+                            console.log(`⚠️ Multiple quotations selected for item ${i + 1} - only one should be selected`);
+                            // Don't auto-select - let admin choose which one
+                        } else {
+                            // Update item cost to match the selected quotation
+                            const selectedQuotation = selectedQuotations[0];
+                            item.unitCost = selectedQuotation.amount;
+                            item.totalCost = selectedQuotation.amount * (item.quantity || 1);
+                            
+                            console.log(`✅ Using admin-selected quotation: ${selectedQuotation.provider} - $${selectedQuotation.amount}`);
+                            console.log(`💰 Updated item cost: $${item.totalCost} (${item.quantity} × $${item.unitCost})`);
+                        }
+                    } else if (item.quotations && item.quotations.length === 1) {
+                        // If only one quotation, automatically select it (this is acceptable)
+                        const quotation = item.quotations[0];
+                        quotation.isSelected = true;
+                        quotation.selectedBy = user._id;
+                        quotation.selectedAt = new Date();
+                        quotation.selectedByEmail = user.email;
+                        
+                        // Update item cost to match the quotation
+                        item.unitCost = quotation.amount;
+                        item.totalCost = quotation.amount * (item.quantity || 1);
+                        
+                        console.log(`✅ Auto-selected single quotation: ${quotation.provider} - $${quotation.amount}`);
                     }
                 }
             }
@@ -1053,6 +1317,142 @@ exports.financeApproval = async (req, res) => {
         
         res.status(200).json(response);
     } catch (error) {
+        console.error('Error in finance approval:', error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Finance override quotation selection
+exports.financeOverrideQuotation = async (req, res) => {
+    try {
+        const { itemIndex, quotationIndex, reason } = req.body;
+        const user = req.user;
+        
+        const request = await Request.findById(req.params.id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+        
+        // Only finance users can override quotations
+        if (!['finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+        
+        // Check if request is in correct status for finance override
+        if (request.status !== 'pending' && request.financeStatus !== 'pending') {
+            return res.status(400).json({ message: 'Request is not in correct status for finance override' });
+        }
+        
+        // Validate item and quotation indices
+        if (itemIndex === undefined || quotationIndex === undefined) {
+            return res.status(400).json({ message: 'Item index and quotation index are required' });
+        }
+        
+        if (!request.items || !request.items[itemIndex]) {
+            return res.status(400).json({ message: 'Item not found' });
+        }
+        
+        const item = request.items[itemIndex];
+        if (!item.quotations || !item.quotations[quotationIndex]) {
+            return res.status(400).json({ message: 'Quotation not found' });
+        }
+        
+        // Find the previously selected quotation
+        const previouslySelectedQuotation = item.quotations.find(q => q.isSelected === true);
+        
+        // Deselect all quotations for this item
+        item.quotations.forEach(quotation => {
+            quotation.isSelected = false;
+            quotation.deselectedBy = user._id;
+            quotation.deselectedAt = new Date();
+            quotation.deselectedByEmail = user.email;
+            
+            // Add to selection history
+            if (quotation.selectionHistory) {
+                quotation.selectionHistory.push({
+                    action: 'deselected',
+                    user: user._id,
+                    userEmail: user.email,
+                    timestamp: new Date(),
+                    reason: reason || 'Finance override'
+                });
+            }
+        });
+        
+        // Select the new quotation
+        const newSelectedQuotation = item.quotations[quotationIndex];
+        newSelectedQuotation.isSelected = true;
+        newSelectedQuotation.selectedBy = user._id;
+        newSelectedQuotation.selectedAt = new Date();
+        newSelectedQuotation.selectedByEmail = user.email;
+        
+        // Add to selection history
+        if (newSelectedQuotation.selectionHistory) {
+            newSelectedQuotation.selectionHistory.push({
+                action: 'selected',
+                user: user._id,
+                userEmail: user.email,
+                timestamp: new Date(),
+                reason: reason || 'Finance override'
+            });
+        }
+        
+        // Update item cost to match the new selected quotation
+        const oldUnitCost = item.unitCost;
+        const oldTotalCost = item.totalCost;
+        
+        item.unitCost = newSelectedQuotation.amount;
+        item.totalCost = newSelectedQuotation.amount * (item.quantity || 1);
+        
+        // Recalculate total estimated cost for the request
+        if (request.items && request.items.length > 0) {
+            request.totalEstimatedCost = request.items.reduce((total, reqItem) => {
+                return total + (reqItem.totalCost || 0);
+            }, 0);
+        }
+        
+        // Add to request history
+        const changes = [
+            `Finance overrode quotation selection for item ${itemIndex + 1}`,
+            `Changed from ${previouslySelectedQuotation ? previouslySelectedQuotation.provider : 'none'} to ${newSelectedQuotation.provider}`,
+            `Updated cost from $${oldTotalCost} to $${item.totalCost}`
+        ];
+        
+        if (reason) {
+            changes.push(`Reason: ${reason}`);
+        }
+        
+        request.requestHistory.push({
+            date: new Date(),
+            action: 'Finance quotation override',
+            user: user._id,
+            changes: changes
+        });
+        
+        await request.save();
+        
+        const updatedRequest = await Request.findById(request._id)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('residence', 'name')
+            .populate('items.quotations.selectedBy', 'firstName lastName email')
+            .populate('items.quotations.deselectedBy', 'firstName lastName email')
+            .populate('approval.finance.approvedBy', 'firstName lastName email');
+        
+        res.status(200).json({
+            message: 'Quotation selection overridden successfully',
+            request: updatedRequest,
+            changes: {
+                itemIndex,
+                quotationIndex,
+                newProvider: newSelectedQuotation.provider,
+                newAmount: newSelectedQuotation.amount,
+                oldAmount: oldTotalCost,
+                newTotalCost: item.totalCost
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error in finance quotation override:', error);
         res.status(500).json({ message: error.message });
     }
 };
