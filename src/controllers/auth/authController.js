@@ -47,10 +47,12 @@ exports.register = async (req, res) => {
                 await createDebtorForStudent(user, {
                     createdBy: user._id
                 });
-                ('Debtor account created for student:', email);
+                console.log('✅ Debtor account created for student:', email);
             } catch (debtorError) {
-                console.error('Failed to create debtor account:', debtorError);
+                console.error('❌ Failed to create debtor account:', debtorError);
                 // Continue with registration even if debtor creation fails
+                // But log this for monitoring
+                console.log('⚠️ Student registered but debtor creation failed. Manual intervention may be needed.');
             }
         }
 

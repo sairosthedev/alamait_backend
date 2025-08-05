@@ -151,15 +151,35 @@ debtorSchema.pre('save', function(next) {
 
 // Static method to generate debtor code
 debtorSchema.statics.generateDebtorCode = async function() {
-  const count = await this.countDocuments();
-  const code = `DR${String(count + 1).padStart(4, '0')}`;
+  // Get the highest existing debtor code to avoid duplicates
+  const highestDebtor = await this.findOne().sort({ debtorCode: -1 });
+  let nextNumber = 1;
+  
+  if (highestDebtor && highestDebtor.debtorCode) {
+    const match = highestDebtor.debtorCode.match(/DR(\d+)/);
+    if (match) {
+      nextNumber = parseInt(match[1]) + 1;
+    }
+  }
+  
+  const code = `DR${String(nextNumber).padStart(4, '0')}`;
   return code;
 };
 
 // Static method to generate account code
 debtorSchema.statics.generateAccountCode = async function() {
-  const count = await this.countDocuments();
-  const code = `110${String(count + 1).padStart(3, '0')}`; // 1100 series for Accounts Receivable
+  // Get the highest existing account code to avoid duplicates
+  const highestDebtor = await this.findOne().sort({ accountCode: -1 });
+  let nextNumber = 1;
+  
+  if (highestDebtor && highestDebtor.accountCode) {
+    const match = highestDebtor.accountCode.match(/110(\d+)/);
+    if (match) {
+      nextNumber = parseInt(match[1]) + 1;
+    }
+  }
+  
+  const code = `110${String(nextNumber).padStart(3, '0')}`; // 1100 series for Accounts Receivable
   return code;
 };
 

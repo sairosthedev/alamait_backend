@@ -126,10 +126,12 @@ exports.createStudent = async (req, res) => {
                 residenceId: residenceId,
                 createdBy: req.user._id
             });
-            console.log(`Debtor account created for student ${student.email}`);
+            console.log(`✅ Debtor account created for student ${student.email}`);
         } catch (debtorError) {
-            console.error('Failed to create debtor account:', debtorError);
+            console.error('❌ Failed to create debtor account:', debtorError);
             // Continue with student creation even if debtor creation fails
+            // But log this for monitoring
+            console.log('⚠️ Student created but debtor creation failed. Manual intervention may be needed.');
         }
 
         await createAuditLog({
@@ -891,6 +893,20 @@ exports.manualAddStudent = async (req, res) => {
         });
 
         await student.save();
+
+        // Automatically create debtor account for the new student
+        try {
+            await createDebtorForStudent(student, {
+                residenceId: residenceId,
+                roomNumber: roomNumber,
+                createdBy: req.user._id
+            });
+            console.log(`✅ Debtor account created for manually added student ${student.email}`);
+        } catch (debtorError) {
+            console.error('❌ Failed to create debtor account:', debtorError);
+            // Continue with student creation even if debtor creation fails
+            console.log('⚠️ Student manually added but debtor creation failed. Manual intervention may be needed.');
+        }
 
         // Create application record (following the existing application logic)
         const application = new Application({
