@@ -28,6 +28,9 @@ router.get('/debtors', vendorController.getDebtors);
 // Get creditor summary - Finance only
 router.get('/creditors/:vendorId/summary', vendorController.getCreditorSummary);
 
+// Get vendor transactions (ledger) - Finance only (must be before /:id route)
+router.get('/:id/transactions', vendorController.getVendorTransactions);
+
 // Get vendor by ID (Finance only) - This must be last to avoid catching other routes
 router.get('/:id', vendorController.getVendorById);
 
