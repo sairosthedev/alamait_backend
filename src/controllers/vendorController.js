@@ -3,6 +3,54 @@ const Account = require('../models/Account');
 const TransactionEntry = require('../models/TransactionEntry');
 const mongoose = require('mongoose');
 
+// Helper function to calculate vendor totals from transactions
+async function calculateVendorTotals(vendorId, chartOfAccountsCode) {
+    try {
+        const transactions = await TransactionEntry.find({
+            'entries.accountCode': chartOfAccountsCode
+        }).sort({ date: 1 });
+
+        let totalSpent = 0;
+        let totalPaid = 0;
+
+        transactions.forEach(transaction => {
+            const vendorEntry = transaction.entries.find(entry => 
+                entry.accountCode === chartOfAccountsCode
+            );
+
+            if (vendorEntry) {
+                const amount = vendorEntry.debit || vendorEntry.credit || 0;
+                const isDebit = vendorEntry.debit > 0;
+                
+                if (isDebit) {
+                    // Debit to vendor account = payment made to vendor (reducing payable)
+                    totalPaid += amount;
+                } else {
+                    // Credit to vendor account = expense/purchase from vendor (increasing payable)
+                    totalSpent += amount;
+                }
+            }
+        });
+
+        const outstandingAmount = totalSpent - totalPaid;
+
+        return {
+            totalSpent,
+            totalPaid,
+            outstandingAmount,
+            currentBalance: outstandingAmount
+        };
+    } catch (error) {
+        console.error('Error calculating vendor totals:', error);
+        return {
+            totalSpent: 0,
+            totalPaid: 0,
+            outstandingAmount: 0,
+            currentBalance: 0
+        };
+    }
+}
+
 // Create new vendor
 exports.createVendor = async (req, res) => {
     try {
@@ -161,11 +209,24 @@ exports.getAllVendors = async (req, res) => {
             .skip((page - 1) * limit)
             .exec();
 
+        // Calculate totals for each vendor
+        const vendorsWithTotals = await Promise.all(
+            vendors.map(async (vendor) => {
+                const totals = await calculateVendorTotals(vendor._id, vendor.chartOfAccountsCode);
+                return {
+                    ...vendor.toObject(),
+                    totalSpent: totals.totalSpent,
+                    outstandingAmount: totals.outstandingAmount,
+                    currentBalance: totals.currentBalance
+                };
+            })
+        );
+
         // Get total count
         const total = await Vendor.countDocuments(query);
 
         res.status(200).json({
-            vendors,
+            vendors: vendorsWithTotals,
             totalPages: Math.ceil(total / limit),
             currentPage: page,
             totalVendors: total
@@ -192,7 +253,17 @@ exports.getVendorById = async (req, res) => {
             return res.status(404).json({ message: 'Vendor not found' });
         }
 
-        res.status(200).json(vendor);
+        // Calculate totals for this vendor
+        const totals = await calculateVendorTotals(vendor._id, vendor.chartOfAccountsCode);
+        
+        const vendorWithTotals = {
+            ...vendor.toObject(),
+            totalSpent: totals.totalSpent,
+            outstandingAmount: totals.outstandingAmount,
+            currentBalance: totals.currentBalance
+        };
+
+        res.status(200).json(vendorWithTotals);
 
     } catch (error) {
         console.error('Error getting vendor:', error);
