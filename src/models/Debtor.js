@@ -28,7 +28,7 @@ const debtorSchema = new mongoose.Schema({
   // Current Status
   status: {
     type: String,
-    enum: ['active', 'inactive', 'overdue', 'defaulted'],
+    enum: ['active', 'inactive', 'overdue', 'defaulted', 'paid'],
     default: 'active'
   },
   
@@ -96,6 +96,37 @@ const debtorSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  
+  // Application Information (for syncing)
+  application: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Application'
+  },
+  
+  billingPeriod: {
+    type: String,
+    trim: true
+  },
+  
+  startDate: {
+    type: Date
+  },
+  
+  endDate: {
+    type: Date
+  },
+  
+  roomPrice: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  
+  // Payment Information (for syncing)
+  payments: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Payment'
+  }],
   
   // Contact Information (cached for quick access)
   contactInfo: {
