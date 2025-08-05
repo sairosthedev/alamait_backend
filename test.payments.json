@@ -1,0 +1,276 @@
+[{
+  "_id": {
+    "$oid": "6883fbab0ec7843bff4791b8"
+  },
+  "paymentId": "PAY-1753480105884",
+  "student": {
+    "$oid": "686f0db06f4f0fe746acb9ed"
+  },
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "room": "Cottage1",
+  "roomType": "",
+  "rentAmount": 150,
+  "adminFee": 0,
+  "deposit": 0,
+  "totalAmount": 150,
+  "paymentMonth": "2025-07",
+  "date": {
+    "$date": "2025-07-23T00:00:00.000Z"
+  },
+  "method": "Cash",
+  "status": "Verified",
+  "applicationStatus": "pending",
+  "proofOfPayment": {
+    "status": "Accepted",
+    "verificationDate": {
+      "$date": "2025-07-25T21:48:58.926Z"
+    },
+    "verificationNotes": "yes",
+    "verifiedBy": {
+      "$oid": "67c023adae5e27657502e887"
+    }
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "clarificationRequests": [],
+  "createdAt": {
+    "$date": "2025-07-25T21:48:27.298Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-25T21:48:58.927Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6883fed00ec7843bff479e8f"
+  },
+  "paymentId": "PAY-1753480910641",
+  "student": {
+    "$oid": "686d806b76fac16e629e9bdd"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "room": "M3",
+  "roomType": "",
+  "rentAmount": 180,
+  "adminFee": 20,
+  "deposit": 100,
+  "totalAmount": 300,
+  "paymentMonth": "2025-08",
+  "date": {
+    "$date": "2025-07-23T00:00:00.000Z"
+  },
+  "method": "Bank Transfer",
+  "status": "Verified",
+  "applicationStatus": "pending",
+  "proofOfPayment": {
+    "status": "Accepted",
+    "verificationDate": {
+      "$date": "2025-07-25T22:05:15.521Z"
+    },
+    "verificationNotes": "confirmed",
+    "verifiedBy": {
+      "$oid": "67c023adae5e27657502e887"
+    }
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "clarificationRequests": [],
+  "createdAt": {
+    "$date": "2025-07-25T22:01:52.154Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-25T22:05:15.521Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6889646d43033e4833f5eeee"
+  },
+  "paymentId": "PAY-1753834604519",
+  "student": {
+    "$oid": "686ef7e66f4f0fe746ac6a0b"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "room": "Exclusive Room",
+  "roomType": "",
+  "rentAmount": 220,
+  "adminFee": 20,
+  "deposit": 100,
+  "totalAmount": 340,
+  "paymentMonth": "2025-07",
+  "date": {
+    "$date": "2025-07-23T00:00:00.000Z"
+  },
+  "method": "Cash",
+  "status": "Verified",
+  "applicationStatus": "pending",
+  "proofOfPayment": {
+    "status": "Accepted",
+    "verificationDate": {
+      "$date": "2025-07-30T00:17:16.296Z"
+    },
+    "verificationNotes": "confirmed",
+    "verifiedBy": {
+      "$oid": "67c023adae5e27657502e887"
+    }
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "clarificationRequests": [],
+  "createdAt": {
+    "$date": "2025-07-30T00:16:45.159Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-30T00:17:16.297Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "688965b643033e4833f5fefd"
+  },
+  "paymentId": "PAY-1753834934534",
+  "student": {
+    "$oid": "686e7a60913b15e1760d7d58"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "room": "M3",
+  "roomType": "",
+  "rentAmount": 180,
+  "adminFee": 20,
+  "deposit": 180,
+  "totalAmount": 380,
+  "paymentMonth": "2025-08",
+  "date": {
+    "$date": "2025-08-01T00:00:00.000Z"
+  },
+  "method": "Ecocash",
+  "status": "Verified",
+  "applicationStatus": "pending",
+  "proofOfPayment": {
+    "status": "Accepted",
+    "verificationDate": {
+      "$date": "2025-07-30T00:22:53.868Z"
+    },
+    "verificationNotes": "yes",
+    "verifiedBy": {
+      "$oid": "67c023adae5e27657502e887"
+    }
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "clarificationRequests": [],
+  "createdAt": {
+    "$date": "2025-07-30T00:22:14.895Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-30T00:22:53.869Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "688966d443033e4833f60512"
+  },
+  "paymentId": "PAY-1753835220318",
+  "student": {
+    "$oid": "686d806b76fac16e629e9bdd"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "room": "M3",
+  "roomType": "",
+  "rentAmount": 180,
+  "adminFee": 0,
+  "deposit": 0,
+  "totalAmount": 180,
+  "paymentMonth": "2025-09",
+  "date": {
+    "$date": "2025-09-02T00:00:00.000Z"
+  },
+  "method": "Bank Transfer",
+  "status": "Verified",
+  "applicationStatus": "pending",
+  "proofOfPayment": {
+    "status": "Accepted",
+    "verificationDate": {
+      "$date": "2025-07-30T00:29:17.173Z"
+    },
+    "verificationNotes": "yes done",
+    "verifiedBy": {
+      "$oid": "67c023adae5e27657502e887"
+    }
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "clarificationRequests": [],
+  "createdAt": {
+    "$date": "2025-07-30T00:27:00.707Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-30T00:29:17.174Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "688a9ed255fe1a1fd3542b92"
+  },
+  "paymentId": "PAY-1753915089361",
+  "student": {
+    "$oid": "688a965155fe1a1fd35411c0"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "room": "M1",
+  "roomType": "",
+  "rentAmount": 180,
+  "adminFee": 20,
+  "deposit": 80,
+  "totalAmount": 280,
+  "paymentMonth": "2025-07",
+  "date": {
+    "$date": "2025-07-31T00:00:00.000Z"
+  },
+  "method": "Cash",
+  "status": "Verified",
+  "applicationStatus": "pending",
+  "proofOfPayment": {
+    "status": "Accepted",
+    "verificationDate": {
+      "$date": "2025-07-30T22:39:19.045Z"
+    },
+    "verificationNotes": "confirmed",
+    "verifiedBy": {
+      "$oid": "67c023adae5e27657502e887"
+    }
+  },
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "clarificationRequests": [],
+  "createdAt": {
+    "$date": "2025-07-30T22:38:10.983Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-30T22:39:19.046Z"
+  },
+  "__v": 0
+}]

@@ -1,0 +1,2045 @@
+[{
+  "_id": {
+    "$oid": "686d82f576fac16e629eae5a"
+  },
+  "student": {
+    "$oid": "686d806b76fac16e629e9bdd"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "issue": "Toilet is blocked",
+  "description": "Please help us with the matter",
+  "room": "M3",
+  "category": "plumbing",
+  "priority": "medium",
+  "status": "completed",
+  "requestDate": {
+    "$date": "2025-07-08T20:43:33.125Z"
+  },
+  "amount": 0,
+  "financeStatus": "approved",
+  "images": [],
+  "updates": [
+    {
+      "date": {
+        "$date": "2025-07-08T20:43:33.125Z"
+      },
+      "message": "Maintenance request submitted",
+      "_id": {
+        "$oid": "686d82f576fac16e629eae5b"
+      }
+    }
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-08T20:45:25.874Z"
+      },
+      "action": "Request approved by finance",
+      "user": {
+        "$oid": "686d806b76fac16e629e9bdd"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "686d836576fac16e629eb20a"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-07-08T20:43:33.129Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-14T12:25:53.457Z"
+  },
+  "__v": 1,
+  "assignedTo": {
+    "_id": {
+      "$oid": "68656a74aed51883df804dc2"
+    },
+    "name": "Gift",
+    "surname": "Fashu"
+  },
+  "paymentMethod": "Cash"
+},
+{
+  "_id": {
+    "$oid": "686e7bc0913b15e1760d8178"
+  },
+  "student": {
+    "$oid": "686e7a60913b15e1760d7d58"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "issue": "lights not working",
+  "description": "they are not switching on",
+  "room": "M3",
+  "category": "electrical",
+  "priority": "medium",
+  "status": "assigned",
+  "requestDate": {
+    "$date": "2025-07-09T14:25:04.285Z"
+  },
+  "amount": 136,
+  "financeStatus": "approved",
+  "images": [],
+  "updates": [
+    {
+      "date": {
+        "$date": "2025-07-09T14:25:04.285Z"
+      },
+      "message": "Maintenance request submitted",
+      "_id": {
+        "$oid": "686e7bc0913b15e1760d8179"
+      }
+    }
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-09T23:43:54.618Z"
+      },
+      "action": "Request approved by finance",
+      "user": {
+        "$oid": "686e7a60913b15e1760d7d58"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "686efeba6f4f0fe746ac7aa5"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-07-09T23:44:25.944Z"
+      },
+      "action": "Request approved by finance",
+      "user": {
+        "$oid": "686e7a60913b15e1760d7d58"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "686efed96f4f0fe746ac7ad6"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-07-09T14:25:04.287Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-30T02:20:22.873Z"
+  },
+  "__v": 2,
+  "assignedTo": {
+    "_id": {
+      "$oid": "686efddb6f4f0fe746ac7767"
+    },
+    "name": "Admire",
+    "surname": "Kumba"
+  },
+  "paymentMethod": "Cash",
+  "ceoApprovalDate": {
+    "$date": "2025-07-30T01:25:25.401Z"
+  },
+  "ceoApprovalReason": "reasonable",
+  "ceoStatus": "approved"
+},
+{
+  "_id": {
+    "$oid": "686ee3e86af01f8b9f54ed14"
+  },
+  "student": null,
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "issue": "Toilet is blocked",
+  "description": "please",
+  "room": "Exclusive Room",
+  "category": "plumbing",
+  "priority": "medium",
+  "status": "pending",
+  "requestDate": {
+    "$date": "2025-07-09T21:49:28.302Z"
+  },
+  "amount": 224,
+  "financeStatus": "approved",
+  "images": [],
+  "updates": [
+    {
+      "date": {
+        "$date": "2025-07-09T21:49:28.302Z"
+      },
+      "message": "Maintenance request submitted",
+      "_id": {
+        "$oid": "686ee3e86af01f8b9f54ed15"
+      }
+    }
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-15T11:28:34.505Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "68763b62a6985fe04f08b6e7"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:45:20.314Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891380085b1b7d90641271a"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:01:24.461Z"
+      },
+      "action": "Request rejected by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "68913bc4ed5ce20772bcc185"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:01:32.597Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "68913bcced5ce20772bcc1ea"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:13:57.387Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "68913eb555d6e899b5670cc9"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:20:05.346Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891402555d6e899b5672b58"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:20:23.021Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891403755d6e899b5672cce"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:20:44.697Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891404c55d6e899b5672e13"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:23:53.755Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891410955d6e899b56732e8"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:28:50.966Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891423255d6e899b567489d"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:29:06.553Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891424255d6e899b56749d2"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:29:36.209Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891426055d6e899b5674bf7"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:29:50.807Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891426e55d6e899b5674d97"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:33:03.402Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891432f4bf9504ea739f64b"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:38:34.449Z"
+      },
+      "action": "Request rejected by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891447a4bf9504ea739fb2a"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:41:14.536Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891451a724ac4cadd12be02"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-07-09T21:49:28.307Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T23:43:49.131Z"
+  },
+  "__v": 16,
+  "assignedTo": {
+    "_id": {
+      "$oid": "68656a74aed51883df804dc2"
+    },
+    "name": "Gift",
+    "surname": "Fashu"
+  },
+  "paymentMethod": "Ecocash",
+  "ceoStatus": "pending",
+  "financeNotes": "done",
+  "updatedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  }
+},
+{
+  "_id": {
+    "$oid": "686efc626f4f0fe746ac755e"
+  },
+  "student": null,
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "issue": "Toilets not working",
+  "description": "please",
+  "room": "M8",
+  "category": "plumbing",
+  "priority": "medium",
+  "status": "pending",
+  "requestDate": {
+    "$date": "2025-07-09T23:33:54.229Z"
+  },
+  "amount": 60,
+  "financeStatus": "approved",
+  "images": [],
+  "updates": [
+    {
+      "date": {
+        "$date": "2025-07-09T23:33:54.229Z"
+      },
+      "message": "Maintenance request submitted",
+      "_id": {
+        "$oid": "686efc626f4f0fe746ac755f"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:48:53.849Z"
+      },
+      "message": "Maintenance request approved by finance - Amount: $60",
+      "author": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "_id": {
+        "$oid": "689146e5900535cfaf7d3ae3"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:55:15.033Z"
+      },
+      "message": "Maintenance request approved by finance - Amount: $60",
+      "author": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "_id": {
+        "$oid": "68914863b7d94da9729a3a79"
+      }
+    }
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-03T00:11:40.312Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688ea93c24a1455fe08c703c"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-03T00:11:40.314Z"
+      },
+      "action": "Request updated",
+      "changes": [
+        "Status changed to in-progress"
+      ],
+      "_id": {
+        "$oid": "688ea93c24a1455fe08c703d"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-03T00:16:16.045Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688eaa5024a1455fe08c73a1"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-03T00:19:01.054Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688eaaf524a1455fe08c7459"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:19:32.126Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "689131f485b1b7d90640ec6f"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:19:40.041Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "689131fc85b1b7d90640ec9a"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:25:22.367Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891335285b1b7d90640f2c9"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:26:30.868Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891339685b1b7d90640f4b8"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:28:03.184Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "689133f385b1b7d90640f78b"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:28:20.531Z"
+      },
+      "action": "Request approved by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891340485b1b7d90640f85a"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:30:03.528Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891346b85b1b7d90640fafb"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:30:38.623Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891348e85b1b7d90640fff4"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:32:09.297Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "689134e985b1b7d906410788"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:33:21.523Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891353185b1b7d906410a48"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:34:27.118Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891357385b1b7d906410d29"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:36:18.759Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "689135e285b1b7d90641115f"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:37:58.772Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891364685b1b7d906411581"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:38:44.777Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891367485b1b7d906411809"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:40:07.711Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "689136c785b1b7d906411bd8"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:42:07.803Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "6891373f85b1b7d906411f98"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:48:41.313Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "689146d9900535cfaf7d3a8b"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T23:53:40.940Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": null,
+      "changes": [],
+      "_id": {
+        "$oid": "68914804b7d94da9729a3a1b"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-07-09T23:33:54.232Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T23:55:15.040Z"
+  },
+  "__v": 23,
+  "assignedTo": "686efddb6f4f0fe746ac7767",
+  "paymentMethod": "Cash",
+  "approval": {
+    "admin": {
+      "approved": false
+    },
+    "ceo": {
+      "approved": false
+    },
+    "finance": {
+      "approved": false,
+      "rejected": false,
+      "waitlisted": false
+    }
+  },
+  "convertedToExpense": false,
+  "items": [],
+  "quotations": [],
+  "totalEstimatedCost": 0,
+  "ceoStatus": "pending",
+  "updatedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "financeNotes": "fy"
+},
+{
+  "_id": {
+    "$oid": "686fad37991066842501d583"
+  },
+  "student": {
+    "$oid": "686fa791991066842501ce5a"
+  },
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "issue": "Electricity: Plugs not working",
+  "description": "Electricity: Plugs not working",
+  "room": "B1",
+  "category": "electrical",
+  "priority": "medium",
+  "status": "pending",
+  "requestDate": {
+    "$date": "2025-07-10T12:08:23.261Z"
+  },
+  "amount": 50,
+  "financeStatus": "approved",
+  "images": [],
+  "updates": [
+    {
+      "date": {
+        "$date": "2025-07-10T12:08:23.261Z"
+      },
+      "message": "Maintenance request submitted",
+      "_id": {
+        "$oid": "686fad37991066842501d584"
+      }
+    }
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-10T12:12:39.389Z"
+      },
+      "action": "Request approved by finance",
+      "user": {
+        "$oid": "686fa791991066842501ce5a"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "686fae37991066842501d7a4"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-07-10T12:08:23.267Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-10T12:14:48.867Z"
+  },
+  "__v": 1,
+  "assignedTo": {
+    "_id": {
+      "$oid": "68656a74aed51883df804dc2"
+    },
+    "name": "Gift",
+    "surname": "Fashu"
+  },
+  "paymentMethod": "Innbucks"
+},
+{
+  "_id": {
+    "$oid": "688a4e45c0f30f13fe683751"
+  },
+  "title": "gazebo construction",
+  "description": "gazebo construction request",
+  "type": "operational",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "department": "operations",
+  "requestedBy": "Mako",
+  "items": [
+    {
+      "description": "builder",
+      "quantity": 1,
+      "estimatedCost": 150,
+      "purpose": "construction in progress",
+      "quotations": [
+        {
+          "provider": "tembo",
+          "amount": 150,
+          "description": "builder",
+          "fileUrl": "/uploads/quotations/5kva 48V Full Package Solar Quote.pdf",
+          "fileName": "5kva 48V Full Package Solar Quote.pdf",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "isApproved": true,
+          "_id": {
+            "$oid": "688a4e45c0f30f13fe683753"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-30T16:54:29.650Z"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T00:51:09.278Z"
+          },
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          }
+        }
+      ],
+      "_id": {
+        "$oid": "688a4e45c0f30f13fe683752"
+      }
+    }
+  ],
+  "totalEstimatedCost": 150,
+  "deliveryLocation": "Belvedere",
+  "priority": "medium",
+  "status": "pending-ceo-approval",
+  "approval": {
+    "admin": {
+      "approved": true,
+      "approvedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedByEmail": "admin@alamait.com",
+      "approvedAt": {
+        "$date": "2025-07-30T16:54:29.646Z"
+      }
+    },
+    "finance": {
+      "approved": true,
+      "approvedAt": {
+        "$date": "2025-07-31T00:51:09.278Z"
+      },
+      "approvedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedByEmail": "finance@alamait.com",
+      "notes": "Finance approved with selected quotation"
+    },
+    "ceo": {
+      "approved": false
+    }
+  },
+  "convertedToExpense": false,
+  "amount": 150,
+  "quotations": [],
+  "images": [],
+  "updates": [],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-30T16:54:29.658Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to pending",
+        "Approval status updated"
+      ],
+      "_id": {
+        "$oid": "688a4e45c0f30f13fe683754"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-07-30T16:54:29.949Z"
+      },
+      "action": "Request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request submitted"
+      ],
+      "_id": {
+        "$oid": "688a4e45c0f30f13fe683756"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-07-30T16:54:29.657Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T00:40:09.215Z"
+  },
+  "__v": 1,
+  "category": "other",
+  "issue": "gazebo construction",
+  "financeStatus": "approved"
+},
+{
+  "_id": {
+    "$oid": "688ddd9cb5b09c633d688505"
+  },
+  "title": "taps",
+  "description": "none",
+  "type": "operational",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "department": "Operations",
+  "requestedBy": "Mako",
+  "items": [
+    {
+      "description": "taps",
+      "quantity": 1,
+      "unitCost": 200,
+      "totalCost": 200,
+      "purpose": "lol",
+      "quotations": [
+        {
+          "provider": "trust jings Electrician",
+          "amount": 200,
+          "description": "lkjhgf",
+          "fileUrl": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/request_quotations/67c023adae5e27657502e887_1754127770774_cash-flow-statement-2025.pdf",
+          "fileName": "cash-flow-statement-2025.pdf",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-02T09:42:52.254Z"
+          },
+          "isApproved": false,
+          "_id": {
+            "$oid": "688ddd9cb5b09c633d688507"
+          }
+        }
+      ],
+      "_id": {
+        "$oid": "688ddd9cb5b09c633d688506"
+      }
+    }
+  ],
+  "totalEstimatedCost": 200,
+  "proposedVendor": "trust jings Electrician",
+  "deliveryLocation": "St kilda",
+  "priority": "medium",
+  "status": "pending",
+  "financeStatus": "pending",
+  "approval": {
+    "admin": {
+      "approved": true,
+      "approvedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedByEmail": "admin@alamait.com",
+      "approvedAt": {
+        "$date": "2025-08-02T09:42:52.255Z"
+      }
+    },
+    "finance": {
+      "approved": false,
+      "rejected": false,
+      "waitlisted": false
+    },
+    "ceo": {
+      "approved": false
+    }
+  },
+  "convertedToExpense": false,
+  "amount": 0,
+  "quotations": [],
+  "images": [],
+  "updates": [],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-02T09:42:52.282Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to pending",
+        "Approval status updated"
+      ],
+      "_id": {
+        "$oid": "688ddd9cb5b09c633d688508"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T09:42:52.583Z"
+      },
+      "action": "Request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request submitted"
+      ],
+      "_id": {
+        "$oid": "688ddd9cb5b09c633d68850a"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-08-02T09:42:52.281Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-02T09:42:52.585Z"
+  },
+  "__v": 1
+},
+{
+  "_id": {
+    "$oid": "688def7cd7fd1a4091fc2d2f"
+  },
+  "title": "test",
+  "description": ";iuygf",
+  "type": "operational",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "department": ";iuytr",
+  "requestedBy": "Mako",
+  "items": [
+    {
+      "description": "bricks",
+      "quantity": 1,
+      "unitCost": 100,
+      "totalCost": 100,
+      "purpose": "][poiuyt",
+      "quotations": [
+        {
+          "provider": "Gift Fashu Plumber",
+          "amount": 100,
+          "description": "jhg",
+          "fileUrl": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/request_quotations/67c023adae5e27657502e887_1754132345952_balance-sheet-2025.pdf",
+          "fileName": "balance-sheet-2025.pdf",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-02T10:59:06.709Z"
+          },
+          "isApproved": false,
+          "isSelected": true,
+          "_id": {
+            "$oid": "688def7cd7fd1a4091fc2d31"
+          },
+          "selectionHistory": []
+        },
+        {
+          "provider": "Admire Kumba Electrician",
+          "amount": 200,
+          "description": "poiuy",
+          "fileUrl": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/request_quotations/67c023adae5e27657502e887_1754132346710_cash-flow-statement-2025.pdf",
+          "fileName": "cash-flow-statement-2025.pdf",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-02T10:59:08.028Z"
+          },
+          "isApproved": false,
+          "isSelected": false,
+          "_id": {
+            "$oid": "688def7cd7fd1a4091fc2d32"
+          },
+          "selectionHistory": []
+        }
+      ],
+      "_id": {
+        "$oid": "688def7cd7fd1a4091fc2d30"
+      }
+    }
+  ],
+  "totalEstimatedCost": 100,
+  "proposedVendor": "Admire Kumba Electrician",
+  "deliveryLocation": "poiuytr",
+  "priority": "medium",
+  "status": "in-progress",
+  "financeStatus": "approved",
+  "approval": {
+    "admin": {
+      "approved": true,
+      "approvedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedByEmail": "admin@alamait.com",
+      "approvedAt": {
+        "$date": "2025-08-02T10:59:08.028Z"
+      }
+    },
+    "finance": {
+      "approved": false,
+      "rejected": false,
+      "waitlisted": false
+    },
+    "ceo": {
+      "approved": false
+    }
+  },
+  "convertedToExpense": false,
+  "amount": 100,
+  "quotations": [],
+  "images": [],
+  "updates": [],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-02T10:59:08.041Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to pending",
+        "Approval status updated"
+      ],
+      "_id": {
+        "$oid": "688def7cd7fd1a4091fc2d33"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T10:59:08.368Z"
+      },
+      "action": "Request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request submitted"
+      ],
+      "_id": {
+        "$oid": "688def7cd7fd1a4091fc2d35"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T20:19:26.923Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688e72cea36ab7b47dc58fd3"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T20:19:26.927Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to in-progress"
+      ],
+      "_id": {
+        "$oid": "688e72cea36ab7b47dc58fd4"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T20:32:45.871Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688e75eda34ab5bc2c058828"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T20:43:11.599Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688e785f83b749c308ef34a5"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T20:52:36.838Z"
+      },
+      "action": "Request Updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "assignedTo updated to: Finance Manager",
+        "adminResponse updated to: Testing assignedTo with valid user - 2025-08-02T20:52:35.282Z"
+      ],
+      "_id": {
+        "$oid": "688e7a9483b749c308ef34e6"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T20:52:36.843Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Assignment updated"
+      ],
+      "_id": {
+        "$oid": "688e7a9483b749c308ef34e7"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T23:45:31.410Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688ea31b24a1455fe08c4b56"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T23:49:59.304Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688ea42724a1455fe08c583b"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-08-02T10:59:08.040Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-02T23:49:59.309Z"
+  },
+  "__v": 7,
+  "assignedTo": {
+    "_id": {
+      "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+    },
+    "name": "Finance",
+    "surname": "Manager",
+    "role": "finance_admin"
+  }
+},
+{
+  "_id": {
+    "$oid": "688e88c44cd4fe2eae34d5a3"
+  },
+  "student": {
+    "$oid": "686d806b76fac16e629e9bdd"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "issue": "tissues",
+  "description": "toilets blocked",
+  "room": "M5",
+  "category": "plumbing",
+  "priority": "medium",
+  "status": "pending",
+  "requestDate": {
+    "$date": "2025-08-02T21:53:08.755Z"
+  },
+  "amount": 0,
+  "financeStatus": "pending",
+  "ceoStatus": "pending",
+  "images": [],
+  "updates": [
+    {
+      "date": {
+        "$date": "2025-08-02T21:53:08.755Z"
+      },
+      "message": "Maintenance request submitted",
+      "_id": {
+        "$oid": "688e88c44cd4fe2eae34d5a4"
+      }
+    }
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-02T23:35:20.787Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688ea0b824a1455fe08c44c0"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T23:35:20.792Z"
+      },
+      "action": "Request updated",
+      "changes": [
+        "Status changed to in-progress"
+      ],
+      "_id": {
+        "$oid": "688ea0b824a1455fe08c44c1"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T23:53:40.061Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688ea50424a1455fe08c5c2b"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-02T23:56:54.353Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: in-progress"
+      ],
+      "_id": {
+        "$oid": "688ea5c624a1455fe08c6015"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T21:57:37.438Z"
+      },
+      "action": "Request approved by finance",
+      "user": {
+        "$oid": "686d806b76fac16e629e9bdd"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "68912cd1e2f944624f9c12e8"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T21:57:41.290Z"
+      },
+      "action": "Request approved by finance",
+      "user": {
+        "$oid": "686d806b76fac16e629e9bdd"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "68912cd5e2f944624f9c1310"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:20:47.881Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": {
+        "$oid": "686d806b76fac16e629e9bdd"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "6891323f85b1b7d90640eea2"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:24:41.430Z"
+      },
+      "action": "Request approved by finance",
+      "user": {
+        "$oid": "686d806b76fac16e629e9bdd"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "6891332985b1b7d90640f1ca"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:25:15.532Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": {
+        "$oid": "686d806b76fac16e629e9bdd"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "6891334b85b1b7d90640f293"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:26:00.420Z"
+      },
+      "action": "Request approved by finance",
+      "user": {
+        "$oid": "686d806b76fac16e629e9bdd"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "6891337885b1b7d90640f452"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T22:28:00.543Z"
+      },
+      "action": "Request moved to waitlist by finance",
+      "user": {
+        "$oid": "686d806b76fac16e629e9bdd"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "689133f085b1b7d90640f753"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-08-02T21:53:08.758Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T22:28:00.546Z"
+  },
+  "__v": 10,
+  "approval": {
+    "admin": {
+      "approved": false
+    },
+    "ceo": {
+      "approved": false
+    },
+    "finance": {
+      "approved": false,
+      "rejected": false,
+      "waitlisted": false
+    }
+  },
+  "convertedToExpense": false,
+  "items": [],
+  "quotations": [],
+  "totalEstimatedCost": 0
+},
+{
+  "_id": {
+    "$oid": "68901028796b964b360dc0b5"
+  },
+  "title": "Cleaning",
+  "description": "For new semester",
+  "type": "operational",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "department": "Operations",
+  "requestedBy": "Kudzai",
+  "items": [
+    {
+      "description": "Brooms",
+      "quantity": 1,
+      "unitCost": 10,
+      "totalCost": 10,
+      "purpose": "For sweeping",
+      "quotations": [
+        {
+          "provider": "Trust Jings Electrician",
+          "amount": 8,
+          "description": "None",
+          "fileUrl": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/request_quotations/67c023adae5e27657502e887_1754271783170_Requisition%20Form%202.docx",
+          "fileName": "Requisition Form 2.docx",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-04T01:43:03.999Z"
+          },
+          "isApproved": false,
+          "isSelected": false,
+          "_id": {
+            "$oid": "68901028796b964b360dc0b7"
+          },
+          "selectionHistory": []
+        },
+        {
+          "provider": "Admin Electrician",
+          "amount": 10,
+          "description": "lol",
+          "fileUrl": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/request_quotations/67c023adae5e27657502e887_1754271784000_balance-sheet-2025.pdf",
+          "fileName": "balance-sheet-2025.pdf",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-04T01:43:04.677Z"
+          },
+          "isApproved": false,
+          "isSelected": false,
+          "_id": {
+            "$oid": "68901028796b964b360dc0b8"
+          },
+          "selectionHistory": []
+        }
+      ],
+      "_id": {
+        "$oid": "68901028796b964b360dc0b6"
+      }
+    },
+    {
+      "description": "Handy Andy",
+      "quantity": 2,
+      "unitCost": 120,
+      "totalCost": 240,
+      "purpose": "Cleaning",
+      "_id": {
+        "$oid": "68901028796b964b360dc0b9"
+      },
+      "quotations": []
+    }
+  ],
+  "totalEstimatedCost": 250,
+  "proposedVendor": "Trust Jings Electrician",
+  "deliveryLocation": "St kilda",
+  "priority": "medium",
+  "financeStatus": "approved",
+  "approval": {
+    "admin": {
+      "approved": true,
+      "approvedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedByEmail": "admin@alamait.com",
+      "approvedAt": {
+        "$date": "2025-08-04T01:43:04.677Z"
+      }
+    },
+    "finance": {
+      "approved": false,
+      "rejected": false,
+      "waitlisted": false
+    },
+    "ceo": {
+      "approved": false
+    }
+  },
+  "convertedToExpense": true,
+  "amount": 0,
+  "quotations": [],
+  "images": [],
+  "updates": [],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-04T01:43:04.691Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to pending",
+        "Approval status updated"
+      ],
+      "_id": {
+        "$oid": "68901028796b964b360dc0ba"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T01:43:04.991Z"
+      },
+      "action": "Request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request submitted"
+      ],
+      "_id": {
+        "$oid": "68901028796b964b360dc0bc"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T01:47:35.628Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: undefined"
+      ],
+      "_id": {
+        "$oid": "68901137796b964b360dc4b4"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T01:47:35.631Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to undefined"
+      ],
+      "_id": {
+        "$oid": "68901137796b964b360dc4b5"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T01:48:14.179Z"
+      },
+      "action": "Status update",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to: undefined"
+      ],
+      "_id": {
+        "$oid": "6890115e796b964b360dc670"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T02:03:16.100Z"
+      },
+      "action": "Request Updated",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "status updated to: pending-ceo-approval",
+        "financeStatus updated to: approved"
+      ],
+      "_id": {
+        "$oid": "689014e42e7c647c942c2940"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T02:03:16.138Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to pending-ceo-approval"
+      ],
+      "_id": {
+        "$oid": "689014e42e7c647c942c2941"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-08-04T01:43:04.691Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:38:28.149Z"
+  },
+  "__v": 4,
+  "status": "approved",
+  "ceoApprovalDate": {
+    "$date": "2025-08-04T12:38:27.040Z"
+  },
+  "ceoApprovalReason": "Approved by CEO",
+  "ceoStatus": "approved",
+  "requestDate": {
+    "$date": "2025-08-04T12:36:53.248Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "6890b110e00449139e8af036"
+  },
+  "title": "Roof Leaks",
+  "description": "Maintenance",
+  "type": "maintenance",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "department": "IT",
+  "requestedBy": "Miccs",
+  "items": [
+    {
+      "description": "Asbestos",
+      "quantity": 1,
+      "unitCost": 19.94,
+      "totalCost": 19.94,
+      "purpose": "Roofing",
+      "quotations": [
+        {
+          "provider": "Gift Fashu Plumber",
+          "amount": 19.94,
+          "description": "gfh",
+          "fileName": "Screenshot (2).png",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "isApproved": false,
+          "isSelected": false,
+          "_id": {
+            "$oid": "6890b110e00449139e8af038"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-04T13:09:36.545Z"
+          },
+          "selectionHistory": []
+        },
+        {
+          "provider": "Admin Kuswa",
+          "amount": 50,
+          "description": "tfgyhu",
+          "fileName": "Screenshot (3).png",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "isApproved": false,
+          "isSelected": false,
+          "_id": {
+            "$oid": "6890b110e00449139e8af039"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-04T13:09:36.546Z"
+          },
+          "selectionHistory": []
+        }
+      ],
+      "_id": {
+        "$oid": "6890b110e00449139e8af037"
+      }
+    },
+    {
+      "description": "Nails",
+      "quantity": 200,
+      "unitCost": 0.1,
+      "totalCost": 20,
+      "purpose": "kukoma",
+      "_id": {
+        "$oid": "6890b110e00449139e8af03a"
+      },
+      "quotations": []
+    }
+  ],
+  "totalEstimatedCost": 39.94,
+  "proposedVendor": "Gift Fashu Plumber",
+  "deliveryLocation": "Belvedere",
+  "priority": "medium",
+  "status": "pending",
+  "financeStatus": "approved",
+  "approval": {
+    "admin": {
+      "approved": false
+    },
+    "finance": {
+      "approved": false,
+      "rejected": false,
+      "waitlisted": false
+    },
+    "ceo": {
+      "approved": false
+    }
+  },
+  "convertedToExpense": false,
+  "amount": 0,
+  "quotations": [],
+  "images": [],
+  "updates": [],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-04T13:09:36.564Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to pending"
+      ],
+      "_id": {
+        "$oid": "6890b110e00449139e8af03b"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T13:09:36.961Z"
+      },
+      "action": "Request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request submitted"
+      ],
+      "_id": {
+        "$oid": "6890b110e00449139e8af03d"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-08-04T13:09:36.550Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T13:12:31.625Z"
+  },
+  "__v": 1,
+  "ceoStatus": "pending",
+  "requestDate": {
+    "$date": "2025-08-04T13:12:27.764Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "68912af4e2f944624f9c0770"
+  },
+  "title": "Payroll Management system",
+  "description": "rrr",
+  "type": "financial",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "department": "IT",
+  "requestedBy": "Miccs",
+  "items": [
+    {
+      "description": "domain",
+      "quantity": 1,
+      "unitCost": 15,
+      "totalCost": 15,
+      "purpose": "domain purchase",
+      "quotations": [
+        {
+          "provider": "Gift Fashu Plumber",
+          "amount": 22,
+          "description": "web",
+          "fileUrl": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/request_quotations/67c023adae5e27657502e887_1754344175552_Screenshot%20%283%29.png",
+          "fileName": "Screenshot (3).png",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-04T21:49:36.937Z"
+          },
+          "isApproved": false,
+          "isSelected": false,
+          "_id": {
+            "$oid": "68912af4e2f944624f9c0772"
+          },
+          "selectionHistory": []
+        },
+        {
+          "provider": "Gift Fashu Plumber",
+          "amount": 15,
+          "description": "webdev",
+          "fileUrl": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/request_quotations/67c023adae5e27657502e887_1754344176937_Screenshot%20%288%29.png",
+          "fileName": "Screenshot (8).png",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-04T21:49:38.735Z"
+          },
+          "isApproved": false,
+          "isSelected": false,
+          "_id": {
+            "$oid": "68912af4e2f944624f9c0773"
+          },
+          "selectionHistory": []
+        },
+        {
+          "provider": "Admin Kuswa",
+          "amount": 11,
+          "description": "sup",
+          "fileUrl": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/request_quotations/67c023adae5e27657502e887_1754344178739_Screenshot%20%288%29.png",
+          "fileName": "Screenshot (8).png",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-08-04T21:49:40.058Z"
+          },
+          "isApproved": false,
+          "isSelected": false,
+          "_id": {
+            "$oid": "68912af4e2f944624f9c0774"
+          },
+          "selectionHistory": []
+        }
+      ],
+      "_id": {
+        "$oid": "68912af4e2f944624f9c0771"
+      }
+    }
+  ],
+  "totalEstimatedCost": 15,
+  "proposedVendor": "Gift Fashu Plumber",
+  "deliveryLocation": "St Kilda",
+  "priority": "medium",
+  "status": "pending",
+  "financeStatus": "pending",
+  "approval": {
+    "admin": {
+      "approved": true,
+      "approvedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedByEmail": "admin@alamait.com",
+      "approvedAt": {
+        "$date": "2025-08-04T21:49:40.058Z"
+      }
+    },
+    "finance": {
+      "approved": false,
+      "rejected": false,
+      "waitlisted": false
+    },
+    "ceo": {
+      "approved": false
+    }
+  },
+  "convertedToExpense": false,
+  "amount": 0,
+  "quotations": [],
+  "images": [],
+  "updates": [],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-04T21:49:40.168Z"
+      },
+      "action": "Request updated",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to pending",
+        "Approval status updated"
+      ],
+      "_id": {
+        "$oid": "68912af4e2f944624f9c0775"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T21:49:40.568Z"
+      },
+      "action": "Request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request submitted"
+      ],
+      "_id": {
+        "$oid": "68912af4e2f944624f9c0778"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-08-04T21:49:40.167Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T21:49:40.570Z"
+  },
+  "__v": 1
+}]

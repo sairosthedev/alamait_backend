@@ -1,6 +1,16 @@
-const Maintenance = require('../../models/Maintenance');
-const Residence = require('../../models/Residence');
 const { validationResult } = require('express-validator');
+const Maintenance = require('../../models/Maintenance');
+const Transaction = require('../../models/Transaction');
+const TransactionEntry = require('../../models/TransactionEntry');
+const Account = require('../../models/Account');
+const AuditLog = require('../../models/AuditLog');
+const Residence = require('../../models/Residence');
+
+// Helper function to generate unique transaction ID
+const generateUniqueId = async (prefix) => {
+    const count = await Transaction.countDocuments();
+    return `${prefix}${String(count + 1).padStart(6, '0')}`;
+};
 
 // Get maintenance requests for managed residences
 exports.getMaintenanceRequests = async (req, res) => {
@@ -63,7 +73,8 @@ exports.updateMaintenanceRequest = async (req, res) => {
         }
 
         const maintenance = await Maintenance.findById(req.params.id)
-            .populate('residence', 'manager');
+            .populate('residence', 'manager name')
+            .populate('student', 'firstName lastName email');
 
         if (!maintenance) {
             return res.status(404).json({ error: 'Maintenance request not found' });
@@ -74,9 +85,18 @@ exports.updateMaintenanceRequest = async (req, res) => {
             return res.status(403).json({ error: 'Not authorized' });
         }
 
-        // Update allowed fields
+        const before = maintenance.toObject();
+
+        // Store the previous status to check if it's being completed
+        const previousStatus = maintenance.status;
+        const isBeingCompleted = previousStatus !== 'completed' && req.body.status === 'completed';
+
         const allowedUpdates = [
-            'status', 'priority', 'assignedTo', 'scheduledDate',
+            'status',
+            'assignedTo',
+            'scheduledDate',
+            'estimatedCompletion',
+            'description',
             'amount'
         ];
 
@@ -92,6 +112,108 @@ exports.updateMaintenanceRequest = async (req, res) => {
         }
 
         await maintenance.save();
+
+        // Create transaction when maintenance is completed
+        if (isBeingCompleted && maintenance.amount > 0) {
+            try {
+                console.log('[COMPLETION] Creating completion transaction for maintenance:', maintenance._id);
+                
+                // Get maintenance expense account (default to 5099)
+                const expenseAccount = await Account.findOne({ code: '5099', type: 'Expense' });
+                if (!expenseAccount) {
+                    console.error('[COMPLETION] Maintenance expense account not found');
+                    throw new Error('Maintenance expense account not found');
+                }
+
+                // Get cash/bank account for payment (default to 1000)
+                const cashAccount = await Account.findOne({ code: '1000', type: 'Asset' });
+                if (!cashAccount) {
+                    console.error('[COMPLETION] Cash account not found');
+                    throw new Error('Cash account not found');
+                }
+
+                // Generate unique transaction ID
+                const transactionId = await generateUniqueId('TXN');
+
+                // Create completion transaction
+                const completionTxn = await Transaction.create({
+                    transactionId: transactionId,
+                    date: new Date(),
+                    description: `Maintenance Completion: ${maintenance.issue} - ${maintenance.description}`,
+                    reference: `MAINT-COMPLETE-${maintenance._id}`,
+                    residence: maintenance.residence._id,
+                    residenceName: maintenance.residence.name,
+                    type: 'completion',
+                    createdBy: req.user._id
+                });
+
+                // Create double-entry transaction entry
+                const completionEntry = await TransactionEntry.create({
+                    transactionId: transactionId,
+                    date: new Date(),
+                    description: `Maintenance Completion: ${maintenance.issue}`,
+                    reference: `MAINT-COMPLETE-${maintenance._id}`,
+                    entries: [
+                        {
+                            // DEBIT: Maintenance Expense Account
+                            accountCode: expenseAccount.code,
+                            accountName: expenseAccount.name,
+                            accountType: expenseAccount.type,
+                            debit: maintenance.amount,
+                            credit: 0,
+                            description: `Maintenance completion: ${maintenance.issue}`
+                        },
+                        {
+                            // CREDIT: Cash/Bank Account (payment made)
+                            accountCode: cashAccount.code,
+                            accountName: cashAccount.name,
+                            accountType: cashAccount.type,
+                            debit: 0,
+                            credit: maintenance.amount,
+                            description: `Payment for maintenance: ${maintenance.issue}`
+                        }
+                    ],
+                    totalDebit: maintenance.amount,
+                    totalCredit: maintenance.amount,
+                    source: 'maintenance_completion',
+                    sourceId: maintenance._id,
+                    sourceModel: 'Maintenance',
+                    createdBy: req.user.email || `${req.user.firstName} ${req.user.lastName}`,
+                    status: 'posted'
+                });
+
+                // Link transaction entry to transaction
+                await Transaction.findByIdAndUpdate(completionTxn._id, {
+                    $push: { entries: completionEntry._id }
+                });
+
+                // Create audit log for completion transaction
+                await AuditLog.create({
+                    user: req.user._id,
+                    action: 'maintenance_completed_transaction_created',
+                    collection: 'Transaction',
+                    recordId: completionTxn._id,
+                    before: null,
+                    after: completionTxn.toObject(),
+                    timestamp: new Date(),
+                    details: {
+                        source: 'Maintenance',
+                        sourceId: maintenance._id,
+                        maintenanceIssue: maintenance.issue,
+                        maintenanceAmount: maintenance.amount,
+                        expenseAccount: expenseAccount.code,
+                        cashAccount: cashAccount.code,
+                        description: `Maintenance completed - Expense recorded for ${maintenance.issue}`
+                    }
+                });
+
+                console.log('[COMPLETION] Completion transaction created:', completionTxn._id);
+
+            } catch (completionError) {
+                console.error('[COMPLETION] Failed to create completion transaction:', completionError);
+                // Don't fail the maintenance update, just log the error
+            }
+        }
 
         const updatedMaintenance = await Maintenance.findById(req.params.id)
             .populate('residence', 'name address')

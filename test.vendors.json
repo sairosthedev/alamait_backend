@@ -1,0 +1,997 @@
+[{
+  "_id": {
+    "$oid": "688c9c858e2ef0e7c3a6256d"
+  },
+  "vendorCode": "V25001",
+  "businessName": "Trust Jings Electrician",
+  "tradingName": "Trust Jings",
+  "contactPerson": {
+    "firstName": "Trust",
+    "lastName": "Jings",
+    "email": "tjngs@gmail.com",
+    "phone": "0773557750",
+    "mobile": "0773557750"
+  },
+  "businessAddress": {
+    "street": "Mangura",
+    "city": "Mangura",
+    "state": "",
+    "postalCode": "",
+    "country": "Zimbabwe"
+  },
+  "chartOfAccountsCode": "200001",
+  "expenseAccountCode": "5000",
+  "category": "electrical",
+  "specializations": [
+    "Electrician"
+  ],
+  "serviceAreas": [
+    "Mangura"
+  ],
+  "status": "active",
+  "rating": {
+    "average": 0,
+    "totalReviews": 0,
+    "lastReviewDate": null
+  },
+  "performance": {
+    "totalOrders": 0,
+    "completedOrders": 0,
+    "averageResponseTime": 0,
+    "onTimeDelivery": 0,
+    "qualityRating": 0
+  },
+  "creditLimit": 0,
+  "currentBalance": 0,
+  "paymentTerms": 30,
+  "notes": "Converted from maintenance staff. Original speciality: Electrician. Original location: Mangura",
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "updatedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "history": [
+    {
+      "action": "Vendor created from maintenance staff",
+      "description": "Converted from maintenance staff record",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "timestamp": {
+        "$date": "2025-08-01T10:52:53.630Z"
+      },
+      "changes": [
+        {
+          "field": "source",
+          "oldValue": "maintenance_staff",
+          "newValue": "vendor"
+        },
+        {
+          "field": "originalId",
+          "oldValue": "6828dd4d5899165100a73dcb",
+          "newValue": "converted"
+        }
+      ]
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-05-17T19:02:37.734Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T10:52:53.630Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688c9c858e2ef0e7c3a6256e"
+  },
+  "vendorCode": "V25002",
+  "businessName": "trust jings Electrician",
+  "tradingName": "trust jings",
+  "contactPerson": {
+    "firstName": "trust",
+    "lastName": "jings",
+    "email": "trustjings@gmail.com",
+    "phone": "0765457890",
+    "mobile": "0765457890"
+  },
+  "businessAddress": {
+    "street": "hwange",
+    "city": "hwange",
+    "state": "",
+    "postalCode": "",
+    "country": "Zimbabwe"
+  },
+  "chartOfAccountsCode": "200002",
+  "expenseAccountCode": "5000",
+  "category": "electrical",
+  "specializations": [
+    "electrician"
+  ],
+  "serviceAreas": [
+    "hwange"
+  ],
+  "status": "active",
+  "rating": {
+    "average": 0,
+    "totalReviews": 0,
+    "lastReviewDate": null
+  },
+  "performance": {
+    "totalOrders": 0,
+    "completedOrders": 0,
+    "averageResponseTime": 0,
+    "onTimeDelivery": 0,
+    "qualityRating": 0
+  },
+  "creditLimit": 0,
+  "currentBalance": 0,
+  "paymentTerms": 30,
+  "notes": "Converted from maintenance staff. Original speciality: electrician. Original location: hwange",
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "updatedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "history": [
+    {
+      "action": "Vendor created from maintenance staff",
+      "description": "Converted from maintenance staff record",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "timestamp": {
+        "$date": "2025-08-01T10:52:53.713Z"
+      },
+      "changes": [
+        {
+          "field": "source",
+          "oldValue": "maintenance_staff",
+          "newValue": "vendor"
+        },
+        {
+          "field": "originalId",
+          "oldValue": "684021d0ed98ba6ab5055a6e",
+          "newValue": "converted"
+        }
+      ]
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-06-04T10:37:04.901Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T10:52:53.713Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688c9c858e2ef0e7c3a6256f"
+  },
+  "vendorCode": "V25003",
+  "businessName": "Gift Fashu Plumber",
+  "tradingName": "Gift Fashu",
+  "contactPerson": {
+    "firstName": "Gift",
+    "lastName": "Fashu",
+    "email": "giftf@gmail.com",
+    "phone": "0723345679",
+    "mobile": "0723345679"
+  },
+  "businessAddress": {
+    "street": "Harare",
+    "city": "Harare",
+    "state": "",
+    "postalCode": "",
+    "country": "Zimbabwe"
+  },
+  "chartOfAccountsCode": "200003",
+  "expenseAccountCode": "5000",
+  "category": "plumbing",
+  "specializations": [
+    "plumber"
+  ],
+  "serviceAreas": [
+    "Harare"
+  ],
+  "status": "active",
+  "rating": {
+    "average": 0,
+    "totalReviews": 0,
+    "lastReviewDate": null
+  },
+  "performance": {
+    "totalOrders": 0,
+    "completedOrders": 0,
+    "averageResponseTime": 0,
+    "onTimeDelivery": 0,
+    "qualityRating": 0
+  },
+  "creditLimit": 0,
+  "currentBalance": 0,
+  "paymentTerms": 30,
+  "notes": "Converted from maintenance staff. Original speciality: plumber. Original location: Harare",
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "updatedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "history": [
+    {
+      "action": "Vendor created from maintenance staff",
+      "description": "Converted from maintenance staff record",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "timestamp": {
+        "$date": "2025-08-01T10:52:53.790Z"
+      },
+      "changes": [
+        {
+          "field": "source",
+          "oldValue": "maintenance_staff",
+          "newValue": "vendor"
+        },
+        {
+          "field": "originalId",
+          "oldValue": "68656a74aed51883df804dc2",
+          "newValue": "converted"
+        }
+      ]
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-07-02T17:20:52.981Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-01T10:52:53.790Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688c9c858e2ef0e7c3a62570"
+  },
+  "vendorCode": "V25004",
+  "businessName": "Admin Electrician",
+  "tradingName": "Admire Kumba",
+  "contactPerson": {
+    "firstName": "Admire",
+    "lastName": "Kumba",
+    "email": "admirek@gmail.com",
+    "phone": "1234567",
+    "mobile": "1234567"
+  },
+  "businessAddress": {
+    "street": "Harare",
+    "city": "Harare",
+    "state": "",
+    "postalCode": "",
+    "country": "Zimbabwe"
+  },
+  "chartOfAccountsCode": "200004",
+  "expenseAccountCode": "5000",
+  "category": "electrical",
+  "specializations": [
+    "Electrician"
+  ],
+  "serviceAreas": [
+    "Harare"
+  ],
+  "status": "active",
+  "rating": {
+    "average": 0,
+    "totalReviews": 0,
+    "lastReviewDate": null
+  },
+  "performance": {
+    "totalOrders": 0,
+    "completedOrders": 0,
+    "averageResponseTime": 0,
+    "onTimeDelivery": 0,
+    "qualityRating": 0
+  },
+  "creditLimit": 500,
+  "currentBalance": 0,
+  "paymentTerms": 30,
+  "notes": "Converted from maintenance staff. Original speciality: Electrician. Original location: Harare",
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "updatedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "history": [
+    {
+      "action": "Vendor created from maintenance staff",
+      "description": "Converted from maintenance staff record",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "timestamp": {
+        "$date": "2025-08-01T10:52:53.871Z"
+      },
+      "changes": [
+        {
+          "field": "source",
+          "oldValue": "maintenance_staff",
+          "newValue": "vendor",
+          "_id": {
+            "$oid": "688ef9ad9b2391756079f529"
+          }
+        },
+        {
+          "field": "originalId",
+          "oldValue": "686efddb6f4f0fe746ac7767",
+          "newValue": "converted",
+          "_id": {
+            "$oid": "688ef9ad9b2391756079f52a"
+          }
+        }
+      ],
+      "_id": {
+        "$oid": "688ef9ad9b2391756079f528"
+      }
+    },
+    {
+      "action": "Vendor updated",
+      "description": "Vendor information modified",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        {
+          "field": "contactPerson",
+          "oldValue": {
+            "firstName": "Admire",
+            "lastName": "Kumba",
+            "email": "admirek@gmail.com",
+            "phone": "1234567",
+            "mobile": "1234567"
+          },
+          "newValue": {
+            "firstName": "Admire",
+            "lastName": "Kumba",
+            "email": "admirek@gmail.com",
+            "phone": "1234567",
+            "mobile": "1234567"
+          },
+          "_id": {
+            "$oid": "688efaaa9b2391756079f604"
+          }
+        },
+        {
+          "field": "businessAddress",
+          "oldValue": {
+            "street": "Harare",
+            "city": "Harare",
+            "state": "",
+            "postalCode": "",
+            "country": "Zimbabwe"
+          },
+          "newValue": {
+            "street": "Harare",
+            "city": "Harare",
+            "state": "",
+            "postalCode": "",
+            "country": "Zimbabwe"
+          },
+          "_id": {
+            "$oid": "688efaaa9b2391756079f605"
+          }
+        },
+        {
+          "field": "rating",
+          "oldValue": {
+            "average": 0,
+            "totalReviews": 0,
+            "lastReviewDate": null
+          },
+          "newValue": {
+            "average": 0,
+            "totalReviews": 0,
+            "lastReviewDate": null
+          },
+          "_id": {
+            "$oid": "688efaaa9b2391756079f606"
+          }
+        },
+        {
+          "field": "performance",
+          "oldValue": {
+            "totalOrders": 0,
+            "completedOrders": 0,
+            "averageResponseTime": 0,
+            "onTimeDelivery": 0,
+            "qualityRating": 0
+          },
+          "newValue": {
+            "totalOrders": 0,
+            "completedOrders": 0,
+            "averageResponseTime": 0,
+            "onTimeDelivery": 0,
+            "qualityRating": 0
+          },
+          "_id": {
+            "$oid": "688efaaa9b2391756079f607"
+          }
+        },
+        {
+          "field": "_id",
+          "oldValue": {
+            "$oid": "688c9c858e2ef0e7c3a62570"
+          },
+          "newValue": "688c9c858e2ef0e7c3a62570",
+          "_id": {
+            "$oid": "688efaaa9b2391756079f608"
+          }
+        },
+        {
+          "field": "businessName",
+          "oldValue": "Admire Kumba Electrician",
+          "newValue": "Admin Electrician",
+          "_id": {
+            "$oid": "688efaaa9b2391756079f609"
+          }
+        },
+        {
+          "field": "specializations",
+          "oldValue": [
+            "Electrician"
+          ],
+          "newValue": [
+            "Electrician"
+          ],
+          "_id": {
+            "$oid": "688efaaa9b2391756079f60a"
+          }
+        },
+        {
+          "field": "serviceAreas",
+          "oldValue": [
+            "Harare"
+          ],
+          "newValue": [
+            "Harare"
+          ],
+          "_id": {
+            "$oid": "688efaaa9b2391756079f60b"
+          }
+        },
+        {
+          "field": "creditLimit",
+          "oldValue": 0,
+          "newValue": "500",
+          "_id": {
+            "$oid": "688efaaa9b2391756079f60c"
+          }
+        },
+        {
+          "field": "createdBy",
+          "oldValue": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "newValue": {
+            "_id": "67c023adae5e27657502e887",
+            "email": "admin@alamait.com",
+            "firstName": "Makomborero",
+            "lastName": "Madziwa"
+          },
+          "_id": {
+            "$oid": "688efaaa9b2391756079f60d"
+          }
+        },
+        {
+          "field": "updatedBy",
+          "oldValue": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "newValue": {
+            "_id": "67c023adae5e27657502e887",
+            "email": "admin@alamait.com",
+            "firstName": "Makomborero",
+            "lastName": "Madziwa"
+          },
+          "_id": {
+            "$oid": "688efaaa9b2391756079f60e"
+          }
+        },
+        {
+          "field": "history",
+          "oldValue": [
+            {
+              "_id": {
+                "$oid": "688efaaa9b2391756079f5fd"
+              },
+              "action": "Vendor created from maintenance staff",
+              "description": "Converted from maintenance staff record",
+              "user": {
+                "$oid": "67c023adae5e27657502e887"
+              },
+              "timestamp": {
+                "$date": "2025-08-01T10:52:53.871Z"
+              },
+              "changes": [
+                {
+                  "_id": {
+                    "$oid": "688efaaa9b2391756079f5fe"
+                  },
+                  "field": "source",
+                  "oldValue": "maintenance_staff",
+                  "newValue": "vendor"
+                },
+                {
+                  "_id": {
+                    "$oid": "688efaaa9b2391756079f5ff"
+                  },
+                  "field": "originalId",
+                  "oldValue": "686efddb6f4f0fe746ac7767",
+                  "newValue": "converted"
+                }
+              ]
+            }
+          ],
+          "newValue": [
+            {
+              "_id": "688ef9ad9b2391756079f528",
+              "action": "Vendor created from maintenance staff",
+              "description": "Converted from maintenance staff record",
+              "user": "67c023adae5e27657502e887",
+              "timestamp": "2025-08-01T10:52:53.871Z",
+              "changes": [
+                {
+                  "_id": "688ef9ad9b2391756079f529",
+                  "field": "source",
+                  "oldValue": "maintenance_staff",
+                  "newValue": "vendor"
+                },
+                {
+                  "_id": "688ef9ad9b2391756079f52a",
+                  "field": "originalId",
+                  "oldValue": "686efddb6f4f0fe746ac7767",
+                  "newValue": "converted"
+                }
+              ]
+            }
+          ],
+          "_id": {
+            "$oid": "688efaaa9b2391756079f60f"
+          }
+        },
+        {
+          "field": "createdAt",
+          "oldValue": {
+            "$date": "2025-07-09T23:40:11.320Z"
+          },
+          "newValue": "2025-07-09T23:40:11.320Z",
+          "_id": {
+            "$oid": "688efaaa9b2391756079f610"
+          }
+        },
+        {
+          "field": "updatedAt",
+          "oldValue": {
+            "$date": "2025-08-01T10:52:53.871Z"
+          },
+          "newValue": "2025-08-01T10:52:53.871Z",
+          "_id": {
+            "$oid": "688efaaa9b2391756079f611"
+          }
+        },
+        {
+          "field": "documents",
+          "oldValue": [],
+          "newValue": [],
+          "_id": {
+            "$oid": "688efaaa9b2391756079f612"
+          }
+        }
+      ],
+      "_id": {
+        "$oid": "688efaaa9b2391756079f603"
+      },
+      "timestamp": {
+        "$date": "2025-08-03T05:59:06.952Z"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-07-09T23:40:11.320Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-03T05:59:07.056Z"
+  },
+  "__v": 1,
+  "defaultPaymentMethod": "Cash",
+  "documents": [],
+  "isAutoGenerated": false,
+  "vendorType": "other"
+},
+{
+  "_id": {
+    "$oid": "688ef57649698c19e276dd8e"
+  },
+  "vendorCode": "V250001",
+  "businessName": "Test Vendor for Accounts",
+  "tradingName": "Test Trading",
+  "contactPerson": {
+    "firstName": "John",
+    "lastName": "Doe",
+    "email": "john.doe@testaccounts.com",
+    "phone": "1234567890"
+  },
+  "businessAddress": {
+    "street": "123 Test Street",
+    "city": "Test City",
+    "country": "South Africa"
+  },
+  "chartOfAccountsCode": "200001",
+  "expenseAccountCode": "5000",
+  "defaultPaymentMethod": "Cash",
+  "category": "maintenance",
+  "vendorType": "other",
+  "specializations": [],
+  "serviceAreas": [],
+  "status": "active",
+  "rating": {
+    "average": 0,
+    "totalReviews": 0
+  },
+  "performance": {
+    "totalOrders": 0,
+    "completedOrders": 0,
+    "averageResponseTime": 0,
+    "onTimeDelivery": 0,
+    "qualityRating": 0
+  },
+  "creditLimit": 0,
+  "currentBalance": 0,
+  "paymentTerms": 30,
+  "isAutoGenerated": false,
+  "createdBy": {
+    "$oid": "688ef57649698c19e276dd8d"
+  },
+  "documents": [],
+  "history": [],
+  "createdAt": {
+    "$date": "2025-08-03T05:36:54.249Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-03T05:36:54.249Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "688efc0bffd19d6da25af5b5"
+  },
+  "vendorCode": "V2501099670669",
+  "businessName": "Willow Willow",
+  "tradingName": "The Best",
+  "contactPerson": {
+    "firstName": "kudzai",
+    "lastName": "Pemhiwa",
+    "email": "kudzaicindyrellapemhiwa@gmail.com",
+    "phone": "0786209200",
+    "mobile": ""
+  },
+  "businessAddress": {
+    "street": "183 21crescent Glen View 1",
+    "city": "Harare",
+    "state": "",
+    "postalCode": "",
+    "country": "South Africa"
+  },
+  "taxNumber": "",
+  "vatNumber": "",
+  "registrationNumber": "123456789",
+  "chartOfAccountsCode": "200006",
+  "expenseAccountCode": "5000",
+  "bankDetails": {
+    "bankName": "",
+    "accountNumber": "",
+    "accountType": "",
+    "branchCode": "",
+    "swiftCode": ""
+  },
+  "defaultPaymentMethod": "Cash",
+  "category": "landscaping",
+  "vendorType": "other",
+  "specializations": [],
+  "serviceAreas": [],
+  "status": "active",
+  "rating": {
+    "average": 0,
+    "totalReviews": 0
+  },
+  "performance": {
+    "totalOrders": 0,
+    "completedOrders": 0,
+    "averageResponseTime": 0,
+    "onTimeDelivery": 0,
+    "qualityRating": 0
+  },
+  "creditLimit": 300,
+  "currentBalance": 0,
+  "paymentTerms": 30,
+  "notes": "sdfghj;",
+  "isAutoGenerated": false,
+  "createdBy": {
+    "$oid": "688efc0affd19d6da25af5aa"
+  },
+  "history": [
+    {
+      "action": "Vendor created",
+      "description": "New vendor account created",
+      "user": {
+        "$oid": "688efc0affd19d6da25af5aa"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "688efc0bffd19d6da25af5b6"
+      },
+      "timestamp": {
+        "$date": "2025-08-03T06:04:59.683Z"
+      }
+    }
+  ],
+  "documents": [],
+  "createdAt": {
+    "$date": "2025-08-03T06:04:59.694Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-03T06:04:59.694Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "688efe946e6ecdb6e803b88e"
+  },
+  "vendorCode": "V2501748273617",
+  "businessName": "Willow Willow",
+  "tradingName": "The Best",
+  "contactPerson": {
+    "firstName": "kudzai",
+    "lastName": "Pemhiwa",
+    "email": "kudzaipemhiwa@gmail.com",
+    "phone": "0786209200",
+    "mobile": ""
+  },
+  "businessAddress": {
+    "street": "183 21crescent Glen View 1",
+    "city": "Harare",
+    "state": "",
+    "postalCode": "",
+    "country": "South Africa"
+  },
+  "taxNumber": "",
+  "vatNumber": "",
+  "registrationNumber": "123456789",
+  "chartOfAccountsCode": "200007",
+  "expenseAccountCode": "5000",
+  "bankDetails": {
+    "bankName": "",
+    "accountNumber": "",
+    "accountType": "",
+    "branchCode": "",
+    "swiftCode": ""
+  },
+  "defaultPaymentMethod": "Cash",
+  "category": "landscaping",
+  "vendorType": "other",
+  "specializations": [],
+  "serviceAreas": [],
+  "status": "active",
+  "rating": {
+    "average": 0,
+    "totalReviews": 0
+  },
+  "performance": {
+    "totalOrders": 0,
+    "completedOrders": 0,
+    "averageResponseTime": 0,
+    "onTimeDelivery": 0,
+    "qualityRating": 0
+  },
+  "creditLimit": 300,
+  "currentBalance": 0,
+  "paymentTerms": 30,
+  "notes": "sdfghj;",
+  "isAutoGenerated": false,
+  "createdBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "history": [
+    {
+      "action": "Vendor created",
+      "description": "New vendor account created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "688efe946e6ecdb6e803b88f"
+      },
+      "timestamp": {
+        "$date": "2025-08-03T06:15:48.278Z"
+      }
+    }
+  ],
+  "documents": [],
+  "createdAt": {
+    "$date": "2025-08-03T06:15:48.282Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-03T06:15:48.282Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68901bdc2e7c647c942c3947"
+  },
+  "vendorCode": "V2574780087029",
+  "businessName": "Admin Kuswa",
+  "tradingName": "Building",
+  "contactPerson": {
+    "firstName": "Admire",
+    "lastName": "Kumusha",
+    "email": "andraek@gmail.com",
+    "phone": "01234567",
+    "mobile": ""
+  },
+  "businessAddress": {
+    "street": "Harare",
+    "city": "Harare",
+    "state": "",
+    "postalCode": "",
+    "country": "South Africa"
+  },
+  "taxNumber": "",
+  "vatNumber": "",
+  "registrationNumber": "",
+  "chartOfAccountsCode": "200008",
+  "expenseAccountCode": "5010",
+  "bankDetails": {
+    "bankName": "",
+    "accountNumber": "",
+    "accountType": "",
+    "branchCode": "",
+    "swiftCode": ""
+  },
+  "defaultPaymentMethod": "Cash",
+  "category": "cleaning",
+  "vendorType": "other",
+  "specializations": [],
+  "serviceAreas": [],
+  "status": "active",
+  "rating": {
+    "average": 0,
+    "totalReviews": 0
+  },
+  "performance": {
+    "totalOrders": 0,
+    "completedOrders": 0,
+    "averageResponseTime": 0,
+    "onTimeDelivery": 0,
+    "qualityRating": 0
+  },
+  "creditLimit": 0,
+  "currentBalance": 0,
+  "paymentTerms": 30,
+  "notes": "",
+  "isAutoGenerated": false,
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "history": [
+    {
+      "action": "Vendor created",
+      "description": "New vendor account created",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "68901bdc2e7c647c942c3948"
+      },
+      "timestamp": {
+        "$date": "2025-08-04T02:33:00.090Z"
+      }
+    }
+  ],
+  "documents": [],
+  "createdAt": {
+    "$date": "2025-08-04T02:33:00.092Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T02:33:00.092Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "689247eb0067f3f7098c4b78"
+  },
+  "vendorCode": "V2517131510497",
+  "businessName": "Miccs Technologies",
+  "tradingName": "Miccs",
+  "contactPerson": {
+    "firstName": "Macdonald",
+    "lastName": "Sairos",
+    "email": "macdonaldsairos01@gmail.com",
+    "phone": "0786033933",
+    "mobile": "0786033933"
+  },
+  "businessAddress": {
+    "street": "736 Nyerere Way ,Kuwadzana Banket",
+    "city": "North Banket Zvimba",
+    "state": "Mashonaland West",
+    "postalCode": "00000",
+    "country": "Zimbabwe"
+  },
+  "taxNumber": "TX12",
+  "vatNumber": "VAT12",
+  "registrationNumber": "MICCS23",
+  "chartOfAccountsCode": "200009",
+  "expenseAccountCode": "5013",
+  "bankDetails": {
+    "bankName": "",
+    "accountNumber": "",
+    "accountType": "",
+    "branchCode": "",
+    "swiftCode": ""
+  },
+  "defaultPaymentMethod": "Cash",
+  "category": "other",
+  "vendorType": "other",
+  "specializations": [],
+  "serviceAreas": [],
+  "status": "active",
+  "rating": {
+    "average": 0,
+    "totalReviews": 0
+  },
+  "performance": {
+    "totalOrders": 0,
+    "completedOrders": 0,
+    "averageResponseTime": 0,
+    "onTimeDelivery": 0,
+    "qualityRating": 0
+  },
+  "creditLimit": 10000,
+  "currentBalance": 0,
+  "paymentTerms": 30,
+  "notes": "",
+  "isAutoGenerated": false,
+  "createdBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "history": [
+    {
+      "action": "Vendor created",
+      "description": "New vendor account created",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [],
+      "_id": {
+        "$oid": "689247eb0067f3f7098c4b79"
+      },
+      "timestamp": {
+        "$date": "2025-08-05T18:05:31.543Z"
+      }
+    }
+  ],
+  "documents": [],
+  "createdAt": {
+    "$date": "2025-08-05T18:05:31.573Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T18:05:31.573Z"
+  },
+  "__v": 0
+}]

@@ -1,0 +1,927 @@
+[{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f2"
+  },
+  "code": "1100",
+  "name": "Accounts Receivable - Tenants",
+  "type": "asset"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f4"
+  },
+  "code": "1110",
+  "name": "Tenant Advance Payments",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f7"
+  },
+  "code": "1201",
+  "name": "Commercial - Glendale",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f8"
+  },
+  "code": "1202",
+  "name": "Residential Property - Breach",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8fb"
+  },
+  "code": "1206",
+  "name": "Residential Property - Glendale",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8ff"
+  },
+  "code": "1221",
+  "name": "Office Property - Newlands",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a909"
+  },
+  "code": "2020",
+  "name": "Tenant Deposits Held",
+  "type": "Liability"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a90f"
+  },
+  "code": "4002",
+  "name": "Rental Income - Offices",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a910"
+  },
+  "code": "4003",
+  "name": "Rental Income - BnB",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a91c"
+  },
+  "code": "5009",
+  "name": "Sanitary",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a91f"
+  },
+  "code": "5012",
+  "name": "Property Management Salaries",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a920"
+  },
+  "code": "5013",
+  "name": "Administrative Expenses",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a922"
+  },
+  "code": "5015",
+  "name": "Staff Salaries & Wages",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a924"
+  },
+  "code": "5017",
+  "name": "Depreciation - Buildings",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8fd"
+  },
+  "code": "1211",
+  "name": "School Accommodation - Belvedere",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8fe"
+  },
+  "code": "1220",
+  "name": "Office Property - Greendale",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a900"
+  },
+  "code": "1231",
+  "name": "Land - Nyanga",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a905"
+  },
+  "code": "1236",
+  "name": "Motor Vehicles",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a90d"
+  },
+  "code": "4000",
+  "name": "Rental Income - Residential",
+  "type": "income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a917"
+  },
+  "code": "5004",
+  "name": "Bulk water",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a919"
+  },
+  "code": "5006",
+  "name": "Car maintance and repair",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a91e"
+  },
+  "code": "5011",
+  "name": "Security Costs",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a921"
+  },
+  "code": "5014",
+  "name": "Marketing Expenses",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a926"
+  },
+  "code": "5019",
+  "name": "Waste management",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a928"
+  },
+  "code": "5021",
+  "name": "Advertising",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a92b"
+  },
+  "code": "5024",
+  "name": "Licenses",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f3"
+  },
+  "code": "1105",
+  "name": "Prepaid Expenses",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f5"
+  },
+  "code": "1115",
+  "name": "Rent Receivable - Late Payments",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8fc"
+  },
+  "code": "1210",
+  "name": "School Accommodation - St Kilda",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a902"
+  },
+  "code": "1233",
+  "name": "Land - Glendale",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a904"
+  },
+  "code": "1235",
+  "name": "Solar",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a907"
+  },
+  "code": "2000",
+  "name": "Accounts Payable",
+  "type": "Liability"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a908"
+  },
+  "code": "2010",
+  "name": "Staff Advances Payable",
+  "type": "Liability"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a912"
+  },
+  "code": "4010",
+  "name": "Management Fees Received",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a913"
+  },
+  "code": "4020",
+  "name": "Other Income",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a91a"
+  },
+  "code": "5007",
+  "name": "Gas filling",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a91b"
+  },
+  "code": "5008",
+  "name": "Communication cost",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a925"
+  },
+  "code": "5018",
+  "name": "Professional Fees (Legal, Audit)",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a92a"
+  },
+  "code": "5023",
+  "name": "House association fees",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8ef"
+  },
+  "code": "1000",
+  "name": "Bank - Main Account",
+  "type": "asset"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f0"
+  },
+  "code": "1005",
+  "name": "Bank - Rent Deposits Account",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f1"
+  },
+  "code": "1010",
+  "name": "Petty Cash",
+  "type": "Asset"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f6"
+  },
+  "code": "1200",
+  "name": "Residential Property - Newlands",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8f9"
+  },
+  "code": "1203",
+  "name": "Land - Christon Bank",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a8fa"
+  },
+  "code": "1204",
+  "name": "Land - Greystone Park",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a901"
+  },
+  "code": "1232",
+  "name": "Bnb - Nyanga",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a903"
+  },
+  "code": "1234",
+  "name": "Furniture and fittings",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a906"
+  },
+  "code": "1237",
+  "name": "Land - Arlington Estate",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a90a"
+  },
+  "code": "2030",
+  "name": "Deferred Income - Tenant Advances",
+  "type": "Liability"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a90b"
+  },
+  "code": "3000",
+  "name": "Owner's Capital",
+  "type": "Equity"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a90c"
+  },
+  "code": "3100",
+  "name": "Retained Earnings",
+  "type": "Equity"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a90e"
+  },
+  "code": "4001",
+  "name": "Rental Income - School Accommodation",
+  "type": "income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a911"
+  },
+  "code": "4004",
+  "name": "Land Lease Income",
+  "type": "Income"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a915"
+  },
+  "code": "5001",
+  "name": "Utilities - Water",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a916"
+  },
+  "code": "5002",
+  "name": "Utilities - Electricity",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a918"
+  },
+  "code": "5005",
+  "name": "Car running",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a91d"
+  },
+  "code": "5010",
+  "name": "House keeping",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a923"
+  },
+  "code": "5016",
+  "name": "Staff Welfare",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a927"
+  },
+  "code": "5020",
+  "name": "Medical aid",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a929"
+  },
+  "code": "5022",
+  "name": "Family expenses",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "687a2f396a235c50a6f2a92c"
+  },
+  "code": "5025",
+  "name": "Depreciation - Motor Vehicles",
+  "type": "Expense"
+},
+{
+  "_id": {
+    "$oid": "68812b706b56860a112a2461"
+  },
+  "code": "2100",
+  "__v": 0,
+  "name": "Loans Payable",
+  "type": "Liability"
+},
+{
+  "_id": {
+    "$oid": "68812b706b56860a112a2462"
+  },
+  "code": "1300",
+  "__v": 0,
+  "name": "Loans Receivable",
+  "type": "Asset"
+},
+{
+  "_id": {
+    "$oid": "6882360883e9fb22a8deec30"
+  },
+  "code": "1106",
+  "name": "KHAYA",
+  "type": "Expense",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6883871546edf0629efa37f8"
+  },
+  "code": "1015",
+  "name": "Cash",
+  "type": "asset"
+},
+{
+  "_id": {
+    "$oid": "6883e7c246edf0629efa37f9"
+  },
+  "code": "1016",
+  "name": "Innbucks",
+  "type": "Asset"
+},
+{
+  "_id": {
+    "$oid": "6883e7d346edf0629efa37fa"
+  },
+  "code": "1017",
+  "name": "Ecocash",
+  "type": "Asset"
+},
+{
+  "_id": {
+    "$oid": "68842d40602ccf1264704bf8"
+  },
+  "code": "PC1753492799842",
+  "name": "undefined Petty Cash",
+  "type": "Asset",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68842d54602ccf1264704bfa"
+  },
+  "code": "PC1753492820570",
+  "name": "undefined Petty Cash",
+  "type": "Asset",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68842e6c48c4aa288706f6b5"
+  },
+  "code": "5003",
+  "name": "Transportation Expense",
+  "type": "Expense",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68842e6d48c4aa288706f6b9"
+  },
+  "code": "5099",
+  "name": "Other Operating Expenses",
+  "type": "Expense",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68843b3ee051bf36c9310ba3"
+  },
+  "code": "1011",
+  "name": "Admin Petty Cash",
+  "type": "Asset",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68843bf2e051bf36c9310fbe"
+  },
+  "code": "EXP1753496562346",
+  "name": "water expense",
+  "type": "Expense",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6884e97a6f90a70eebdbd75f"
+  },
+  "code": "1012",
+  "name": "Finance Petty Cash",
+  "type": "Asset",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "688c9c868e2ef0e7c3a62571"
+  },
+  "code": null,
+  "name": "Accounts Payable - Trust Jings Electrician",
+  "type": "Liability"
+},
+{
+  "_id": {
+    "$oid": "688efc0bffd19d6da25af5ba"
+  },
+  "code": "200006",
+  "name": "Accounts Payable - Willow Willow",
+  "type": "Liability",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "688efc0bffd19d6da25af5bd"
+  },
+  "code": "5000",
+  "name": "Landscaping Expenses",
+  "type": "Expense",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "688efe946e6ecdb6e803b892"
+  },
+  "code": "200007",
+  "name": "Accounts Payable - Willow Willow",
+  "type": "Liability",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68901bdc2e7c647c942c394b"
+  },
+  "code": "200008",
+  "name": "Accounts Payable - Admin Kuswa",
+  "type": "Liability",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "689036ab849163ff1b4619f2"
+  },
+  "code": "110004",
+  "name": "Accounts Receivable - Macdonald Sairos",
+  "type": "Asset",
+  "description": "Accounts receivable for Macdonald Sairos",
+  "isActive": true,
+  "parentAccount": "1100",
+  "createdBy": {
+    "$oid": "688a965155fe1a1fd35411c0"
+  },
+  "createdAt": {
+    "$date": "2025-08-04T04:27:23.990Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T04:27:23.990Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "6890379d56e3fb25ba913158"
+  },
+  "code": "110005",
+  "name": "Accounts Receivable - Kudzai Pemhiwa",
+  "type": "Asset",
+  "description": "Accounts receivable for Kudzai Pemhiwa",
+  "isActive": true,
+  "parentAccount": "1100",
+  "createdBy": {
+    "$oid": "686d806b76fac16e629e9bdd"
+  },
+  "createdAt": {
+    "$date": "2025-08-04T04:31:25.577Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T04:31:25.577Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "68903eb956e3fb25ba91315a"
+  },
+  "code": "110006",
+  "name": "Accounts Receivable - makanaka pemhiwa",
+  "type": "Asset",
+  "description": "Accounts receivable for makanaka pemhiwa",
+  "isActive": true,
+  "parentAccount": "1100",
+  "createdBy": {
+    "$oid": "686f0db06f4f0fe746acb9ed"
+  },
+  "createdAt": {
+    "$date": "2025-08-04T05:01:45.699Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T05:01:45.699Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "68903eba56e3fb25ba91315c"
+  },
+  "code": "110007",
+  "name": "Accounts Receivable - Renia Banda",
+  "type": "Asset",
+  "description": "Accounts receivable for Renia Banda",
+  "isActive": true,
+  "parentAccount": "1100",
+  "createdBy": {
+    "$oid": "686fa791991066842501ce5a"
+  },
+  "createdAt": {
+    "$date": "2025-08-04T05:01:46.045Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T05:01:46.045Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "68913cabed5ce20772bcc2e5"
+  },
+  "code": "1400",
+  "name": "Equipment",
+  "type": "Asset",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68913cabed5ce20772bcc2e7"
+  },
+  "code": "1500",
+  "name": "Buildings",
+  "type": "Asset",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68913caced5ce20772bcc2ed"
+  },
+  "code": "2200",
+  "name": "Notes Payable",
+  "type": "Liability",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68913caced5ce20772bcc2ef"
+  },
+  "code": "2300",
+  "name": "Taxes Payable",
+  "type": "Liability",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68913caced5ce20772bcc2f5"
+  },
+  "code": "3200",
+  "name": "Common Stock",
+  "type": "Equity",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68913caced5ce20772bcc2f9"
+  },
+  "code": "4100",
+  "name": "Service Revenue",
+  "type": "Income",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68913caced5ce20772bcc2fb"
+  },
+  "code": "4200",
+  "name": "Interest Revenue",
+  "type": "Income",
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68927d7bd555faf9f2d06420"
+  },
+  "code": "1001",
+  "name": "Bank Account",
+  "type": "Asset",
+  "category": "Current Assets",
+  "subcategory": null,
+  "description": null,
+  "isActive": true,
+  "parentAccount": null,
+  "level": 1,
+  "sortOrder": 0,
+  "metadata": {},
+  "createdAt": {
+    "$date": "2025-08-05T21:54:03.375Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T21:54:03.375Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68927d7bd555faf9f2d06428"
+  },
+  "code": "1002",
+  "name": "Cash on Hand",
+  "type": "Asset",
+  "category": "Current Assets",
+  "subcategory": null,
+  "description": null,
+  "isActive": true,
+  "parentAccount": null,
+  "level": 1,
+  "sortOrder": 0,
+  "metadata": {},
+  "createdAt": {
+    "$date": "2025-08-05T21:54:03.635Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T21:54:03.635Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68927d7bd555faf9f2d06431"
+  },
+  "code": "1003",
+  "name": "Ecocash Wallet",
+  "type": "Asset",
+  "category": "Current Assets",
+  "subcategory": null,
+  "description": null,
+  "isActive": true,
+  "parentAccount": null,
+  "level": 1,
+  "sortOrder": 0,
+  "metadata": {},
+  "createdAt": {
+    "$date": "2025-08-05T21:54:03.781Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T21:54:03.781Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68927d7bd555faf9f2d06439"
+  },
+  "code": "1004",
+  "name": "Innbucks Wallet",
+  "type": "Asset",
+  "category": "Current Assets",
+  "subcategory": null,
+  "description": null,
+  "isActive": true,
+  "parentAccount": null,
+  "level": 1,
+  "sortOrder": 0,
+  "metadata": {},
+  "createdAt": {
+    "$date": "2025-08-05T21:54:03.912Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T21:54:03.912Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68927d7cd555faf9f2d06441"
+  },
+  "code": "1101",
+  "name": "Accounts Receivable",
+  "type": "Asset",
+  "category": "Current Assets",
+  "subcategory": null,
+  "description": null,
+  "isActive": true,
+  "parentAccount": null,
+  "level": 1,
+  "sortOrder": 0,
+  "metadata": {},
+  "createdAt": {
+    "$date": "2025-08-05T21:54:04.071Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T21:54:04.071Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68927d7cd555faf9f2d0644a"
+  },
+  "code": "2001",
+  "name": "Accounts Payable: Gift Plumber",
+  "type": "Liability",
+  "category": "Current Liabilities",
+  "subcategory": null,
+  "description": null,
+  "isActive": true,
+  "parentAccount": null,
+  "level": 1,
+  "sortOrder": 0,
+  "metadata": {},
+  "createdAt": {
+    "$date": "2025-08-05T21:54:04.211Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T21:54:04.211Z"
+  },
+  "__v": 0
+}]

@@ -1,0 +1,1471 @@
+[{
+  "_id": {
+    "$oid": "6890ad803e904974f476361f"
+  },
+  "transactionId": "TXN1754312064588001",
+  "date": {
+    "$date": "2025-07-15T00:00:00.000Z"
+  },
+  "description": "Maintenance Service Accepted - Toilet Repair",
+  "reference": "MAINT-001",
+  "entries": [
+    {
+      "accountCode": "5000",
+      "accountName": "Maintenance Expense",
+      "accountType": "Expense",
+      "debit": 100,
+      "credit": 0,
+      "description": "Toilet repair service",
+      "_id": {
+        "$oid": "6890ad803e904974f4763620"
+      }
+    },
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable - Kudzai",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 100,
+      "description": "Amount owed to Kudzai",
+      "_id": {
+        "$oid": "6890ad803e904974f4763621"
+      }
+    }
+  ],
+  "totalDebit": 100,
+  "totalCredit": 100,
+  "source": "manual",
+  "sourceId": {
+    "$oid": "6890ad803e904974f4763615"
+  },
+  "sourceModel": "Manual",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:24.608Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:24.608Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890ad803e904974f4763623"
+  },
+  "transactionId": "TXN1754312064588002",
+  "date": {
+    "$date": "2025-07-20T00:00:00.000Z"
+  },
+  "description": "Payment to Kudzai for Toilet Repair",
+  "reference": "PAY-001",
+  "entries": [
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable - Kudzai",
+      "accountType": "Liability",
+      "debit": 100,
+      "credit": 0,
+      "description": "Payment to Kudzai",
+      "_id": {
+        "$oid": "6890ad803e904974f4763624"
+      }
+    },
+    {
+      "accountCode": "1000",
+      "accountName": "Cash",
+      "accountType": "Asset",
+      "debit": 0,
+      "credit": 100,
+      "description": "Cash payment",
+      "_id": {
+        "$oid": "6890ad803e904974f4763625"
+      }
+    }
+  ],
+  "totalDebit": 100,
+  "totalCredit": 100,
+  "source": "payment",
+  "sourceId": {
+    "$oid": "6890ad803e904974f4763616"
+  },
+  "sourceModel": "Payment",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:24.686Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:24.686Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890ad803e904974f4763627"
+  },
+  "transactionId": "TXN1754312064588003",
+  "date": {
+    "$date": "2025-07-01T00:00:00.000Z"
+  },
+  "description": "Rent Collection - Student A",
+  "reference": "RENT-001",
+  "entries": [
+    {
+      "accountCode": "1000",
+      "accountName": "Cash",
+      "accountType": "Asset",
+      "debit": 500,
+      "credit": 0,
+      "description": "Cash received",
+      "_id": {
+        "$oid": "6890ad803e904974f4763628"
+      }
+    },
+    {
+      "accountCode": "4000",
+      "accountName": "Rental Income",
+      "accountType": "Income",
+      "debit": 0,
+      "credit": 500,
+      "description": "Rent income",
+      "_id": {
+        "$oid": "6890ad803e904974f4763629"
+      }
+    }
+  ],
+  "totalDebit": 500,
+  "totalCredit": 500,
+  "source": "payment",
+  "sourceId": {
+    "$oid": "6890ad803e904974f4763617"
+  },
+  "sourceModel": "Payment",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:24.739Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:24.739Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890ad803e904974f476362b"
+  },
+  "transactionId": "TXN1754312064588004",
+  "date": {
+    "$date": "2025-07-10T00:00:00.000Z"
+  },
+  "description": "Electricity Bill Payment",
+  "reference": "UTIL-001",
+  "entries": [
+    {
+      "accountCode": "5100",
+      "accountName": "Utility Expense",
+      "accountType": "Expense",
+      "debit": 150,
+      "credit": 0,
+      "description": "Electricity bill",
+      "_id": {
+        "$oid": "6890ad803e904974f476362c"
+      }
+    },
+    {
+      "accountCode": "1000",
+      "accountName": "Cash",
+      "accountType": "Asset",
+      "debit": 0,
+      "credit": 150,
+      "description": "Cash payment",
+      "_id": {
+        "$oid": "6890ad803e904974f476362d"
+      }
+    }
+  ],
+  "totalDebit": 150,
+  "totalCredit": 150,
+  "source": "payment",
+  "sourceId": {
+    "$oid": "6890ad803e904974f4763618"
+  },
+  "sourceModel": "Payment",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:24.796Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:24.796Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890ad803e904974f476362f"
+  },
+  "transactionId": "TXN1754312064588005",
+  "date": {
+    "$date": "2025-07-12T00:00:00.000Z"
+  },
+  "description": "Cleaning Service - Handy Andy",
+  "reference": "CLEAN-001",
+  "entries": [
+    {
+      "accountCode": "5200",
+      "accountName": "Cleaning Expense",
+      "accountType": "Expense",
+      "debit": 80,
+      "credit": 0,
+      "description": "Cleaning service",
+      "_id": {
+        "$oid": "6890ad803e904974f4763630"
+      }
+    },
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable - Handy Andy",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 80,
+      "description": "Amount owed to Handy Andy",
+      "_id": {
+        "$oid": "6890ad803e904974f4763631"
+      }
+    }
+  ],
+  "totalDebit": 80,
+  "totalCredit": 80,
+  "source": "manual",
+  "sourceId": {
+    "$oid": "6890ad803e904974f4763619"
+  },
+  "sourceModel": "Manual",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:24.851Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:24.851Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890ad803e904974f4763633"
+  },
+  "transactionId": "TXN1754312064588006",
+  "date": {
+    "$date": "2025-07-15T00:00:00.000Z"
+  },
+  "description": "Payment to Handy Andy for Cleaning",
+  "reference": "PAY-002",
+  "entries": [
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable - Handy Andy",
+      "accountType": "Liability",
+      "debit": 80,
+      "credit": 0,
+      "description": "Payment to Handy Andy",
+      "_id": {
+        "$oid": "6890ad803e904974f4763634"
+      }
+    },
+    {
+      "accountCode": "1000",
+      "accountName": "Cash",
+      "accountType": "Asset",
+      "debit": 0,
+      "credit": 80,
+      "description": "Cash payment",
+      "_id": {
+        "$oid": "6890ad803e904974f4763635"
+      }
+    }
+  ],
+  "totalDebit": 80,
+  "totalCredit": 80,
+  "source": "payment",
+  "sourceId": {
+    "$oid": "6890ad803e904974f476361a"
+  },
+  "sourceModel": "Payment",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:24.907Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:24.907Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890ad803e904974f4763637"
+  },
+  "transactionId": "TXN1754312064588007",
+  "date": {
+    "$date": "2025-07-05T00:00:00.000Z"
+  },
+  "description": "Security Deposit - New Student",
+  "reference": "DEP-001",
+  "entries": [
+    {
+      "accountCode": "1000",
+      "accountName": "Cash",
+      "accountType": "Asset",
+      "debit": 300,
+      "credit": 0,
+      "description": "Cash received",
+      "_id": {
+        "$oid": "6890ad803e904974f4763638"
+      }
+    },
+    {
+      "accountCode": "2100",
+      "accountName": "Security Deposits Payable",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 300,
+      "description": "Security deposit liability",
+      "_id": {
+        "$oid": "6890ad803e904974f4763639"
+      }
+    }
+  ],
+  "totalDebit": 300,
+  "totalCredit": 300,
+  "source": "payment",
+  "sourceId": {
+    "$oid": "6890ad803e904974f476361b"
+  },
+  "sourceModel": "Payment",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:24.960Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:24.960Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890ad813e904974f476363b"
+  },
+  "transactionId": "TXN1754312064588008",
+  "date": {
+    "$date": "2025-07-08T00:00:00.000Z"
+  },
+  "description": "Building Insurance Premium",
+  "reference": "INS-001",
+  "entries": [
+    {
+      "accountCode": "5300",
+      "accountName": "Insurance Expense",
+      "accountType": "Expense",
+      "debit": 200,
+      "credit": 0,
+      "description": "Insurance premium",
+      "_id": {
+        "$oid": "6890ad813e904974f476363c"
+      }
+    },
+    {
+      "accountCode": "1000",
+      "accountName": "Cash",
+      "accountType": "Asset",
+      "debit": 0,
+      "credit": 200,
+      "description": "Cash payment",
+      "_id": {
+        "$oid": "6890ad813e904974f476363d"
+      }
+    }
+  ],
+  "totalDebit": 200,
+  "totalCredit": 200,
+  "source": "payment",
+  "sourceId": {
+    "$oid": "6890ad803e904974f476361c"
+  },
+  "sourceModel": "Payment",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:25.013Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:25.013Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890ad813e904974f476363f"
+  },
+  "transactionId": "TXN1754312064588009",
+  "date": {
+    "$date": "2025-07-02T00:00:00.000Z"
+  },
+  "description": "Rent Collection via Bank Transfer",
+  "reference": "RENT-002",
+  "entries": [
+    {
+      "accountCode": "1100",
+      "accountName": "Bank Account",
+      "accountType": "Asset",
+      "debit": 600,
+      "credit": 0,
+      "description": "Bank transfer received",
+      "_id": {
+        "$oid": "6890ad813e904974f4763640"
+      }
+    },
+    {
+      "accountCode": "4000",
+      "accountName": "Rental Income",
+      "accountType": "Income",
+      "debit": 0,
+      "credit": 600,
+      "description": "Rent income",
+      "_id": {
+        "$oid": "6890ad813e904974f4763641"
+      }
+    }
+  ],
+  "totalDebit": 600,
+  "totalCredit": 600,
+  "source": "payment",
+  "sourceId": {
+    "$oid": "6890ad803e904974f476361d"
+  },
+  "sourceModel": "Payment",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:25.069Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:25.069Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890ad813e904974f4763643"
+  },
+  "transactionId": "TXN1754312064588010",
+  "date": {
+    "$date": "2025-07-18T00:00:00.000Z"
+  },
+  "description": "Purchase of Maintenance Supplies",
+  "reference": "SUP-001",
+  "entries": [
+    {
+      "accountCode": "5400",
+      "accountName": "Supplies Expense",
+      "accountType": "Expense",
+      "debit": 75,
+      "credit": 0,
+      "description": "Maintenance supplies",
+      "_id": {
+        "$oid": "6890ad813e904974f4763644"
+      }
+    },
+    {
+      "accountCode": "1000",
+      "accountName": "Cash",
+      "accountType": "Asset",
+      "debit": 0,
+      "credit": 75,
+      "description": "Cash payment",
+      "_id": {
+        "$oid": "6890ad813e904974f4763645"
+      }
+    }
+  ],
+  "totalDebit": 75,
+  "totalCredit": 75,
+  "source": "payment",
+  "sourceId": {
+    "$oid": "6890ad803e904974f476361e"
+  },
+  "sourceModel": "Payment",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T12:54:25.120Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T12:54:25.120Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890be4ace5414d3d449975d"
+  },
+  "transactionId": "TXN1754316362657SH3C9",
+  "date": {
+    "$date": "2025-08-04T14:06:02.657Z"
+  },
+  "description": "Payment for Expense EXP-1754315710964-3123 - Kudzai",
+  "reference": "6890bbbee00449139e8b2481",
+  "entries": [
+    {
+      "accountCode": "200008",
+      "accountName": "Accounts Payable - Admin Kuswa",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 250,
+      "description": "Payment received for expense EXP-1754315710964-3123",
+      "_id": {
+        "$oid": "6890be4ace5414d3d449975e"
+      }
+    },
+    {
+      "accountCode": "1012",
+      "accountName": "Finance Petty Cash",
+      "accountType": "Asset",
+      "debit": 250,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1754315710964-3123",
+      "_id": {
+        "$oid": "6890be4ace5414d3d449975f"
+      }
+    }
+  ],
+  "totalDebit": 250,
+  "totalCredit": 250,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "6890bbbee00449139e8b2481"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-04T14:06:02.658Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1754315710964-3123",
+    "expenseDescription": "Kudzai",
+    "paymentMethod": "Bank Transfer",
+    "reference": "6890bbbee00449139e8b2481"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T14:06:02.658Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6890be52ce5414d3d4499768"
+  },
+  "transactionId": "TXN1754316370914F87Y0",
+  "date": {
+    "$date": "2025-08-04T14:06:10.914Z"
+  },
+  "description": "Payment for Expense EXP-1754315710964-3123 - Kudzai",
+  "reference": "6890bbbee00449139e8b2481",
+  "entries": [
+    {
+      "accountCode": "200008",
+      "accountName": "Accounts Payable - Admin Kuswa",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 250,
+      "description": "Payment received for expense EXP-1754315710964-3123",
+      "_id": {
+        "$oid": "6890be52ce5414d3d4499769"
+      }
+    },
+    {
+      "accountCode": "1012",
+      "accountName": "Finance Petty Cash",
+      "accountType": "Asset",
+      "debit": 250,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1754315710964-3123",
+      "_id": {
+        "$oid": "6890be52ce5414d3d449976a"
+      }
+    }
+  ],
+  "totalDebit": 250,
+  "totalCredit": 250,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "6890bbbee00449139e8b2481"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-04T14:06:10.914Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1754315710964-3123",
+    "expenseDescription": "Kudzai",
+    "paymentMethod": "Bank Transfer",
+    "reference": "6890bbbee00449139e8b2481"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T14:06:10.914Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "689146e5900535cfaf7d3ada"
+  },
+  "transactionId": "TXN-1754351333485-0950",
+  "date": {
+    "$date": "2025-08-04T23:48:53.551Z"
+  },
+  "description": "Maintenance Approval: Toilets not working",
+  "reference": "MAINT-686efc626f4f0fe746ac755e",
+  "entries": [
+    {
+      "accountCode": "5099",
+      "accountName": "Other Operating Expenses",
+      "accountType": "Expense",
+      "debit": 60,
+      "credit": 0,
+      "description": "Maintenance expense: Toilets not working",
+      "_id": {
+        "$oid": "689146e5900535cfaf7d3adb"
+      }
+    },
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 60,
+      "description": "Accounts payable for maintenance: Toilets not working",
+      "_id": {
+        "$oid": "689146e5900535cfaf7d3adc"
+      }
+    }
+  ],
+  "totalDebit": 60,
+  "totalCredit": 60,
+  "source": "manual",
+  "sourceId": {
+    "$oid": "686efc626f4f0fe746ac755e"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T23:48:53.557Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T23:48:53.557Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68914862b7d94da9729a3a70"
+  },
+  "transactionId": "TXN-1754351714724-6207",
+  "date": {
+    "$date": "2025-08-04T23:55:14.782Z"
+  },
+  "description": "Maintenance Approval: Toilets not working",
+  "reference": "MAINT-686efc626f4f0fe746ac755e",
+  "entries": [
+    {
+      "accountCode": "5099",
+      "accountName": "Other Operating Expenses",
+      "accountType": "Expense",
+      "debit": 60,
+      "credit": 0,
+      "description": "Maintenance expense: Toilets not working",
+      "_id": {
+        "$oid": "68914862b7d94da9729a3a71"
+      }
+    },
+    {
+      "accountCode": "200008",
+      "accountName": "Accounts Payable - Admin Kuswa",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 60,
+      "description": "Accounts payable for maintenance: Toilets not working",
+      "_id": {
+        "$oid": "68914862b7d94da9729a3a72"
+      }
+    }
+  ],
+  "totalDebit": 60,
+  "totalCredit": 60,
+  "source": "manual",
+  "sourceId": {
+    "$oid": "686efc626f4f0fe746ac755e"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-04T23:55:14.784Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T23:55:14.784Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68914943b7d94da9729a3d44"
+  },
+  "transactionId": "TXN175435193931304W1X",
+  "date": {
+    "$date": "2025-08-04T23:58:59.313Z"
+  },
+  "description": "Payment for Expense EXP-1754347339837-9076 - Maintenance: Toilets not working - please",
+  "reference": "6890bbbee00449139e8b2481",
+  "entries": [
+    {
+      "accountCode": "200008",
+      "accountName": "Accounts Payable - Admin Kuswa",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 60,
+      "description": "Payment received for expense EXP-1754347339837-9076",
+      "_id": {
+        "$oid": "68914943b7d94da9729a3d45"
+      }
+    },
+    {
+      "accountCode": "1017",
+      "accountName": "Ecocash",
+      "accountType": "Asset",
+      "debit": 60,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1754347339837-9076",
+      "_id": {
+        "$oid": "68914943b7d94da9729a3d46"
+      }
+    }
+  ],
+  "totalDebit": 60,
+  "totalCredit": 60,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "6891374b85b1b7d906412033"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-04T23:58:59.314Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1754347339837-9076",
+    "expenseDescription": "Maintenance: Toilets not working - please",
+    "paymentMethod": "Cash",
+    "reference": "6890bbbee00449139e8b2481"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T23:58:59.314Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6891496cb7d94da9729a3d4f"
+  },
+  "transactionId": "TXN17543519802219MGYU",
+  "date": {
+    "$date": "2025-08-04T23:59:40.221Z"
+  },
+  "description": "Payment for Expense EXP-1754347339837-9076 - Maintenance: Toilets not working - please",
+  "reference": "6890bbbee00449139e8b2481",
+  "entries": [
+    {
+      "accountCode": "200008",
+      "accountName": "Accounts Payable - Admin Kuswa",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 60,
+      "description": "Payment received for expense EXP-1754347339837-9076",
+      "_id": {
+        "$oid": "6891496cb7d94da9729a3d50"
+      }
+    },
+    {
+      "accountCode": "1017",
+      "accountName": "Ecocash",
+      "accountType": "Asset",
+      "debit": 60,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1754347339837-9076",
+      "_id": {
+        "$oid": "6891496cb7d94da9729a3d51"
+      }
+    }
+  ],
+  "totalDebit": 60,
+  "totalCredit": 60,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "6891374b85b1b7d906412033"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-04T23:59:40.221Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1754347339837-9076",
+    "expenseDescription": "Maintenance: Toilets not working - please",
+    "paymentMethod": "Cash",
+    "reference": "6890bbbee00449139e8b2481"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T23:59:40.221Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "689149dab7d94da9729a3df6"
+  },
+  "transactionId": "TXN1754352090598ADJY8",
+  "date": {
+    "$date": "2025-08-05T00:01:30.598Z"
+  },
+  "description": "Payment for Expense EXP-1754347339837-9076 - Maintenance: Toilets not working - please",
+  "reference": "6890bbbee00449139e8b2481",
+  "entries": [
+    {
+      "accountCode": "200008",
+      "accountName": "Accounts Payable - Admin Kuswa",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 60,
+      "description": "Payment received for expense EXP-1754347339837-9076",
+      "_id": {
+        "$oid": "689149dab7d94da9729a3df7"
+      }
+    },
+    {
+      "accountCode": "1017",
+      "accountName": "Ecocash",
+      "accountType": "Asset",
+      "debit": 60,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1754347339837-9076",
+      "_id": {
+        "$oid": "689149dab7d94da9729a3df8"
+      }
+    }
+  ],
+  "totalDebit": 60,
+  "totalCredit": 60,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "6891374b85b1b7d906412033"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-05T00:01:30.598Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1754347339837-9076",
+    "expenseDescription": "Maintenance: Toilets not working - please",
+    "paymentMethod": "Cash",
+    "reference": "6890bbbee00449139e8b2481"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T00:01:30.598Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6891e41e05028384d1008598"
+  },
+  "transactionId": "TXN17543915828165IGPY",
+  "date": {
+    "$date": "2025-08-05T10:59:42.816Z"
+  },
+  "description": "Payment for Expense EXP-1754350388319-1534 - Maintenance: Toilet is blocked - please",
+  "reference": "Jug",
+  "entries": [
+    {
+      "accountCode": "5002",
+      "accountName": "Utilities - Electricity",
+      "accountType": "Expense",
+      "debit": 0,
+      "credit": 224,
+      "description": "Payment received for expense EXP-1754350388319-1534",
+      "_id": {
+        "$oid": "6891e41e05028384d1008599"
+      }
+    },
+    {
+      "accountCode": "1017",
+      "accountName": "Ecocash",
+      "accountType": "Asset",
+      "debit": 224,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1754350388319-1534",
+      "_id": {
+        "$oid": "6891e41e05028384d100859a"
+      }
+    }
+  ],
+  "totalDebit": 224,
+  "totalCredit": 224,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "689143344bf9504ea739f670"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-05T10:59:42.816Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1754350388319-1534",
+    "expenseDescription": "Maintenance: Toilet is blocked - please",
+    "paymentMethod": "Bank Transfer",
+    "reference": "Jug"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T10:59:42.816Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6891e42205028384d10085a4"
+  },
+  "transactionId": "TXN1754391586252YABFA",
+  "date": {
+    "$date": "2025-08-05T10:59:46.252Z"
+  },
+  "description": "Payment for Expense EXP-1754272996697-0056 - Cleaning - Brooms",
+  "reference": "Jug",
+  "entries": [
+    {
+      "accountCode": "5013",
+      "accountName": "Administrative Expenses",
+      "accountType": "Expense",
+      "debit": 0,
+      "credit": 10,
+      "description": "Payment received for expense EXP-1754272996697-0056",
+      "_id": {
+        "$oid": "6891e42205028384d10085a5"
+      }
+    },
+    {
+      "accountCode": "1017",
+      "accountName": "Ecocash",
+      "accountType": "Asset",
+      "debit": 10,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1754272996697-0056",
+      "_id": {
+        "$oid": "6891e42205028384d10085a6"
+      }
+    }
+  ],
+  "totalDebit": 10,
+  "totalCredit": 10,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "689014e42e7c647c942c2944"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-05T10:59:46.252Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1754272996697-0056",
+    "expenseDescription": "Cleaning - Brooms",
+    "paymentMethod": "Bank Transfer",
+    "reference": "Jug"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T10:59:46.252Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6891e42505028384d10085af"
+  },
+  "transactionId": "TXN1754391589184TB0HV",
+  "date": {
+    "$date": "2025-08-05T10:59:49.184Z"
+  },
+  "description": "Payment for Expense EXP-1754347343129-8673 - Maintenance Request: Toilets not working - please",
+  "reference": "Jug",
+  "entries": [
+    {
+      "accountCode": "5002",
+      "accountName": "Utilities - Electricity",
+      "accountType": "Expense",
+      "debit": 0,
+      "credit": 60,
+      "description": "Payment received for expense EXP-1754347343129-8673",
+      "_id": {
+        "$oid": "6891e42505028384d10085b0"
+      }
+    },
+    {
+      "accountCode": "1017",
+      "accountName": "Ecocash",
+      "accountType": "Asset",
+      "debit": 60,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1754347343129-8673",
+      "_id": {
+        "$oid": "6891e42505028384d10085b1"
+      }
+    }
+  ],
+  "totalDebit": 60,
+  "totalCredit": 60,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "6891374f85b1b7d906412085"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-05T10:59:49.184Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1754347343129-8673",
+    "expenseDescription": "Maintenance Request: Toilets not working - please",
+    "paymentMethod": "Bank Transfer",
+    "reference": "Jug"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T10:59:49.184Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6891e42805028384d10085ba"
+  },
+  "transactionId": "TXN1754391592224QR4S8",
+  "date": {
+    "$date": "2025-08-05T10:59:52.224Z"
+  },
+  "description": "Payment for Expense EXP-1754350388682-6965 - Maintenance Request: Toilet is blocked - please",
+  "reference": "Jug",
+  "entries": [
+    {
+      "accountCode": "5002",
+      "accountName": "Utilities - Electricity",
+      "accountType": "Expense",
+      "debit": 0,
+      "credit": 224,
+      "description": "Payment received for expense EXP-1754350388682-6965",
+      "_id": {
+        "$oid": "6891e42805028384d10085bb"
+      }
+    },
+    {
+      "accountCode": "1017",
+      "accountName": "Ecocash",
+      "accountType": "Asset",
+      "debit": 224,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1754350388682-6965",
+      "_id": {
+        "$oid": "6891e42805028384d10085bc"
+      }
+    }
+  ],
+  "totalDebit": 224,
+  "totalCredit": 224,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "689143344bf9504ea739f6a5"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-05T10:59:52.224Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1754350388682-6965",
+    "expenseDescription": "Maintenance Request: Toilet is blocked - please",
+    "paymentMethod": "Bank Transfer",
+    "reference": "Jug"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T10:59:52.224Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6891e42b05028384d10085c5"
+  },
+  "transactionId": "TXN1754391595158EQSO4",
+  "date": {
+    "$date": "2025-08-05T10:59:55.158Z"
+  },
+  "description": "Payment for Expense EXP-1753842022590-2239 - Maintenance: lights not working - they are not switching on",
+  "reference": "Jug",
+  "entries": [
+    {
+      "accountCode": "5002",
+      "accountName": "Utilities - Electricity",
+      "accountType": "Expense",
+      "debit": 0,
+      "credit": 136,
+      "description": "Payment received for expense EXP-1753842022590-2239",
+      "_id": {
+        "$oid": "6891e42b05028384d10085c6"
+      }
+    },
+    {
+      "accountCode": "1017",
+      "accountName": "Ecocash",
+      "accountType": "Asset",
+      "debit": 136,
+      "credit": 0,
+      "description": "Payment made for expense EXP-1753842022590-2239",
+      "_id": {
+        "$oid": "6891e42b05028384d10085c7"
+      }
+    }
+  ],
+  "totalDebit": 136,
+  "totalCredit": 136,
+  "source": "expense_payment",
+  "sourceId": {
+    "$oid": "688981669afd9155255a4470"
+  },
+  "sourceModel": "Expense",
+  "createdBy": "finance@alamait.com",
+  "createdAt": {
+    "$date": "2025-08-05T10:59:55.158Z"
+  },
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "expenseId": "EXP-1753842022590-2239",
+    "expenseDescription": "Maintenance: lights not working - they are not switching on",
+    "paymentMethod": "Bank Transfer",
+    "reference": "Jug"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T10:59:55.158Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68924ad824ec085b648eed32"
+  },
+  "transactionId": "TXN1754417880003001",
+  "date": {
+    "$date": "2024-01-15T00:00:00.000Z"
+  },
+  "description": "IT Equipment Purchase - Laptops",
+  "reference": "INV-2024-001",
+  "entries": [
+    {
+      "accountCode": "200009",
+      "accountName": "Accounts Payable - Miccs Technologies",
+      "debit": 0,
+      "credit": 5000,
+      "_id": {
+        "$oid": "68924ad824ec085b648eed33"
+      }
+    },
+    {
+      "accountCode": "5000",
+      "accountName": "Equipment Expense",
+      "debit": 5000,
+      "credit": 0,
+      "_id": {
+        "$oid": "68924ad824ec085b648eed34"
+      }
+    }
+  ],
+  "totalDebit": 5000,
+  "totalCredit": 5000,
+  "source": "manual",
+  "sourceId": {
+    "$oid": "68924ad824ec085b648eed2d"
+  },
+  "sourceModel": "Manual",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-05T18:18:00.798Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T18:18:00.798Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68924ad924ec085b648eed37"
+  },
+  "transactionId": "TXN1754417880004002",
+  "date": {
+    "$date": "2024-02-20T00:00:00.000Z"
+  },
+  "description": "Software License Renewal",
+  "reference": "INV-2024-002",
+  "entries": [
+    {
+      "accountCode": "200009",
+      "accountName": "Accounts Payable - Miccs Technologies",
+      "debit": 0,
+      "credit": 1200,
+      "_id": {
+        "$oid": "68924ad924ec085b648eed38"
+      }
+    },
+    {
+      "accountCode": "5013",
+      "accountName": "Other Expenses",
+      "debit": 1200,
+      "credit": 0,
+      "_id": {
+        "$oid": "68924ad924ec085b648eed39"
+      }
+    }
+  ],
+  "totalDebit": 1200,
+  "totalCredit": 1200,
+  "source": "manual",
+  "sourceId": {
+    "$oid": "68924ad824ec085b648eed2e"
+  },
+  "sourceModel": "Manual",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-05T18:18:01.438Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T18:18:01.438Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68924ad924ec085b648eed3b"
+  },
+  "transactionId": "TXN1754417880004003",
+  "date": {
+    "$date": "2024-03-10T00:00:00.000Z"
+  },
+  "description": "Payment to Miccs Technologies",
+  "reference": "PAY-2024-001",
+  "entries": [
+    {
+      "accountCode": "200009",
+      "accountName": "Accounts Payable - Miccs Technologies",
+      "debit": 3000,
+      "credit": 0,
+      "_id": {
+        "$oid": "68924ad924ec085b648eed3c"
+      }
+    },
+    {
+      "accountCode": "1000",
+      "accountName": "Bank Account",
+      "debit": 0,
+      "credit": 3000,
+      "_id": {
+        "$oid": "68924ad924ec085b648eed3d"
+      }
+    }
+  ],
+  "totalDebit": 3000,
+  "totalCredit": 3000,
+  "source": "vendor_payment",
+  "sourceId": {
+    "$oid": "68924ad824ec085b648eed2f"
+  },
+  "sourceModel": "Vendor",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-05T18:18:01.504Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T18:18:01.504Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68924ad924ec085b648eed3f"
+  },
+  "transactionId": "TXN1754417880004004",
+  "date": {
+    "$date": "2024-04-05T00:00:00.000Z"
+  },
+  "description": "Network Maintenance Services",
+  "reference": "INV-2024-003",
+  "entries": [
+    {
+      "accountCode": "200009",
+      "accountName": "Accounts Payable - Miccs Technologies",
+      "debit": 0,
+      "credit": 800,
+      "_id": {
+        "$oid": "68924ad924ec085b648eed40"
+      }
+    },
+    {
+      "accountCode": "5013",
+      "accountName": "Other Expenses",
+      "debit": 800,
+      "credit": 0,
+      "_id": {
+        "$oid": "68924ad924ec085b648eed41"
+      }
+    }
+  ],
+  "totalDebit": 800,
+  "totalCredit": 800,
+  "source": "manual",
+  "sourceId": {
+    "$oid": "68924ad824ec085b648eed30"
+  },
+  "sourceModel": "Manual",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-05T18:18:01.572Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T18:18:01.572Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68924ad924ec085b648eed43"
+  },
+  "transactionId": "TXN1754417880004005",
+  "date": {
+    "$date": "2024-05-12T00:00:00.000Z"
+  },
+  "description": "Final Payment to Miccs Technologies",
+  "reference": "PAY-2024-002",
+  "entries": [
+    {
+      "accountCode": "200009",
+      "accountName": "Accounts Payable - Miccs Technologies",
+      "debit": 4000,
+      "credit": 0,
+      "_id": {
+        "$oid": "68924ad924ec085b648eed44"
+      }
+    },
+    {
+      "accountCode": "1000",
+      "accountName": "Bank Account",
+      "debit": 0,
+      "credit": 4000,
+      "_id": {
+        "$oid": "68924ad924ec085b648eed45"
+      }
+    }
+  ],
+  "totalDebit": 4000,
+  "totalCredit": 4000,
+  "source": "vendor_payment",
+  "sourceId": {
+    "$oid": "68924ad824ec085b648eed31"
+  },
+  "sourceModel": "Vendor",
+  "createdBy": "admin@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "createdAt": {
+    "$date": "2025-08-05T18:18:01.639Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T18:18:01.639Z"
+  },
+  "__v": 0
+}]

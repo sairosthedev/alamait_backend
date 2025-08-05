@@ -1,0 +1,2974 @@
+[{
+  "_id": {
+    "$oid": "688b0734a7f326e19b41f954"
+  },
+  "title": "WiFi Service",
+  "description": "WiFi for December 2024",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "WiFi",
+      "quantity": 1,
+      "estimatedCost": 150,
+      "purpose": "Monthly wifi service",
+      "category": "utilities",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Econet Wireless",
+          "amount": 150,
+          "description": "Monthly wifi service from Econet Wireless",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:03:32.699Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:03:32.699Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 150,
+  "priority": "medium",
+  "notes": "Monthly wifi service for St Kilda residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:03:32.699Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "utilities",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.699Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.699Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:03:32.699Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:03:32.699Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0734a7f326e19b41f955"
+  },
+  "title": "Electricity Supply",
+  "description": "Electricity for December 2024",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Electricity",
+      "quantity": 1,
+      "estimatedCost": 450,
+      "purpose": "Monthly electricity service",
+      "category": "utilities",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "ZESA Holdings",
+          "amount": 450,
+          "description": "Monthly electricity service from ZESA Holdings",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:03:32.699Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:03:32.699Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 450,
+  "priority": "medium",
+  "notes": "Monthly electricity service for St Kilda residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:03:32.699Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "utilities",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.699Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.699Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:03:32.699Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:03:32.699Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0734a7f326e19b41f956"
+  },
+  "title": "Gas Supply",
+  "description": "Gas for December 2024",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Gas",
+      "quantity": 1,
+      "estimatedCost": 200,
+      "purpose": "Monthly gas service",
+      "category": "utilities",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Progas Zimbabwe",
+          "amount": 200,
+          "description": "Monthly gas service from Progas Zimbabwe",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:03:32.699Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:03:32.699Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 200,
+  "priority": "medium",
+  "notes": "Monthly gas service for St Kilda residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:03:32.699Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "utilities",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.699Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.699Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:03:32.699Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:03:32.699Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0734a7f326e19b41f957"
+  },
+  "title": "Security Services",
+  "description": "Security for December 2024",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Security",
+      "quantity": 1,
+      "estimatedCost": 800,
+      "purpose": "Monthly security service",
+      "category": "services",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Securico Security Services",
+          "amount": 800,
+          "description": "Monthly security service from Securico Security Services",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:03:32.699Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:03:32.700Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 800,
+  "priority": "medium",
+  "notes": "Monthly security service for St Kilda residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "services",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.700Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.700Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0734a7f326e19b41f958"
+  },
+  "title": "Water Council",
+  "description": "Water for December 2024",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Water",
+      "quantity": 1,
+      "estimatedCost": 120,
+      "purpose": "Monthly water service",
+      "category": "utilities",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Harare City Council",
+          "amount": 120,
+          "description": "Monthly water service from Harare City Council",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:03:32.700Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:03:32.700Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 120,
+  "priority": "medium",
+  "notes": "Monthly water service for St Kilda residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "utilities",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.700Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.700Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0734a7f326e19b41f959"
+  },
+  "title": "Sanitary Services",
+  "description": "Sanitary for December 2024",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Sanitary",
+      "quantity": 1,
+      "estimatedCost": 80,
+      "purpose": "Monthly sanitary service",
+      "category": "services",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Harare City Council",
+          "amount": 80,
+          "description": "Monthly sanitary service from Harare City Council",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:03:32.700Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:03:32.700Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 80,
+  "priority": "medium",
+  "notes": "Monthly sanitary service for St Kilda residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "services",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.700Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.700Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0734a7f326e19b41f95a"
+  },
+  "title": "Waste Collection",
+  "description": "Waste Collection for December 2024",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Waste Collection",
+      "quantity": 1,
+      "estimatedCost": 60,
+      "purpose": "Monthly waste collection service",
+      "category": "services",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Harare City Council",
+          "amount": 60,
+          "description": "Monthly waste collection service from Harare City Council",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:03:32.700Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:03:32.700Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 60,
+  "priority": "medium",
+  "notes": "Monthly waste collection service for St Kilda residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "services",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.700Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:03:32.700Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:03:32.700Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0757a7f326e19b41f95b"
+  },
+  "title": "WiFi Service",
+  "description": "WiFi for December 2024",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "WiFi",
+      "quantity": 1,
+      "estimatedCost": 150,
+      "purpose": "Monthly wifi service",
+      "category": "utilities",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Econet Wireless",
+          "amount": 150,
+          "description": "Monthly wifi service from Econet Wireless",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:04:07.458Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:04:07.458Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 150,
+  "priority": "medium",
+  "notes": "Monthly wifi service for Belvedere residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:04:07.459Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "utilities",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.459Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.459Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:04:07.459Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:04:07.459Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0757a7f326e19b41f95c"
+  },
+  "title": "Electricity Supply",
+  "description": "Electricity for December 2024",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Electricity",
+      "quantity": 1,
+      "estimatedCost": 450,
+      "purpose": "Monthly electricity service",
+      "category": "utilities",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "ZESA Holdings",
+          "amount": 450,
+          "description": "Monthly electricity service from ZESA Holdings",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:04:07.459Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:04:07.459Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 450,
+  "priority": "medium",
+  "notes": "Monthly electricity service for Belvedere residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:04:07.459Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "utilities",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.459Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.460Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:04:07.460Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:04:07.460Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0757a7f326e19b41f95d"
+  },
+  "title": "Gas Supply",
+  "description": "Gas for December 2024",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Gas",
+      "quantity": 1,
+      "estimatedCost": 200,
+      "purpose": "Monthly gas service",
+      "category": "utilities",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Progas Zimbabwe",
+          "amount": 200,
+          "description": "Monthly gas service from Progas Zimbabwe",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:04:07.460Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:04:07.461Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 200,
+  "priority": "medium",
+  "notes": "Monthly gas service for Belvedere residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:04:07.461Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "utilities",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.461Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.461Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:04:07.461Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:04:07.461Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0757a7f326e19b41f95e"
+  },
+  "title": "Security Services",
+  "description": "Security for December 2024",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Security",
+      "quantity": 1,
+      "estimatedCost": 800,
+      "purpose": "Monthly security service",
+      "category": "services",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Securico Security Services",
+          "amount": 800,
+          "description": "Monthly security service from Securico Security Services",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:04:07.461Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:04:07.461Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 800,
+  "priority": "medium",
+  "notes": "Monthly security service for Belvedere residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:04:07.461Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "services",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.461Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.461Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:04:07.461Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:04:07.461Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0757a7f326e19b41f95f"
+  },
+  "title": "Water Council",
+  "description": "Water for December 2024",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Water",
+      "quantity": 1,
+      "estimatedCost": 120,
+      "purpose": "Monthly water service",
+      "category": "utilities",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Harare City Council",
+          "amount": 120,
+          "description": "Monthly water service from Harare City Council",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:04:07.461Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:04:07.461Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 120,
+  "priority": "medium",
+  "notes": "Monthly water service for Belvedere residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:04:07.461Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "utilities",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.461Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.461Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:04:07.461Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:04:07.461Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0757a7f326e19b41f960"
+  },
+  "title": "Sanitary Services",
+  "description": "Sanitary for December 2024",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Sanitary",
+      "quantity": 1,
+      "estimatedCost": 80,
+      "purpose": "Monthly sanitary service",
+      "category": "services",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Harare City Council",
+          "amount": 80,
+          "description": "Monthly sanitary service from Harare City Council",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:04:07.462Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:04:07.463Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 80,
+  "priority": "medium",
+  "notes": "Monthly sanitary service for Belvedere residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:04:07.463Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "services",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.463Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.463Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:04:07.463Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:04:07.463Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b0757a7f326e19b41f961"
+  },
+  "title": "Waste Collection",
+  "description": "Waste Collection for December 2024",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "month": 12,
+  "year": 2024,
+  "items": [
+    {
+      "description": "Waste Collection",
+      "quantity": 1,
+      "estimatedCost": 60,
+      "purpose": "Monthly waste collection service",
+      "category": "services",
+      "isRecurring": true,
+      "quotations": [
+        {
+          "provider": "Harare City Council",
+          "amount": 60,
+          "description": "Monthly waste collection service from Harare City Council",
+          "fileUrl": "",
+          "fileName": "",
+          "uploadedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "uploadedAt": {
+            "$date": "2025-07-31T06:04:07.463Z"
+          },
+          "isApproved": true,
+          "approvedBy": {
+            "$oid": "67c023adae5e27657502e887"
+          },
+          "approvedAt": {
+            "$date": "2025-07-31T06:04:07.463Z"
+          }
+        }
+      ]
+    }
+  ],
+  "totalEstimatedCost": 60,
+  "priority": "medium",
+  "notes": "Monthly waste collection service for Belvedere residence",
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "status": "approved",
+  "approvedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "approvedAt": {
+    "$date": "2025-07-31T06:04:07.463Z"
+  },
+  "approvedByEmail": "admin@alamait.com",
+  "tags": [
+    "services",
+    "monthly",
+    "recurring"
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.463Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created with approved quotation"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T06:04:07.463Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request approved by admin"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.804Z"
+      },
+      "action": "Status migrated to approved (past/current)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to approved (past/current month migration)"
+      ]
+    }
+  ],
+  "isTemplate": false,
+  "createdAt": {
+    "$date": "2025-07-31T06:04:07.463Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T06:04:07.463Z"
+  },
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.804Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688b82c53126816645f32122"
+  },
+  "title": "Monthly Requests",
+  "description": "Monthly Requests Belvedere",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "month": null,
+  "year": null,
+  "status": "draft",
+  "priority": "medium",
+  "items": [
+    {
+      "title": "wifi",
+      "description": "100",
+      "quantity": 1,
+      "estimatedCost": 100,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "",
+      "tags": [],
+      "_id": {
+        "$oid": "688b82c53126816645f32123"
+      },
+      "changeHistory": [],
+      "quotations": []
+    },
+    {
+      "title": "Gas",
+      "description": "Gas for belvedere",
+      "quantity": 1,
+      "estimatedCost": 90,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "",
+      "tags": [],
+      "_id": {
+        "$oid": "688b82c53126816645f32124"
+      },
+      "changeHistory": [],
+      "quotations": []
+    }
+  ],
+  "totalEstimatedCost": 190,
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "isTemplate": true,
+  "templateVersion": 1,
+  "tags": [],
+  "lastUpdated": {
+    "$date": "2025-07-31T21:58:12.692Z"
+  },
+  "effectiveFrom": {
+    "$date": "2025-07-31T14:50:45.228Z"
+  },
+  "templateChanges": [],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-07-31T14:50:45.228Z"
+      },
+      "action": "Monthly request created",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Request created"
+      ],
+      "_id": {
+        "$oid": "688b82c53126816645f32125"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-07-31T21:58:12.692Z"
+      },
+      "action": "Status migrated to draft (template)",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed to draft (template migration)"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-08-03T16:51:49.410Z"
+      },
+      "action": "Added monthly approvals array",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Added 12 monthly approvals for 2025"
+      ]
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-07-31T14:50:45.236Z"
+  },
+  "updatedAt": {
+    "$date": "2025-07-31T14:50:45.236Z"
+  },
+  "__v": 0,
+  "monthlyApprovals": [
+    {
+      "month": 1,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for January 2025",
+      "submittedAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 2,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for February 2025",
+      "submittedAt": {
+        "$date": "2025-02-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 3,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for March 2025",
+      "submittedAt": {
+        "$date": "2025-03-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 4,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for April 2025",
+      "submittedAt": {
+        "$date": "2025-04-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 5,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for May 2025",
+      "submittedAt": {
+        "$date": "2025-05-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 6,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for June 2025",
+      "submittedAt": {
+        "$date": "2025-06-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 7,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for July 2025",
+      "submittedAt": {
+        "$date": "2025-07-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 8,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for August 2025",
+      "submittedAt": {
+        "$date": "2025-08-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 9,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for September 2025",
+      "submittedAt": {
+        "$date": "2025-09-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 10,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for October 2025",
+      "submittedAt": {
+        "$date": "2025-10-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 11,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for November 2025",
+      "submittedAt": {
+        "$date": "2025-11-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    },
+    {
+      "month": 12,
+      "year": 2025,
+      "status": "draft",
+      "items": [],
+      "totalCost": 190,
+      "notes": "Monthly request for December 2025",
+      "submittedAt": {
+        "$date": "2025-12-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      }
+    }
+  ],
+  "approvedAt": null,
+  "approvedBy": null,
+  "approvedByEmail": null
+},
+{
+  "_id": {
+    "$oid": "688c449e57271825c8910fcf"
+  },
+  "title": "Monthly Requests",
+  "description": "Monthly Requests 1ACP",
+  "residence": {
+    "$oid": "6848258b1149b66fc94a261d"
+  },
+  "month": null,
+  "year": null,
+  "status": "approved",
+  "priority": "medium",
+  "items": [
+    {
+      "title": "Cleaning Supplies",
+      "description": "Supplies for 1ACP",
+      "quantity": 1,
+      "estimatedCost": 80,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "",
+      "tags": [],
+      "costHistory": [],
+      "itemHistory": [],
+      "costVariations": [],
+      "costSummary": null,
+      "_id": {
+        "$oid": "688c449e57271825c8910fd0"
+      },
+      "changeHistory": [],
+      "quotations": []
+    },
+    {
+      "title": "Electricity",
+      "description": "Request for electricity",
+      "quantity": 1,
+      "estimatedCost": 200,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "Cost history: 2 entries, 0 variations; Item history: 0 added, 0 removed, 1 modified",
+      "tags": [],
+      "costHistory": [
+        {
+          "month": 5,
+          "year": 2025,
+          "cost": 100,
+          "date": {
+            "$date": "2025-05-01T00:00:00.000Z"
+          },
+          "note": "Cost changed during modified - undefined",
+          "title": "Electricity",
+          "description": "Zesa",
+          "quantity": 1,
+          "category": "utilities",
+          "priority": "medium",
+          "isRecurring": true,
+          "notes": "",
+          "_id": {
+            "$oid": "688c449e57271825c8910fd2"
+          }
+        },
+        {
+          "month": 1,
+          "year": 2025,
+          "cost": 200,
+          "date": {
+            "$date": "2025-01-01T00:00:00.000Z"
+          },
+          "note": "Historical cost from 1/2025",
+          "title": "Electricity",
+          "description": "Zesa",
+          "quantity": 1,
+          "category": "utilities",
+          "priority": "medium",
+          "isRecurring": true,
+          "notes": "",
+          "_id": {
+            "$oid": "688c449e57271825c8910fd3"
+          }
+        }
+      ],
+      "itemHistory": [
+        {
+          "month": 5,
+          "year": 2025,
+          "date": {
+            "$date": "2025-05-01T00:00:00.000Z"
+          },
+          "action": "modified",
+          "status": "active",
+          "note": "modified in 5/2025",
+          "cost": 100,
+          "quantity": 1,
+          "title": "Electricity",
+          "description": "Zesa",
+          "category": "utilities",
+          "priority": "medium",
+          "isRecurring": true,
+          "notes": "",
+          "_id": {
+            "$oid": "688c449e57271825c8910fd4"
+          }
+        }
+      ],
+      "costVariations": [],
+      "costSummary": {
+        "mostRecentCost": 200,
+        "mostRecentMonth": "1/2025",
+        "uniqueCosts": [
+          200
+        ],
+        "totalVariations": 0,
+        "averageCost": "200.00"
+      },
+      "_id": {
+        "$oid": "688c449e57271825c8910fd1"
+      },
+      "changeHistory": [],
+      "quotations": []
+    }
+  ],
+  "totalEstimatedCost": 280,
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "isTemplate": true,
+  "templateVersion": 1,
+  "lastUpdated": {
+    "$date": "2025-08-01T04:37:50.091Z"
+  },
+  "effectiveFrom": {
+    "$date": "2025-08-01T04:37:50.091Z"
+  },
+  "templateMetadata": {
+    "createdWithHistoricalData": true,
+    "creationDate": {
+      "$date": "2025-08-01T04:37:50.091Z"
+    },
+    "historicalDataProvided": 2,
+    "itemHistoryProvided": 1,
+    "templateDescription": "Recurring monthly requests with historical data ",
+    "totalHistoricalEntries": 2,
+    "totalItemHistoryEntries": 1
+  },
+  "templateChanges": [],
+  "tags": [],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-01T05:10:57.259Z"
+      },
+      "action": "Sent to finance for approval",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Status changed from draft to pending"
+      ],
+      "_id": {
+        "$oid": "688c4c61d2481b583ddfde36"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-01T05:25:51.821Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Status changed to approved"
+      ],
+      "_id": {
+        "$oid": "688c4fdfd2481b583ddfe38d"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-01T06:59:20.572Z"
+      },
+      "action": "Retroactively converted approved monthly approvals to expenses",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Converted 8 approved monthly approvals to expenses"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-08-03T16:51:49.648Z"
+      },
+      "action": "Updated monthly approvals array",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Updated monthly approvals for 2025 with proper status"
+      ]
+    },
+    {
+      "date": {
+        "$date": "2025-08-03T22:56:36.701Z"
+      },
+      "action": "Template approved for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template approved for 8/2025"
+      ],
+      "_id": {
+        "$oid": "688fe92454effffa6732c872"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T02:35:35.032Z"
+      },
+      "action": "Template approved for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template approved for 8/2025"
+      ],
+      "_id": {
+        "$oid": "68901c772e7c647c942c4286"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T19:45:27.729Z"
+      },
+      "action": "Template approved for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template approved for 8/2025"
+      ],
+      "_id": {
+        "$oid": "68910dd77f91275b7a620953"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T19:45:44.657Z"
+      },
+      "action": "Template approved for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template approved for 8/2025"
+      ],
+      "_id": {
+        "$oid": "68910de87f91275b7a6209c5"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T19:45:58.739Z"
+      },
+      "action": "Template approved for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template approved for 8/2025"
+      ],
+      "_id": {
+        "$oid": "68910df67f91275b7a620a39"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-04T19:46:19.909Z"
+      },
+      "action": "Template rejected for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template rejected for 8/2025"
+      ],
+      "_id": {
+        "$oid": "68910e0b7f91275b7a620aaf"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-05T03:22:28.706Z"
+      },
+      "action": "Template approved for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template approved for 8/2025"
+      ],
+      "_id": {
+        "$oid": "689178f46afca5e9654009f0"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-05T03:27:03.247Z"
+      },
+      "action": "Template approved for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template approved for 8/2025"
+      ],
+      "_id": {
+        "$oid": "68917a076afca5e965400e55"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-05T03:30:54.990Z"
+      },
+      "action": "Template approved for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template approved for 8/2025"
+      ],
+      "_id": {
+        "$oid": "68917aee6afca5e9654016ea"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-05T03:31:45.604Z"
+      },
+      "action": "Template approved for 8/2025",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Template approved for 8/2025"
+      ],
+      "_id": {
+        "$oid": "68917b216afca5e9654017db"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-08-01T04:37:50.118Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T03:31:45.608Z"
+  },
+  "__v": 12,
+  "approvedAt": {
+    "$date": "2025-08-01T05:25:51.820Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "notes": "Approved by Finance",
+  "monthlyApprovals": [
+    {
+      "month": 1,
+      "year": 2025,
+      "status": "approved",
+      "items": [
+        {
+          "title": "Cleaning Supplies",
+          "description": "Supplies for 1ACP",
+          "quantity": 1,
+          "estimatedCost": 80,
+          "category": "maintenance",
+          "priority": "medium",
+          "notes": ""
+        },
+        {
+          "title": "Electricity",
+          "description": "Request for electricity",
+          "quantity": 1,
+          "estimatedCost": 200,
+          "category": "maintenance",
+          "priority": "medium",
+          "notes": "Cost history: 2 entries, 0 variations; Item history: 0 added, 0 removed, 1 modified"
+        }
+      ],
+      "totalCost": 280,
+      "submittedAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "notes": "Monthly request for January 2025",
+      "approvedBy": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "approvedAt": {
+        "$date": "2025-01-15T10:30:00.000Z"
+      },
+      "approvedByEmail": "finance@alamait.com"
+    },
+    {
+      "month": 2,
+      "year": 2025,
+      "status": "approved",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Monthly request for February 2025",
+      "submittedAt": {
+        "$date": "2025-02-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedBy": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "approvedAt": {
+        "$date": "2025-02-15T10:30:00.000Z"
+      },
+      "approvedByEmail": "finance@alamait.com"
+    },
+    {
+      "month": 3,
+      "year": 2025,
+      "status": "approved",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Monthly request for March 2025",
+      "submittedAt": {
+        "$date": "2025-03-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedBy": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "approvedAt": {
+        "$date": "2025-03-15T10:30:00.000Z"
+      },
+      "approvedByEmail": "finance@alamait.com"
+    },
+    {
+      "month": 4,
+      "year": 2025,
+      "status": "approved",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Monthly request for April 2025",
+      "submittedAt": {
+        "$date": "2025-04-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedBy": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "approvedAt": {
+        "$date": "2025-04-15T10:30:00.000Z"
+      },
+      "approvedByEmail": "finance@alamait.com"
+    },
+    {
+      "month": 5,
+      "year": 2025,
+      "status": "approved",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Monthly request for May 2025",
+      "submittedAt": {
+        "$date": "2025-05-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedBy": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "approvedAt": {
+        "$date": "2025-05-15T10:30:00.000Z"
+      },
+      "approvedByEmail": "finance@alamait.com"
+    },
+    {
+      "month": 6,
+      "year": 2025,
+      "status": "approved",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Monthly request for June 2025",
+      "submittedAt": {
+        "$date": "2025-06-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedBy": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "approvedAt": {
+        "$date": "2025-06-15T10:30:00.000Z"
+      },
+      "approvedByEmail": "finance@alamait.com"
+    },
+    {
+      "month": 7,
+      "year": 2025,
+      "status": "approved",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Monthly request for July 2025",
+      "submittedAt": {
+        "$date": "2025-07-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedBy": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "approvedAt": {
+        "$date": "2025-07-15T10:30:00.000Z"
+      },
+      "approvedByEmail": "finance@alamait.com"
+    },
+    {
+      "month": 8,
+      "year": 2025,
+      "status": "approved",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Template approved by Finance",
+      "submittedAt": {
+        "$date": "2025-08-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedBy": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "approvedAt": {
+        "$date": "2025-08-05T03:31:45.604Z"
+      },
+      "approvedByEmail": "finance@alamait.com"
+    },
+    {
+      "month": 9,
+      "year": 2025,
+      "status": "pending",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Pending due to previous month rejection",
+      "submittedAt": {
+        "$date": "2025-09-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedAt": null,
+      "approvedBy": null,
+      "approvedByEmail": null
+    },
+    {
+      "month": 10,
+      "year": 2025,
+      "status": "pending",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Pending due to previous month rejection",
+      "submittedAt": {
+        "$date": "2025-10-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedAt": null,
+      "approvedBy": null,
+      "approvedByEmail": null
+    },
+    {
+      "month": 11,
+      "year": 2025,
+      "status": "pending",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Pending due to previous month rejection",
+      "submittedAt": {
+        "$date": "2025-11-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedAt": null,
+      "approvedBy": null,
+      "approvedByEmail": null
+    },
+    {
+      "month": 12,
+      "year": 2025,
+      "status": "pending",
+      "items": [],
+      "totalCost": 280,
+      "notes": "Pending due to previous month rejection",
+      "submittedAt": {
+        "$date": "2025-12-01T00:00:00.000Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "approvedAt": null,
+      "approvedBy": null,
+      "approvedByEmail": null
+    }
+  ]
+},
+{
+  "_id": {
+    "$oid": "6890f0ee5c29ab0f1589dc2e"
+  },
+  "title": "Water Services",
+  "description": "Water for St Kilda",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "month": null,
+  "year": null,
+  "status": "draft",
+  "priority": "medium",
+  "items": [
+    {
+      "title": "Water",
+      "description": "Water requests",
+      "quantity": 1,
+      "estimatedCost": 10,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": false,
+      "notes": "water. Cost history: 1 entries, 0 variations; Item history: 1 added, 0 removed, 0 modified",
+      "tags": [],
+      "costHistory": [
+        {
+          "month": 8,
+          "year": 2025,
+          "cost": 10,
+          "date": {
+            "$date": "2025-07-31T22:00:00.000Z"
+          },
+          "note": "Historical cost from 8/2025",
+          "_id": {
+            "$oid": "6890f0ee5c29ab0f1589dc30"
+          }
+        }
+      ],
+      "itemHistory": [
+        {
+          "month": 8,
+          "year": 2025,
+          "date": {
+            "$date": "2025-07-31T22:00:00.000Z"
+          },
+          "action": "added",
+          "status": "active",
+          "note": "added in 8/2025",
+          "cost": 10,
+          "quantity": 1,
+          "_id": {
+            "$oid": "6890f0ee5c29ab0f1589dc31"
+          }
+        }
+      ],
+      "costVariations": [],
+      "costSummary": {
+        "mostRecentCost": 10,
+        "mostRecentMonth": "8/2025",
+        "uniqueCosts": [
+          10
+        ],
+        "totalVariations": 0,
+        "averageCost": "10.00"
+      },
+      "_id": {
+        "$oid": "6890f0ee5c29ab0f1589dc2f"
+      },
+      "changeHistory": [],
+      "quotations": []
+    }
+  ],
+  "totalEstimatedCost": 10,
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "isTemplate": true,
+  "templateVersion": 1,
+  "lastUpdated": {
+    "$date": "2025-08-04T17:42:06.458Z"
+  },
+  "effectiveFrom": {
+    "$date": "2025-08-04T17:42:06.458Z"
+  },
+  "templateMetadata": {
+    "createdWithManualHistory": true,
+    "creationDate": {
+      "$date": "2025-08-04T17:42:06.458Z"
+    },
+    "historicalDataProvided": 1,
+    "itemHistoryProvided": 1,
+    "templateDescription": "Water for St Kilda",
+    "totalHistoricalEntries": 1,
+    "totalItemHistoryEntries": 1
+  },
+  "templateChanges": [],
+  "tags": [],
+  "monthlyApprovals": [],
+  "requestHistory": [],
+  "createdAt": {
+    "$date": "2025-08-04T17:42:06.501Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-04T17:42:06.501Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6891762c6afca5e9653ffc2d"
+  },
+  "title": "Fife",
+  "description": "Monthly Requests for Fife",
+  "residence": {
+    "$oid": "6859be80cabd83fabe7761de"
+  },
+  "month": null,
+  "year": null,
+  "status": "draft",
+  "priority": "medium",
+  "items": [
+    {
+      "title": "WiFi",
+      "description": "WiFi requests",
+      "quantity": 1,
+      "estimatedCost": 100,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "none",
+      "tags": [],
+      "costSummary": {
+        "uniqueCosts": []
+      },
+      "_id": {
+        "$oid": "6891762c6afca5e9653ffc2e"
+      },
+      "costHistory": [],
+      "itemHistory": [],
+      "costVariations": [],
+      "changeHistory": [],
+      "quotations": []
+    },
+    {
+      "title": "Water",
+      "description": "Water requests",
+      "quantity": 1,
+      "estimatedCost": 200,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "",
+      "tags": [],
+      "costSummary": {
+        "uniqueCosts": []
+      },
+      "_id": {
+        "$oid": "6891762c6afca5e9653ffc2f"
+      },
+      "costHistory": [],
+      "itemHistory": [],
+      "costVariations": [],
+      "changeHistory": [],
+      "quotations": []
+    },
+    {
+      "title": "Gas",
+      "description": "Gas requests",
+      "quantity": 1,
+      "estimatedCost": 90,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "",
+      "tags": [],
+      "costSummary": {
+        "uniqueCosts": []
+      },
+      "_id": {
+        "$oid": "6891762c6afca5e9653ffc30"
+      },
+      "costHistory": [],
+      "itemHistory": [],
+      "costVariations": [],
+      "changeHistory": [],
+      "quotations": []
+    },
+    {
+      "title": "Electricty",
+      "description": "Electricty requests",
+      "quantity": 1,
+      "estimatedCost": 150,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "",
+      "tags": [],
+      "costSummary": {
+        "uniqueCosts": []
+      },
+      "_id": {
+        "$oid": "6891762c6afca5e9653ffc31"
+      },
+      "costHistory": [],
+      "itemHistory": [],
+      "costVariations": [],
+      "changeHistory": [],
+      "quotations": []
+    }
+  ],
+  "totalEstimatedCost": 540,
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "isTemplate": true,
+  "templateVersion": 1,
+  "lastUpdated": {
+    "$date": "2025-08-05T03:10:36.706Z"
+  },
+  "effectiveFrom": {
+    "$date": "2025-08-05T03:10:36.706Z"
+  },
+  "templateMetadata": {
+    "createdWithHistoricalData": false,
+    "creationDate": {
+      "$date": "2025-08-05T03:10:36.706Z"
+    },
+    "historicalDataProvided": 0,
+    "itemHistoryProvided": 0,
+    "templateDescription": "Monthly Requests for Fife",
+    "totalHistoricalEntries": 0,
+    "totalItemHistoryEntries": 0
+  },
+  "templateChanges": [],
+  "tags": [],
+  "monthlyApprovals": [
+    {
+      "month": 8,
+      "year": 2025,
+      "status": "pending",
+      "items": [
+        {
+          "title": "WiFi",
+          "description": "WiFi requests",
+          "quantity": 1,
+          "estimatedCost": 100,
+          "category": "maintenance",
+          "priority": "medium",
+          "notes": "none",
+          "_id": {
+            "$oid": "689177f46afca5e9654004b4"
+          }
+        },
+        {
+          "title": "Water",
+          "description": "Water requests",
+          "quantity": 1,
+          "estimatedCost": 200,
+          "category": "maintenance",
+          "priority": "medium",
+          "notes": "",
+          "_id": {
+            "$oid": "689177f46afca5e9654004b5"
+          }
+        },
+        {
+          "title": "Gas",
+          "description": "Gas requests",
+          "quantity": 1,
+          "estimatedCost": 90,
+          "category": "maintenance",
+          "priority": "medium",
+          "notes": "",
+          "_id": {
+            "$oid": "689177f46afca5e9654004b6"
+          }
+        },
+        {
+          "title": "Electricty",
+          "description": "Electricty requests",
+          "quantity": 1,
+          "estimatedCost": 150,
+          "category": "maintenance",
+          "priority": "medium",
+          "notes": "",
+          "_id": {
+            "$oid": "689177f46afca5e9654004b7"
+          }
+        }
+      ],
+      "totalCost": 540,
+      "submittedAt": {
+        "$date": "2025-08-05T03:18:12.378Z"
+      },
+      "submittedBy": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "_id": {
+        "$oid": "689177f46afca5e9654004b3"
+      }
+    }
+  ],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-05T03:10:37.093Z"
+      },
+      "action": "Template created with historical data",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Template created with historical data"
+      ],
+      "_id": {
+        "$oid": "6891762d6afca5e9653ffc34"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-05T03:18:12.381Z"
+      },
+      "action": "Sent 8/2025 monthly request to finance",
+      "user": {
+        "$oid": "67c023adae5e27657502e887"
+      },
+      "changes": [
+        "Monthly request for 8/2025 sent to finance"
+      ],
+      "_id": {
+        "$oid": "689177f46afca5e9654004b8"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-08-05T03:10:36.721Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T03:18:12.703Z"
+  },
+  "__v": 2
+},
+{
+  "_id": {
+    "$oid": "689177f46afca5e9654004b9"
+  },
+  "title": "Fife - 8/2025",
+  "description": "Monthly Requests for Fife for August 2025",
+  "residence": {
+    "$oid": "6859be80cabd83fabe7761de"
+  },
+  "month": 8,
+  "year": 2025,
+  "status": "completed",
+  "priority": "medium",
+  "items": [
+    {
+      "title": "WiFi",
+      "description": "WiFi requests",
+      "quantity": 1,
+      "estimatedCost": 100,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "none",
+      "tags": [],
+      "costSummary": {
+        "uniqueCosts": []
+      },
+      "_id": {
+        "$oid": "689177f46afca5e9654004ba"
+      },
+      "costHistory": [],
+      "itemHistory": [],
+      "costVariations": [],
+      "changeHistory": [],
+      "quotations": []
+    },
+    {
+      "title": "Water",
+      "description": "Water requests",
+      "quantity": 1,
+      "estimatedCost": 200,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "",
+      "tags": [],
+      "costSummary": {
+        "uniqueCosts": []
+      },
+      "_id": {
+        "$oid": "689177f46afca5e9654004bb"
+      },
+      "costHistory": [],
+      "itemHistory": [],
+      "costVariations": [],
+      "changeHistory": [],
+      "quotations": []
+    },
+    {
+      "title": "Gas",
+      "description": "Gas requests",
+      "quantity": 1,
+      "estimatedCost": 90,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "",
+      "tags": [],
+      "costSummary": {
+        "uniqueCosts": []
+      },
+      "_id": {
+        "$oid": "689177f46afca5e9654004bc"
+      },
+      "costHistory": [],
+      "itemHistory": [],
+      "costVariations": [],
+      "changeHistory": [],
+      "quotations": []
+    },
+    {
+      "title": "Electricty",
+      "description": "Electricty requests",
+      "quantity": 1,
+      "estimatedCost": 150,
+      "category": "maintenance",
+      "priority": "medium",
+      "isRecurring": true,
+      "notes": "",
+      "tags": [],
+      "costSummary": {
+        "uniqueCosts": []
+      },
+      "_id": {
+        "$oid": "689177f46afca5e9654004bd"
+      },
+      "costHistory": [],
+      "itemHistory": [],
+      "costVariations": [],
+      "changeHistory": [],
+      "quotations": []
+    }
+  ],
+  "totalEstimatedCost": 540,
+  "submittedBy": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "notes": "Approved by Finance",
+  "isTemplate": false,
+  "templateVersion": 1,
+  "tags": [],
+  "monthlyApprovals": [],
+  "lastUpdated": {
+    "$date": "2025-08-05T03:18:12.383Z"
+  },
+  "effectiveFrom": {
+    "$date": "2025-08-05T03:18:12.383Z"
+  },
+  "templateChanges": [],
+  "requestHistory": [
+    {
+      "date": {
+        "$date": "2025-08-05T03:33:54.679Z"
+      },
+      "action": "Monthly request approved",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "Status changed to approved"
+      ],
+      "_id": {
+        "$oid": "68917ba26afca5e965401f8c"
+      }
+    },
+    {
+      "date": {
+        "$date": "2025-08-05T03:33:56.099Z"
+      },
+      "action": "Converted to expense",
+      "user": {
+        "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+      },
+      "changes": [
+        "4 items converted to expenses"
+      ],
+      "_id": {
+        "$oid": "68917ba46afca5e965401f98"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2025-08-05T03:18:12.386Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-05T03:33:56.102Z"
+  },
+  "__v": 2,
+  "approvedAt": {
+    "$date": "2025-08-05T03:33:54.679Z"
+  },
+  "approvedBy": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "approvedByEmail": "finance@alamait.com",
+  "templateMetadata": {}
+}]
