@@ -7,9 +7,13 @@ const { auth, checkRole } = require('../../middleware/auth');
 router.use(auth);
 router.use(checkRole('admin', 'finance_admin', 'finance_user', 'ceo'));
 
-router.get(
-  '/',
-  auditLogController.getAuditLogs
-);
+// Get all audit logs
+router.get('/', auditLogController.getAuditLogs);
+
+// Get audit log by ID
+router.get('/:id', auditLogController.getAuditLogById);
+
+// Get audit logs for a specific user
+router.get('/user/:userId', auditLogController.getUserAuditLogs);
 
 module.exports = router; 

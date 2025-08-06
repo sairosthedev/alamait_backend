@@ -20,7 +20,8 @@ const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
 // Category to account code mapping (updated to match chart of accounts)
 const CATEGORY_TO_ACCOUNT_CODE = {
     'Maintenance': '5003', // Transportation Expense (for maintenance)
-    'Utilities': '5099',   // Other Operating Expenses (for utilities)
+    'Utilities': '5001',   // Utilities - Water (for utilities)
+    'Water': '5001',       // Utilities - Water (specific for water)
     'Taxes': '5099',       // Other Operating Expenses (for taxes)
     'Insurance': '5099',   // Other Operating Expenses (for insurance)
     'Salaries': '5099',    // Other Operating Expenses (for salaries)

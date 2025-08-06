@@ -554,7 +554,7 @@ exports.createRequest = async (req, res) => {
         }
         
         // Validate type based on user role
-        if (user.role === 'student' && type !== 'maintenance') {
+        if (user.role === 'student' && type !== 'maintenance' && type !== 'student_maintenance') {
             return res.status(400).json({ message: 'Students can only submit maintenance requests' });
         }
         
@@ -568,8 +568,8 @@ exports.createRequest = async (req, res) => {
             }
         }
         
-        // Validate non-student specific fields
-        if (user.role !== 'student' && type !== 'maintenance') {
+        // Validate non-student specific fields (only for non-maintenance requests)
+        if (user.role !== 'student' && type !== 'maintenance' && type !== 'student_maintenance') {
             if (!department) {
                 return res.status(400).json({ message: 'Department is required for non-student requests' });
             }
@@ -894,7 +894,7 @@ exports.createRequest = async (req, res) => {
         }
         
         // For admin requests, set initial admin approval
-        if (user.role === 'admin' && type !== 'maintenance') {
+        if (user.role === 'admin' && type !== 'maintenance' && type !== 'student_maintenance') {
             requestData.approval = {
                 admin: {
                     approved: true,

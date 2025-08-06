@@ -556,6 +556,75 @@ exports.updatePaymentStatus = async (req, res) => {
             text: emailText
         });
 
+        // Auto-generate receipt for application payment
+        try {
+            const { createReceipt } = require('../receiptController');
+            
+            // Create receipt items based on application type
+            let receiptItems = [];
+            let paymentDescription = '';
+            
+            if (application.requestType === 'upgrade') {
+                paymentDescription = 'Room Upgrade Payment';
+                receiptItems = [{
+                    description: `Room Upgrade Payment - ${roomNumber}`,
+                    quantity: 1,
+                    unitPrice: application.paymentAmount || 0,
+                    totalPrice: application.paymentAmount || 0
+                }];
+            } else {
+                paymentDescription = 'Room Allocation Payment';
+                receiptItems = [{
+                    description: `Room Allocation Payment - ${roomNumber}`,
+                    quantity: 1,
+                    unitPrice: application.paymentAmount || 0,
+                    totalPrice: application.paymentAmount || 0
+                }];
+            }
+            
+            // Create receipt data
+            const receiptData = {
+                student: application.student._id,
+                items: receiptItems,
+                notes: `${paymentDescription} for ${application.firstName} ${application.lastName} - Room ${roomNumber}`,
+                template: 'default',
+                paymentMethod: application.paymentMethod || 'bank_transfer',
+                paymentReference: `APP-${application.applicationCode}`,
+                residence: residence._id,
+                room: roomNumber
+            };
+
+            // Create receipt
+            const receiptReq = {
+                body: receiptData,
+                user: req.user
+            };
+            
+            const receiptRes = {
+                status: (code) => ({
+                    json: (data) => {
+                        if (code === 201) {
+                            console.log(`✅ Receipt automatically generated for application payment`);
+                            console.log(`   Application: ${application.applicationCode}`);
+                            console.log(`   Student: ${application.firstName} ${application.lastName}`);
+                            console.log(`   Room: ${roomNumber}`);
+                            console.log(`   Receipt Number: ${data?.data?.receipt?.receiptNumber || 'N/A'}`);
+                        } else {
+                            console.error('❌ Failed to generate receipt for application payment:', data);
+                        }
+                    }
+                })
+            };
+
+            await createReceipt(receiptReq, receiptRes);
+            
+        } catch (receiptError) {
+            console.error('❌ Error auto-generating receipt for application payment:', receiptError);
+            console.error('   Application:', application.applicationCode);
+            console.error('   Student:', application.firstName, application.lastName);
+            // Don't fail the application update if receipt generation fails
+        }
+
         // Return updated room information along with the application
         const updatedRoom = {
             name: roomNumber,

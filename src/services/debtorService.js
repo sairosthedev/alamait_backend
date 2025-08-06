@@ -1,14 +1,20 @@
 const Debtor = require('../models/Debtor');
 const User = require('../models/User');
 const Residence = require('../models/Residence');
+const Application = require('../models/Application');
+const Lease = require('../models/Lease');
+const Payment = require('../models/Payment');
 
 /**
- * Automatically create a debtor account for a new student
+ * Automatically create a debtor account for a new student with full financial data
  * @param {Object} user - The user object (student)
  * @param {Object} options - Additional options
  * @param {string} options.residenceId - Residence ID if available
  * @param {string} options.roomNumber - Room number if available
  * @param {string} options.createdBy - User ID who created the student
+ * @param {Date} options.startDate - Lease start date if available
+ * @param {Date} options.endDate - Lease end date if available
+ * @param {number} options.roomPrice - Room price if available
  * @returns {Promise<Object>} Created debtor object
  */
 exports.createDebtorForStudent = async (user, options = {}) => {
@@ -31,31 +37,167 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             phone: user.phone
         };
 
-        // Create debtor object
+        // Initialize financial data
+        let roomPrice = 0;
+        let startDate = null;
+        let endDate = null;
+        let residenceId = options.residenceId;
+        let roomNumber = options.roomNumber;
+
+        // Try to get financial data from various sources
+        try {
+            // 1. Check for existing application
+            const application = await Application.findOne({ student: user._id })
+                .populate('residence', 'name rooms roomPrice');
+            
+            if (application) {
+                console.log(`📝 Found application for ${user.email}`);
+                startDate = application.startDate || options.startDate;
+                endDate = application.endDate || options.endDate;
+                roomPrice = application.roomPrice || 0;
+                residenceId = residenceId || application.residence?._id;
+                roomNumber = roomNumber || application.allocatedRoom || application.roomNumber;
+                
+                // If no room price from application, try residence
+                if (!roomPrice && application.residence) {
+                    roomPrice = application.residence.roomPrice || 0;
+                    
+                    // If still no room price, try to find it in rooms array
+                    if (!roomPrice && application.residence.rooms && application.residence.rooms.length > 0) {
+                        const room = application.residence.rooms.find(r => 
+                            r.roomNumber === roomNumber || r.name === roomNumber
+                        );
+                        if (room && room.price) {
+                            roomPrice = room.price;
+                        }
+                    }
+                }
+            }
+
+            // 2. Check for existing lease if no application data
+            if (!startDate || !endDate) {
+                const lease = await Lease.findOne({ studentId: user._id });
+                if (lease) {
+                    console.log(`📄 Found lease for ${user.email}`);
+                    startDate = startDate || lease.startDate;
+                    endDate = endDate || lease.endDate;
+                    residenceId = residenceId || lease.residence;
+                    roomNumber = roomNumber || lease.room;
+                }
+            }
+
+            // 3. Get residence data if we have residenceId but no room price
+            if (residenceId && !roomPrice) {
+                const residence = await Residence.findById(residenceId);
+                if (residence) {
+                    roomPrice = residence.roomPrice || 0;
+                    
+                    // Try to find room price in rooms array
+                    if (!roomPrice && residence.rooms && residence.rooms.length > 0) {
+                        const room = residence.rooms.find(r => 
+                            r.roomNumber === roomNumber || r.name === roomNumber
+                        );
+                        if (room && room.price) {
+                            roomPrice = room.price;
+                        } else if (residence.rooms[0] && residence.rooms[0].price) {
+                            // Use first room's price as fallback
+                            roomPrice = residence.rooms[0].price;
+                            roomNumber = roomNumber || residence.rooms[0].roomNumber || residence.rooms[0].name;
+                        }
+                    }
+                }
+            }
+
+            // 4. Set default values if still no data
+            if (!roomPrice) {
+                roomPrice = options.roomPrice || 150; // Default room price
+                console.log(`⚠️  Using default room price $${roomPrice} for ${user.email}`);
+            }
+
+            if (!startDate) {
+                startDate = options.startDate || new Date(); // Default to current date
+                console.log(`⚠️  Using current date as start date for ${user.email}`);
+            }
+
+            if (!endDate) {
+                endDate = options.endDate || new Date(new Date().setMonth(new Date().getMonth() + 6)); // Default to 6 months
+                console.log(`⚠️  Using 6-month default end date for ${user.email}`);
+            }
+
+        } catch (error) {
+            console.error(`❌ Error gathering financial data for ${user.email}:`, error);
+            // Continue with default values
+            roomPrice = options.roomPrice || 150;
+            startDate = options.startDate || new Date();
+            endDate = options.endDate || new Date(new Date().setMonth(new Date().getMonth() + 6));
+        }
+
+        // Calculate billing period and expected total
+        const billingPeriod = Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24 * 30.44));
+        const expectedTotal = roomPrice * billingPeriod;
+
+        // Get existing payments for this student
+        const payments = await Payment.find({
+            student: user._id,
+            status: { $in: ['verified', 'paid', 'confirmed'] }
+        });
+
+        // Calculate total paid
+        const totalPaid = payments.reduce((sum, payment) => {
+            let paymentTotal = 0;
+            if (payment.rentAmount && payment.rentAmount > 0) paymentTotal += payment.rentAmount;
+            if (payment.rent && payment.rent > 0) paymentTotal += payment.rent;
+            if (payment.adminFee && payment.adminFee > 0) paymentTotal += payment.adminFee;
+            if (payment.deposit && payment.deposit > 0) paymentTotal += payment.deposit;
+            if (payment.amount && payment.amount > 0) paymentTotal += payment.amount;
+            return sum + paymentTotal;
+        }, 0);
+
+        // Calculate current balance
+        const currentBalance = Math.max(expectedTotal - totalPaid, 0);
+        const overdueAmount = currentBalance > 0 ? currentBalance : 0;
+
+        // Determine status
+        let status = 'active';
+        if (currentBalance === 0) {
+            status = 'paid';
+        } else if (currentBalance > 0 && new Date(endDate) < new Date()) {
+            status = 'overdue';
+        }
+
+        // Create debtor object with full financial data
         const debtorData = {
             debtorCode,
             user: user._id,
             accountCode,
-            status: 'active',
+            status,
+            currentBalance,
+            totalOwed: expectedTotal,
+            totalPaid,
+            overdueAmount,
+            creditLimit: roomPrice * 2, // 2 months credit limit
+            paymentTerms: 'monthly',
+            residence: residenceId,
+            roomNumber,
+            billingPeriod: `${billingPeriod} months`,
+            startDate,
+            endDate,
+            roomPrice,
             contactInfo,
             createdBy: options.createdBy || user._id
         };
-
-        // Add residence info if provided
-        if (options.residenceId) {
-            debtorData.residence = options.residenceId;
-        }
-
-        // Add room number if provided
-        if (options.roomNumber) {
-            debtorData.roomNumber = options.roomNumber;
-        }
 
         // Create the debtor
         const debtor = new Debtor(debtorData);
         await debtor.save();
 
         console.log(`✅ Debtor account created for student ${user.email}: ${debtorCode}`);
+        console.log(`   Room Price: $${roomPrice}`);
+        console.log(`   Billing Period: ${billingPeriod} months`);
+        console.log(`   Expected Total: $${expectedTotal}`);
+        console.log(`   Total Paid: $${totalPaid}`);
+        console.log(`   Current Balance: $${currentBalance}`);
+        console.log(`   Status: ${status}`);
 
         return debtor;
     } catch (error) {

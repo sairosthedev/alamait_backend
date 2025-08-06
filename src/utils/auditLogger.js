@@ -7,25 +7,43 @@
 // that stores audit information in a separate collection or table
 
 /**
- * Creates an audit log entry
+ * Creates a simple audit log entry
  * @param {Object} logData - The audit log data
- * @param {string} logData.action - The action performed (CREATE, UPDATE, DELETE, etc.)
- * @param {string} logData.resourceType - The type of resource (Expense, BalanceSheet, etc.)
- * @param {string} logData.resourceId - The ID of the resource
+ * @param {string} logData.action - The action performed
+ * @param {string} logData.collection - The collection name
+ * @param {string} logData.recordId - The ID of the record
  * @param {string} logData.userId - The ID of the user who performed the action
  * @param {string} logData.details - Additional details about the action
- * @returns {Promise<void>}
+ * @returns {Promise<Object>} Created audit log entry
  */
 const AuditLog = require('../models/AuditLog');
 exports.createAuditLog = async (logData) => {
-    const { action, resourceType, resourceId, userId, details } = logData;
-    // Log to console
-    console.log(`[AUDIT LOG] ${new Date().toISOString()} | ${action} | ${resourceType} | ${resourceId} | User: ${userId} | ${details}`);
-    // Persist to database
+    const {
+        action,
+        collection,
+        recordId,
+        userId,
+        before = null,
+        after = null,
+        details = ''
+    } = logData;
+
     try {
-        await AuditLog.create({ action, resourceType, resourceId, userId, details });
-    } catch (err) {
-        console.error('Failed to save audit log:', err);
+        const auditEntry = await AuditLog.create({
+            user: userId,
+            action,
+            collection,
+            recordId,
+            before,
+            after,
+            details,
+            timestamp: new Date()
+        });
+
+        console.log(`[AUDIT] ${action} on ${collection} - ${recordId} by user ${userId}`);
+        return auditEntry;
+    } catch (error) {
+        console.error('Failed to save audit log:', error);
+        throw error;
     }
-    return true;
 }; 

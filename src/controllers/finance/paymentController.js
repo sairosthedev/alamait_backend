@@ -184,6 +184,79 @@ exports.updatePaymentStatus = async (req, res) => {
         payment.updatedBy = req.user._id;
         await payment.save();
 
+        // Auto-generate receipt when payment status is updated to successful
+        if (status === 'Paid' || status === 'confirmed' || status === 'completed') {
+            try {
+                // Check if receipt already exists for this payment
+                const existingReceipt = await require('../models/Receipt').findOne({ payment: payment._id });
+                
+                if (!existingReceipt) {
+                    const { createReceipt } = require('../receiptController');
+                    
+                    // Create detailed receipt items based on payment breakdown
+                    let receiptItems = [];
+                    
+                    if (payment.payments && payment.payments.length > 0) {
+                        // Use the detailed payment breakdown
+                        receiptItems = payment.payments.map(paymentItem => ({
+                            description: `${paymentItem.type.charAt(0).toUpperCase() + paymentItem.type.slice(1)} Payment - ${payment.paymentMonth}`,
+                            quantity: 1,
+                            unitPrice: paymentItem.amount,
+                            totalPrice: paymentItem.amount
+                        }));
+                    } else {
+                        // Fallback to single item
+                        receiptItems = [{
+                            description: `Accommodation Payment - ${payment.paymentMonth}`,
+                            quantity: 1,
+                            unitPrice: payment.totalAmount,
+                            totalPrice: payment.totalAmount
+                        }];
+                    }
+                    
+                    // Create receipt data
+                    const receiptData = {
+                        paymentId: payment._id,
+                        items: receiptItems,
+                        notes: `Payment status updated to ${status} for ${payment.student?.firstName} ${payment.student?.lastName} - ${payment.paymentMonth}`,
+                        template: 'default'
+                    };
+
+                    // Create receipt
+                    const receiptReq = {
+                        body: receiptData,
+                        user: req.user
+                    };
+                    
+                    const receiptRes = {
+                        status: (code) => ({
+                            json: (data) => {
+                                if (code === 201) {
+                                    console.log(`✅ Receipt automatically generated for payment status update (Finance)`);
+                                    console.log(`   Payment ID: ${payment.paymentId}`);
+                                    console.log(`   Student: ${payment.student?.firstName} ${payment.student?.lastName}`);
+                                    console.log(`   Status: ${status}`);
+                                    console.log(`   Receipt Number: ${data?.data?.receipt?.receiptNumber || 'N/A'}`);
+                                } else {
+                                    console.error('❌ Failed to generate receipt on status update (Finance):', data);
+                                }
+                            }
+                        })
+                    };
+
+                    await createReceipt(receiptReq, receiptRes);
+                } else {
+                    console.log(`ℹ️  Receipt already exists for payment ${payment.paymentId} (Finance)`);
+                }
+                
+            } catch (receiptError) {
+                console.error('❌ Error auto-generating receipt on status update (Finance):', receiptError);
+                console.error('   Payment ID:', payment.paymentId);
+                console.error('   Student:', payment.student?.firstName, payment.student?.lastName);
+                // Don't fail the status update if receipt generation fails
+            }
+        }
+
         // Return updated payment
         res.json({
             message: `Payment ${status.toLowerCase()} successfully`,

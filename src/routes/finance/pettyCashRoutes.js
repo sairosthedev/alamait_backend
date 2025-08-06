@@ -1,83 +1,68 @@
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
-const { auth, checkAdminOrFinance } = require('../../middleware/auth');
-const {
-    getAllPettyCash,
-    getPettyCashById,
-    getEligibleUsers,
-    allocatePettyCash,
-    updatePettyCash,
-    getPettyCashUsage,
-    createPettyCashUsage,
-    updatePettyCashUsageStatus,
-    createPettyCashEntry,
-    getPettyCashBalance,
-    getAllPettyCashBalances,
-    transferPettyCash
-} = require('../../controllers/finance/pettyCashController');
+const pettyCashController = require('../../controllers/finance/pettyCashController');
+const { authenticateToken } = require('../../middleware/auth');
+const roleMiddleware = require('../../middleware/roleMiddleware');
 
-// Apply authentication and role middleware to all routes
-router.use(auth);
-router.use(checkAdminOrFinance);
+// Validation middleware
+const validatePettyCashInitialization = [
+    body('amount').isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
+    body('custodian').notEmpty().withMessage('Custodian is required'),
+    body('description').optional().isString().withMessage('Description must be a string')
+];
 
-// Petty Cash Allocation Routes
-router.get('/', getAllPettyCash);
-router.get('/eligible-users', getEligibleUsers);
-router.get('/:id', getPettyCashById);
+const validatePettyCashReplenishment = [
+    body('amount').isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
+    body('description').optional().isString().withMessage('Description must be a string'),
+    body('receipts').optional().isArray().withMessage('Receipts must be an array')
+];
 
-router.post('/', [
-    body('userId').notEmpty().withMessage('User ID is required'),
-    body('amount').isNumeric().withMessage('Amount must be a number'),
-    body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
-    body('notes').optional().isString().withMessage('Notes must be a string')
-], allocatePettyCash);
-
-router.put('/:id', [
-    body('allocatedAmount').optional().isNumeric().withMessage('Allocated amount must be a number'),
-    body('status').optional().isIn(['active', 'inactive', 'closed']).withMessage('Invalid status'),
-    body('notes').optional().isString().withMessage('Notes must be a string')
-], updatePettyCash);
-
-// Petty Cash Usage Routes
-router.get('/:pettyCashId/usage', getPettyCashUsage);
-
-router.post('/usage', [
-    body('pettyCashId').notEmpty().withMessage('Petty cash ID is required'),
-    body('amount').isNumeric().withMessage('Amount must be a number'),
-    body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
+const validatePettyCashExpense = [
+    body('amount').isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
+    body('category').isIn(['office_supplies', 'transportation', 'meals', 'maintenance', 'other']).withMessage('Invalid category'),
     body('description').notEmpty().withMessage('Description is required'),
-    body('category').notEmpty().withMessage('Category is required'),
-    body('date').optional().isISO8601().withMessage('Date must be a valid date'),
-    body('notes').optional().isString().withMessage('Notes must be a string')
-], createPettyCashUsage);
+    body('receipt').optional().isString().withMessage('Receipt must be a string')
+];
 
-router.put('/usage/:id', [
-    body('status').isIn(['pending', 'approved', 'rejected']).withMessage('Invalid status'),
-    body('notes').optional().isString().withMessage('Notes must be a string')
-], updatePettyCashUsageStatus);
+// Routes
 
-// Direct petty cash entry routes (for admin and petty cash users)
-router.get('/balance', getPettyCashBalance);
-router.get('/all-balances', getAllPettyCashBalances);
+// Initialize petty cash fund
+router.post('/initialize', 
+    authenticateToken, 
+    roleMiddleware(['admin', 'finance_admin']), 
+    validatePettyCashInitialization,
+    pettyCashController.initializePettyCash
+);
 
-router.post('/entry', [
-    body('amount').isNumeric().withMessage('Amount must be a number'),
-    body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
-    body('description').notEmpty().withMessage('Description is required'),
-    body('category').notEmpty().withMessage('Category is required'),
-    body('category').isIn(['maintenance', 'utilities', 'supplies', 'transportation', 'meals', 'other']).withMessage('Invalid category'),
-    body('date').optional().isISO8601().withMessage('Date must be a valid date'),
-    body('notes').optional().isString().withMessage('Notes must be a string')
-], createPettyCashEntry);
+// Replenish petty cash fund
+router.post('/replenish', 
+    authenticateToken, 
+    roleMiddleware(['admin', 'finance_admin', 'finance_user']), 
+    validatePettyCashReplenishment,
+    pettyCashController.replenishPettyCash
+);
 
-// Petty cash transfer route (for finance users only)
-router.post('/transfer', [
-    body('fromRole').notEmpty().withMessage('From role is required'),
-    body('toRole').notEmpty().withMessage('To role is required'),
-    body('amount').isNumeric().withMessage('Amount must be a number'),
-    body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
-    body('notes').optional().isString().withMessage('Notes must be a string')
-], transferPettyCash);
+// Record petty cash expense
+router.post('/expense', 
+    authenticateToken, 
+    roleMiddleware(['admin', 'finance_admin', 'finance_user']), 
+    validatePettyCashExpense,
+    pettyCashController.recordExpense
+);
+
+// Get petty cash status
+router.get('/status', 
+    authenticateToken, 
+    roleMiddleware(['admin', 'finance_admin', 'finance_user']), 
+    pettyCashController.getPettyCashStatus
+);
+
+// Get petty cash report
+router.get('/report', 
+    authenticateToken, 
+    roleMiddleware(['admin', 'finance_admin', 'finance_user']), 
+    pettyCashController.getPettyCashReport
+);
 
 module.exports = router; 

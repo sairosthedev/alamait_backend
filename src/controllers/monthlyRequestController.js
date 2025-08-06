@@ -2349,12 +2349,18 @@ async function convertRequestToExpenses(request, user) {
         
         // For templates, create one expense with total cost
         if (request.isTemplate) {
+            // Get proper expense account for template (use first item as reference)
+            const firstItem = request.items[0];
+            const expenseAccountCode = firstItem ? await AccountMappingService.getExpenseAccountForItem(firstItem) : await AccountMappingService.getDefaultExpenseAccount();
+            const expenseAccount = await Account.findOne({ code: expenseAccountCode });
+            const expenseCategory = expenseAccount ? expenseAccount.name.replace(' Expense', '') : 'Other';
+            
             const expense = new Expense({
                 expenseId: expenseId,
                 title: `Monthly Request - ${request.title}`,
                 description: request.description || `Monthly request for ${request.residence.name}`,
                 amount: request.totalEstimatedCost,
-                category: mapCategory(request.items[0]?.category || 'other'),
+                category: expenseCategory,
                 expenseDate: new Date(request.year || new Date().getFullYear(), (request.month || new Date().getMonth() + 1) - 1, 1),
                 period: 'monthly',
                 paymentStatus: 'Pending',
@@ -2362,7 +2368,7 @@ async function convertRequestToExpenses(request, user) {
                 monthlyRequestId: request._id,
                 residence: request.residence, // Add residence field
                 createdBy: user._id,
-                notes: `Converted from monthly request template: ${request.title}. Total items: ${request.items.length}${request.items.some(item => item.provider) ? ` - Providers: ${request.items.filter(item => item.provider).map(item => item.provider).join(', ')}` : ''}`
+                notes: `Converted from monthly request template: ${request.title}. Total items: ${request.items.length}${request.items.some(item => item.provider) ? ` - Providers: ${request.items.filter(item => item.provider).map(item => item.provider).join(', ')}` : ''} - Account: ${expenseAccountCode}`
             });
             
             await expense.save();
@@ -2399,12 +2405,17 @@ async function convertRequestToExpenses(request, user) {
                 const approvedQuotation = item.quotations?.find(q => q.isApproved);
                     
                     if (approvedQuotation) {
+                        // Get proper expense account using the new mapping service
+                        const expenseAccountCode = await AccountMappingService.getExpenseAccountForItem(item);
+                        const expenseAccount = await Account.findOne({ code: expenseAccountCode });
+                        const expenseCategory = expenseAccount ? expenseAccount.name.replace(' Expense', '') : 'Other';
+                        
                         const expense = new Expense({
                         expenseId: `${expenseId}_item_${i}`,
                         title: `${request.title} - ${item.title}`,
                             description: item.description,
                             amount: approvedQuotation.amount,
-                        category: mapCategory(item.category),
+                        category: expenseCategory,
                         expenseDate: new Date(request.year, request.month - 1, 1),
                         period: 'monthly',
                         paymentStatus: 'Pending',
@@ -2414,7 +2425,7 @@ async function convertRequestToExpenses(request, user) {
                         quotationId: approvedQuotation._id,
                         residence: request.residence, // Add residence field
                         createdBy: user._id,
-                        notes: `Converted from monthly request item: ${item.title}${item.provider ? ` - Provider: ${item.provider}` : ''}`
+                        notes: `Converted from monthly request item: ${item.title}${item.provider ? ` - Provider: ${item.provider}` : ''} - Account: ${expenseAccountCode}`
                         });
                         
                         await expense.save();
@@ -2441,12 +2452,17 @@ async function convertRequestToExpenses(request, user) {
                         createdExpenses.push(expense);
                 } else {
                     // If no approved quotation, use estimated cost
-                    const expense = new Expense({
+                        // Get proper expense account using the new mapping service
+                        const expenseAccountCode = await AccountMappingService.getExpenseAccountForItem(item);
+                        const expenseAccount = await Account.findOne({ code: expenseAccountCode });
+                        const expenseCategory = expenseAccount ? expenseAccount.name.replace(' Expense', '') : 'Other';
+                        
+                        const expense = new Expense({
                         expenseId: `${expenseId}_item_${i}`,
                         title: `${request.title} - ${item.title}`,
                         description: item.description,
                         amount: item.estimatedCost,
-                        category: mapCategory(item.category),
+                        category: expenseCategory,
                         expenseDate: new Date(request.year, request.month - 1, 1),
                         period: 'monthly',
                         paymentStatus: 'Pending',
@@ -2455,7 +2471,7 @@ async function convertRequestToExpenses(request, user) {
                         itemIndex: i,
                         residence: request.residence, // Add residence field
                         createdBy: user._id,
-                        notes: `Converted from monthly request item: ${item.title} (estimated cost)${item.provider ? ` - Provider: ${item.provider}` : ''}`
+                        notes: `Converted from monthly request item: ${item.title} (estimated cost)${item.provider ? ` - Provider: ${item.provider}` : ''} - Account: ${expenseAccountCode}`
                     });
                     
                     await expense.save();
@@ -2512,18 +2528,15 @@ function generateExpenseId() {
     return `EXP_${timestamp}_${random}`.toUpperCase();
 }
 
+// Import the new account mapping service
+const AccountMappingService = require('../utils/accountMappingService');
+
 // Helper function to map monthly request categories to expense categories
-function mapCategory(monthlyRequestCategory) {
-    const categoryMap = {
-        'utilities': 'Utilities',
-        'maintenance': 'Maintenance',
-        'supplies': 'Supplies',
-        'equipment': 'Other',
-        'services': 'Other',
-        'other': 'Other'
-    };
-    
-    return categoryMap[monthlyRequestCategory] || 'Other';
+async function mapCategory(monthlyRequestCategory) {
+    // Use the new account mapping service for better accuracy
+    const accountCode = await AccountMappingService.getAccountByCategory(monthlyRequestCategory);
+    const account = await Account.findOne({ code: accountCode });
+    return account ? account.name.replace(' Expense', '') : 'Other';
 }
 
 // Get CEO monthly request dashboard

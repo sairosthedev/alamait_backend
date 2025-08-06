@@ -162,26 +162,19 @@ exports.createInvoice = async (req, res) => {
         // Check if debtor account exists, create if not
         let debtor = await Debtor.findOne({ user: studentId });
         if (!debtor) {
-            // Create debtor account automatically
-            const debtorCode = await Debtor.generateDebtorCode();
-            const accountCode = await Debtor.generateAccountCode();
+            // Create debtor account automatically using enhanced service
+            const { createDebtorForStudent } = require('../services/debtorService');
             
-            debtor = new Debtor({
-                debtorCode,
-                user: studentId,
-                accountCode,
-                residence: residence,
+            debtor = await createDebtorForStudent(studentDetails, {
+                residenceId: residence,
                 roomNumber: roomNumber,
-                contactInfo: {
-                    name: `${studentDetails.firstName} ${studentDetails.lastName}`,
-                    email: studentDetails.email,
-                    phone: studentDetails.phone
-                },
+                roomPrice: roomPrice,
+                startDate: billingStartDate,
+                endDate: billingEndDate,
                 createdBy: user._id
             });
             
-            await debtor.save();
-            console.log(`Created debtor account for student: ${studentDetails.firstName} ${studentDetails.lastName}`);
+            console.log(`✅ Created enhanced debtor account for student: ${studentDetails.firstName} ${studentDetails.lastName}`);
         }
 
         // Add charge to debtor account

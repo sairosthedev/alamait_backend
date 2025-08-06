@@ -37,6 +37,18 @@ const paymentSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    payments: [{
+        type: {
+            type: String,
+            enum: ['rent', 'admin', 'deposit'],
+            required: true
+        },
+        amount: {
+            type: Number,
+            required: true,
+            min: 0
+        }
+    }],
     totalAmount: {
         type: Number,
         required: true

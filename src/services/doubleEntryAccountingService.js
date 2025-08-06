@@ -379,6 +379,7 @@ class DoubleEntryAccountingService {
                 const selectedQuotation = item.quotations?.find(q => q.isSelected);
                 
                 if (selectedQuotation) {
+                    // ✅ Items WITH vendors
                     // Debit: Maintenance Expense
                     entries.push({
                         accountCode: await this.getMaintenanceExpenseAccount(),
@@ -398,6 +399,42 @@ class DoubleEntryAccountingService {
                         credit: selectedQuotation.amount,
                         description: `Payable to ${selectedQuotation.provider}`
                     });
+                } else {
+                    // ✅ Items WITHOUT vendors
+                    // Debit: Maintenance Expense
+                    const amount = item.estimatedCost || item.totalCost || 0;
+                    
+                    entries.push({
+                        accountCode: await this.getMaintenanceExpenseAccount(),
+                        accountName: 'Maintenance Expense',
+                        accountType: 'Expense',
+                        debit: amount,
+                        credit: 0,
+                        description: `Maintenance: ${item.description}`
+                    });
+
+                    // Credit: Cash/Bank (immediate payment) OR Accounts Payable: General
+                    if (request.paymentMethod === 'Cash' || request.paymentMethod === 'Immediate') {
+                        // Immediate payment
+                        entries.push({
+                            accountCode: await this.getPaymentSourceAccount('Cash'),
+                            accountName: 'Cash',
+                            accountType: 'Asset',
+                            debit: 0,
+                            credit: amount,
+                            description: `Cash payment for ${item.description}`
+                        });
+                    } else {
+                        // Deferred payment
+                        entries.push({
+                            accountCode: await this.getOrCreateAccount('2000', 'Accounts Payable: General', 'Liability'),
+                            accountName: 'Accounts Payable: General',
+                            accountType: 'Liability',
+                            debit: 0,
+                            credit: amount,
+                            description: `General payable for ${item.description}`
+                        });
+                    }
                 }
             }
 
@@ -622,16 +659,24 @@ class DoubleEntryAccountingService {
 
     /**
      * 4. STUDENT RENT PAYMENT (Cash Basis - No Invoice)
+     * Handles both current period payments and debt settlements
      */
     static async recordStudentRentPayment(payment, user) {
         try {
             console.log('💰 Recording student rent payment (cash basis)');
             
+            // Check if student has outstanding debt
+            const Debtor = require('../models/Debtor');
+            const debtor = await Debtor.findOne({ user: payment.student });
+            const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
+            
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
                 transactionId,
                 date: payment.date || new Date(),
-                description: `Rent received from ${payment.student?.firstName || 'Student'}`,
+                description: studentHasOutstandingDebt ? 
+                    `Debt settlement from ${payment.student?.firstName || 'Student'}` :
+                    `Rent received from ${payment.student?.firstName || 'Student'}`,
                 type: 'payment',
                 reference: payment._id.toString(),
                 residence: payment.residence,
@@ -641,34 +686,64 @@ class DoubleEntryAccountingService {
 
             await transaction.save();
 
-            // Create double-entry entries
+            // Create double-entry entries based on payment type
             const entries = [];
 
-            // Debit: Cash/Bank (Payment Method)
-            entries.push({
-                accountCode: await this.getPaymentSourceAccount(payment.method),
-                accountName: this.getPaymentAccountName(payment.method),
-                accountType: 'Asset',
-                debit: payment.totalAmount,
-                credit: 0,
-                description: `Rent payment via ${payment.method}`
-            });
+            if (studentHasOutstandingDebt) {
+                // Student has outstanding debt - this payment settles the debt
+                console.log('💰 Recording debt settlement payment');
+                
+                // Debit: Cash/Bank (Payment Method)
+                entries.push({
+                    accountCode: await this.getPaymentSourceAccount(payment.method),
+                    accountName: this.getPaymentAccountName(payment.method),
+                    accountType: 'Asset',
+                    debit: payment.totalAmount,
+                    credit: 0,
+                    description: `Debt settlement payment via ${payment.method}`
+                });
 
-            // Credit: Rent Income
-            entries.push({
-                accountCode: await this.getRentIncomeAccount(),
-                accountName: 'Rent Income',
-                accountType: 'Income',
-                debit: 0,
-                credit: payment.totalAmount,
-                description: `Rent income from ${payment.student?.firstName || 'Student'}`
-            });
+                // Credit: Accounts Receivable (reduce debt)
+                entries.push({
+                    accountCode: await this.getAccountsReceivableAccount(),
+                    accountName: 'Accounts Receivable',
+                    accountType: 'Asset',
+                    debit: 0,
+                    credit: payment.totalAmount,
+                    description: `Settlement of outstanding debt from ${payment.student?.firstName || 'Student'}`
+                });
+            } else {
+                // Student has no outstanding debt - this is current period payment
+                console.log('💰 Recording current period payment');
+                
+                // Debit: Cash/Bank (Payment Method)
+                entries.push({
+                    accountCode: await this.getPaymentSourceAccount(payment.method),
+                    accountName: this.getPaymentAccountName(payment.method),
+                    accountType: 'Asset',
+                    debit: payment.totalAmount,
+                    credit: 0,
+                    description: `Rent payment via ${payment.method}`
+                });
+
+                // Credit: Rent Income
+                entries.push({
+                    accountCode: await this.getRentIncomeAccount(),
+                    accountName: 'Rent Income',
+                    accountType: 'Income',
+                    debit: 0,
+                    credit: payment.totalAmount,
+                    description: `Rent income from ${payment.student?.firstName || 'Student'}`
+                });
+            }
 
             // Create transaction entry
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
                 date: payment.date || new Date(),
-                description: `Rent payment from ${payment.student?.firstName || 'Student'}`,
+                description: studentHasOutstandingDebt ? 
+                    `Debt settlement from ${payment.student?.firstName || 'Student'}` :
+                    `Rent payment from ${payment.student?.firstName || 'Student'}`,
                 reference: payment._id.toString(),
                 entries,
                 totalDebit: payment.totalAmount,
@@ -678,7 +753,12 @@ class DoubleEntryAccountingService {
                 sourceModel: 'Payment',
                 residence: payment.residence, // Add residence reference
                 createdBy: user.email,
-                status: 'posted'
+                status: 'posted',
+                metadata: {
+                    paymentType: studentHasOutstandingDebt ? 'debt_settlement' : 'current_payment',
+                    studentHasOutstandingDebt: studentHasOutstandingDebt,
+                    studentBalance: debtor ? debtor.currentBalance : 0
+                }
             });
 
             await transactionEntry.save();
@@ -687,7 +767,7 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log('✅ Student rent payment recorded (cash basis)');
+            console.log(`✅ Student payment recorded (${studentHasOutstandingDebt ? 'debt settlement' : 'current period'})`);
             return { transaction, transactionEntry };
 
         } catch (error) {

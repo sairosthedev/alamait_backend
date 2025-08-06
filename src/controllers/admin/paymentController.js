@@ -166,6 +166,79 @@ const updatePaymentStatus = async (req, res) => {
             .populate('residence', 'name')
             .populate('student', 'firstName lastName email');
 
+        // Auto-generate receipt when payment status is updated to successful
+        if (status === 'Paid' || status === 'confirmed' || status === 'completed') {
+            try {
+                // Check if receipt already exists for this payment
+                const existingReceipt = await require('../models/Receipt').findOne({ payment: payment._id });
+                
+                if (!existingReceipt) {
+                    const { createReceipt } = require('../receiptController');
+                    
+                    // Create detailed receipt items based on payment breakdown
+                    let receiptItems = [];
+                    
+                    if (payment.payments && payment.payments.length > 0) {
+                        // Use the detailed payment breakdown
+                        receiptItems = payment.payments.map(paymentItem => ({
+                            description: `${paymentItem.type.charAt(0).toUpperCase() + paymentItem.type.slice(1)} Payment - ${payment.paymentMonth}`,
+                            quantity: 1,
+                            unitPrice: paymentItem.amount,
+                            totalPrice: paymentItem.amount
+                        }));
+                    } else {
+                        // Fallback to single item
+                        receiptItems = [{
+                            description: `Accommodation Payment - ${payment.paymentMonth}`,
+                            quantity: 1,
+                            unitPrice: payment.totalAmount,
+                            totalPrice: payment.totalAmount
+                        }];
+                    }
+                    
+                    // Create receipt data
+                    const receiptData = {
+                        paymentId: payment._id,
+                        items: receiptItems,
+                        notes: `Payment status updated to ${status} for ${updatedPayment.student?.firstName} ${updatedPayment.student?.lastName} - ${payment.paymentMonth}`,
+                        template: 'default'
+                    };
+
+                    // Create receipt
+                    const receiptReq = {
+                        body: receiptData,
+                        user: req.user
+                    };
+                    
+                    const receiptRes = {
+                        status: (code) => ({
+                            json: (data) => {
+                                if (code === 201) {
+                                    console.log(`✅ Receipt automatically generated for payment status update`);
+                                    console.log(`   Payment ID: ${payment.paymentId}`);
+                                    console.log(`   Student: ${updatedPayment.student?.firstName} ${updatedPayment.student?.lastName}`);
+                                    console.log(`   Status: ${status}`);
+                                    console.log(`   Receipt Number: ${data?.data?.receipt?.receiptNumber || 'N/A'}`);
+                                } else {
+                                    console.error('❌ Failed to generate receipt on status update:', data);
+                                }
+                            }
+                        })
+                    };
+
+                    await createReceipt(receiptReq, receiptRes);
+                } else {
+                    console.log(`ℹ️  Receipt already exists for payment ${payment.paymentId}`);
+                }
+                
+            } catch (receiptError) {
+                console.error('❌ Error auto-generating receipt on status update:', receiptError);
+                console.error('   Payment ID:', payment.paymentId);
+                console.error('   Student:', updatedPayment.student?.firstName, updatedPayment.student?.lastName);
+                // Don't fail the status update if receipt generation fails
+            }
+        }
+
         // Audit log
         await AuditLog.create({
             user: req.user._id,
@@ -450,26 +523,16 @@ const createPayment = async (req, res) => {
         // Update debtor account if exists, create if not
         let debtor = await Debtor.findOne({ user: student });
         if (!debtor) {
-            // Create debtor account automatically
-            const debtorCode = await Debtor.generateDebtorCode();
-            const accountCode = await Debtor.generateAccountCode();
+            // Create debtor account automatically using enhanced service
+            const { createDebtorForStudent } = require('../../services/debtorService');
             
-            debtor = new Debtor({
-                debtorCode,
-                user: student,
-                accountCode,
-                residence: residence,
+            debtor = await createDebtorForStudent(studentExists, {
+                residenceId: residence,
                 roomNumber: room,
-                contactInfo: {
-                    name: `${studentExists.firstName} ${studentExists.lastName}`,
-                    email: studentExists.email,
-                    phone: studentExists.phone
-                },
                 createdBy: req.user._id
             });
             
-            await debtor.save();
-            console.log(`Created debtor account for student: ${studentExists.firstName} ${studentExists.lastName}`);
+            console.log(`✅ Created enhanced debtor account for student: ${studentExists.firstName} ${studentExists.lastName}`);
         }
 
         // Add payment to debtor account
@@ -487,21 +550,37 @@ const createPayment = async (req, res) => {
             after: payment.toObject()
         });
 
-        // Auto-generate receipt for confirmed payments
-        if (status === 'confirmed') {
+        // Auto-generate receipt for all successful payments
+        if (status === 'confirmed' || status === 'completed' || status === 'paid') {
             try {
                 const { createReceipt } = require('../receiptController');
+                
+                // Create detailed receipt items based on payment breakdown
+                let receiptItems = [];
+                
+                if (parsedPayments && parsedPayments.length > 0) {
+                    // Use the detailed payment breakdown
+                    receiptItems = parsedPayments.map(paymentItem => ({
+                        description: `${paymentItem.type.charAt(0).toUpperCase() + paymentItem.type.slice(1)} Payment - ${paymentMonth}`,
+                        quantity: 1,
+                        unitPrice: paymentItem.amount,
+                        totalPrice: paymentItem.amount
+                    }));
+                } else {
+                    // Fallback to single item
+                    receiptItems = [{
+                        description: `Accommodation Payment - ${paymentMonth}`,
+                        quantity: 1,
+                        unitPrice: totalAmount,
+                        totalPrice: totalAmount
+                    }];
+                }
                 
                 // Create receipt data
                 const receiptData = {
                     paymentId: payment._id,
-                    items: [{
-                        description: `Payment for ${paymentMonth || 'accommodation'}`,
-                        quantity: 1,
-                        unitPrice: totalAmount,
-                        totalPrice: totalAmount
-                    }],
-                    notes: `Payment confirmed for ${studentExists.firstName} ${studentExists.lastName}`,
+                    items: receiptItems,
+                    notes: `Payment received for ${studentExists.firstName} ${studentExists.lastName} - ${paymentMonth}`,
                     template: 'default'
                 };
 
@@ -515,9 +594,12 @@ const createPayment = async (req, res) => {
                     status: (code) => ({
                         json: (data) => {
                             if (code === 201) {
-                                console.log(`Receipt generated for payment ${payment.paymentId}`);
+                                console.log(`✅ Receipt automatically generated for payment ${payment.paymentId}`);
+                                console.log(`   Student: ${studentExists.firstName} ${studentExists.lastName}`);
+                                console.log(`   Amount: $${totalAmount}`);
+                                console.log(`   Receipt Number: ${data?.data?.receipt?.receiptNumber || 'N/A'}`);
                             } else {
-                                console.error('Failed to generate receipt:', data);
+                                console.error('❌ Failed to generate receipt:', data);
                             }
                         }
                     })
@@ -526,9 +608,13 @@ const createPayment = async (req, res) => {
                 await createReceipt(receiptReq, receiptRes);
                 
             } catch (receiptError) {
-                console.error('Error auto-generating receipt:', receiptError);
+                console.error('❌ Error auto-generating receipt:', receiptError);
+                console.error('   Payment ID:', payment.paymentId);
+                console.error('   Student:', studentExists.firstName, studentExists.lastName);
                 // Don't fail the payment creation if receipt generation fails
             }
+        } else {
+            console.log(`ℹ️  Receipt not generated for payment ${payment.paymentId} - Status: ${status}`);
         }
 
         // --- Payment Transaction for Rentals Received ---
@@ -549,6 +635,10 @@ const createPayment = async (req, res) => {
         const studentName = studentExists ? `${studentExists.firstName} ${studentExists.lastName}` : 'Student';
         
         if (receivingAccount && rentAccount && studentAccount && totalAmount > 0) {
+            // Determine if this is a debt settlement or current period payment
+            // Check if student has outstanding debt
+            const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
+            
             // Create the main transaction
             const txn = await Transaction.create({
                 date: payment.date,
@@ -558,33 +648,62 @@ const createPayment = async (req, res) => {
                 residenceName: residenceExists ? residenceExists.name : undefined
             });
 
-            // Create transaction entries for double-entry accounting
-            const entries = [
-                {
-                    transaction: txn._id,
-                    account: receivingAccount._id,
-                    debit: totalAmount,
-                    credit: 0,
-                    type: receivingAccount.type || 'asset',
-                    description: `Received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
-                },
-                {
-                    transaction: txn._id,
-                    account: rentAccount._id,
-                    debit: 0,
-                    credit: totalAmount,
-                    type: rentAccount.type || 'income',
-                    description: `Rental income from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
-                },
-                {
-                    transaction: txn._id,
-                    account: studentAccount._id,
-                    debit: 0,
-                    credit: totalAmount,
-                    type: studentAccount.type || 'asset',
-                    description: `Paid by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
-                }
-            ];
+            let entries = [];
+            let transactionType = 'current_payment';
+
+            if (studentHasOutstandingDebt) {
+                // Student has outstanding debt - this payment settles the debt
+                transactionType = 'debt_settlement';
+                
+                entries = [
+                    {
+                        transaction: txn._id,
+                        account: receivingAccount._id,
+                        debit: totalAmount,
+                        credit: 0,
+                        type: receivingAccount.type || 'asset',
+                        description: `Payment received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                    },
+                    {
+                        transaction: txn._id,
+                        account: studentAccount._id,
+                        debit: 0,
+                        credit: totalAmount,
+                        type: studentAccount.type || 'asset',
+                        description: `Settlement of outstanding debt by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                    }
+                ];
+            } else {
+                // Student has no outstanding debt - this is current period payment
+                transactionType = 'current_payment';
+                
+                entries = [
+                    {
+                        transaction: txn._id,
+                        account: receivingAccount._id,
+                        debit: totalAmount,
+                        credit: 0,
+                        type: receivingAccount.type || 'asset',
+                        description: `Payment received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                    },
+                    {
+                        transaction: txn._id,
+                        account: rentAccount._id,
+                        debit: 0,
+                        credit: totalAmount,
+                        type: rentAccount.type || 'income',
+                        description: `Rental income from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                    }
+                ];
+            }
+
+            // Validate that debits equal credits
+            const totalDebits = entries.reduce((sum, entry) => sum + entry.debit, 0);
+            const totalCredits = entries.reduce((sum, entry) => sum + entry.credit, 0);
+
+            if (totalDebits !== totalCredits) {
+                throw new Error(`Double-entry imbalance: Debits (${totalDebits}) != Credits (${totalCredits})`);
+            }
 
             // Insert all transaction entries into the TransactionEntry collection
             const createdEntries = await TransactionEntry.insertMany(entries);
@@ -598,7 +717,7 @@ const createPayment = async (req, res) => {
             // Audit log for the conversion
             await AuditLog.create({
                 user: req.user._id,
-                action: 'convert_to_' + (receivingAccount.code === '1000' ? 'bank' : (receivingAccount.code === '1015' ? 'cash' : 'other')),
+                action: `convert_to_${transactionType}_${receivingAccount.code === '1000' ? 'bank' : (receivingAccount.code === '1015' ? 'cash' : 'other')}`,
                 collection: 'Transaction',
                 recordId: txn._id,
                 before: null,
@@ -607,12 +726,15 @@ const createPayment = async (req, res) => {
                 details: {
                     source: 'Payment',
                     sourceId: payment._id,
-                    description: `Admin payment converted to ${receivingAccount.name} as Payment for ${studentName}`,
+                    transactionType: transactionType,
+                    studentHasOutstandingDebt: studentHasOutstandingDebt,
+                    studentBalance: debtor ? debtor.currentBalance : 0,
+                    description: `Admin payment converted to ${receivingAccount.name} as ${transactionType === 'debt_settlement' ? 'Debt Settlement' : 'Current Payment'} for ${studentName}`,
                     entriesCreated: createdEntries.length
                 }
             });
 
-            console.log(`Payment ${payment.paymentId} converted to transaction ${txn._id} with ${createdEntries.length} entries`);
+            console.log(`Payment ${payment.paymentId} converted to transaction ${txn._id} with ${createdEntries.length} entries (${transactionType})`);
         } else {
             console.log(`Skipping transaction creation for payment ${payment.paymentId} - missing accounts or zero amount`);
         }
