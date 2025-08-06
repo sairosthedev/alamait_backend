@@ -301,6 +301,10 @@ app.use('/api/finance/other-income', financeOtherIncomeRoutes);
 app.use('/api/finance/other-expenses', financeOtherExpenseRoutes);
 app.use('/api/finance/users', financeUsersRoutes);
 
+// Financial Reports routes
+const financialReportsRoutes = require('./routes/financialReportsRoutes');
+app.use('/api/financial-reports', financialReportsRoutes);
+
 // General expense routes (alias for frontend compatibility)
 app.use('/api/expenses', financeExpenseRoutes);
 
