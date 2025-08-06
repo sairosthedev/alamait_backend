@@ -475,6 +475,56 @@ const createPayment = async (req, res) => {
             return res.status(400).json({ message: 'Invalid residence ID format' });
         }
 
+        // 🚨 DUPLICATE PAYMENT PREVENTION
+        // Check for existing payment with same paymentId (primary check)
+        const existingPaymentById = await Payment.findOne({ paymentId });
+        if (existingPaymentById) {
+            console.log(`⚠️ Duplicate payment detected - Payment ID already exists: ${paymentId}`);
+            return res.status(409).json({
+                message: 'Payment already exists with this ID',
+                error: 'DUPLICATE_PAYMENT_ID',
+                existingPayment: {
+                    id: existingPaymentById._id,
+                    paymentId: existingPaymentById.paymentId,
+                    status: existingPaymentById.status,
+                    createdAt: existingPaymentById.createdAt
+                }
+            });
+        }
+
+        // Check for duplicate payment within last 5 minutes (secondary check)
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const existingRecentPayment = await Payment.findOne({
+            student,
+            totalAmount,
+            paymentMonth,
+            method,
+            createdAt: { $gte: fiveMinutesAgo }
+        });
+
+        if (existingRecentPayment) {
+            console.log(`⚠️ Potential duplicate payment detected within 5 minutes`);
+            console.log(`   Student: ${student}`);
+            console.log(`   Amount: $${totalAmount}`);
+            console.log(`   Month: ${paymentMonth}`);
+            console.log(`   Method: ${method}`);
+            console.log(`   Existing Payment ID: ${existingRecentPayment.paymentId}`);
+            
+            return res.status(409).json({
+                message: 'A similar payment was recently created. Please check if this is a duplicate.',
+                error: 'POTENTIAL_DUPLICATE_PAYMENT',
+                existingPayment: {
+                    id: existingRecentPayment._id,
+                    paymentId: existingRecentPayment.paymentId,
+                    status: existingRecentPayment.status,
+                    createdAt: existingRecentPayment.createdAt,
+                    totalAmount: existingRecentPayment.totalAmount,
+                    paymentMonth: existingRecentPayment.paymentMonth
+                },
+                suggestion: 'If this is not a duplicate, please wait a few minutes and try again.'
+            });
+        }
+
         // Check if student exists
         const studentExists = await User.findOne({ _id: student, role: 'student' });
         if (!studentExists) {
