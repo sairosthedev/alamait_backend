@@ -2,6 +2,7 @@ const MonthlyRequest = require('../models/MonthlyRequest');
 const Residence = require('../models/Residence');
 const { uploadToS3 } = require('../utils/fileStorage');
 const Expense = require('../models/finance/Expense'); // Added for expense conversion
+const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
 
 // Helper function to format description with month name
 function formatDescriptionWithMonth(description, month, year) {
@@ -2365,13 +2366,28 @@ async function convertRequestToExpenses(request, user) {
             });
             
             await expense.save();
+            
+            // ✅ ADD: Create double-entry transaction
+            try {
+                const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(request, user);
+                
+                // Link expense to transaction
+                expense.transactionId = transactionResult.transaction._id;
+                await expense.save();
+                
+                console.log('✅ Double-entry transaction created for monthly request template');
+            } catch (transactionError) {
+                console.error('❌ Error creating double-entry transaction:', transactionError);
+                // Don't fail the expense creation if transaction fails
+            }
+            
             createdExpenses.push(expense);
             
             // Update request status to completed
             request.status = 'completed';
             request.requestHistory.push({
                 date: new Date(),
-                action: 'Converted to expense',
+                action: 'Converted to expense with double-entry transaction',
                 user: user._id,
                 changes: [`Template converted to expense with total cost: $${request.totalEstimatedCost}`]
             });
@@ -2402,6 +2418,26 @@ async function convertRequestToExpenses(request, user) {
                         });
                         
                         await expense.save();
+                        
+                        // ✅ ADD: Create double-entry transaction for this item
+                        try {
+                            const tempRequest = {
+                                ...request.toObject(),
+                                items: [item], // Only this item
+                                totalEstimatedCost: approvedQuotation.amount
+                            };
+                            
+                            const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+                            
+                            // Link expense to transaction
+                            expense.transactionId = transactionResult.transaction._id;
+                            await expense.save();
+                            
+                            console.log('✅ Double-entry transaction created for monthly request item');
+                        } catch (transactionError) {
+                            console.error('❌ Error creating double-entry transaction for item:', transactionError);
+                        }
+                        
                         createdExpenses.push(expense);
                 } else {
                     // If no approved quotation, use estimated cost
@@ -2423,6 +2459,26 @@ async function convertRequestToExpenses(request, user) {
                     });
                     
                     await expense.save();
+                    
+                    // ✅ ADD: Create double-entry transaction for this item
+                    try {
+                        const tempRequest = {
+                            ...request.toObject(),
+                            items: [item], // Only this item
+                            totalEstimatedCost: item.estimatedCost
+                        };
+                        
+                        const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+                        
+                        // Link expense to transaction
+                        expense.transactionId = transactionResult.transaction._id;
+                        await expense.save();
+                        
+                        console.log('✅ Double-entry transaction created for monthly request item (estimated)');
+                    } catch (transactionError) {
+                        console.error('❌ Error creating double-entry transaction for item:', transactionError);
+                    }
+                    
                     createdExpenses.push(expense);
                 }
             }
@@ -2431,7 +2487,7 @@ async function convertRequestToExpenses(request, user) {
                         request.status = 'completed';
                         request.requestHistory.push({
                             date: new Date(),
-                            action: 'Converted to expense',
+                            action: 'Converted to expenses with double-entry transactions',
                             user: user._id,
                 changes: [`${createdExpenses.length} items converted to expenses`]
                         });
