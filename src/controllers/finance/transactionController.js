@@ -1,306 +1,319 @@
+const DoubleEntryAccountingService = require('../../services/doubleEntryAccountingService');
 const TransactionEntry = require('../../models/TransactionEntry');
-const Account = require('../../models/Account');
+const Payment = require('../../models/Payment');
+const Expense = require('../../models/finance/Expense');
+const Invoice = require('../../models/Invoice');
 
-// Get transaction entries with filters
-exports.getTransactionEntriesWithFilters = async (req, res) => {
-    try {
-        const {
-            page = 1,
-            limit = 10,
-            startDate,
-            endDate,
-            type,
-            account,
-            status
-        } = req.query;
+/**
+ * Transaction Controller
+ * 
+ * Handles automatic creation of transaction entries for all financial operations
+ */
 
-        const query = {};
-
-        // Date range filter
-        if (startDate || endDate) {
-            query.date = {};
-            if (startDate) query.date.$gte = new Date(startDate);
-            if (endDate) query.date.$lte = new Date(endDate);
-        }
-
-        // Account filter
-        if (account && account !== 'all') {
-            query['entries.accountCode'] = account;
-        }
-
-        // Status filter
-        if (status) {
-            query.status = status;
-        }
-
-        // Type filter (debit/credit)
-        if (type && type !== 'all') {
-            if (type === 'debit') {
-                query['entries.debit'] = { $gt: 0 };
-            } else if (type === 'credit') {
-                query['entries.credit'] = { $gt: 0 };
-            }
-        }
-
-        const options = {
-            sort: { date: -1 },
-            limit: parseInt(limit),
-            skip: (parseInt(page) - 1) * parseInt(limit)
-        };
-
-        const transactionEntries = await TransactionEntry.find(query, null, options);
-        const total = await TransactionEntry.countDocuments(query);
-
-        // Transform data for frontend
-        const transformedTransactions = transactionEntries.map(entry => {
-            // Flatten entries for table display
-            const transactions = [];
+class TransactionController {
+    
+    /**
+     * Create transaction entries for student payment
+     */
+    static async createPaymentTransaction(req, res) {
+        try {
+            const { paymentId, amount, paymentMethod, description, date } = req.body;
             
-            entry.entries.forEach(entryItem => {
-                if (entryItem.debit > 0) {
-                    transactions.push({
-                        _id: `${entry._id}_debit_${entryItem.accountCode}`,
-                        transactionId: entry.transactionId,
-                        timestamp: entry.date,
-                        type: 'debit',
-                        accountName: entryItem.accountName,
-                        accountType: entryItem.accountType,
-                        accountCode: entryItem.accountCode,
-                        amount: entryItem.debit,
-                        description: entryItem.description || entry.description,
-                        reference: entry.reference,
-                        referenceType: entry.source,
-                        referenceId: entry.sourceId,
-                        createdByEmail: entry.createdBy,
-                        createdAt: entry.createdAt,
-                        metadata: entry.metadata
-                    });
-                }
-                
-                if (entryItem.credit > 0) {
-                    transactions.push({
-                        _id: `${entry._id}_credit_${entryItem.accountCode}`,
-                        transactionId: entry.transactionId,
-                        timestamp: entry.date,
-                        type: 'credit',
-                        accountName: entryItem.accountName,
-                        accountType: entryItem.accountType,
-                        accountCode: entryItem.accountCode,
-                        amount: entryItem.credit,
-                        description: entryItem.description || entry.description,
-                        reference: entry.reference,
-                        referenceType: entry.source,
-                        referenceId: entry.sourceId,
-                        createdByEmail: entry.createdBy,
-                        createdAt: entry.createdAt,
-                        metadata: entry.metadata
-                    });
+            // Validate required fields
+            if (!paymentId || !amount || !paymentMethod || !description) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Missing required fields: paymentId, amount, paymentMethod, description'
+                });
+            }
+            
+            // Get the payment record
+            const payment = await Payment.findById(paymentId);
+            if (!payment) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Payment not found'
+                });
+            }
+            
+            // Create transaction entries using the service
+            const transactionResult = await DoubleEntryAccountingService.createStudentPaymentTransaction({
+                paymentId: payment._id,
+                amount: amount,
+                paymentMethod: paymentMethod,
+                description: description,
+                date: date || new Date(),
+                studentId: payment.student,
+                residenceId: payment.residence,
+                room: payment.room,
+                rentAmount: payment.rentAmount,
+                adminFee: payment.adminFee,
+                deposit: payment.deposit,
+                createdBy: req.user._id
+            });
+            
+            res.status(201).json({
+                success: true,
+                message: 'Payment transaction entries created successfully',
+                data: {
+                    transactionId: transactionResult.transactionId,
+                    entries: transactionResult.entries,
+                    paymentId: payment._id
                 }
             });
             
-            return transactions;
-        }).flat();
-
-        res.status(200).json({
-            success: true,
-            data: transformedTransactions,
-            pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / limit),
-                totalEntries: total,
-                limit: parseInt(limit)
-            }
-        });
-
-    } catch (error) {
-        console.error('Error fetching transaction entries:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching transaction entries',
-            error: error.message
-        });
-    }
-};
-
-// Get transaction summary
-exports.getTransactionSummary = async (req, res) => {
-    try {
-        const {
-            startDate,
-            endDate,
-            type,
-            account,
-            status
-        } = req.query;
-
-        const query = {};
-
-        // Date range filter
-        if (startDate || endDate) {
-            query.date = {};
-            if (startDate) query.date.$gte = new Date(startDate);
-            if (endDate) query.date.$lte = new Date(endDate);
-        }
-
-        // Account filter
-        if (account && account !== 'all') {
-            query['entries.accountCode'] = account;
-        }
-
-        // Status filter
-        if (status) {
-            query.status = status;
-        }
-
-        const transactionEntries = await TransactionEntry.find(query);
-
-        let totalDebits = 0;
-        let totalCredits = 0;
-        let transactionCount = 0;
-
-        transactionEntries.forEach(entry => {
-            entry.entries.forEach(entryItem => {
-                totalDebits += entryItem.debit || 0;
-                totalCredits += entryItem.credit || 0;
-            });
-            transactionCount++;
-        });
-
-        const netAmount = totalCredits - totalDebits;
-
-        res.status(200).json({
-            success: true,
-            data: {
-                totalDebits,
-                totalCredits,
-                netAmount,
-                transactionCount
-            }
-        });
-
-    } catch (error) {
-        console.error('Error fetching transaction summary:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching transaction summary',
-            error: error.message
-        });
-    }
-};
-
-// Get all transactions (legacy support)
-exports.getAllTransactions = async (req, res) => {
-    try {
-        const { 
-            type, 
-            startDate, 
-            endDate, 
-            residence, 
-            limit = 50, 
-            page = 1 
-        } = req.query;
-
-        // Build filter object
-        const filter = {};
-        
-        if (type) {
-            filter.type = type;
-        }
-        
-        if (startDate && endDate) {
-            filter.date = {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
-            };
-        } else if (startDate) {
-            filter.date = { $gte: new Date(startDate) };
-        } else if (endDate) {
-            filter.date = { $lte: new Date(endDate) };
-        }
-
-        // Calculate skip value for pagination
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-
-        // Get transactions with pagination
-        const transactions = await TransactionEntry.find(filter)
-            .sort({ date: -1 })
-            .limit(parseInt(limit))
-            .skip(skip);
-
-        // Get total count for pagination
-        const total = await TransactionEntry.countDocuments(filter);
-
-        res.status(200).json({
-            success: true,
-            transactions,
-            pagination: {
-                total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                pages: Math.ceil(total / parseInt(limit))
-            }
-        });
-
-    } catch (error) {
-        console.error('Error fetching transactions:', error);
-        res.status(500).json({ 
-            success: false,
-            message: error.message 
-        });
-    }
-};
-
-// Get transaction by ID
-exports.getTransactionById = async (req, res) => {
-    try {
-        const { id } = req.params;
-
-        const transaction = await TransactionEntry.findById(id);
-
-        if (!transaction) {
-            return res.status(404).json({ 
+        } catch (error) {
+            console.error('Error creating payment transaction:', error);
+            res.status(500).json({
                 success: false,
-                message: 'Transaction not found' 
+                message: 'Failed to create payment transaction entries',
+                error: error.message
             });
         }
-
-        res.status(200).json({ 
-            success: true,
-            transaction 
-        });
-
-    } catch (error) {
-        console.error('Error fetching transaction:', error);
-        res.status(500).json({ 
-            success: false,
-            message: error.message 
-        });
     }
-};
-
-// Get transaction entries
-exports.getTransactionEntries = async (req, res) => {
-    try {
-        const { id } = req.params;
-
-        const transaction = await TransactionEntry.findById(id);
-        if (!transaction) {
-            return res.status(404).json({ 
+    
+    /**
+     * Create transaction entries for request approval (accrual)
+     */
+    static async createApprovalTransaction(req, res) {
+        try {
+            const { requestId, amount, description, vendorName, date } = req.body;
+            
+            // Validate required fields
+            if (!requestId || !amount || !description) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Missing required fields: requestId, amount, description'
+                });
+            }
+            
+            // Create transaction entries using the service
+            const transactionResult = await DoubleEntryAccountingService.createRequestApprovalTransaction({
+                requestId: requestId,
+                amount: amount,
+                description: description,
+                vendorName: vendorName,
+                date: date || new Date(),
+                createdBy: req.user._id
+            });
+            
+            res.status(201).json({
+                success: true,
+                message: 'Approval transaction entries created successfully',
+                data: {
+                    transactionId: transactionResult.transactionId,
+                    entries: transactionResult.entries,
+                    requestId: requestId
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error creating approval transaction:', error);
+            res.status(500).json({
                 success: false,
-                message: 'Transaction not found' 
+                message: 'Failed to create approval transaction entries',
+                error: error.message
             });
         }
-
-        res.status(200).json({
-            success: true,
-            entries: transaction.entries
-        });
-
-    } catch (error) {
-        console.error('Error fetching transaction entries:', error);
-        res.status(500).json({ 
-            success: false,
-            message: error.message 
-        });
     }
-}; 
+    
+    /**
+     * Create transaction entries for refund
+     */
+    static async createRefundTransaction(req, res) {
+        try {
+            const { refundId, amount, reason, description, date } = req.body;
+            
+            // Validate required fields
+            if (!refundId || !amount || !reason || !description) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Missing required fields: refundId, amount, reason, description'
+                });
+            }
+            
+            // Create transaction entries using the service
+            const transactionResult = await DoubleEntryAccountingService.createRefundTransaction({
+                refundId: refundId,
+                amount: amount,
+                reason: reason,
+                description: description,
+                date: date || new Date(),
+                createdBy: req.user._id
+            });
+            
+            res.status(201).json({
+                success: true,
+                message: 'Refund transaction entries created successfully',
+                data: {
+                    transactionId: transactionResult.transactionId,
+                    entries: transactionResult.entries,
+                    refundId: refundId
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error creating refund transaction:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to create refund transaction entries',
+                error: error.message
+            });
+        }
+    }
+    
+    /**
+     * Create transaction entries for invoice payment
+     */
+    static async createInvoicePaymentTransaction(req, res) {
+        try {
+            const { invoiceId, amount, paymentMethod, description, date } = req.body;
+            
+            // Validate required fields
+            if (!invoiceId || !amount || !paymentMethod || !description) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Missing required fields: invoiceId, amount, paymentMethod, description'
+                });
+            }
+            
+            // Get the invoice record
+            const invoice = await Invoice.findById(invoiceId);
+            if (!invoice) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Invoice not found'
+                });
+            }
+            
+            // Create transaction entries using the service
+            const transactionResult = await DoubleEntryAccountingService.createInvoicePaymentTransaction({
+                invoiceId: invoice._id,
+                amount: amount,
+                paymentMethod: paymentMethod,
+                description: description,
+                date: date || new Date(),
+                studentId: invoice.student,
+                invoiceNumber: invoice.invoiceNumber,
+                createdBy: req.user._id
+            });
+            
+            res.status(201).json({
+                success: true,
+                message: 'Invoice payment transaction entries created successfully',
+                data: {
+                    transactionId: transactionResult.transactionId,
+                    entries: transactionResult.entries,
+                    invoiceId: invoice._id
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error creating invoice payment transaction:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to create invoice payment transaction entries',
+                error: error.message
+            });
+        }
+    }
+    
+    /**
+     * Verify transaction creation for a specific source
+     */
+    static async verifyTransaction(req, res) {
+        try {
+            const { sourceType, sourceId } = req.params;
+            
+            // Find transaction entries for the source
+            const transactionEntry = await TransactionEntry.findOne({
+                source: sourceType,
+                sourceId: sourceId
+            });
+            
+            if (!transactionEntry) {
+                return res.status(404).json({
+                    success: false,
+                    message: `No transaction entries found for ${sourceType} with ID ${sourceId}`,
+                    data: {
+                        transactionCreated: false,
+                        sourceType: sourceType,
+                        sourceId: sourceId
+                    }
+                });
+            }
+            
+            res.status(200).json({
+                success: true,
+                message: 'Transaction entries verified successfully',
+                data: {
+                    transactionCreated: true,
+                    transactionId: transactionEntry.transactionId,
+                    sourceType: sourceType,
+                    sourceId: sourceId,
+                    entries: transactionEntry.entries,
+                    totalDebit: transactionEntry.totalDebit,
+                    totalCredit: transactionEntry.totalCredit,
+                    balanced: transactionEntry.totalDebit === transactionEntry.totalCredit
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error verifying transaction:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to verify transaction entries',
+                error: error.message
+            });
+        }
+    }
+    
+    /**
+     * Get transaction history for a specific source
+     */
+    static async getTransactionHistory(req, res) {
+        try {
+            const { sourceType, sourceId } = req.params;
+            const { page = 1, limit = 10 } = req.query;
+            
+            // Find all transaction entries for the source
+            const transactionEntries = await TransactionEntry.find({
+                source: sourceType,
+                sourceId: sourceId
+            })
+            .sort({ createdAt: -1 })
+            .limit(limit * 1)
+            .skip((page - 1) * limit);
+            
+            // Get total count
+            const total = await TransactionEntry.countDocuments({
+                source: sourceType,
+                sourceId: sourceId
+            });
+            
+            res.status(200).json({
+                success: true,
+                message: 'Transaction history retrieved successfully',
+                data: {
+                    transactions: transactionEntries,
+                    pagination: {
+                        currentPage: page,
+                        totalPages: Math.ceil(total / limit),
+                        totalItems: total,
+                        itemsPerPage: limit
+                    }
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error getting transaction history:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to get transaction history',
+                error: error.message
+            });
+        }
+    }
+}
+
+module.exports = TransactionController; 

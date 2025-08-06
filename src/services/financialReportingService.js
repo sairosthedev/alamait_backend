@@ -46,11 +46,11 @@ class FinancialReportingService {
                     const debit = line.debit || 0;
                     const credit = line.credit || 0;
                     
-                    if (accountType === 'Income') {
+                    if (accountType === 'Income' || accountType === 'income') {
                         const key = `${accountCode} - ${accountName}`;
                         if (!revenue[key]) revenue[key] = 0;
                         revenue[key] += credit - debit; // Income increases with credit
-                    } else if (accountType === 'Expense') {
+                    } else if (accountType === 'Expense' || accountType === 'expense') {
                         const key = `${accountCode} - ${accountName}`;
                         if (!expenses[key]) expenses[key] = 0;
                         expenses[key] += debit - credit; // Expenses increase with debit

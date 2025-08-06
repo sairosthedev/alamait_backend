@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const balanceSheetController = require('../../controllers/finance/balanceSheetController');
+const FinancialReportsController = require('../../controllers/financialReportsController');
 const { auth, checkRole, financeAccess } = require('../../middleware/auth');
 
 // All routes require finance role authorization
@@ -31,34 +32,17 @@ router.delete('/:id',
     balanceSheetController.deleteBalanceSheet
 );
 
-// Generate balance sheet (admin and finance_admin only)
-// router.post('/generate', 
-//     checkRole('admin', 'finance_admin'),
-//     balanceSheetController.generateBalanceSheet
-// );
-
 // Approve balance sheet (admin and CEO only)
 router.patch('/:id/approve', 
     checkRole('admin', 'ceo'), 
     balanceSheetController.approveBalanceSheet
 );
 
-// Add entry to balance sheet (admin and finance_admin only)
-router.post('/:id/entries', 
-    checkRole('admin', 'finance_admin'),
-    balanceSheetController.addBalanceSheetEntry
-);
-
-// Update balance sheet entry
-router.put('/:id/entries/:entryId',
-    checkRole('admin', 'finance_admin'),
-    balanceSheetController.updateBalanceSheetEntry
-);
-
-// Delete balance sheet entry
-router.delete('/:id/entries/:entryId',
-    checkRole('admin', 'finance_admin'),
-    balanceSheetController.deleteBalanceSheetEntry
+// NEW: Generate dynamic balance sheet report
+// GET /api/finance/balance-sheets/report?asOf=2024-12-31&basis=cash
+router.get('/report/generate', 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    FinancialReportsController.generateBalanceSheet
 );
 
 module.exports = router;

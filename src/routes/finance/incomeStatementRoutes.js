@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const incomeStatementController = require('../../controllers/finance/incomeStatementController');
+const FinancialReportsController = require('../../controllers/financialReportsController');
 const { auth, checkRole, financeAccess } = require('../../middleware/auth');
 
 // All routes require finance role authorization
@@ -35,6 +36,13 @@ router.delete('/:id',
 router.patch('/:id/approve', 
     checkRole('admin', 'ceo'), 
     incomeStatementController.approveIncomeStatement
+);
+
+// NEW: Generate dynamic income statement report
+// GET /api/finance/income-statements/report?period=2024&basis=cash
+router.get('/report/generate', 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    FinancialReportsController.generateIncomeStatement
 );
 
 module.exports = router; 

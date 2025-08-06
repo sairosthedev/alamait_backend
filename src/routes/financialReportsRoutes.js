@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const FinancialReportsController = require('../controllers/financialReportsController');
-const { validateToken } = require('../middleware/auth');
+const { auth, financeAccess } = require('../middleware/auth');
 
 /**
  * Financial Reports Routes
@@ -10,7 +10,8 @@ const { validateToken } = require('../middleware/auth');
  */
 
 // Apply authentication middleware to all routes
-router.use(validateToken);
+router.use(auth);
+router.use(financeAccess);
 
 /**
  * Income Statement
