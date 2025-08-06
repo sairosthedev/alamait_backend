@@ -323,7 +323,7 @@ exports.createTransactionEntry = async (req, res) => {
       entries,
       source = 'manual',
       sourceId,
-      sourceModel = 'Manual',
+      sourceModel = 'Request',
       metadata = {}
     } = req.body;
 

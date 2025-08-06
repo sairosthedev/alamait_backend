@@ -60,7 +60,7 @@ const transactionEntrySchema = new mongoose.Schema({
   },
   sourceModel: {
     type: String,
-    enum: ['Payment', 'Invoice', 'Manual', 'Vendor', 'Expense'],
+    enum: ['Payment', 'Invoice', 'Request', 'Vendor', 'Expense'],
     required: true
   },
   

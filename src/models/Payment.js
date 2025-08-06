@@ -140,6 +140,19 @@ paymentSchema.index({ room: 1 });
 paymentSchema.index({ status: 1 });
 paymentSchema.index({ date: -1 });
 
+// 🚨 DUPLICATE PREVENTION INDEX
+// Compound index to prevent duplicate payments within a time window
+paymentSchema.index({ 
+    student: 1, 
+    totalAmount: 1, 
+    paymentMonth: 1, 
+    method: 1, 
+    createdAt: 1 
+}, { 
+    name: 'duplicate_prevention_index',
+    expireAfterSeconds: 300 // Expire after 5 minutes
+});
+
 // Add pagination plugin
 paymentSchema.plugin(mongoosePaginate);
 

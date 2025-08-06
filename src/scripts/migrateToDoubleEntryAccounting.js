@@ -252,7 +252,7 @@ async function migrateTransactionEntries() {
             updates.sourceModel = 'Expense';
           } else {
             updates.source = 'manual';
-            updates.sourceModel = 'Manual';
+            updates.sourceModel = 'Request';
           }
         }
 

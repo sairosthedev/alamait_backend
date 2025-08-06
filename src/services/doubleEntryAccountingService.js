@@ -379,7 +379,7 @@ class DoubleEntryAccountingService {
                 const selectedQuotation = item.quotations?.find(q => q.isSelected);
                 
                 if (selectedQuotation) {
-                    // ✅ Items WITH vendors
+                    // ✅ Items WITH selected quotations
                     // Debit: Maintenance Expense
                     entries.push({
                         accountCode: await this.getMaintenanceExpenseAccount(),
@@ -399,11 +399,14 @@ class DoubleEntryAccountingService {
                         credit: selectedQuotation.amount,
                         description: `Payable to ${selectedQuotation.provider}`
                     });
-                } else {
-                    // ✅ Items WITHOUT vendors
-                    // Debit: Maintenance Expense
-                    const amount = item.estimatedCost || item.totalCost || 0;
+                } else if (request.proposedVendor || item.provider) {
+                    // ✅ NEW: Items with providers but no quotations
+                    const provider = request.proposedVendor || item.provider;
+                    const amount = item.totalCost || item.estimatedCost || 0;
                     
+                    console.log(`💰 Processing item with provider but no quotation: ${provider} - $${amount}`);
+                    
+                    // Debit: Maintenance Expense
                     entries.push({
                         accountCode: await this.getMaintenanceExpenseAccount(),
                         accountName: 'Maintenance Expense',
@@ -413,9 +416,31 @@ class DoubleEntryAccountingService {
                         description: `Maintenance: ${item.description}`
                     });
 
-                    // Credit: Cash/Bank (immediate payment) OR Accounts Payable: General
+                    // Credit: Accounts Payable: Provider
+                    entries.push({
+                        accountCode: await this.getOrCreateVendorPayableAccount(provider),
+                        accountName: `Accounts Payable: ${provider}`,
+                        accountType: 'Liability',
+                        debit: 0,
+                        credit: amount,
+                        description: `Payable to ${provider}`
+                    });
+                } else {
+                    // ✅ Items WITHOUT providers (general expenses)
+                    const amount = item.totalCost || item.estimatedCost || 0;
+                    
+                    // Debit: Maintenance Expense
+                    entries.push({
+                        accountCode: await this.getMaintenanceExpenseAccount(),
+                        accountName: 'Maintenance Expense',
+                        accountType: 'Expense',
+                        debit: amount,
+                        credit: 0,
+                        description: `Maintenance: ${item.description}`
+                    });
+
+                    // Credit: Cash/Bank or General Accounts Payable
                     if (request.paymentMethod === 'Cash' || request.paymentMethod === 'Immediate') {
-                        // Immediate payment
                         entries.push({
                             accountCode: await this.getPaymentSourceAccount('Cash'),
                             accountName: 'Cash',
@@ -425,7 +450,6 @@ class DoubleEntryAccountingService {
                             description: `Cash payment for ${item.description}`
                         });
                     } else {
-                        // Deferred payment
                         entries.push({
                             accountCode: await this.getOrCreateAccount('2000', 'Accounts Payable: General', 'Liability'),
                             accountName: 'Accounts Payable: General',
@@ -664,6 +688,25 @@ class DoubleEntryAccountingService {
     static async recordStudentRentPayment(payment, user) {
         try {
             console.log('💰 Recording student rent payment (cash basis)');
+            
+            // 🚨 DUPLICATE TRANSACTION PREVENTION
+            // Check if transaction already exists to prevent duplicates
+            const existingTransaction = await TransactionEntry.findOne({
+                source: 'payment',
+                sourceId: payment._id,
+                createdAt: { $gte: new Date(Date.now() - 60000) } // Within last minute
+            });
+
+            if (existingTransaction) {
+                console.log('⚠️ Duplicate student payment transaction detected, skipping');
+                console.log(`   Payment ID: ${payment.paymentId}`);
+                console.log(`   Existing Transaction ID: ${existingTransaction.transactionId}`);
+                return { 
+                    transaction: null, 
+                    transactionEntry: existingTransaction,
+                    message: 'Transaction already exists for this payment'
+                };
+            }
             
             // Check if student has outstanding debt
             const Debtor = require('../models/Debtor');
