@@ -20,6 +20,30 @@ router.use(financeAccess);
 router.get('/income-statement', FinancialReportsController.generateIncomeStatement);
 
 /**
+ * Monthly Income Statement (January to December breakdown)
+ * GET /api/financial-reports/monthly-income-statement?period=2025&basis=cash
+ */
+router.get('/monthly-income-statement', FinancialReportsController.generateMonthlyIncomeStatement);
+
+/**
+ * Monthly Expenses
+ * GET /api/financial-reports/monthly-expenses?period=2025&basis=cash
+ */
+router.get('/monthly-expenses', FinancialReportsController.generateMonthlyExpenses);
+
+/**
+ * Monthly Balance Sheet (January to December breakdown)
+ * GET /api/financial-reports/monthly-balance-sheet?period=2025&basis=cash
+ */
+router.get('/monthly-balance-sheet', FinancialReportsController.generateMonthlyBalanceSheet);
+
+/**
+ * Monthly Cash Flow (January to December breakdown)
+ * GET /api/financial-reports/monthly-cash-flow?period=2025&basis=cash
+ */
+router.get('/monthly-cash-flow', FinancialReportsController.generateMonthlyCashFlow);
+
+/**
  * Balance Sheet
  * GET /api/financial-reports/balance-sheet?asOf=2025-12-31&basis=cash
  */

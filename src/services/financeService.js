@@ -92,13 +92,35 @@ export const getIncomeStatement = async (period, basis = 'cash') => {
   }
 };
 
-// Get Monthly Income Statement
+// Get Monthly Income Statement (January to December breakdown)
 export const getMonthlyIncomeStatement = async (period, basis = 'cash') => {
   try {
     const response = await api.get(`/financial-reports/monthly-income-statement?period=${period}&basis=${basis}`);
     return response.data;
   } catch (error) {
     console.error('Error fetching monthly income statement:', error);
+    throw error;
+  }
+};
+
+// Get Monthly Balance Sheet (January to December breakdown)
+export const getMonthlyBalanceSheet = async (period, basis = 'cash') => {
+  try {
+    const response = await api.get(`/financial-reports/monthly-balance-sheet?period=${period}&basis=${basis}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching monthly balance sheet:', error);
+    throw error;
+  }
+};
+
+// Get Monthly Cash Flow (January to December breakdown)
+export const getMonthlyCashFlow = async (period, basis = 'cash') => {
+  try {
+    const response = await api.get(`/financial-reports/monthly-cash-flow?period=${period}&basis=${basis}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching monthly cash flow:', error);
     throw error;
   }
 };

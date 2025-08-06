@@ -220,6 +220,46 @@ class FinancialReportsController {
     }
     
     /**
+     * Generate Monthly Balance Sheet
+     * GET /api/finance/reports/monthly-balance-sheet
+     */
+    static async generateMonthlyBalanceSheet(req, res) {
+        try {
+            const { period, basis = 'cash' } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2024)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            const monthlyBalanceSheet = await FinancialReportingService.generateMonthlyBalanceSheet(period, basis);
+            
+            res.json({
+                success: true,
+                data: monthlyBalanceSheet,
+                message: `Monthly balance sheet generated for ${period} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating monthly balance sheet:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating monthly balance sheet',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Generate Balance Sheet
      * GET /api/finance/reports/balance-sheet
      */
