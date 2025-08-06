@@ -21,7 +21,7 @@ class FinancialReportsController {
      */
     static async generateIncomeStatement(req, res) {
         try {
-            const { period, basis = 'cash' } = req.query;
+            const { period, basis = 'cash', residence } = req.query;
             
             if (!period) {
                 return res.status(400).json({
@@ -37,12 +37,19 @@ class FinancialReportsController {
                 });
             }
             
-            const incomeStatement = await FinancialReportingService.generateIncomeStatement(period, basis);
+            let incomeStatement;
+            if (residence) {
+                // Use residence-filtered method
+                incomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
+            } else {
+                // Use regular method
+                incomeStatement = await FinancialReportingService.generateIncomeStatement(period, basis);
+            }
             
             res.json({
                 success: true,
                 data: incomeStatement,
-                message: `Income statement generated for ${period} (${basis} basis)`
+                message: `Income statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
             });
             
         } catch (error) {
@@ -265,7 +272,7 @@ class FinancialReportsController {
      */
     static async generateBalanceSheet(req, res) {
         try {
-            const { asOf, basis = 'cash' } = req.query;
+            const { asOf, basis = 'cash', residence } = req.query;
             
             if (!asOf) {
                 return res.status(400).json({
@@ -281,12 +288,19 @@ class FinancialReportsController {
                 });
             }
             
-            const balanceSheet = await FinancialReportingService.generateBalanceSheet(asOf, basis);
+            let balanceSheet;
+            if (residence) {
+                // Use residence-filtered method
+                balanceSheet = await FinancialReportingService.generateResidenceFilteredBalanceSheet(asOf, residence, basis);
+            } else {
+                // Use regular method
+                balanceSheet = await FinancialReportingService.generateBalanceSheet(asOf, basis);
+            }
             
             res.json({
                 success: true,
                 data: balanceSheet,
-                message: `Balance sheet generated as of ${asOf} (${basis} basis)`
+                message: `Balance sheet generated as of ${asOf}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
             });
             
         } catch (error) {
@@ -305,7 +319,7 @@ class FinancialReportsController {
      */
     static async generateCashFlowStatement(req, res) {
         try {
-            const { period, basis = 'cash' } = req.query;
+            const { period, basis = 'cash', residence } = req.query;
             
             if (!period) {
                 return res.status(400).json({
@@ -321,12 +335,19 @@ class FinancialReportsController {
                 });
             }
             
-            const cashFlowStatement = await FinancialReportingService.generateCashFlowStatement(period, basis);
+            let cashFlowStatement;
+            if (residence) {
+                // Use residence-filtered method
+                cashFlowStatement = await FinancialReportingService.generateResidenceFilteredCashFlow(period, residence, basis);
+            } else {
+                // Use regular method
+                cashFlowStatement = await FinancialReportingService.generateCashFlowStatement(period, basis);
+            }
             
             res.json({
                 success: true,
                 data: cashFlowStatement,
-                message: `Cash flow statement generated for ${period} (${basis} basis)`
+                message: `Cash flow statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
             });
             
         } catch (error) {

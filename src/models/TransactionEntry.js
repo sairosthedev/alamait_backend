@@ -64,6 +64,13 @@ const transactionEntrySchema = new mongoose.Schema({
     required: true
   },
   
+  // Residence (for filtering and reporting)
+  residence: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Residence',
+    required: false // Optional for backward compatibility
+  },
+  
   // Audit Trail
   createdBy: {
     type: String, // User email

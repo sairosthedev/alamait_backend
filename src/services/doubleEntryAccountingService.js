@@ -414,6 +414,7 @@ class DoubleEntryAccountingService {
                 source: 'expense_payment',
                 sourceId: request._id,
                 sourceModel: 'Request',
+                residence: request.residence, // Add residence reference
                 createdBy: user.email,
                 status: 'posted',
                 metadata: {
@@ -461,7 +462,7 @@ class DoubleEntryAccountingService {
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
                 transactionId,
-                date: new Date(),
+                date: expense.paidDate || expense.date || new Date(),
                 description: `Payment to ${expense.vendorName || 'Vendor'}`,
                 type: 'payment',
                 reference: expense._id.toString(),
@@ -503,7 +504,7 @@ class DoubleEntryAccountingService {
             const totalAmount = entries.reduce((sum, entry) => sum + entry.debit, 0);
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: new Date(),
+                date: expense.paidDate || expense.date || new Date(),
                 description: `Payment to ${expense.vendorName}`,
                 reference: expense._id.toString(),
                 entries,
@@ -512,6 +513,7 @@ class DoubleEntryAccountingService {
                 source: 'vendor_payment',
                 sourceId: expense._id,
                 sourceModel: 'Expense',
+                residence: expense.residence, // Add residence reference
                 createdBy: user.email,
                 status: 'posted',
                 metadata: {
@@ -628,7 +630,7 @@ class DoubleEntryAccountingService {
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
                 transactionId,
-                date: new Date(),
+                date: payment.date || new Date(),
                 description: `Rent received from ${payment.student?.firstName || 'Student'}`,
                 type: 'payment',
                 reference: payment._id.toString(),
@@ -665,7 +667,7 @@ class DoubleEntryAccountingService {
             // Create transaction entry
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: new Date(),
+                date: payment.date || new Date(),
                 description: `Rent payment from ${payment.student?.firstName || 'Student'}`,
                 reference: payment._id.toString(),
                 entries,
@@ -674,6 +676,7 @@ class DoubleEntryAccountingService {
                 source: 'payment',
                 sourceId: payment._id,
                 sourceModel: 'Payment',
+                residence: payment.residence, // Add residence reference
                 createdBy: user.email,
                 status: 'posted'
             });
@@ -703,7 +706,7 @@ class DoubleEntryAccountingService {
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
                 transactionId,
-                date: new Date(),
+                date: invoice.date || new Date(),
                 description: `Invoice issued to ${invoice.student?.firstName || 'Student'}`,
                 type: 'approval',
                 reference: invoice._id.toString(),
@@ -749,6 +752,7 @@ class DoubleEntryAccountingService {
                 source: 'invoice',
                 sourceId: invoice._id,
                 sourceModel: 'Invoice',
+                residence: invoice.residence, // Add residence reference
                 createdBy: user.email,
                 status: 'posted'
             });

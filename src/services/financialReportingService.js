@@ -1,5 +1,6 @@
 const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
+const Residence = require('../models/Residence');
 const mongoose = require('mongoose');
 
 /**
@@ -1407,6 +1408,296 @@ class FinancialReportingService {
             return debit - credit; // Expense increase = cash outflow
         }
         return 0;
+    }
+
+    /**
+     * RESIDENCE-FILTERED FINANCIAL REPORTS
+     */
+
+    /**
+     * Generate Residence-Filtered Income Statement
+     */
+    static async generateResidenceFilteredIncomeStatement(period, residenceId, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating residence-filtered income statement for ${period}, residence: ${residenceId}`);
+            
+            // Get all transaction entries for the period with populated source documents
+            const transactionEntries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            })
+            .populate({
+                path: 'sourceId',
+                select: 'residence student amount date',
+                populate: {
+                    path: 'residence',
+                    select: 'name address'
+                }
+            })
+            .lean();
+            
+            console.log(`Found ${transactionEntries.length} transaction entries for the period`);
+            
+            // Filter by residence if specified
+            let filteredEntries = transactionEntries;
+            if (residenceId) {
+                filteredEntries = transactionEntries.filter(entry => {
+                    return entry.sourceId && 
+                           entry.sourceId.residence && 
+                           entry.sourceId.residence._id.toString() === residenceId;
+                });
+                console.log(`Filtered to ${filteredEntries.length} entries for residence ${residenceId}`);
+            }
+            
+            // Calculate revenue and expenses
+            const revenue = {};
+            const expenses = {};
+            
+            filteredEntries.forEach(entry => {
+                entry.entries.forEach(accountEntry => {
+                    if (accountEntry.accountType === 'Income' || accountEntry.accountType === 'income') {
+                        const month = new Date(entry.date).toLocaleString('default', { month: 'long' }).toLowerCase();
+                        if (!revenue[month]) revenue[month] = 0;
+                        revenue[month] += accountEntry.credit || 0;
+                    } else if (accountEntry.accountType === 'Expense' || accountEntry.accountType === 'expense') {
+                        const month = new Date(entry.date).toLocaleString('default', { month: 'long' }).toLowerCase();
+                        if (!expenses[month]) expenses[month] = 0;
+                        expenses[month] += accountEntry.debit || 0;
+                    }
+                });
+            });
+            
+            // Calculate totals
+            const totalRevenue = Object.values(revenue).reduce((sum, amount) => sum + amount, 0);
+            const totalExpenses = Object.values(expenses).reduce((sum, amount) => sum + amount, 0);
+            const netIncome = totalRevenue - totalExpenses;
+            
+            // Get residence info if specified
+            let residenceInfo = null;
+            if (residenceId) {
+                residenceInfo = await Residence.findById(residenceId).select('name address').lean();
+            }
+            
+            return {
+                period,
+                residence: residenceInfo,
+                basis,
+                revenue: {
+                    ...revenue,
+                    total_revenue: totalRevenue
+                },
+                expenses: {
+                    ...expenses,
+                    total_expenses: totalExpenses
+                },
+                net_income: netIncome,
+                gross_profit: totalRevenue,
+                operating_income: netIncome
+            };
+            
+        } catch (error) {
+            console.error('Error generating residence-filtered income statement:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Residence-Filtered Balance Sheet
+     */
+    static async generateResidenceFilteredBalanceSheet(asOf, residenceId, basis = 'cash') {
+        try {
+            const asOfDate = new Date(asOf);
+            
+            console.log(`Generating residence-filtered balance sheet as of ${asOf}, residence: ${residenceId}`);
+            
+            // Get all transaction entries up to the asOf date with populated source documents
+            const transactionEntries = await TransactionEntry.find({
+                date: { $lte: asOfDate }
+            })
+            .populate({
+                path: 'sourceId',
+                select: 'residence student amount date',
+                populate: {
+                    path: 'residence',
+                    select: 'name address'
+                }
+            })
+            .lean();
+            
+            // Filter by residence if specified
+            let filteredEntries = transactionEntries;
+            if (residenceId) {
+                filteredEntries = transactionEntries.filter(entry => {
+                    return entry.sourceId && 
+                           entry.sourceId.residence && 
+                           entry.sourceId.residence._id.toString() === residenceId;
+                });
+            }
+            
+            // Calculate account balances
+            const assets = {};
+            const liabilities = {};
+            const equity = {};
+            
+            filteredEntries.forEach(entry => {
+                entry.entries.forEach(accountEntry => {
+                    const accountCode = accountEntry.accountCode;
+                    const accountName = accountEntry.accountName;
+                    const accountType = accountEntry.accountType;
+                    const debit = accountEntry.debit || 0;
+                    const credit = accountEntry.credit || 0;
+                    
+                    const key = `${accountCode} - ${accountName}`;
+                    
+                    if (accountType === 'Asset' || accountType === 'asset') {
+                        if (!assets[key]) assets[key] = 0;
+                        assets[key] += debit - credit; // Assets increase with debit
+                    } else if (accountType === 'Liability' || accountType === 'liability') {
+                        if (!liabilities[key]) liabilities[key] = 0;
+                        liabilities[key] += credit - debit; // Liabilities increase with credit
+                    } else if (accountType === 'Equity' || accountType === 'equity') {
+                        if (!equity[key]) equity[key] = 0;
+                        equity[key] += credit - debit; // Equity increases with credit
+                    }
+                });
+            });
+            
+            // Calculate totals
+            const totalAssets = Object.values(assets).reduce((sum, amount) => sum + amount, 0);
+            const totalLiabilities = Object.values(liabilities).reduce((sum, amount) => sum + amount, 0);
+            const totalEquity = Object.values(equity).reduce((sum, amount) => sum + amount, 0);
+            
+            // Get residence info if specified
+            let residenceInfo = null;
+            if (residenceId) {
+                residenceInfo = await Residence.findById(residenceId).select('name address').lean();
+            }
+            
+            return {
+                asOf,
+                residence: residenceInfo,
+                basis,
+                assets: {
+                    ...assets,
+                    total_assets: totalAssets
+                },
+                liabilities: {
+                    ...liabilities,
+                    total_liabilities: totalLiabilities
+                },
+                equity: {
+                    ...equity,
+                    total_equity: totalEquity
+                },
+                total_liabilities_and_equity: totalLiabilities + totalEquity
+            };
+            
+        } catch (error) {
+            console.error('Error generating residence-filtered balance sheet:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Residence-Filtered Cash Flow Statement
+     */
+    static async generateResidenceFilteredCashFlow(period, residenceId, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating residence-filtered cash flow for ${period}, residence: ${residenceId}`);
+            
+            // Get all transaction entries for the period with populated source documents
+            const transactionEntries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            })
+            .populate({
+                path: 'sourceId',
+                select: 'residence student amount date',
+                populate: {
+                    path: 'residence',
+                    select: 'name address'
+                }
+            })
+            .lean();
+            
+            // Filter by residence if specified
+            let filteredEntries = transactionEntries;
+            if (residenceId) {
+                filteredEntries = transactionEntries.filter(entry => {
+                    return entry.sourceId && 
+                           entry.sourceId.residence && 
+                           entry.sourceId.residence._id.toString() === residenceId;
+                });
+            }
+            
+            // Calculate cash flows by activity type
+            const operating = {};
+            const investing = {};
+            const financing = {};
+            
+            filteredEntries.forEach(entry => {
+                entry.entries.forEach(accountEntry => {
+                    const accountCode = accountEntry.accountCode;
+                    const accountType = accountEntry.accountType;
+                    const debit = accountEntry.debit || 0;
+                    const credit = accountEntry.credit || 0;
+                    
+                    const month = new Date(entry.date).toLocaleString('default', { month: 'long' }).toLowerCase();
+                    const cashFlow = this.calculateCashFlow(accountType, debit, credit);
+                    const activityType = this.getCashFlowActivityType(accountCode, accountType);
+                    
+                    if (activityType === 'operating') {
+                        if (!operating[month]) operating[month] = 0;
+                        operating[month] += cashFlow;
+                    } else if (activityType === 'investing') {
+                        if (!investing[month]) investing[month] = 0;
+                        investing[month] += cashFlow;
+                    } else if (activityType === 'financing') {
+                        if (!financing[month]) financing[month] = 0;
+                        financing[month] += cashFlow;
+                    }
+                });
+            });
+            
+            // Calculate totals
+            const totalOperating = Object.values(operating).reduce((sum, amount) => sum + amount, 0);
+            const totalInvesting = Object.values(investing).reduce((sum, amount) => sum + amount, 0);
+            const totalFinancing = Object.values(financing).reduce((sum, amount) => sum + amount, 0);
+            const netCashFlow = totalOperating + totalInvesting + totalFinancing;
+            
+            // Get residence info if specified
+            let residenceInfo = null;
+            if (residenceId) {
+                residenceInfo = await Residence.findById(residenceId).select('name address').lean();
+            }
+            
+            return {
+                period,
+                residence: residenceInfo,
+                basis,
+                operating_activities: {
+                    ...operating,
+                    total: totalOperating
+                },
+                investing_activities: {
+                    ...investing,
+                    total: totalInvesting
+                },
+                financing_activities: {
+                    ...financing,
+                    total: totalFinancing
+                },
+                net_cash_flow: netCashFlow
+            };
+            
+        } catch (error) {
+            console.error('Error generating residence-filtered cash flow:', error);
+            throw error;
+        }
     }
 }
 
