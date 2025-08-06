@@ -234,7 +234,7 @@ const requestSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['maintenance', 'financial', 'operational'],
+        enum: ['maintenance', 'student_maintenance', 'financial', 'operational'],
         required: false // Will be validated in custom validation
     },
     submittedBy: {
@@ -540,22 +540,28 @@ requestSchema.pre('validate', function(next) {
         if (!this.submittedBy) {
             errors.push('submittedBy: SubmittedBy is required for admin requests');
         }
-        if (!this.department) {
-            errors.push('department: Department is required for admin requests');
+        
+        // For student_maintenance type, make department and deliveryLocation optional
+        if (this.type !== 'student_maintenance') {
+            if (!this.department) {
+                errors.push('department: Department is required for admin requests');
+            }
+            if (!this.requestedBy) {
+                errors.push('requestedBy: RequestedBy is required for admin requests');
+            }
+            if (!this.deliveryLocation) {
+                errors.push('deliveryLocation: DeliveryLocation is required for admin requests');
+            }
         }
-        if (!this.requestedBy) {
-            errors.push('requestedBy: RequestedBy is required for admin requests');
-        }
-        if (!this.deliveryLocation) {
-            errors.push('deliveryLocation: DeliveryLocation is required for admin requests');
-        }
+        
         if (this.student) {
             errors.push('student: Student should not be provided for admin requests');
         }
         if (this.issue) {
             errors.push('issue: Issue should not be provided for admin requests');
         }
-        if (this.category) {
+        // Allow category for student_maintenance type
+        if (this.category && this.type !== 'student_maintenance') {
             errors.push('category: Category should not be provided for admin requests');
         }
     } else {
