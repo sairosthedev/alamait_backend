@@ -25,22 +25,45 @@ class FinancialReportingService {
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
             
-            // Get all transaction entries for the period
+            console.log(`Generating income statement for ${period} from ${startDate} to ${endDate}`);
+            
+            // Get all transaction entries for the period (without metadata filter)
             const entries = await TransactionEntry.find({
-                date: { $gte: startDate, $lte: endDate },
-                'metadata.accountingBasis': basis
+                date: { $gte: startDate, $lte: endDate }
             }).populate('entries');
             
-            // Calculate revenue (Income accounts)
-            const revenue = await this.calculateAccountTypeTotal('Income', startDate, endDate, basis);
+            console.log(`Found ${entries.length} transaction entries for the period`);
             
-            // Calculate expenses (Expense accounts)
-            const expenses = await this.calculateAccountTypeTotal('Expense', startDate, endDate, basis);
+            // Calculate revenue and expenses from transaction entries
+            const revenue = {};
+            const expenses = {};
             
-            // Calculate net income
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    const accountCode = line.accountCode;
+                    const accountName = line.accountName;
+                    const accountType = line.accountType;
+                    const debit = line.debit || 0;
+                    const credit = line.credit || 0;
+                    
+                    if (accountType === 'Income') {
+                        const key = `${accountCode} - ${accountName}`;
+                        if (!revenue[key]) revenue[key] = 0;
+                        revenue[key] += credit - debit; // Income increases with credit
+                    } else if (accountType === 'Expense') {
+                        const key = `${accountCode} - ${accountName}`;
+                        if (!expenses[key]) expenses[key] = 0;
+                        expenses[key] += debit - credit; // Expenses increase with debit
+                    }
+                });
+            });
+            
+            // Calculate totals
             const totalRevenue = Object.values(revenue).reduce((sum, amount) => sum + amount, 0);
             const totalExpenses = Object.values(expenses).reduce((sum, amount) => sum + amount, 0);
             const netIncome = totalRevenue - totalExpenses;
+            
+            console.log(`Revenue: $${totalRevenue}, Expenses: $${totalExpenses}, Net Income: $${netIncome}`);
             
             return {
                 period,
@@ -71,75 +94,104 @@ class FinancialReportingService {
         try {
             const asOfDate = new Date(asOf);
             
-            // Get account balances as of the specified date
-            const assets = await this.getAccountBalancesByType('Asset', asOfDate, basis);
-            const liabilities = await this.getAccountBalancesByType('Liability', asOfDate, basis);
-            const equity = await this.getAccountBalancesByType('Equity', asOfDate, basis);
+            console.log(`Generating balance sheet as of ${asOfDate}`);
+            
+            // Get all transaction entries up to the specified date
+            const entries = await TransactionEntry.find({
+                date: { $lte: asOfDate }
+            }).populate('entries');
+            
+            console.log(`Found ${entries.length} transaction entries up to ${asOfDate}`);
+            
+            // Calculate account balances
+            const accountBalances = {};
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    const accountCode = line.accountCode;
+                    const accountName = line.accountName;
+                    const accountType = line.accountType;
+                    const debit = line.debit || 0;
+                    const credit = line.credit || 0;
+                    
+                    const key = `${accountCode} - ${accountName}`;
+                    if (!accountBalances[key]) {
+                        accountBalances[key] = {
+                            code: accountCode,
+                            name: accountName,
+                            type: accountType,
+                            balance: 0
+                        };
+                    }
+                    
+                    // Calculate balance based on account type
+                    if (accountType === 'Asset' || accountType === 'Expense') {
+                        accountBalances[key].balance += debit - credit;
+                    } else {
+                        accountBalances[key].balance += credit - debit;
+                    }
+                });
+            });
+            
+            // Group by account type
+            const assets = {};
+            const liabilities = {};
+            const equity = {};
+            const income = {};
+            const expenses = {};
+            
+            Object.values(accountBalances).forEach(account => {
+                const key = `${account.code} - ${account.name}`;
+                switch (account.type) {
+                    case 'Asset':
+                        assets[key] = account.balance;
+                        break;
+                    case 'Liability':
+                        liabilities[key] = account.balance;
+                        break;
+                    case 'Equity':
+                        equity[key] = account.balance;
+                        break;
+                    case 'Income':
+                        income[key] = account.balance;
+                        break;
+                    case 'Expense':
+                        expenses[key] = account.balance;
+                        break;
+                }
+            });
             
             // Calculate totals
             const totalAssets = Object.values(assets).reduce((sum, amount) => sum + amount, 0);
             const totalLiabilities = Object.values(liabilities).reduce((sum, amount) => sum + amount, 0);
             const totalEquity = Object.values(equity).reduce((sum, amount) => sum + amount, 0);
+            const totalIncome = Object.values(income).reduce((sum, amount) => sum + amount, 0);
+            const totalExpenses = Object.values(expenses).reduce((sum, amount) => sum + amount, 0);
             
-            // Group assets into current and non-current
-            const currentAssets = {};
-            const nonCurrentAssets = {};
-            
-            Object.keys(assets).forEach(account => {
-                if (this.isCurrentAsset(account)) {
-                    currentAssets[account] = assets[account];
-                } else {
-                    nonCurrentAssets[account] = assets[account];
-                }
-            });
-            
-            // Group liabilities into current and non-current
-            const currentLiabilities = {};
-            const nonCurrentLiabilities = {};
-            
-            Object.keys(liabilities).forEach(account => {
-                if (this.isCurrentLiability(account)) {
-                    currentLiabilities[account] = liabilities[account];
-                } else {
-                    nonCurrentLiabilities[account] = liabilities[account];
-                }
-            });
+            // Calculate retained earnings
+            const retainedEarnings = totalIncome - totalExpenses;
             
             return {
                 asOf,
                 basis,
                 assets: {
-                    current_assets: {
-                        ...currentAssets,
-                        total_current_assets: Object.values(currentAssets).reduce((sum, amount) => sum + amount, 0)
-                    },
-                    non_current_assets: {
-                        ...nonCurrentAssets,
-                        total_non_current_assets: Object.values(nonCurrentAssets).reduce((sum, amount) => sum + amount, 0)
-                    },
+                    ...assets,
                     total_assets: totalAssets
                 },
                 liabilities: {
-                    current_liabilities: {
-                        ...currentLiabilities,
-                        total_current_liabilities: Object.values(currentLiabilities).reduce((sum, amount) => sum + amount, 0)
-                    },
-                    non_current_liabilities: {
-                        ...nonCurrentLiabilities,
-                        total_non_current_liabilities: Object.values(nonCurrentLiabilities).reduce((sum, amount) => sum + amount, 0)
-                    },
+                    ...liabilities,
                     total_liabilities: totalLiabilities
                 },
                 equity: {
                     ...equity,
-                    total_equity: totalEquity
+                    retained_earnings: retainedEarnings,
+                    total_equity: totalEquity + retainedEarnings
                 },
-                // Verify accounting equation
                 accounting_equation: {
                     assets: totalAssets,
                     liabilities: totalLiabilities,
-                    equity: totalEquity,
-                    balanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01
+                    equity: totalEquity + retainedEarnings,
+                    balanced: Math.abs((totalAssets - (totalLiabilities + totalEquity + retainedEarnings))) < 0.01
                 }
             };
             
@@ -157,43 +209,69 @@ class FinancialReportingService {
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
             
-            // Operating Activities
-            const operatingActivities = await this.calculateOperatingCashFlows(startDate, endDate, basis);
+            console.log(`Generating cash flow statement for ${period}`);
             
-            // Investing Activities
-            const investingActivities = await this.calculateInvestingCashFlows(startDate, endDate, basis);
+            // Get all transaction entries for the period
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            }).populate('entries');
             
-            // Financing Activities
-            const financingActivities = await this.calculateFinancingCashFlows(startDate, endDate, basis);
+            // Calculate cash flows by source
+            const operatingActivities = {
+                cash_received_from_customers: 0,
+                cash_paid_to_suppliers: 0,
+                cash_paid_for_expenses: 0
+            };
             
-            // Calculate net change in cash
-            const netOperatingCash = operatingActivities.net_cash_from_operating;
-            const netInvestingCash = investingActivities.net_cash_from_investing;
-            const netFinancingCash = financingActivities.net_cash_from_financing;
-            const netChangeInCash = netOperatingCash + netInvestingCash + netFinancingCash;
+            const investingActivities = {
+                purchase_of_equipment: 0,
+                purchase_of_buildings: 0
+            };
             
-            // Get cash balances
-            const cashAtBeginning = await this.getCashBalanceAtDate(startDate, basis);
-            const cashAtEnd = await this.getCashBalanceAtDate(endDate, basis);
+            const financingActivities = {
+                owners_contribution: 0,
+                loan_proceeds: 0
+            };
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    const accountCode = line.accountCode;
+                    const accountName = line.accountName;
+                    const debit = line.debit || 0;
+                    const credit = line.credit || 0;
+                    
+                    // Operating activities - cash accounts and income/expense
+                    if (accountCode.startsWith('100') || accountCode.startsWith('101')) { // Cash accounts
+                        if (entry.source === 'payment') {
+                            operatingActivities.cash_received_from_customers += credit;
+                        } else if (entry.source === 'expense_payment') {
+                            operatingActivities.cash_paid_for_expenses += debit;
+                        }
+                    }
+                });
+            });
+            
+            const netOperatingCashFlow = operatingActivities.cash_received_from_customers - 
+                                       operatingActivities.cash_paid_to_suppliers - 
+                                       operatingActivities.cash_paid_for_expenses;
+            
+            const netInvestingCashFlow = investingActivities.purchase_of_equipment + 
+                                       investingActivities.purchase_of_buildings;
+            
+            const netFinancingCashFlow = financingActivities.owners_contribution + 
+                                       financingActivities.loan_proceeds;
+            
+            const netChangeInCash = netOperatingCashFlow + netInvestingCashFlow + netFinancingCashFlow;
             
             return {
                 period,
                 basis,
-                operating_activities: {
-                    ...operatingActivities,
-                    net_cash_from_operating: netOperatingCash
-                },
-                investing_activities: {
-                    ...investingActivities,
-                    net_cash_from_investing: netInvestingCash
-                },
-                financing_activities: {
-                    ...financingActivities,
-                    net_cash_from_financing: netFinancingCash
-                },
+                operating_activities: operatingActivities,
+                investing_activities: investingActivities,
+                financing_activities: financingActivities,
                 net_change_in_cash: netChangeInCash,
-                cash_at_beginning: cashAtBeginning,
-                cash_at_end: cashAtEnd
+                cash_at_beginning: 0, // Would need to calculate from previous period
+                cash_at_end: netChangeInCash
             };
             
         } catch (error) {
@@ -209,28 +287,52 @@ class FinancialReportingService {
         try {
             const asOfDate = new Date(asOf);
             
-            // Get all accounts with balances
-            const accounts = await Account.find({ isActive: true });
-            const trialBalance = [];
+            console.log(`Generating trial balance as of ${asOfDate}`);
             
-            for (const account of accounts) {
-                const balance = await this.getAccountBalance(account.code, asOfDate, basis);
-                
-                if (balance !== 0) {
-                    trialBalance.push({
-                        accountCode: account.code,
-                        accountName: account.name,
-                        accountType: account.type,
-                        debit: balance > 0 ? balance : 0,
-                        credit: balance < 0 ? Math.abs(balance) : 0,
-                        balance: balance
-                    });
-                }
-            }
+            // Get all transaction entries up to the specified date
+            const entries = await TransactionEntry.find({
+                date: { $lte: asOfDate }
+            }).populate('entries');
             
-            // Calculate totals
-            const totalDebits = trialBalance.reduce((sum, item) => sum + item.debit, 0);
-            const totalCredits = trialBalance.reduce((sum, item) => sum + item.credit, 0);
+            // Calculate account balances
+            const accountBalances = {};
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    const accountCode = line.accountCode;
+                    const accountName = line.accountName;
+                    const accountType = line.accountType;
+                    const debit = line.debit || 0;
+                    const credit = line.credit || 0;
+                    
+                    const key = `${accountCode} - ${accountName}`;
+                    if (!accountBalances[key]) {
+                        accountBalances[key] = {
+                            code: accountCode,
+                            name: accountName,
+                            type: accountType,
+                            debit: 0,
+                            credit: 0
+                        };
+                    }
+                    
+                    accountBalances[key].debit += debit;
+                    accountBalances[key].credit += credit;
+                });
+            });
+            
+            // Calculate net balances
+            const trialBalance = Object.values(accountBalances).map(account => ({
+                accountCode: account.code,
+                accountName: account.name,
+                accountType: account.type,
+                debit: account.debit,
+                credit: account.credit,
+                balance: account.debit - account.credit
+            }));
+            
+            const totalDebits = trialBalance.reduce((sum, account) => sum + account.debit, 0);
+            const totalCredits = trialBalance.reduce((sum, account) => sum + account.credit, 0);
             
             return {
                 asOf,
@@ -269,7 +371,6 @@ class FinancialReportingService {
             // Get all transactions for this account
             const transactions = await TransactionEntry.find({
                 date: { $gte: startDate, $lte: endDate },
-                'metadata.accountingBasis': basis,
                 'entries.accountCode': accountCode
             }).sort({ date: 1 });
             
@@ -322,135 +423,169 @@ class FinancialReportingService {
      * Get account balances by type
      */
     static async getAccountBalancesByType(accountType, asOfDate, basis) {
-        const accounts = await Account.find({ type: accountType, isActive: true });
-        const balances = {};
-        
-        for (const account of accounts) {
-            const balance = await this.getAccountBalance(account.code, asOfDate, basis);
-            if (balance !== 0) {
-                balances[account.name.toLowerCase().replace(/\s+/g, '_')] = balance;
-            }
+        try {
+            const entries = await TransactionEntry.find({
+                date: { $lte: asOfDate }
+            }).populate('entries');
+            
+            const balances = {};
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    if (line.accountType === accountType) {
+                        const key = `${line.accountCode} - ${line.accountName}`;
+                        if (!balances[key]) balances[key] = 0;
+                        
+                        if (accountType === 'Asset' || accountType === 'Expense') {
+                            balances[key] += (line.debit || 0) - (line.credit || 0);
+                        } else {
+                            balances[key] += (line.credit || 0) - (line.debit || 0);
+                        }
+                    }
+                });
+            });
+            
+            return balances;
+        } catch (error) {
+            console.error('Error getting account balances by type:', error);
+            throw error;
         }
-        
-        return balances;
     }
     
     /**
-     * Calculate total for account type in period
+     * Calculate account type total for a period
      */
     static async calculateAccountTypeTotal(accountType, startDate, endDate, basis) {
-        const accounts = await Account.find({ type: accountType, isActive: true });
-        const totals = {};
-        
-        for (const account of accounts) {
-            const total = await this.calculateAccountTotal(account.code, startDate, endDate, basis);
-            if (total !== 0) {
-                totals[account.name.toLowerCase().replace(/\s+/g, '_')] = total;
-            }
+        try {
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            }).populate('entries');
+            
+            const totals = {};
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    if (line.accountType === accountType) {
+                        const key = `${line.accountCode} - ${line.accountName}`;
+                        if (!totals[key]) totals[key] = 0;
+                        
+                        if (accountType === 'Income') {
+                            totals[key] += (line.credit || 0) - (line.debit || 0);
+                        } else if (accountType === 'Expense') {
+                            totals[key] += (line.debit || 0) - (line.credit || 0);
+                        }
+                    }
+                });
+            });
+            
+            return totals;
+        } catch (error) {
+            console.error('Error calculating account type total:', error);
+            throw error;
         }
-        
-        return totals;
     }
     
     /**
-     * Get account balance at specific date
+     * Get account balance for a specific account
      */
     static async getAccountBalance(accountCode, asOfDate, basis) {
-        const account = await Account.findOne({ code: accountCode });
-        if (!account) return 0;
-        
-        // Get all transactions up to the date
-        const transactions = await TransactionEntry.find({
-            date: { $lte: asOfDate },
-            'metadata.accountingBasis': basis,
-            'entries.accountCode': accountCode
-        });
-        
-        let balance = 0;
-        
-        for (const transaction of transactions) {
-            const entry = transaction.entries.find(e => e.accountCode === accountCode);
-            if (entry) {
-                const debit = entry.debit || 0;
-                const credit = entry.credit || 0;
-                
-                // Update balance based on account type
-                if (['Asset', 'Expense'].includes(account.type)) {
-                    balance += debit - credit;
-                } else {
-                    balance += credit - debit;
-                }
-            }
+        try {
+            const entries = await TransactionEntry.find({
+                date: { $lte: asOfDate }
+            }).populate('entries');
+            
+            let balance = 0;
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    if (line.accountCode === accountCode) {
+                        if (line.accountType === 'Asset' || line.accountType === 'Expense') {
+                            balance += (line.debit || 0) - (line.credit || 0);
+                        } else {
+                            balance += (line.credit || 0) - (line.debit || 0);
+                        }
+                    }
+                });
+            });
+            
+            return balance;
+        } catch (error) {
+            console.error('Error getting account balance:', error);
+            throw error;
         }
-        
-        return balance;
     }
     
     /**
-     * Calculate account total for period
+     * Calculate account total for a period
      */
     static async calculateAccountTotal(accountCode, startDate, endDate, basis) {
-        const account = await Account.findOne({ code: accountCode });
-        if (!account) return 0;
-        
-        // Get transactions in the period
-        const transactions = await TransactionEntry.find({
-            date: { $gte: startDate, $lte: endDate },
-            'metadata.accountingBasis': basis,
-            'entries.accountCode': accountCode
-        });
-        
-        let total = 0;
-        
-        for (const transaction of transactions) {
-            const entry = transaction.entries.find(e => e.accountCode === accountCode);
-            if (entry) {
-                const debit = entry.debit || 0;
-                const credit = entry.credit || 0;
-                
-                // For income/expense accounts, sum the credits/debits
-                if (account.type === 'Income') {
-                    total += credit;
-                } else if (account.type === 'Expense') {
-                    total += debit;
-                }
-            }
+        try {
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            }).populate('entries');
+            
+            let total = 0;
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    if (line.accountCode === accountCode) {
+                        if (line.accountType === 'Income') {
+                            total += (line.credit || 0) - (line.debit || 0);
+                        } else if (line.accountType === 'Expense') {
+                            total += (line.debit || 0) - (line.credit || 0);
+                        }
+                    }
+                });
+            });
+            
+            return total;
+        } catch (error) {
+            console.error('Error calculating account total:', error);
+            throw error;
         }
-        
-        return total;
     }
     
     /**
      * Calculate operating cash flows
      */
     static async calculateOperatingCashFlows(startDate, endDate, basis) {
-        // Cash received from customers (Rent Income)
-        const cashFromCustomers = await this.calculateAccountTotal('4001', startDate, endDate, basis);
-        
-        // Cash paid to suppliers (Accounts Payable payments)
-        const cashToSuppliers = await this.calculatePayablePayments(startDate, endDate, basis);
-        
-        // Cash paid for expenses
-        const cashForExpenses = await this.calculateDirectExpensePayments(startDate, endDate, basis);
-        
-        return {
-            cash_received_from_customers: cashFromCustomers,
-            cash_paid_to_suppliers: -cashToSuppliers,
-            cash_paid_for_expenses: -cashForExpenses
-        };
+        try {
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate },
+                source: { $in: ['payment', 'expense_payment'] }
+            }).populate('entries');
+            
+            let cashReceived = 0;
+            let cashPaid = 0;
+            
+            entries.forEach(entry => {
+                if (entry.source === 'payment') {
+                    cashReceived += entry.totalCredit;
+                } else if (entry.source === 'expense_payment') {
+                    cashPaid += entry.totalDebit;
+                }
+            });
+            
+            return {
+                cash_received: cashReceived,
+                cash_paid: cashPaid,
+                net_operating_cash_flow: cashReceived - cashPaid
+            };
+        } catch (error) {
+            console.error('Error calculating operating cash flows:', error);
+            throw error;
+        }
     }
     
     /**
      * Calculate investing cash flows
      */
     static async calculateInvestingCashFlows(startDate, endDate, basis) {
-        // Purchase of equipment, buildings, etc.
-        const purchaseOfEquipment = await this.calculateAccountTotal('1400', startDate, endDate, basis);
-        const purchaseOfBuildings = await this.calculateAccountTotal('1500', startDate, endDate, basis);
-        
+        // Placeholder - would need specific logic for investing activities
         return {
-            purchase_of_equipment: -purchaseOfEquipment,
-            purchase_of_buildings: -purchaseOfBuildings
+            purchase_of_equipment: 0,
+            purchase_of_buildings: 0,
+            net_investing_cash_flow: 0
         };
     }
     
@@ -458,90 +593,108 @@ class FinancialReportingService {
      * Calculate financing cash flows
      */
     static async calculateFinancingCashFlows(startDate, endDate, basis) {
-        // Owner's contributions
-        const ownersContribution = await this.calculateAccountTotal('3000', startDate, endDate, basis);
-        
-        // Loan proceeds
-        const loanProceeds = await this.calculateAccountTotal('2100', startDate, endDate, basis);
-        
+        // Placeholder - would need specific logic for financing activities
         return {
-            owners_contribution: ownersContribution,
-            loan_proceeds: loanProceeds
+            owners_contribution: 0,
+            loan_proceeds: 0,
+            net_financing_cash_flow: 0
         };
     }
     
     /**
-     * Get cash balance at specific date
+     * Get cash balance at a specific date
      */
     static async getCashBalanceAtDate(date, basis) {
-        const cashAccounts = ['1001', '1002', '1003', '1004', '1008']; // Bank, Cash, Ecocash, Innbucks, Petty Cash
-        let totalCash = 0;
-        
-        for (const accountCode of cashAccounts) {
-            totalCash += await this.getAccountBalance(accountCode, date, basis);
+        try {
+            const entries = await TransactionEntry.find({
+                date: { $lte: date }
+            }).populate('entries');
+            
+            let cashBalance = 0;
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    if (line.accountCode.startsWith('100') || line.accountCode.startsWith('101')) {
+                        cashBalance += (line.debit || 0) - (line.credit || 0);
+                    }
+                });
+            });
+            
+            return cashBalance;
+        } catch (error) {
+            console.error('Error getting cash balance at date:', error);
+            throw error;
         }
-        
-        return totalCash;
     }
     
     /**
      * Calculate payable payments
      */
     static async calculatePayablePayments(startDate, endDate, basis) {
-        const transactions = await TransactionEntry.find({
-            date: { $gte: startDate, $lte: endDate },
-            'metadata.accountingBasis': basis,
-            'entries.accountCode': { $regex: /^200/ } // Accounts Payable accounts
-        });
-        
-        let totalPayments = 0;
-        
-        for (const transaction of transactions) {
-            const payableEntry = transaction.entries.find(e => e.accountCode.match(/^200/));
-            if (payableEntry && payableEntry.debit > 0) {
-                totalPayments += payableEntry.debit;
-            }
+        try {
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate },
+                source: 'expense_payment'
+            }).populate('entries');
+            
+            let totalPayments = 0;
+            
+            entries.forEach(entry => {
+                totalPayments += entry.totalDebit;
+            });
+            
+            return totalPayments;
+        } catch (error) {
+            console.error('Error calculating payable payments:', error);
+            throw error;
         }
-        
-        return totalPayments;
     }
     
     /**
      * Calculate direct expense payments
      */
     static async calculateDirectExpensePayments(startDate, endDate, basis) {
-        const transactions = await TransactionEntry.find({
-            date: { $gte: startDate, $lte: endDate },
-            'metadata.accountingBasis': basis,
-            'entries.accountCode': { $regex: /^500/ } // Expense accounts
-        });
-        
-        let totalExpenses = 0;
-        
-        for (const transaction of transactions) {
-            const expenseEntry = transaction.entries.find(e => e.accountCode.match(/^500/));
-            if (expenseEntry && expenseEntry.debit > 0) {
-                totalExpenses += expenseEntry.debit;
-            }
+        try {
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate },
+                source: 'expense_payment'
+            }).populate('entries');
+            
+            let totalExpenses = 0;
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    if (line.accountType === 'Expense') {
+                        totalExpenses += line.debit || 0;
+                    }
+                });
+            });
+            
+            return totalExpenses;
+        } catch (error) {
+            console.error('Error calculating direct expense payments:', error);
+            throw error;
         }
-        
-        return totalExpenses;
     }
     
     /**
      * Check if account is current asset
      */
     static isCurrentAsset(accountName) {
-        const currentAssetKeywords = ['cash', 'bank', 'ecocash', 'innbucks', 'petty', 'receivable', 'inventory'];
-        return currentAssetKeywords.some(keyword => accountName.toLowerCase().includes(keyword));
+        const currentAssetKeywords = ['cash', 'bank', 'receivable', 'inventory', 'prepaid'];
+        return currentAssetKeywords.some(keyword => 
+            accountName.toLowerCase().includes(keyword)
+        );
     }
     
     /**
      * Check if account is current liability
      */
     static isCurrentLiability(accountName) {
-        const currentLiabilityKeywords = ['payable', 'advance', 'deposit'];
-        return currentLiabilityKeywords.some(keyword => accountName.toLowerCase().includes(keyword));
+        const currentLiabilityKeywords = ['payable', 'accrued', 'short-term'];
+        return currentLiabilityKeywords.some(keyword => 
+            accountName.toLowerCase().includes(keyword)
+        );
     }
 }
 

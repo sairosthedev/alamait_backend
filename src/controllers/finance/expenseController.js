@@ -717,36 +717,73 @@ exports.markExpenseAsPaid = async (req, res) => {
                 throw new Error('Expense account not found for category: ' + updatedExpense.category);
             }
             
+            // Generate transaction ID
+            const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+            
             // Create transaction
             const txn = await Transaction.create({
+                transactionId: transactionId,
                 date: updatedExpense.paidDate || new Date(),
                 description: `Expense Payment: ${updatedExpense.description}`,
                 reference: updatedExpense.expenseId,
                 residence: updatedExpense.residence?._id || updatedExpense.residence,
-                residenceName: updatedExpense.residence?.name || undefined
+                residenceName: updatedExpense.residence?.name || undefined,
+                type: 'payment',
+                amount: updatedExpense.amount,
+                expenseId: updatedExpense._id,
+                createdBy: req.user._id
             });
             
-            // Create double-entry transaction entries
-            const entries = await TransactionEntry.insertMany([
-                { 
-                    transaction: txn._id, 
-                    account: expenseAccount._id, 
-                    debit: updatedExpense.amount, 
-                    credit: 0, 
-                    type: 'expense' 
-                },
-                { 
-                    transaction: txn._id, 
-                    account: sourceAccount._id, 
-                    debit: 0, 
-                    credit: updatedExpense.amount, 
-                    type: sourceAccount.type.toLowerCase() 
-                }
-            ]);
+            // Generate transaction entry ID
+            const entryTransactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
             
-            // Link entries to transaction
+            // Create double-entry transaction entry
+            const transactionEntry = await TransactionEntry.create({
+                transactionId: entryTransactionId,
+                date: updatedExpense.paidDate || new Date(),
+                description: `Payment for Expense ${updatedExpense.expenseId} - ${updatedExpense.description}`,
+                reference: updatedExpense.expenseId,
+                entries: [
+                    {
+                        accountCode: expenseAccount.code,
+                        accountName: expenseAccount.name,
+                        accountType: expenseAccount.type,
+                        debit: 0,
+                        credit: updatedExpense.amount,
+                        description: `Payment for ${updatedExpense.description}`
+                    },
+                    {
+                        accountCode: sourceAccount.code,
+                        accountName: sourceAccount.name,
+                        accountType: sourceAccount.type,
+                        debit: updatedExpense.amount,
+                        credit: 0,
+                        description: `Payment via ${paymentMethod}`
+                    }
+                ],
+                totalDebit: updatedExpense.amount,
+                totalCredit: updatedExpense.amount,
+                source: 'expense_payment',
+                sourceId: updatedExpense._id,
+                sourceModel: 'Expense',
+                createdBy: req.user.email || req.user.email || 'finance@alamait.com',
+                status: 'posted',
+                metadata: {
+                    paymentMethod: paymentMethod,
+                    expenseId: updatedExpense._id,
+                    originalAmount: updatedExpense.amount
+                }
+            });
+            
+            // Link entry to transaction
             await Transaction.findByIdAndUpdate(txn._id, { 
-                $push: { entries: { $each: entries.map(e => e._id) } } 
+                $push: { entries: transactionEntry._id },
+                $set: { amount: updatedExpense.amount }
+            });
+            
+            // Link transaction to expense
+            await Expense.findByIdAndUpdate(updatedExpense._id, {
+                $set: { transactionId: txn._id }
             });
             
             // Create audit log for the transaction
