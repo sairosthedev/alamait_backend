@@ -48,15 +48,20 @@ exports.getAllAccounts = async (req, res) => {
 
     const total = await Account.countDocuments(filter);
 
-    res.status(200).json({
-      accounts,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit))
-      }
-    });
+    // If no pagination parameters, return just the accounts array
+    if (req.query.page === undefined && req.query.limit === undefined) {
+      res.status(200).json(accounts);
+    } else {
+      res.status(200).json({
+        accounts,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          pages: Math.ceil(total / parseInt(limit))
+        }
+      });
+    }
   } catch (error) {
     console.error('Error fetching accounts:', error);
     res.status(500).json({ error: 'Failed to fetch accounts' });
