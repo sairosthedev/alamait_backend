@@ -107,8 +107,16 @@ const allocatePettyCash = async (req, res) => {
         });
 
         if (existingPettyCash) {
+            // Instead of blocking, offer to update the existing allocation
             return res.status(400).json({ 
-                message: 'User already has an active petty cash allocation' 
+                message: 'User already has an active petty cash allocation',
+                existingAllocation: {
+                    id: existingPettyCash._id,
+                    currentAmount: existingPettyCash.allocatedAmount,
+                    allocatedDate: existingPettyCash.createdAt,
+                    notes: existingPettyCash.notes
+                },
+                suggestion: 'Use PUT /api/finance/petty-cash/:id to update the existing allocation or close it first'
             });
         }
 

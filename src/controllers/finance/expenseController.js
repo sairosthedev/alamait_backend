@@ -737,6 +737,30 @@ exports.markExpenseAsPaid = async (req, res) => {
             // Generate transaction entry ID
             const entryTransactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
             
+            // Check if expense was previously accrued (has transactionId)
+            const wasAccrued = updatedExpense.transactionId;
+            
+            // Get the appropriate accounts for payment
+            let debitAccount, creditAccount;
+            
+            if (wasAccrued) {
+                // If expense was previously accrued, we're paying off the liability
+                // Debit: Accounts Payable (reduce liability)
+                // Credit: Source Account (reduce asset)
+                const apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                if (!apAccount) {
+                    throw new Error('Accounts Payable account not found');
+                }
+                debitAccount = apAccount;
+                creditAccount = sourceAccount;
+            } else {
+                // If expense was not previously accrued, this is a direct payment
+                // Debit: Expense Account (increase expense)
+                // Credit: Source Account (reduce asset)
+                debitAccount = expenseAccount;
+                creditAccount = sourceAccount;
+            }
+            
             // Create double-entry transaction entry
             const transactionEntry = await TransactionEntry.create({
                 transactionId: entryTransactionId,
@@ -745,19 +769,21 @@ exports.markExpenseAsPaid = async (req, res) => {
                 reference: updatedExpense.expenseId,
                 entries: [
                     {
-                        accountCode: expenseAccount.code,
-                        accountName: expenseAccount.name,
-                        accountType: expenseAccount.type,
-                        debit: 0,
-                        credit: updatedExpense.amount,
-                        description: `Payment for ${updatedExpense.description}`
-                    },
-                    {
-                        accountCode: sourceAccount.code,
-                        accountName: sourceAccount.name,
-                        accountType: sourceAccount.type,
+                        accountCode: debitAccount.code,
+                        accountName: debitAccount.name,
+                        accountType: debitAccount.type,
                         debit: updatedExpense.amount,
                         credit: 0,
+                        description: wasAccrued ? 
+                            `Payment for ${updatedExpense.description} (reducing liability)` :
+                            `Payment for ${updatedExpense.description}`
+                    },
+                    {
+                        accountCode: creditAccount.code,
+                        accountName: creditAccount.name,
+                        accountType: creditAccount.type,
+                        debit: 0,
+                        credit: updatedExpense.amount,
                         description: `Payment via ${paymentMethod}`
                     }
                 ],
@@ -771,7 +797,8 @@ exports.markExpenseAsPaid = async (req, res) => {
                 metadata: {
                     paymentMethod: paymentMethod,
                     expenseId: updatedExpense._id,
-                    originalAmount: updatedExpense.amount
+                    originalAmount: updatedExpense.amount,
+                    wasAccrued: wasAccrued
                 }
             });
             
@@ -801,9 +828,10 @@ exports.markExpenseAsPaid = async (req, res) => {
                     expenseCategory: updatedExpense.category,
                     expenseAmount: updatedExpense.amount,
                     paymentMethod: paymentMethod,
-                    sourceAccount: sourceAccount.code,
-                    expenseAccount: expenseAccount.code,
-                    description: `Expense payment processed via ${paymentMethod} - ${updatedExpense.description}`
+                    wasAccrued: wasAccrued,
+                    debitAccount: debitAccount.code,
+                    creditAccount: creditAccount.code,
+                    description: `Expense payment processed via ${paymentMethod} - ${updatedExpense.description}${wasAccrued ? ' (reducing liability)' : ' (direct payment)'}`
                 }
             });
             
@@ -813,8 +841,9 @@ exports.markExpenseAsPaid = async (req, res) => {
                 amount: updatedExpense.amount,
                 category: updatedExpense.category,
                 paymentMethod: paymentMethod,
-                sourceAccount: sourceAccount.code,
-                expenseAccount: expenseAccount.code
+                wasAccrued: wasAccrued,
+                debitAccount: debitAccount.code,
+                creditAccount: creditAccount.code
             });
             
         } catch (paymentError) {
@@ -989,16 +1018,16 @@ exports.recordExpensePayment = async (req, res) => {
                     accountCode: finalReceivingAccount,
                     accountName: receivingAcc.name,
                     accountType: receivingAcc.type,
-                    debit: 0,
-                    credit: parseFloat(amount),
+                    debit: parseFloat(amount),
+                    credit: 0,
                     description: `Payment received for expense ${expense.expenseId}`
                 },
                 {
                     accountCode: payingAccount,
                     accountName: payingAcc.name,
                     accountType: payingAcc.type,
-                    debit: parseFloat(amount),
-                    credit: 0,
+                    debit: 0,
+                    credit: parseFloat(amount),
                     description: `Payment made for expense ${expense.expenseId}`
                 }
             ],
