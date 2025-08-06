@@ -115,8 +115,7 @@ exports.createStudent = async (req, res) => {
 
         // Generate temporary password
         const tempPassword = Math.random().toString(36).slice(-8);
-        const salt = await bcrypt.genSalt(10);
-        student.password = await bcrypt.hash(tempPassword, salt);
+        student.password = tempPassword; // Let the pre-save hook hash it
 
         await student.save();
 
@@ -876,8 +875,6 @@ exports.manualAddStudent = async (req, res) => {
 
         // Generate temporary password
         const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(tempPassword, salt);
 
         // Create new student user
         const student = new User({
@@ -885,7 +882,7 @@ exports.manualAddStudent = async (req, res) => {
             firstName,
             lastName,
             phone,
-            password: hashedPassword,
+            password: tempPassword, // Let the pre-save hook hash it
             status: 'active',
             emergencyContact,
             role: 'student',
