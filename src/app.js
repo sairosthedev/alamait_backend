@@ -304,8 +304,10 @@ app.use('/api/finance/users', financeUsersRoutes);
 // NEW: Separate financial reporting routes
 const financeCashFlowRoutes = require('./routes/finance/cashFlowRoutes');
 const financeTrialBalanceRoutes = require('./routes/finance/trialBalanceRoutes');
+const financeIncomeRoutes = require('./routes/finance/incomeRoutes');
 app.use('/api/finance/cash-flow', financeCashFlowRoutes);
 app.use('/api/finance/trial-balance', financeTrialBalanceRoutes);
+app.use('/api/finance/income', financeIncomeRoutes);
 
 // Financial Reports routes (commented out due to middleware issues)
 // const financialReportsRoutes = require('./routes/financialReportsRoutes');

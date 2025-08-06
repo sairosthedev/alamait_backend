@@ -45,4 +45,11 @@ router.get('/report/generate',
     FinancialReportsController.generateIncomeStatement
 );
 
+// NEW: Generate monthly income statement report
+// GET /api/finance/income-statements/monthly?period=2024&basis=cash
+router.get('/monthly', 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    FinancialReportsController.generateMonthlyIncomeStatement
+);
+
 module.exports = router; 

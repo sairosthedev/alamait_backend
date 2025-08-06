@@ -86,6 +86,140 @@ class FinancialReportingService {
             throw error;
         }
     }
+
+    /**
+     * Generate Monthly Income Statement (Profit & Loss by Month)
+     */
+    static async generateMonthlyIncomeStatement(period, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating monthly income statement for ${period} from ${startDate} to ${endDate}`);
+            
+            // Get all transaction entries for the period
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            }).populate('entries');
+            
+            console.log(`Found ${entries.length} transaction entries for the period`);
+            
+            // Initialize monthly data structure
+            const monthlyData = {
+                january: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                february: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                march: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                april: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                may: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                june: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                july: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                august: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                september: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                october: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                november: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 },
+                december: { revenue: {}, expenses: {}, total_revenue: 0, total_expenses: 0, net_income: 0 }
+            };
+            
+            const monthNames = [
+                'january', 'february', 'march', 'april', 'may', 'june',
+                'july', 'august', 'september', 'october', 'november', 'december'
+            ];
+            
+            // Process each transaction entry
+            entries.forEach(entry => {
+                const month = entry.date.getMonth(); // 0-11
+                const monthName = monthNames[month];
+                
+                entry.entries.forEach(line => {
+                    const accountCode = line.accountCode;
+                    const accountName = line.accountName;
+                    const accountType = line.accountType;
+                    const debit = line.debit || 0;
+                    const credit = line.credit || 0;
+                    
+                    if (accountType === 'Income' || accountType === 'income') {
+                        const key = `${accountCode} - ${accountName}`;
+                        if (!monthlyData[monthName].revenue[key]) {
+                            monthlyData[monthName].revenue[key] = 0;
+                        }
+                        monthlyData[monthName].revenue[key] += credit - debit;
+                        monthlyData[monthName].total_revenue += credit - debit;
+                    } else if (accountType === 'Expense' || accountType === 'expense') {
+                        const key = `${accountCode} - ${accountName}`;
+                        if (!monthlyData[monthName].expenses[key]) {
+                            monthlyData[monthName].expenses[key] = 0;
+                        }
+                        monthlyData[monthName].expenses[key] += debit - credit;
+                        monthlyData[monthName].total_expenses += debit - credit;
+                    }
+                });
+                
+                // Calculate net income for this month
+                monthlyData[monthName].net_income = 
+                    monthlyData[monthName].total_revenue - monthlyData[monthName].total_expenses;
+            });
+            
+            // Calculate yearly totals
+            const yearlyTotals = {
+                revenue: {},
+                expenses: {},
+                total_revenue: 0,
+                total_expenses: 0,
+                net_income: 0
+            };
+            
+            // Aggregate all months
+            monthNames.forEach(monthName => {
+                const monthData = monthlyData[monthName];
+                
+                // Aggregate revenue accounts
+                Object.keys(monthData.revenue).forEach(account => {
+                    if (!yearlyTotals.revenue[account]) yearlyTotals.revenue[account] = 0;
+                    yearlyTotals.revenue[account] += monthData.revenue[account];
+                });
+                
+                // Aggregate expense accounts
+                Object.keys(monthData.expenses).forEach(account => {
+                    if (!yearlyTotals.expenses[account]) yearlyTotals.expenses[account] = 0;
+                    yearlyTotals.expenses[account] += monthData.expenses[account];
+                });
+                
+                yearlyTotals.total_revenue += monthData.total_revenue;
+                yearlyTotals.total_expenses += monthData.total_expenses;
+            });
+            
+            yearlyTotals.net_income = yearlyTotals.total_revenue - yearlyTotals.total_expenses;
+            
+            return {
+                period,
+                basis,
+                monthly_breakdown: monthlyData,
+                yearly_totals: {
+                    ...yearlyTotals,
+                    gross_profit: yearlyTotals.total_revenue,
+                    operating_income: yearlyTotals.net_income
+                },
+                summary: {
+                    total_months_with_data: monthNames.filter(month => 
+                        monthlyData[month].total_revenue > 0 || monthlyData[month].total_expenses > 0
+                    ).length,
+                    best_month: monthNames.reduce((best, month) => 
+                        monthlyData[month].net_income > monthlyData[best].net_income ? month : best
+                    ),
+                    worst_month: monthNames.reduce((worst, month) => 
+                        monthlyData[month].net_income < monthlyData[worst].net_income ? month : worst
+                    ),
+                    average_monthly_revenue: yearlyTotals.total_revenue / 12,
+                    average_monthly_expenses: yearlyTotals.total_expenses / 12,
+                    average_monthly_net_income: yearlyTotals.net_income / 12
+                }
+            };
+            
+        } catch (error) {
+            console.error('Error generating monthly income statement:', error);
+            throw error;
+        }
+    }
     
     /**
      * Generate Balance Sheet

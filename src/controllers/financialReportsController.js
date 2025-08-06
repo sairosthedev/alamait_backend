@@ -54,6 +54,46 @@ class FinancialReportsController {
             });
         }
     }
+
+    /**
+     * Generate Monthly Income Statement
+     * GET /api/finance/reports/monthly-income-statement
+     */
+    static async generateMonthlyIncomeStatement(req, res) {
+        try {
+            const { period, basis = 'cash' } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2024)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            const monthlyIncomeStatement = await FinancialReportingService.generateMonthlyIncomeStatement(period, basis);
+            
+            res.json({
+                success: true,
+                data: monthlyIncomeStatement,
+                message: `Monthly income statement generated for ${period} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating monthly income statement:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating monthly income statement',
+                error: error.message
+            });
+        }
+    }
     
     /**
      * Generate Balance Sheet
