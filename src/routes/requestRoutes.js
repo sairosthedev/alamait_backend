@@ -64,8 +64,8 @@ router.get('/:id', requestController.getRequestById);
 // Get quotations for a request (CEO and Finance can view)
 router.get('/:id/quotations', requestController.getRequestQuotations);
 
-// Update entire request (admin and finance)
-router.put('/:id', checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), requestController.updateRequest);
+// Update entire request (admin, finance, and ceo)
+router.put('/:id', checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), requestController.updateRequest);
 
 // Create new request
 router.post('/', 
@@ -202,6 +202,18 @@ router.post('/:requestId/items/:itemIndex/quotations/:quotationIndex/override',
 router.post('/:id/finance-override-quotation', 
     checkRole(['finance', 'finance_admin', 'finance_user']), 
     requestController.financeOverrideQuotation
+);
+
+// CEO override quotation selection with strategic reasoning
+router.post('/:id/ceo-override-quotation', 
+    checkRole(['ceo']), 
+    require('../controllers/ceo/quotationController').ceoOverrideQuotation
+);
+
+// CEO quotation analysis for strategic decision making
+router.get('/:id/ceo-quotation-analysis', 
+    checkRole(['ceo']), 
+    require('../controllers/ceo/quotationController').getQuotationAnalysis
 );
 
 // Mark expense as paid
