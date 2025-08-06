@@ -543,6 +543,14 @@ const createPayment = async (req, res) => {
         // Record double-entry accounting transaction
         try {
             const DoubleEntryAccountingService = require('../../services/doubleEntryAccountingService');
+            
+            console.log('💰 Creating double-entry accounting transaction...');
+            console.log(`   Payment ID: ${payment.paymentId}`);
+            console.log(`   Student: ${payment.student}`);
+            console.log(`   Residence: ${payment.residence}`);
+            console.log(`   Amount: $${payment.totalAmount}`);
+            console.log(`   Method: ${payment.method}`);
+            
             const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(payment, req.user);
             
             console.log('✅ Double-entry accounting transaction created for payment');
@@ -550,6 +558,8 @@ const createPayment = async (req, res) => {
             console.log(`   Amount: $${accountingResult.transaction.amount}`);
         } catch (accountingError) {
             console.error('❌ Error creating accounting transaction:', accountingError);
+            console.error('   Error details:', accountingError.message);
+            console.error('   Stack trace:', accountingError.stack);
             // Don't fail the payment creation, but log the error
         }
 

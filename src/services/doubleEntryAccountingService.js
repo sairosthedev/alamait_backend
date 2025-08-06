@@ -671,6 +671,12 @@ class DoubleEntryAccountingService {
             const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
             
             const transactionId = await this.generateTransactionId();
+            // Ensure we have a valid residence ID
+            const residenceId = payment.residence || (debtor && debtor.residence);
+            if (!residenceId) {
+                throw new Error('Residence ID is required for transaction creation');
+            }
+
             const transaction = new Transaction({
                 transactionId,
                 date: payment.date || new Date(),
@@ -679,7 +685,7 @@ class DoubleEntryAccountingService {
                     `Rent received from ${payment.student?.firstName || 'Student'}`,
                 type: 'payment',
                 reference: payment._id.toString(),
-                residence: payment.residence,
+                residence: residenceId,
                 residenceName: payment.residence?.name || 'Unknown Residence',
                 createdBy: user._id
             });
@@ -751,7 +757,7 @@ class DoubleEntryAccountingService {
                 source: 'payment',
                 sourceId: payment._id,
                 sourceModel: 'Payment',
-                residence: payment.residence, // Add residence reference
+                residence: residenceId, // Use the validated residence ID
                 createdBy: user.email,
                 status: 'posted',
                 metadata: {
