@@ -540,6 +540,19 @@ const createPayment = async (req, res) => {
             await debtor.addPayment(totalAmount, `Payment ${paymentId} - ${paymentMonth}`);
         }
 
+        // Record double-entry accounting transaction
+        try {
+            const DoubleEntryAccountingService = require('../../services/doubleEntryAccountingService');
+            const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(payment, req.user);
+            
+            console.log('✅ Double-entry accounting transaction created for payment');
+            console.log(`   Transaction ID: ${accountingResult.transaction.transactionId}`);
+            console.log(`   Amount: $${accountingResult.transaction.amount}`);
+        } catch (accountingError) {
+            console.error('❌ Error creating accounting transaction:', accountingError);
+            // Don't fail the payment creation, but log the error
+        }
+
         // Audit log
         await AuditLog.create({
             user: req.user._id,
@@ -745,7 +758,18 @@ const createPayment = async (req, res) => {
             .populate('student', 'firstName lastName email')
             .populate('residence', 'name');
 
-        res.status(201).json(populatedPayment);
+        // Include accounting information in response
+        const response = {
+            success: true,
+            message: 'Payment created successfully with double-entry accounting',
+            payment: populatedPayment,
+            accounting: {
+                transactionCreated: true,
+                message: 'Double-entry accounting transaction created'
+            }
+        };
+
+        res.status(201).json(response);
     } catch (error) {
         console.error('Error creating payment:', error);
         res.status(500).json({ message: error.message });
