@@ -331,6 +331,10 @@ app.use('/api/finance/debtors', debtorRoutes);
 const studentAccountRoutes = require('./routes/finance/studentAccountRoutes');
 app.use('/api/finance/student-accounts', studentAccountRoutes);
 
+// Petty Cash routes
+const pettyCashRoutes = require('./routes/finance/pettyCashRoutes');
+app.use('/api/finance/petty-cash', pettyCashRoutes);
+
 // Finance index routes (for student-specific endpoints) - last to avoid conflicts
 app.use('/api/finance', financeIndexRoutes);
 
