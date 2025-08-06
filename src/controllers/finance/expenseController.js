@@ -989,16 +989,16 @@ exports.recordExpensePayment = async (req, res) => {
                     accountCode: finalReceivingAccount,
                     accountName: receivingAcc.name,
                     accountType: receivingAcc.type,
-                    debit: 0,
-                    credit: parseFloat(amount),
+                    debit: parseFloat(amount),
+                    credit: 0,
                     description: `Payment received for expense ${expense.expenseId}`
                 },
                 {
                     accountCode: payingAccount,
                     accountName: payingAcc.name,
                     accountType: payingAcc.type,
-                    debit: parseFloat(amount),
-                    credit: 0,
+                    debit: 0,
+                    credit: parseFloat(amount),
                     description: `Payment made for expense ${expense.expenseId}`
                 }
             ],
