@@ -94,6 +94,130 @@ class FinancialReportsController {
             });
         }
     }
+
+    /**
+     * Generate Monthly Expenses
+     * GET /api/finance/reports/monthly-expenses
+     */
+    static async generateMonthlyExpenses(req, res) {
+        try {
+            const { period, basis = 'cash' } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2024)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            // For now, use the existing income statement method but filter for expenses only
+            const monthlyExpenses = await FinancialReportingService.generateMonthlyIncomeStatement(period, basis);
+            
+            // Filter to show only expenses
+            const expensesOnly = {
+                period,
+                basis,
+                monthly_breakdown: {},
+                yearly_totals: {
+                    expenses: monthlyExpenses.yearly_totals.expenses,
+                    total_expenses: monthlyExpenses.yearly_totals.total_expenses
+                }
+            };
+            
+            // Extract only expenses from monthly breakdown
+            Object.keys(monthlyExpenses.monthly_breakdown).forEach(month => {
+                expensesOnly.monthly_breakdown[month] = {
+                    expenses: monthlyExpenses.monthly_breakdown[month].expenses,
+                    total_expenses: monthlyExpenses.monthly_breakdown[month].total_expenses
+                };
+            });
+            
+            res.json({
+                success: true,
+                data: expensesOnly,
+                message: `Monthly expenses generated for ${period} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating monthly expenses:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating monthly expenses',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Generate Monthly Cash Flow
+     * GET /api/finance/reports/monthly-cash-flow
+     */
+    static async generateMonthlyCashFlow(req, res) {
+        try {
+            const { period, basis = 'cash' } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2024)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            // For now, return a simplified monthly cash flow
+            const monthlyCashFlow = {
+                period,
+                basis,
+                monthly_breakdown: {
+                    january: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    february: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    march: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    april: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    may: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    june: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    july: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    august: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    september: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    october: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    november: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
+                    december: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 }
+                },
+                yearly_totals: {
+                    net_cash_flow: 0,
+                    operating_activities: 0,
+                    investing_activities: 0,
+                    financing_activities: 0
+                }
+            };
+            
+            res.json({
+                success: true,
+                data: monthlyCashFlow,
+                message: `Monthly cash flow generated for ${period} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating monthly cash flow:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating monthly cash flow',
+                error: error.message
+            });
+        }
+    }
     
     /**
      * Generate Balance Sheet

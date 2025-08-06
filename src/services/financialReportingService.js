@@ -220,6 +220,548 @@ class FinancialReportingService {
             throw error;
         }
     }
+
+    /**
+     * Generate Monthly Expenses Breakdown
+     */
+    static async generateMonthlyExpenses(period, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating monthly expenses for ${period} from ${startDate} to ${endDate}`);
+            
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            }).populate('entries');
+            
+            const monthNames = [
+                'january', 'february', 'march', 'april', 'may', 'june',
+                'july', 'august', 'september', 'october', 'november', 'december'
+            ];
+            
+            // Initialize monthly expense structure
+            const monthlyExpenses = {};
+            monthNames.forEach(month => {
+                monthlyExpenses[month] = {
+                    expenses: {},
+                    total_expenses: 0,
+                    expense_count: 0,
+                    categories: {}
+                };
+            });
+            
+            // Process expenses by month
+            entries.forEach(entry => {
+                const month = entry.date.getMonth();
+                const monthName = monthNames[month];
+                
+                entry.entries.forEach(line => {
+                    if (line.accountType === 'Expense' || line.accountType === 'expense') {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const amount = line.debit - line.credit;
+                        
+                        const key = `${accountCode} - ${accountName}`;
+                        
+                        if (!monthlyExpenses[monthName].expenses[key]) {
+                            monthlyExpenses[monthName].expenses[key] = 0;
+                        }
+                        
+                        monthlyExpenses[monthName].expenses[key] += amount;
+                        monthlyExpenses[monthName].total_expenses += amount;
+                        monthlyExpenses[monthName].expense_count += 1;
+                        
+                        // Categorize by expense type
+                        const category = this.getExpenseCategory(accountCode);
+                        if (!monthlyExpenses[monthName].categories[category]) {
+                            monthlyExpenses[monthName].categories[category] = 0;
+                        }
+                        monthlyExpenses[monthName].categories[category] += amount;
+                    }
+                });
+            });
+            
+            // Calculate yearly totals
+            const yearlyTotals = {
+                expenses: {},
+                categories: {},
+                total_expenses: 0,
+                total_transactions: 0
+            };
+            
+            monthNames.forEach(monthName => {
+                const monthData = monthlyExpenses[monthName];
+                
+                Object.keys(monthData.expenses).forEach(expense => {
+                    if (!yearlyTotals.expenses[expense]) yearlyTotals.expenses[expense] = 0;
+                    yearlyTotals.expenses[expense] += monthData.expenses[expense];
+                });
+                
+                Object.keys(monthData.categories).forEach(category => {
+                    if (!yearlyTotals.categories[category]) yearlyTotals.categories[category] = 0;
+                    yearlyTotals.categories[category] += monthData.categories[category];
+                });
+                
+                yearlyTotals.total_expenses += monthData.total_expenses;
+                yearlyTotals.total_transactions += monthData.expense_count;
+            });
+            
+            return {
+                period,
+                basis,
+                monthly_breakdown: monthlyExpenses,
+                yearly_totals: yearlyTotals,
+                summary: {
+                    average_monthly_expenses: yearlyTotals.total_expenses / 12,
+                    highest_expense_month: monthNames.reduce((highest, month) => 
+                        monthlyExpenses[month].total_expenses > monthlyExpenses[highest].total_expenses ? month : highest
+                    ),
+                    lowest_expense_month: monthNames.reduce((lowest, month) => 
+                        monthlyExpenses[month].total_expenses < monthlyExpenses[lowest].total_expenses ? month : lowest
+                    ),
+                    top_expense_category: Object.entries(yearlyTotals.categories)
+                        .sort(([,a], [,b]) => b - a)[0]?.[0] || 'None'
+                }
+            };
+            
+        } catch (error) {
+            console.error('Error generating monthly expenses:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Monthly Cash Flow
+     */
+    static async generateMonthlyCashFlow(period, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating monthly cash flow for ${period} from ${startDate} to ${endDate}`);
+            
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            }).populate('entries');
+            
+            const monthNames = [
+                'january', 'february', 'march', 'april', 'may', 'june',
+                'july', 'august', 'september', 'october', 'november', 'december'
+            ];
+            
+            // Initialize monthly cash flow structure
+            const monthlyCashFlow = {};
+            monthNames.forEach(month => {
+                monthlyCashFlow[month] = {
+                    operating_activities: { inflows: 0, outflows: 0, net: 0 },
+                    investing_activities: { inflows: 0, outflows: 0, net: 0 },
+                    financing_activities: { inflows: 0, outflows: 0, net: 0 },
+                    net_cash_flow: 0,
+                    opening_balance: 0,
+                    closing_balance: 0
+                };
+            });
+            
+            // Process cash flows by month
+            entries.forEach(entry => {
+                const month = entry.date.getMonth();
+                const monthName = monthNames[month];
+                
+                entry.entries.forEach(line => {
+                    const accountCode = line.accountCode;
+                    const accountName = line.accountName;
+                    const accountType = line.accountType;
+                    const debit = line.debit || 0;
+                    const credit = line.credit || 0;
+                    
+                    // Determine activity type and cash flow
+                    const activityType = this.getCashFlowActivityType(accountCode, accountType);
+                    const cashFlow = this.calculateCashFlow(accountType, debit, credit);
+                    
+                    if (activityType === 'operating') {
+                        if (cashFlow > 0) {
+                            monthlyCashFlow[monthName].operating_activities.inflows += cashFlow;
+                        } else {
+                            monthlyCashFlow[monthName].operating_activities.outflows += Math.abs(cashFlow);
+                        }
+                        monthlyCashFlow[monthName].operating_activities.net += cashFlow;
+                    } else if (activityType === 'investing') {
+                        if (cashFlow > 0) {
+                            monthlyCashFlow[monthName].investing_activities.inflows += cashFlow;
+                        } else {
+                            monthlyCashFlow[monthName].investing_activities.outflows += Math.abs(cashFlow);
+                        }
+                        monthlyCashFlow[monthName].investing_activities.net += cashFlow;
+                    } else if (activityType === 'financing') {
+                        if (cashFlow > 0) {
+                            monthlyCashFlow[monthName].financing_activities.inflows += cashFlow;
+                        } else {
+                            monthlyCashFlow[monthName].financing_activities.outflows += Math.abs(cashFlow);
+                        }
+                        monthlyCashFlow[monthName].financing_activities.net += cashFlow;
+                    }
+                });
+                
+                // Calculate net cash flow for the month
+                const monthData = monthlyCashFlow[monthName];
+                monthData.net_cash_flow = 
+                    monthData.operating_activities.net + 
+                    monthData.investing_activities.net + 
+                    monthData.financing_activities.net;
+            });
+            
+            // Calculate running balances
+            let runningBalance = 0;
+            monthNames.forEach(monthName => {
+                monthlyCashFlow[monthName].opening_balance = runningBalance;
+                runningBalance += monthlyCashFlow[monthName].net_cash_flow;
+                monthlyCashFlow[monthName].closing_balance = runningBalance;
+            });
+            
+            // Calculate yearly totals
+            const yearlyTotals = {
+                operating_activities: { inflows: 0, outflows: 0, net: 0 },
+                investing_activities: { inflows: 0, outflows: 0, net: 0 },
+                financing_activities: { inflows: 0, outflows: 0, net: 0 },
+                net_cash_flow: 0
+            };
+            
+            monthNames.forEach(monthName => {
+                const monthData = monthlyCashFlow[monthName];
+                
+                yearlyTotals.operating_activities.inflows += monthData.operating_activities.inflows;
+                yearlyTotals.operating_activities.outflows += monthData.operating_activities.outflows;
+                yearlyTotals.operating_activities.net += monthData.operating_activities.net;
+                
+                yearlyTotals.investing_activities.inflows += monthData.investing_activities.inflows;
+                yearlyTotals.investing_activities.outflows += monthData.investing_activities.outflows;
+                yearlyTotals.investing_activities.net += monthData.investing_activities.net;
+                
+                yearlyTotals.financing_activities.inflows += monthData.financing_activities.inflows;
+                yearlyTotals.financing_activities.outflows += monthData.financing_activities.outflows;
+                yearlyTotals.financing_activities.net += monthData.financing_activities.net;
+                
+                yearlyTotals.net_cash_flow += monthData.net_cash_flow;
+            });
+            
+            return {
+                period,
+                basis,
+                monthly_breakdown: monthlyCashFlow,
+                yearly_totals: yearlyTotals,
+                summary: {
+                    best_cash_flow_month: monthNames.reduce((best, month) => 
+                        monthlyCashFlow[month].net_cash_flow > monthlyCashFlow[best].net_cash_flow ? month : best
+                    ),
+                    worst_cash_flow_month: monthNames.reduce((worst, month) => 
+                        monthlyCashFlow[month].net_cash_flow < monthlyCashFlow[worst].net_cash_flow ? month : worst
+                    ),
+                    average_monthly_cash_flow: yearlyTotals.net_cash_flow / 12,
+                    ending_cash_balance: runningBalance
+                }
+            };
+            
+        } catch (error) {
+            console.error('Error generating monthly cash flow:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Monthly Balance Sheet
+     */
+    static async generateMonthlyBalanceSheet(period, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating monthly balance sheet for ${period} from ${startDate} to ${endDate}`);
+            
+            const monthNames = [
+                'january', 'february', 'march', 'april', 'may', 'june',
+                'july', 'august', 'september', 'october', 'november', 'december'
+            ];
+            
+            // Initialize monthly balance sheet structure
+            const monthlyBalanceSheet = {};
+            monthNames.forEach(month => {
+                monthlyBalanceSheet[month] = {
+                    assets: { current: {}, non_current: {}, total: 0 },
+                    liabilities: { current: {}, non_current: {}, total: 0 },
+                    equity: { total: 0 },
+                    total_assets: 0,
+                    total_liabilities: 0,
+                    net_worth: 0
+                };
+            });
+            
+            // Calculate balance sheet for each month end
+            for (let i = 0; i < monthNames.length; i++) {
+                const monthName = monthNames[i];
+                const monthEndDate = new Date(`${period}-${String(i + 1).padStart(2, '0')}-${new Date(period, i + 1, 0).getDate()}`);
+                
+                // Get all transactions up to month end
+                const entries = await TransactionEntry.find({
+                    date: { $lte: monthEndDate }
+                }).populate('entries');
+                
+                // Calculate account balances
+                const accountBalances = {};
+                
+                entries.forEach(entry => {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        const key = `${accountCode} - ${accountName}`;
+                        if (!accountBalances[key]) {
+                            accountBalances[key] = {
+                                accountCode,
+                                accountName,
+                                accountType,
+                                balance: 0
+                            };
+                        }
+                        
+                        // Calculate balance based on account type
+                        if (accountType === 'Asset' || accountType === 'asset') {
+                            accountBalances[key].balance += debit - credit;
+                        } else if (accountType === 'Liability' || accountType === 'liability') {
+                            accountBalances[key].balance += credit - debit;
+                        } else if (accountType === 'Equity' || accountType === 'equity') {
+                            accountBalances[key].balance += credit - debit;
+                        }
+                    });
+                });
+                
+                // Organize by balance sheet sections
+                Object.values(accountBalances).forEach(account => {
+                    if (account.accountType === 'Asset' || account.accountType === 'asset') {
+                        const isCurrent = this.isCurrentAsset(account.accountName);
+                        const section = isCurrent ? 'current' : 'non_current';
+                        
+                        if (!monthlyBalanceSheet[monthName].assets[section][account.accountName]) {
+                            monthlyBalanceSheet[monthName].assets[section][account.accountName] = 0;
+                        }
+                        monthlyBalanceSheet[monthName].assets[section][account.accountName] = account.balance;
+                        monthlyBalanceSheet[monthName].assets.total += account.balance;
+                    } else if (account.accountType === 'Liability' || account.accountType === 'liability') {
+                        const isCurrent = this.isCurrentLiability(account.accountName);
+                        const section = isCurrent ? 'current' : 'non_current';
+                        
+                        if (!monthlyBalanceSheet[monthName].liabilities[section][account.accountName]) {
+                            monthlyBalanceSheet[monthName].liabilities[section][account.accountName] = 0;
+                        }
+                        monthlyBalanceSheet[monthName].liabilities[section][account.accountName] = account.balance;
+                        monthlyBalanceSheet[monthName].liabilities.total += account.balance;
+                    } else if (account.accountType === 'Equity' || account.accountType === 'equity') {
+                        monthlyBalanceSheet[monthName].equity[account.accountName] = account.balance;
+                        monthlyBalanceSheet[monthName].equity.total += account.balance;
+                    }
+                });
+                
+                // Calculate net worth
+                monthlyBalanceSheet[monthName].total_assets = monthlyBalanceSheet[monthName].assets.total;
+                monthlyBalanceSheet[monthName].total_liabilities = monthlyBalanceSheet[monthName].liabilities.total;
+                monthlyBalanceSheet[monthName].net_worth = 
+                    monthlyBalanceSheet[monthName].total_assets - monthlyBalanceSheet[monthName].total_liabilities;
+            }
+            
+            // Calculate yearly summary
+            const yearlySummary = {
+                average_total_assets: 0,
+                average_total_liabilities: 0,
+                average_net_worth: 0,
+                highest_net_worth_month: '',
+                lowest_net_worth_month: '',
+                net_worth_growth: 0
+            };
+            
+            let totalAssets = 0, totalLiabilities = 0, totalNetWorth = 0;
+            let highestNetWorth = -Infinity, lowestNetWorth = Infinity;
+            
+            monthNames.forEach(monthName => {
+                const monthData = monthlyBalanceSheet[monthName];
+                
+                totalAssets += monthData.total_assets;
+                totalLiabilities += monthData.total_liabilities;
+                totalNetWorth += monthData.net_worth;
+                
+                if (monthData.net_worth > highestNetWorth) {
+                    highestNetWorth = monthData.net_worth;
+                    yearlySummary.highest_net_worth_month = monthName;
+                }
+                
+                if (monthData.net_worth < lowestNetWorth) {
+                    lowestNetWorth = monthData.net_worth;
+                    yearlySummary.lowest_net_worth_month = monthName;
+                }
+            });
+            
+            yearlySummary.average_total_assets = totalAssets / 12;
+            yearlySummary.average_total_liabilities = totalLiabilities / 12;
+            yearlySummary.average_net_worth = totalNetWorth / 12;
+            
+            // Calculate net worth growth (first month to last month)
+            const firstMonth = monthlyBalanceSheet[monthNames[0]];
+            const lastMonth = monthlyBalanceSheet[monthNames[monthNames.length - 1]];
+            yearlySummary.net_worth_growth = lastMonth.net_worth - firstMonth.net_worth;
+            
+            return {
+                period,
+                basis,
+                monthly_breakdown: monthlyBalanceSheet,
+                yearly_summary: yearlySummary
+            };
+            
+        } catch (error) {
+            console.error('Error generating monthly balance sheet:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Monthly Trial Balance
+     */
+    static async generateMonthlyTrialBalance(period, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating monthly trial balance for ${period} from ${startDate} to ${endDate}`);
+            
+            const monthNames = [
+                'january', 'february', 'march', 'april', 'may', 'june',
+                'july', 'august', 'september', 'october', 'november', 'december'
+            ];
+            
+            // Initialize monthly trial balance structure
+            const monthlyTrialBalance = {};
+            monthNames.forEach(month => {
+                monthlyTrialBalance[month] = {
+                    accounts: {},
+                    total_debits: 0,
+                    total_credits: 0,
+                    balance: 0
+                };
+            });
+            
+            // Calculate trial balance for each month end
+            for (let i = 0; i < monthNames.length; i++) {
+                const monthName = monthNames[i];
+                const monthEndDate = new Date(`${period}-${String(i + 1).padStart(2, '0')}-${new Date(period, i + 1, 0).getDate()}`);
+                
+                // Get all transactions up to month end
+                const entries = await TransactionEntry.find({
+                    date: { $lte: monthEndDate }
+                }).populate('entries');
+                
+                // Calculate account balances
+                const accountBalances = {};
+                
+                entries.forEach(entry => {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        const key = `${accountCode} - ${accountName}`;
+                        if (!accountBalances[key]) {
+                            accountBalances[key] = {
+                                accountCode,
+                                accountName,
+                                accountType,
+                                debit: 0,
+                                credit: 0,
+                                balance: 0
+                            };
+                        }
+                        
+                        accountBalances[key].debit += debit;
+                        accountBalances[key].credit += credit;
+                        
+                        // Calculate balance based on account type
+                        if (accountType === 'Asset' || accountType === 'asset') {
+                            accountBalances[key].balance += debit - credit;
+                        } else if (accountType === 'Liability' || accountType === 'liability') {
+                            accountBalances[key].balance += credit - debit;
+                        } else if (accountType === 'Equity' || accountType === 'equity') {
+                            accountBalances[key].balance += credit - debit;
+                        } else if (accountType === 'Income' || accountType === 'income') {
+                            accountBalances[key].balance += credit - debit;
+                        } else if (accountType === 'Expense' || accountType === 'expense') {
+                            accountBalances[key].balance += debit - credit;
+                        }
+                    });
+                });
+                
+                // Add accounts to monthly trial balance
+                Object.values(accountBalances).forEach(account => {
+                    monthlyTrialBalance[monthName].accounts[account.accountName] = {
+                        accountCode: account.accountCode,
+                        accountType: account.accountType,
+                        debit: account.debit,
+                        credit: account.credit,
+                        balance: account.balance
+                    };
+                    
+                    monthlyTrialBalance[monthName].total_debits += account.debit;
+                    monthlyTrialBalance[monthName].total_credits += account.credit;
+                });
+                
+                // Calculate balance (should be 0 if balanced)
+                monthlyTrialBalance[monthName].balance = 
+                    monthlyTrialBalance[monthName].total_debits - monthlyTrialBalance[monthName].total_credits;
+            }
+            
+            // Calculate yearly summary
+            const yearlySummary = {
+                average_total_debits: 0,
+                average_total_credits: 0,
+                average_balance: 0,
+                balanced_months: 0,
+                unbalanced_months: 0
+            };
+            
+            let totalDebits = 0, totalCredits = 0, totalBalance = 0;
+            let balancedMonths = 0;
+            
+            monthNames.forEach(monthName => {
+                const monthData = monthlyTrialBalance[monthName];
+                
+                totalDebits += monthData.total_debits;
+                totalCredits += monthData.total_credits;
+                totalBalance += Math.abs(monthData.balance);
+                
+                if (Math.abs(monthData.balance) < 0.01) { // Consider balanced if difference is less than 1 cent
+                    balancedMonths += 1;
+                }
+            });
+            
+            yearlySummary.average_total_debits = totalDebits / 12;
+            yearlySummary.average_total_credits = totalCredits / 12;
+            yearlySummary.average_balance = totalBalance / 12;
+            yearlySummary.balanced_months = balancedMonths;
+            yearlySummary.unbalanced_months = 12 - balancedMonths;
+            
+            return {
+                period,
+                basis,
+                monthly_breakdown: monthlyTrialBalance,
+                yearly_summary: yearlySummary
+            };
+            
+        } catch (error) {
+            console.error('Error generating monthly trial balance:', error);
+            throw error;
+        }
+    }
     
     /**
      * Generate Balance Sheet
@@ -829,6 +1371,42 @@ class FinancialReportingService {
         return currentLiabilityKeywords.some(keyword => 
             accountName.toLowerCase().includes(keyword)
         );
+    }
+
+    // Helper methods for categorization
+    static getExpenseCategory(accountCode) {
+        if (accountCode.startsWith('5001')) return 'Maintenance';
+        if (accountCode.startsWith('5002')) return 'Utilities';
+        if (accountCode.startsWith('5003')) return 'Insurance';
+        if (accountCode.startsWith('5004')) return 'Property Management';
+        if (accountCode.startsWith('5005')) return 'Administrative';
+        return 'Other';
+    }
+
+    static getCashFlowActivityType(accountCode, accountType) {
+        // Operating activities
+        if (accountType === 'Income' || accountType === 'Expense') return 'operating';
+        
+        // Investing activities (asset purchases/sales)
+        if (accountCode.startsWith('1') && accountCode !== '1001' && accountCode !== '1002') return 'investing';
+        
+        // Financing activities (loans, equity)
+        if (accountCode.startsWith('2') || accountCode.startsWith('3')) return 'financing';
+        
+        return 'operating'; // Default
+    }
+
+    static calculateCashFlow(accountType, debit, credit) {
+        if (accountType === 'Asset' || accountType === 'asset') {
+            return credit - debit; // Asset decrease = cash inflow
+        } else if (accountType === 'Liability' || accountType === 'liability') {
+            return debit - credit; // Liability increase = cash inflow
+        } else if (accountType === 'Income' || accountType === 'income') {
+            return credit - debit; // Income increase = cash inflow
+        } else if (accountType === 'Expense' || accountType === 'expense') {
+            return debit - credit; // Expense increase = cash outflow
+        }
+        return 0;
     }
 }
 

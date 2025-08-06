@@ -13,6 +13,335 @@ const Invoice = require('../../models/Invoice');
 class TransactionController {
     
     /**
+     * Get all transactions (main endpoint for frontend)
+     */
+    static async getAllTransactions(req, res) {
+        try {
+            const { page = 1, limit = 50, type, startDate, endDate, residence } = req.query;
+            
+            console.log('🔍 Fetching all transactions with filters:', req.query);
+            
+            const query = {};
+            
+            // Add filters
+            if (type && type !== 'all') {
+                query.type = type;
+            }
+            
+            if (startDate || endDate) {
+                query.date = {};
+                if (startDate) query.date.$gte = new Date(startDate);
+                if (endDate) query.date.$lte = new Date(endDate);
+            }
+            
+            if (residence) {
+                query.residence = residence;
+            }
+            
+            const skip = (parseInt(page) - 1) * parseInt(limit);
+            
+            // Get transaction entries with pagination
+            const transactionEntries = await TransactionEntry.find(query)
+                .sort({ date: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .populate('sourceId', 'paymentId student residence room totalAmount method status')
+                .lean();
+            
+            const total = await TransactionEntry.countDocuments(query);
+            
+            // Transform data for frontend
+            const transactions = transactionEntries.map(entry => ({
+                _id: entry._id,
+                transactionId: entry.transactionId || `TXN-${entry._id}`,
+                date: entry.date,
+                description: entry.description,
+                type: entry.type || 'transaction',
+                amount: entry.totalDebit || entry.totalCredit || 0,
+                residence: entry.residence,
+                expenseId: entry.expenseId,
+                createdBy: {
+                    _id: entry.createdBy,
+                    firstName: 'System',
+                    lastName: 'User',
+                    email: 'system@alamait.com'
+                },
+                entries: entry.entries || []
+            }));
+            
+            res.status(200).json({
+                success: true,
+                transactions: transactions,
+                pagination: {
+                    total: total,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    pages: Math.ceil(total / limit)
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error fetching all transactions:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error fetching transactions',
+                error: error.message
+            });
+        }
+    }
+    
+    /**
+     * Get transaction summary
+     */
+    static async getTransactionSummary(req, res) {
+        try {
+            const { startDate, endDate, type, account, status } = req.query;
+            
+            console.log('🔍 Fetching transaction summary with filters:', req.query);
+            
+            const query = {};
+            
+            // Add filters
+            if (startDate || endDate) {
+                query.date = {};
+                if (startDate) query.date.$gte = new Date(startDate);
+                if (endDate) query.date.$lte = new Date(endDate);
+            }
+            
+            if (type && type !== 'all') {
+                query.type = type;
+            }
+            
+            if (account && account !== 'all') {
+                query['entries.accountCode'] = account;
+            }
+            
+            // Get transaction entries
+            const transactionEntries = await TransactionEntry.find(query).lean();
+            
+            // Calculate summary
+            let totalTransactions = transactionEntries.length;
+            let totalAmount = 0;
+            let byType = {};
+            let byMonth = {};
+            
+            transactionEntries.forEach(entry => {
+                const amount = entry.totalDebit || entry.totalCredit || 0;
+                totalAmount += amount;
+                
+                // Group by type
+                const type = entry.type || 'transaction';
+                if (!byType[type]) {
+                    byType[type] = { count: 0, amount: 0 };
+                }
+                byType[type].count++;
+                byType[type].amount += amount;
+                
+                // Group by month
+                const month = new Date(entry.date).toISOString().substring(0, 7);
+                if (!byMonth[month]) {
+                    byMonth[month] = { count: 0, amount: 0 };
+                }
+                byMonth[month].count++;
+                byMonth[month].amount += amount;
+            });
+            
+            // Get recent transactions
+            const recentTransactions = transactionEntries
+                .sort((a, b) => new Date(b.date) - new Date(a.date))
+                .slice(0, 10)
+                .map(entry => ({
+                    _id: entry._id,
+                    date: entry.date,
+                    description: entry.description,
+                    amount: entry.totalDebit || entry.totalCredit || 0,
+                    type: entry.type || 'transaction'
+                }));
+            
+            res.status(200).json({
+                success: true,
+                data: {
+                    totalTransactions,
+                    totalAmount,
+                    byType,
+                    byMonth,
+                    recentTransactions
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error fetching transaction summary:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error fetching transaction summary',
+                error: error.message
+            });
+        }
+    }
+    
+    /**
+     * Get transaction entries with filters
+     */
+    static async getTransactionEntries(req, res) {
+        try {
+            const { page = 1, limit = 50, startDate, endDate, type, account, status } = req.query;
+            
+            console.log('🔍 Fetching transaction entries with filters:', req.query);
+            
+            const query = {};
+            
+            // Add filters
+            if (startDate || endDate) {
+                query.date = {};
+                if (startDate) query.date.$gte = new Date(startDate);
+                if (endDate) query.date.$lte = new Date(endDate);
+            }
+            
+            if (type && type !== 'all') {
+                if (type === 'debit') {
+                    query.totalDebit = { $gt: 0 };
+                } else if (type === 'credit') {
+                    query.totalCredit = { $gt: 0 };
+                } else {
+                    query.type = type;
+                }
+            }
+            
+            if (account && account !== 'all') {
+                query['entries.accountCode'] = account;
+            }
+            
+            const skip = (parseInt(page) - 1) * parseInt(limit);
+            
+            // Get transaction entries
+            const transactionEntries = await TransactionEntry.find(query)
+                .sort({ date: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean();
+            
+            const total = await TransactionEntry.countDocuments(query);
+            
+            // Transform data for frontend
+            const entries = transactionEntries.map(entry => ({
+                _id: entry._id,
+                transactionId: entry.transactionId || `TXN-${entry._id}`,
+                date: entry.date,
+                description: entry.description,
+                type: entry.type || 'transaction',
+                totalDebit: entry.totalDebit || 0,
+                totalCredit: entry.totalCredit || 0,
+                entries: entry.entries || []
+            }));
+            
+            res.status(200).json({
+                success: true,
+                data: entries,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(total / limit),
+                    totalEntries: total,
+                    limit: parseInt(limit)
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error fetching transaction entries:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error fetching transaction entries',
+                error: error.message
+            });
+        }
+    }
+    
+    /**
+     * Get transaction by ID
+     */
+    static async getTransactionById(req, res) {
+        try {
+            const { id } = req.params;
+            
+            console.log('🔍 Fetching transaction by ID:', id);
+            
+            const transaction = await TransactionEntry.findById(id)
+                .populate('sourceId', 'paymentId student residence room totalAmount method status')
+                .lean();
+            
+            if (!transaction) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Transaction not found'
+                });
+            }
+            
+            const transformedTransaction = {
+                _id: transaction._id,
+                transactionId: transaction.transactionId || `TXN-${transaction._id}`,
+                date: transaction.date,
+                description: transaction.description,
+                type: transaction.type || 'transaction',
+                amount: transaction.totalDebit || transaction.totalCredit || 0,
+                residence: transaction.residence,
+                expenseId: transaction.expenseId,
+                createdBy: {
+                    _id: transaction.createdBy,
+                    firstName: 'System',
+                    lastName: 'User',
+                    email: 'system@alamait.com'
+                },
+                entries: transaction.entries || []
+            };
+            
+            res.status(200).json({
+                success: true,
+                transaction: transformedTransaction
+            });
+            
+        } catch (error) {
+            console.error('Error fetching transaction by ID:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error fetching transaction',
+                error: error.message
+            });
+        }
+    }
+    
+    /**
+     * Get transaction entries by transaction ID
+     */
+    static async getTransactionEntriesById(req, res) {
+        try {
+            const { id } = req.params;
+            
+            console.log('🔍 Fetching transaction entries by transaction ID:', id);
+            
+            const transaction = await TransactionEntry.findById(id).lean();
+            
+            if (!transaction) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Transaction not found'
+                });
+            }
+            
+            res.status(200).json({
+                success: true,
+                entries: transaction.entries || []
+            });
+            
+        } catch (error) {
+            console.error('Error fetching transaction entries by ID:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error fetching transaction entries',
+                error: error.message
+            });
+        }
+    }
+    
+    /**
      * Create transaction entries for student payment
      */
     static async createPaymentTransaction(req, res) {

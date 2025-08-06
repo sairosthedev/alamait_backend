@@ -52,4 +52,11 @@ router.get('/monthly',
     FinancialReportsController.generateMonthlyIncomeStatement
 );
 
+// NEW: Generate monthly expenses report
+// GET /api/finance/income-statements/monthly-expenses?period=2024&basis=cash
+router.get('/monthly-expenses', 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    FinancialReportsController.generateMonthlyExpenses
+);
+
 module.exports = router; 

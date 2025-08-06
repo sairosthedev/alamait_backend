@@ -309,13 +309,13 @@ app.use('/api/finance/cash-flow', financeCashFlowRoutes);
 app.use('/api/finance/trial-balance', financeTrialBalanceRoutes);
 app.use('/api/finance/income', financeIncomeRoutes);
 
-// Financial Reports routes (commented out due to middleware issues)
-// const financialReportsRoutes = require('./routes/financialReportsRoutes');
-// app.use('/api/financial-reports', financialReportsRoutes);
+// Financial Reports routes
+const financialReportsRoutes = require('./routes/financialReportsRoutes');
+app.use('/api/financial-reports', financialReportsRoutes);
 
 // Transaction creation routes
 const transactionCreationRoutes = require('./routes/finance/transactionRoutes');
-app.use('/api/finance', transactionCreationRoutes);
+app.use('/api/finance/transactions', transactionCreationRoutes);
 
 // General expense routes (alias for frontend compatibility)
 app.use('/api/expenses', financeExpenseRoutes);
