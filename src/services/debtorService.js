@@ -133,8 +133,8 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         }
 
         // Calculate billing period and expected total
-        const billingPeriod = Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24 * 30.44));
-        const expectedTotal = roomPrice * billingPeriod;
+        const billingPeriodMonths = Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24 * 30.44));
+        const expectedTotal = roomPrice * billingPeriodMonths;
 
         // Get existing payments for this student
         const payments = await Payment.find({
@@ -165,6 +165,44 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             status = 'overdue';
         }
 
+        // Create comprehensive billing period object
+        const billingPeriodObject = {
+            type: billingPeriodMonths === 3 ? 'quarterly' : 
+                  billingPeriodMonths === 6 ? 'semester' : 
+                  billingPeriodMonths === 12 ? 'annual' : 'monthly',
+            
+            duration: {
+                value: billingPeriodMonths,
+                unit: 'months'
+            },
+            
+            startDate: new Date(startDate),
+            endDate: new Date(endDate),
+            
+            billingCycle: {
+                frequency: 'monthly',
+                dayOfMonth: 1,
+                gracePeriod: 5
+            },
+            
+            amount: {
+                monthly: roomPrice,
+                total: expectedTotal,
+                currency: 'USD'
+            },
+            
+            status: 'active',
+            
+            description: `Billing period for ${user.email}`,
+            notes: `Auto-generated from application data`,
+            
+            autoRenewal: {
+                enabled: false,
+                renewalType: 'same_period',
+                customRenewalPeriod: null
+            }
+        };
+
         // Create debtor object with full financial data
         const debtorData = {
             debtorCode,
@@ -179,7 +217,8 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             paymentTerms: 'monthly',
             residence: residenceId,
             roomNumber,
-            billingPeriod: `${billingPeriod} months`,
+            billingPeriod: billingPeriodObject,
+            billingPeriodLegacy: `${billingPeriodMonths} months`, // For backward compatibility
             startDate,
             endDate,
             roomPrice,
@@ -193,7 +232,7 @@ exports.createDebtorForStudent = async (user, options = {}) => {
 
         console.log(`✅ Debtor account created for student ${user.email}: ${debtorCode}`);
         console.log(`   Room Price: $${roomPrice}`);
-        console.log(`   Billing Period: ${billingPeriod} months`);
+        console.log(`   Billing Period: ${billingPeriodObject.type} (${billingPeriodMonths} months)`);
         console.log(`   Expected Total: $${expectedTotal}`);
         console.log(`   Total Paid: $${totalPaid}`);
         console.log(`   Current Balance: $${currentBalance}`);

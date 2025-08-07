@@ -13,6 +13,7 @@ const accountRoutes = require('./accountRoutes');
 const { getAllStudentAccounts } = require('../../controllers/finance/studentAccountController');
 const Lease = require('../../models/Lease');
 const Payment = require('../../models/Payment');
+const FinanceController = require('../../controllers/financeController');
 
 // Finance middleware - allow both admin and finance roles
 router.use(auth);
@@ -372,5 +373,147 @@ router.get('/students/:studentId/leases', async (req, res) => {
 
 // Add this route for student accounts summary
 router.get('/student-accounts', getAllStudentAccounts);
+
+// ========================================
+// PETTY CASH MANAGEMENT ROUTES
+// ========================================
+
+// Allocate petty cash to user
+router.post('/allocate-petty-cash', FinanceController.allocatePettyCash);
+
+// Replenish petty cash for user
+router.post('/replenish-petty-cash', FinanceController.replenishPettyCash);
+
+// Record petty cash expense
+router.post('/record-petty-cash-expense', FinanceController.recordPettyCashExpense);
+
+// Get user's petty cash balance
+router.get('/petty-cash-balance/:userId', FinanceController.getPettyCashBalance);
+
+// Get all petty cash balances (for finance dashboard)
+router.get('/all-petty-cash-balances', FinanceController.getAllPettyCashBalances);
+
+// Get user's petty cash transactions
+router.get('/petty-cash-transactions/:userId', FinanceController.getPettyCashTransactions);
+
+// Get eligible users for petty cash allocation
+router.get('/eligible-users-for-petty-cash', async (req, res) => {
+    try {
+        console.log('🔍 Getting eligible users for petty cash allocation');
+        
+        // Get users who are eligible for petty cash (not students/tenants)
+        const eligibleUsers = await User.find({
+            role: { 
+                $in: ['admin', 'finance_admin', 'finance_user', 'property_manager', 'maintenance', 'manager', 'staff'] 
+            },
+            status: 'active'
+        })
+        .select('firstName lastName email role status')
+        .sort({ firstName: 1, lastName: 1 })
+        .lean();
+
+        console.log(`✅ Found ${eligibleUsers.length} eligible users for petty cash`);
+        
+        res.json({
+            success: true,
+            eligibleUsers,
+            total: eligibleUsers.length
+        });
+
+    } catch (error) {
+        console.error('❌ Error getting eligible users for petty cash:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get petty cash accounts (role-based accounts)
+router.get('/petty-cash-accounts', async (req, res) => {
+    try {
+        console.log('💰 Getting petty cash accounts');
+        
+        const Account = require('../../models/Account');
+        
+        // Get all petty cash accounts
+        const pettyCashAccounts = await Account.find({
+            code: { $in: ['1010', '1011', '1012', '1013', '1014'] }
+        })
+        .select('code name type balance')
+        .sort({ code: 1 })
+        .lean();
+
+        // Map accounts to roles
+        const accountRoleMapping = {
+            '1010': { role: 'general', name: 'General Petty Cash' },
+            '1011': { role: 'admin', name: 'Admin Petty Cash' },
+            '1012': { role: 'finance', name: 'Finance Petty Cash' },
+            '1013': { role: 'property_manager', name: 'Property Manager Petty Cash' },
+            '1014': { role: 'maintenance', name: 'Maintenance Petty Cash' }
+        };
+
+        const accountsWithRoles = pettyCashAccounts.map(account => ({
+            ...account,
+            role: accountRoleMapping[account.code]?.role || 'general',
+            displayName: accountRoleMapping[account.code]?.name || account.name
+        }));
+
+        console.log(`✅ Found ${accountsWithRoles.length} petty cash accounts`);
+        
+        res.json({
+            success: true,
+            pettyCashAccounts: accountsWithRoles,
+            total: accountsWithRoles.length
+        });
+
+    } catch (error) {
+        console.error('❌ Error getting petty cash accounts:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get petty cash summary for finance dashboard
+router.get('/petty-cash-summary', async (req, res) => {
+    try {
+        console.log('📊 Getting petty cash summary for finance dashboard');
+        
+        const Account = require('../../models/Account');
+        
+        // Get petty cash accounts with balances
+        const pettyCashAccounts = await Account.find({
+            code: { $in: ['1010', '1011', '1012', '1013', '1014'] }
+        })
+        .select('code name balance')
+        .lean();
+
+        // Calculate totals
+        const totalPettyCash = pettyCashAccounts.reduce((sum, account) => sum + (account.balance || 0), 0);
+        
+        // Get recent petty cash transactions
+        const TransactionEntry = require('../../models/TransactionEntry');
+        const recentTransactions = await TransactionEntry.find({
+            source: { $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] }
+        })
+        .sort({ date: -1 })
+        .limit(10)
+        .populate('transactionId')
+        .lean();
+
+        console.log(`✅ Petty cash summary: Total $${totalPettyCash}, ${recentTransactions.length} recent transactions`);
+        
+        res.json({
+            success: true,
+            summary: {
+                totalPettyCash,
+                totalAccounts: pettyCashAccounts.length,
+                recentTransactions: recentTransactions.length
+            },
+            pettyCashAccounts,
+            recentTransactions
+        });
+
+    } catch (error) {
+        console.error('❌ Error getting petty cash summary:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 module.exports = router; 

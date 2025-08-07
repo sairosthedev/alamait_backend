@@ -103,7 +103,108 @@ const debtorSchema = new mongoose.Schema({
     ref: 'Application'
   },
   
+  // Enhanced Billing Period Object
   billingPeriod: {
+    // Period Information
+    type: {
+      type: String,
+      enum: ['monthly', 'quarterly', 'semester', 'annual', 'custom'],
+      default: 'monthly'
+    },
+    
+    // Duration
+    duration: {
+      value: {
+        type: Number,
+        required: true,
+        min: 1
+      },
+      unit: {
+        type: String,
+        enum: ['days', 'weeks', 'months', 'quarters', 'years'],
+        default: 'months'
+      }
+    },
+    
+    // Date Range
+    startDate: {
+      type: Date,
+      required: true
+    },
+    endDate: {
+      type: Date,
+      required: true
+    },
+    
+    // Billing Cycle
+    billingCycle: {
+      frequency: {
+        type: String,
+        enum: ['weekly', 'bi-weekly', 'monthly', 'quarterly', 'annual'],
+        default: 'monthly'
+      },
+      dayOfMonth: {
+        type: Number,
+        min: 1,
+        max: 31,
+        default: 1
+      },
+      gracePeriod: {
+        type: Number,
+        default: 5, // days
+        min: 0
+      }
+    },
+    
+    // Amount Information
+    amount: {
+      monthly: {
+        type: Number,
+        required: true,
+        min: 0
+      },
+      total: {
+        type: Number,
+        required: true,
+        min: 0
+      },
+      currency: {
+        type: String,
+        default: 'USD'
+      }
+    },
+    
+    // Status
+    status: {
+      type: String,
+      enum: ['active', 'completed', 'cancelled', 'suspended'],
+      default: 'active'
+    },
+    
+    // Additional Information
+    description: String,
+    notes: String,
+    
+    // Auto-renewal settings
+    autoRenewal: {
+      enabled: {
+        type: Boolean,
+        default: false
+      },
+      renewalType: {
+        type: String,
+        enum: ['same_period', 'custom_period'],
+        default: 'same_period'
+      },
+      customRenewalPeriod: {
+        value: Number,
+        unit: String
+      }
+    }
+  },
+  
+  // Legacy field for backward compatibility (deprecated)
+  billingPeriodLegacy: {
     type: String,
     trim: true
   },
