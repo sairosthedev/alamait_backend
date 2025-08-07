@@ -10,10 +10,13 @@ const getPettyCashAccountByRole = async (userRole) => {
     
     switch (userRole) {
         case 'admin':
+        case 'admin_assistant':
+        case 'ceo_assistant':
             accountCode = '1011'; // Admin Petty Cash
             break;
         case 'finance_admin':
         case 'finance_user':
+        case 'finance_assistant':
             accountCode = '1012'; // Finance Petty Cash
             break;
         case 'property_manager':

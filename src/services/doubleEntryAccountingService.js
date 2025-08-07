@@ -85,7 +85,8 @@ class DoubleEntryAccountingService {
                 status: 'posted',
                 metadata: {
                     pettyCashUserId: userId,
-                    allocationType: 'initial'
+                    allocationType: 'initial',
+                    transactionType: 'petty_cash_allocation'
                 }
             });
 
@@ -177,7 +178,8 @@ class DoubleEntryAccountingService {
                     pettyCashUserId: userId,
                     expenseCategory,
                     expenseDescription: description,
-                    expenseAmount: amount
+                    expenseAmount: amount,
+                    transactionType: 'petty_cash_expense'
                 }
             });
 
@@ -253,7 +255,8 @@ class DoubleEntryAccountingService {
                 status: 'posted',
                 metadata: {
                     pettyCashUserId: userId,
-                    replenishmentType: 'top_up'
+                    replenishmentType: 'top_up',
+                    transactionType: 'petty_cash_replenishment'
                 }
             });
 

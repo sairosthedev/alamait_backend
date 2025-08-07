@@ -11,6 +11,7 @@ const auditController = require('../../controllers/ceo/auditController');
 const balanceSheetController = require('../../controllers/finance/balanceSheetController');
 const incomeStatementController = require('../../controllers/finance/incomeStatementController');
 const expenseController = require('../../controllers/finance/expenseController');
+const TransactionController = require('../../controllers/finance/transactionController');
 
 // Import analytics service for dashboard data (same as admin uses)
 const analyticsService = require('../../services/analyticsService');
@@ -64,6 +65,14 @@ router.get('/financial/balance-sheets', balanceSheetController.getAllBalanceShee
 router.get('/financial/balance-sheets/:id', balanceSheetController.getBalanceSheetById);
 router.get('/financial/expenses', expenseController.getAllExpenses);
 router.get('/financial/expenses/:id', expenseController.getExpenseById);
+
+// Transaction data (same endpoints as finance uses)
+router.get('/financial/transactions', TransactionController.getAllTransactions);
+router.get('/financial/transactions/summary', TransactionController.getTransactionSummary);
+router.get('/financial/transactions/entries', TransactionController.getTransactionEntries);
+router.get('/financial/transactions/:id', TransactionController.getTransactionById);
+router.get('/financial/transactions/:id/entries', TransactionController.getTransactionEntriesById);
+router.get('/financial/transactions/transaction-history/:sourceType/:sourceId', TransactionController.getTransactionHistory);
 
 // Request management (CEO specific)
 router.get('/requests', requestController.getAllRequests);

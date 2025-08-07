@@ -282,7 +282,8 @@ router.get('/petty-cash/summary', async (req, res) => {
         // Get recent petty cash transactions
         const TransactionEntry = require('../../models/TransactionEntry');
         const recentTransactions = await TransactionEntry.find({
-            source: { $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] }
+            source: 'manual',
+            'metadata.transactionType': { $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] }
         })
         .sort({ date: -1 })
         .limit(10)

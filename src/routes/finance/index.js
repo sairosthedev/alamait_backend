@@ -404,7 +404,18 @@ router.get('/eligible-users-for-petty-cash', async (req, res) => {
         // Get users who are eligible for petty cash (not students/tenants)
         const eligibleUsers = await User.find({
             role: { 
-                $in: ['admin', 'finance_admin', 'finance_user', 'property_manager', 'maintenance', 'manager', 'staff'] 
+                $in: [
+                    'admin', 
+                    'admin_assistant', 
+                    'ceo_assistant', 
+                    'finance_assistant',
+                    'finance_admin', 
+                    'finance_user', 
+                    'property_manager', 
+                    'maintenance', 
+                    'manager', 
+                    'staff'
+                ] 
             },
             status: 'active'
         })
@@ -491,7 +502,8 @@ router.get('/petty-cash-summary', async (req, res) => {
         // Get recent petty cash transactions
         const TransactionEntry = require('../../models/TransactionEntry');
         const recentTransactions = await TransactionEntry.find({
-            source: { $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] }
+            source: 'manual',
+            'metadata.transactionType': { $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] }
         })
         .sort({ date: -1 })
         .limit(10)

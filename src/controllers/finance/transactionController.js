@@ -17,7 +17,7 @@ class TransactionController {
      */
     static async getAllTransactions(req, res) {
         try {
-            const { page = 1, limit = 50, type, startDate, endDate, residence } = req.query;
+            const { page = 1, limit = 50, type, startDate, endDate, residence, source, userId } = req.query;
             
             console.log('🔍 Fetching all transactions with filters:', req.query);
             
@@ -26,6 +26,14 @@ class TransactionController {
             // Add filters
             if (type && type !== 'all') {
                 query.type = type;
+            }
+            
+            if (source && source !== 'all') {
+                query.source = source;
+            }
+            
+            if (userId) {
+                query.sourceId = userId;
             }
             
             if (startDate || endDate) {
@@ -95,7 +103,7 @@ class TransactionController {
      */
     static async getTransactionSummary(req, res) {
         try {
-            const { startDate, endDate, type, account, status } = req.query;
+            const { startDate, endDate, type, account, status, source, userId } = req.query;
             
             console.log('🔍 Fetching transaction summary with filters:', req.query);
             
@@ -110,6 +118,14 @@ class TransactionController {
             
             if (type && type !== 'all') {
                 query.type = type;
+            }
+            
+            if (source && source !== 'all') {
+                query.source = source;
+            }
+            
+            if (userId) {
+                query.sourceId = userId;
             }
             
             if (account && account !== 'all') {

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const pettyCashController = require('../../controllers/finance/pettyCashController');
-const { authenticateToken } = require('../../middleware/auth');
+const { auth } = require('../../middleware/auth');
 const roleMiddleware = require('../../middleware/roleMiddleware');
 
 // Validation middleware
@@ -29,7 +29,7 @@ const validatePettyCashExpense = [
 
 // Initialize petty cash fund
 router.post('/initialize', 
-    authenticateToken, 
+    auth, 
     roleMiddleware(['admin', 'finance_admin']), 
     validatePettyCashInitialization,
     pettyCashController.initializePettyCash
@@ -37,7 +37,7 @@ router.post('/initialize',
 
 // Replenish petty cash fund
 router.post('/replenish', 
-    authenticateToken, 
+    auth, 
     roleMiddleware(['admin', 'finance_admin', 'finance_user']), 
     validatePettyCashReplenishment,
     pettyCashController.replenishPettyCash
@@ -45,7 +45,7 @@ router.post('/replenish',
 
 // Record petty cash expense
 router.post('/expense', 
-    authenticateToken, 
+    auth, 
     roleMiddleware(['admin', 'finance_admin', 'finance_user']), 
     validatePettyCashExpense,
     pettyCashController.recordExpense
@@ -53,14 +53,14 @@ router.post('/expense',
 
 // Get petty cash status
 router.get('/status', 
-    authenticateToken, 
+    auth, 
     roleMiddleware(['admin', 'finance_admin', 'finance_user']), 
     pettyCashController.getPettyCashStatus
 );
 
 // Get petty cash report
 router.get('/report', 
-    authenticateToken, 
+    auth, 
     roleMiddleware(['admin', 'finance_admin', 'finance_user']), 
     pettyCashController.getPettyCashReport
 );
