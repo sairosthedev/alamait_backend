@@ -10,6 +10,22 @@ router.use(auth);
 const allowedRoles = ['admin', 'finance_admin', 'finance_user'];
 router.use(checkRole(...allowedRoles));
 
+// POST route for approve that accepts requestId in body (for frontend compatibility)
+// This must come BEFORE the /requests/status/:status route to avoid conflicts
+router.post('/approve',
+    checkRole('admin', 'finance_admin'),
+    async (req, res, next) => {
+        const { requestId } = req.body;
+        if (!requestId) {
+            return res.status(400).json({ error: 'requestId is required in request body' });
+        }
+        // Set the ID in params so the controller can access it
+        req.params.id = requestId;
+        next();
+    },
+    maintenanceController.approveMaintenance
+);
+
 // Get all maintenance requests with financial details
 router.get('/requests',
     maintenanceController.getAllMaintenanceRequests

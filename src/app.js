@@ -320,10 +320,6 @@ app.use('/api/finance/transactions', transactionCreationRoutes);
 // General expense routes (alias for frontend compatibility)
 app.use('/api/expenses', financeExpenseRoutes);
 
-// Finance maintenance routes
-const financeMaintenanceRoutes = require('./routes/finance/maintenanceRoutes');
-app.use('/api/finance/maintenance', financeMaintenanceRoutes);
-
 // Debtor routes (Accounts Receivable) - must be before finance index routes
 app.use('/api/finance/debtors', debtorRoutes);
 
@@ -337,6 +333,10 @@ app.use('/api/finance/petty-cash', pettyCashRoutes);
 
 // Finance index routes (for student-specific endpoints) - last to avoid conflicts
 app.use('/api/finance', financeIndexRoutes);
+
+// Finance maintenance routes - mounted after index routes to ensure specific routes take precedence
+const financeMaintenanceRoutes = require('./routes/finance/maintenanceRoutes');
+app.use('/api/finance/maintenance', financeMaintenanceRoutes);
 
 // Monitoring routes
 app.use('/api/monitoring', monitoringRoutes);
