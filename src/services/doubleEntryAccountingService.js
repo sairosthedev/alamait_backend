@@ -78,9 +78,9 @@ class DoubleEntryAccountingService {
                 entries,
                 totalDebit: amount,
                 totalCredit: amount,
-                source: 'petty_cash_allocation',
+                source: 'manual',
                 sourceId: userId,
-                sourceModel: 'User',
+                sourceModel: 'Request',
                 createdBy: allocatedBy.email,
                 status: 'posted',
                 metadata: {
@@ -169,9 +169,9 @@ class DoubleEntryAccountingService {
                 entries,
                 totalDebit: amount,
                 totalCredit: amount,
-                source: 'petty_cash_expense',
+                source: 'manual',
                 sourceId: userId,
-                sourceModel: 'User',
+                sourceModel: 'Request',
                 createdBy: approvedBy.email,
                 status: 'posted',
                 metadata: {
@@ -248,9 +248,9 @@ class DoubleEntryAccountingService {
                 entries,
                 totalDebit: amount,
                 totalCredit: amount,
-                source: 'petty_cash_replenishment',
+                source: 'manual',
                 sourceId: userId,
-                sourceModel: 'User',
+                sourceModel: 'Request',
                 createdBy: replenishedBy.email,
                 status: 'posted',
                 metadata: {
@@ -282,7 +282,8 @@ class DoubleEntryAccountingService {
             const allocations = await TransactionEntry.aggregate([
                 {
                     $match: {
-                        source: 'petty_cash_allocation',
+                        source: 'manual',
+                        'metadata.transactionType': 'petty_cash_allocation',
                         sourceId: userId,
                         status: 'posted'
                     }
@@ -298,7 +299,8 @@ class DoubleEntryAccountingService {
             const expenses = await TransactionEntry.aggregate([
                 {
                     $match: {
-                        source: 'petty_cash_expense',
+                        source: 'manual',
+                        'metadata.transactionType': 'petty_cash_expense',
                         sourceId: userId,
                         status: 'posted'
                     }
@@ -314,7 +316,8 @@ class DoubleEntryAccountingService {
             const replenishments = await TransactionEntry.aggregate([
                 {
                     $match: {
-                        source: 'petty_cash_replenishment',
+                        source: 'manual',
+                        'metadata.transactionType': 'petty_cash_replenishment',
                         sourceId: userId,
                         status: 'posted'
                     }

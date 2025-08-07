@@ -25,7 +25,14 @@ class TransactionController {
             
             // Add filters
             if (type && type !== 'all') {
-                query.type = type;
+                if (type === 'petty_cash') {
+                    query.source = 'manual';
+                    query['metadata.transactionType'] = { 
+                        $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] 
+                    };
+                } else {
+                    query.type = type;
+                }
             }
             
             if (source && source !== 'all') {
@@ -117,7 +124,14 @@ class TransactionController {
             }
             
             if (type && type !== 'all') {
-                query.type = type;
+                if (type === 'petty_cash') {
+                    query.source = 'manual';
+                    query['metadata.transactionType'] = { 
+                        $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] 
+                    };
+                } else {
+                    query.type = type;
+                }
             }
             
             if (source && source !== 'all') {

@@ -126,8 +126,8 @@ class FinancialService {
         const entries = [];
         
         try {
-            // Get or create vendor account
-            const vendorAccount = await this.getOrCreateVendorAccount(quotation.vendorId);
+            // Get or create vendor account (vendorId is optional)
+            const vendorAccount = await this.getOrCreateVendorAccount(quotation.vendorId || null);
             
             // Get or create expense account
             const expenseAccount = await this.getOrCreateExpenseAccount(
@@ -159,13 +159,13 @@ class FinancialService {
                 debit: 0,
                 credit: quotation.amount,
                 type: 'liability',
-                description: `Accounts payable to ${quotation.provider} for ${item.description}`,
+                description: `Accounts payable to ${quotation.provider || 'General Vendor'} for ${item.description}`,
                 reference: `${request._id}-item-${itemIndex}`,
                 metadata: {
                     itemIndex,
-                    vendorId: quotation.vendorId,
-                    vendorName: quotation.provider,
-                    vendorCode: quotation.vendorCode
+                    vendorId: quotation.vendorId || null,
+                    vendorName: quotation.provider || 'General Vendor',
+                    vendorCode: quotation.vendorCode || null
                 }
             });
             entries.push(vendorEntry);
@@ -173,8 +173,10 @@ class FinancialService {
             // Save entries
             await TransactionEntry.insertMany(entries);
             
-            // Update vendor's current balance
-            await this.updateVendorBalance(quotation.vendorId, quotation.amount);
+            // Update vendor's current balance (only if vendorId exists)
+            if (quotation.vendorId) {
+                await this.updateVendorBalance(quotation.vendorId, quotation.amount);
+            }
 
             console.log(`✅ Created vendor transaction entries for ${quotation.provider}: $${quotation.amount}`);
             return entries;
@@ -504,9 +506,34 @@ class FinancialService {
     }
 
     static async getOrCreateVendorAccount(vendorId) {
+        // If no vendorId provided, create a general accounts payable account
+        if (!vendorId) {
+            let account = await Account.findOne({ code: '2000' }); // General Accounts Payable
+            if (!account) {
+                account = new Account({
+                    code: '2000',
+                    name: 'Accounts Payable - General',
+                    type: 'Liability'
+                });
+                await account.save();
+            }
+            return account;
+        }
+
         const vendor = await Vendor.findById(vendorId);
         if (!vendor) {
-            throw new Error(`Vendor not found: ${vendorId}`);
+            console.warn(`⚠️ Vendor not found: ${vendorId}, using general accounts payable`);
+            // Instead of throwing error, use general accounts payable
+            let account = await Account.findOne({ code: '2000' }); // General Accounts Payable
+            if (!account) {
+                account = new Account({
+                    code: '2000',
+                    name: 'Accounts Payable - General',
+                    type: 'Liability'
+                });
+                await account.save();
+            }
+            return account;
         }
 
         let account = await Account.findOne({ code: vendor.chartOfAccountsCode });
@@ -569,9 +596,18 @@ class FinancialService {
     }
 
     static async updateVendorBalance(vendorId, amount) {
-        await Vendor.findByIdAndUpdate(vendorId, {
+        if (!vendorId) {
+            console.warn('⚠️ Cannot update vendor balance: vendorId is null or undefined');
+            return;
+        }
+        
+        const result = await Vendor.findByIdAndUpdate(vendorId, {
             $inc: { currentBalance: amount }
         });
+        
+        if (!result) {
+            console.warn(`⚠️ Vendor not found for balance update: ${vendorId}`);
+        }
     }
 }
 
