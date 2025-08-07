@@ -221,9 +221,9 @@ exports.approveMaintenance = async (req, res) => {
         }
 
         // Use provided amount or fall back to maintenance request amount
-        const approvalAmount = amount || maintenance.amount;
-        if (!approvalAmount || approvalAmount <= 0) {
-            return res.status(400).json({ error: 'Maintenance request must have a valid amount to approve' });
+        const approvalAmount = amount || maintenance.amount || 0;
+        if (approvalAmount < 0) {
+            return res.status(400).json({ error: 'Maintenance request amount cannot be negative' });
         }
 
         const before = maintenance.toObject();
@@ -236,6 +236,7 @@ exports.approveMaintenance = async (req, res) => {
                     financeStatus: 'approved',
                     financeNotes: notes || maintenance.financeNotes,
                     amount: approvalAmount, // Update amount if provided
+                    convertedToExpense: true, // Mark as converted to expense
                     updatedBy: req.user?._id || null
                 }
             },
@@ -247,7 +248,10 @@ exports.approveMaintenance = async (req, res) => {
         // --- Create Accounts Payable Entry for Approved Maintenance ---
         try {
             console.log('[AP] Creating accounts payable entry for approved maintenance:', updatedMaintenance._id);
-            console.log('[AP] Using accounts - maintenanceAccount:', maintenanceAccount, 'apAccount:', apAccount);
+            console.log('[AP] Amount:', approvalAmount, 'Using accounts - maintenanceAccount:', maintenanceAccount, 'apAccount:', apAccount);
+            
+            // Only create AP entry if amount is greater than 0
+            if (approvalAmount > 0) {
 
                         // Get maintenance expense account (use provided account or default to 5099)
             let expenseAccount;
@@ -349,6 +353,9 @@ exports.approveMaintenance = async (req, res) => {
             });
 
             console.log('[AP] Accounts payable entry created for maintenance:', updatedMaintenance._id, 'txn:', txn._id, 'entry:', transactionEntry._id);
+            } else {
+                console.log('[AP] Skipping AP entry creation for zero amount maintenance:', updatedMaintenance._id);
+            }
 
         } catch (apError) {
             console.error('[AP] Failed to create accounts payable entry for maintenance:', updatedMaintenance._id, apError);

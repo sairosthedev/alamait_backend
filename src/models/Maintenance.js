@@ -106,6 +106,10 @@ const maintenanceSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    convertedToExpense: {
+        type: Boolean,
+        default: false
+    },
     ceoStatus: {
         type: String,
         enum: ['pending', 'approved', 'rejected'],
