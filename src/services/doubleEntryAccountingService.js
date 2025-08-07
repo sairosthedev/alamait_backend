@@ -34,6 +34,24 @@ class DoubleEntryAccountingService {
         try {
             console.log('💰 Allocating petty cash:', amount, 'to user:', userId);
             
+            // Get the user to determine their role and appropriate petty cash account
+            const User = require('../models/User');
+            const user = await User.findById(userId);
+            
+            if (!user) {
+                throw new Error('User not found');
+            }
+            
+            // Get the appropriate petty cash account based on user role
+            const { getPettyCashAccountByRole } = require('../utils/pettyCashUtils');
+            const pettyCashAccount = await getPettyCashAccountByRole(user.role);
+            
+            if (!pettyCashAccount) {
+                throw new Error(`No petty cash account found for role: ${user.role}`);
+            }
+            
+            console.log(`💰 Allocating to ${user.role} petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
+            
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
                 transactionId,
@@ -50,14 +68,14 @@ class DoubleEntryAccountingService {
             // Create double-entry entries
             const entries = [];
 
-            // Debit: Petty Cash (Asset)
+            // Debit: User's Specific Petty Cash Account (Asset)
             entries.push({
-                accountCode: await this.getPettyCashAccount(),
-                accountName: 'Petty Cash',
-                accountType: 'Asset',
+                accountCode: pettyCashAccount.code,
+                accountName: pettyCashAccount.name,
+                accountType: pettyCashAccount.type,
                 debit: amount,
                 credit: 0,
-                description: `Petty cash allocated to user`
+                description: `Petty cash allocated to ${user.firstName} ${user.lastName} (${user.role})`
             });
 
             // Credit: Bank/Cash (Source)
@@ -67,7 +85,7 @@ class DoubleEntryAccountingService {
                 accountType: 'Asset',
                 debit: 0,
                 credit: amount,
-                description: `Cash withdrawn for petty cash`
+                description: `Cash withdrawn for petty cash allocation to ${user.firstName} ${user.lastName}`
             });
 
             const transactionEntry = new TransactionEntry({
@@ -85,6 +103,8 @@ class DoubleEntryAccountingService {
                 status: 'posted',
                 metadata: {
                     pettyCashUserId: userId,
+                    pettyCashUserRole: user.role,
+                    pettyCashAccountCode: pettyCashAccount.code,
                     allocationType: 'initial',
                     transactionType: 'petty_cash_allocation'
                 }
@@ -95,8 +115,8 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log('✅ Petty cash allocated successfully');
-            return { transaction, transactionEntry };
+            console.log(`✅ Petty cash allocated successfully to ${user.firstName} ${user.lastName} (${user.role})`);
+            return { transaction, transactionEntry, user, pettyCashAccount };
 
         } catch (error) {
             console.error('❌ Error allocating petty cash:', error);
@@ -110,6 +130,24 @@ class DoubleEntryAccountingService {
     static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy) {
         try {
             console.log('💸 Recording petty cash expense:', amount, 'by user:', userId);
+            
+            // Get the user to determine their role and appropriate petty cash account
+            const User = require('../models/User');
+            const user = await User.findById(userId);
+            
+            if (!user) {
+                throw new Error('User not found');
+            }
+            
+            // Get the appropriate petty cash account based on user role
+            const { getPettyCashAccountByRole } = require('../utils/pettyCashUtils');
+            const pettyCashAccount = await getPettyCashAccountByRole(user.role);
+            
+            if (!pettyCashAccount) {
+                throw new Error(`No petty cash account found for role: ${user.role}`);
+            }
+            
+            console.log(`💸 Recording expense from ${user.role} petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
             
             // Check if transaction already exists to prevent duplicates
             const existingTransaction = await TransactionEntry.findOne({
@@ -151,14 +189,14 @@ class DoubleEntryAccountingService {
                 description: `Petty cash expense: ${description}`
             });
 
-            // Credit: Petty Cash (Asset)
+            // Credit: User's Specific Petty Cash Account (Asset)
             entries.push({
-                accountCode: await this.getPettyCashAccount(),
-                accountName: 'Petty Cash',
-                accountType: 'Asset',
+                accountCode: pettyCashAccount.code,
+                accountName: pettyCashAccount.name,
+                accountType: pettyCashAccount.type,
                 debit: 0,
                 credit: amount,
-                description: `Petty cash used for ${description}`
+                description: `${user.firstName} ${user.lastName} petty cash used for ${description}`
             });
 
             const transactionEntry = new TransactionEntry({
@@ -176,6 +214,8 @@ class DoubleEntryAccountingService {
                 status: 'posted',
                 metadata: {
                     pettyCashUserId: userId,
+                    pettyCashUserRole: user.role,
+                    pettyCashAccountCode: pettyCashAccount.code,
                     expenseCategory,
                     expenseDescription: description,
                     expenseAmount: amount,
@@ -188,8 +228,8 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log('✅ Petty cash expense recorded successfully');
-            return { transaction, transactionEntry };
+            console.log(`✅ Petty cash expense recorded successfully for ${user.firstName} ${user.lastName} (${user.role})`);
+            return { transaction, transactionEntry, user, pettyCashAccount };
 
         } catch (error) {
             console.error('❌ Error recording petty cash expense:', error);
@@ -203,6 +243,24 @@ class DoubleEntryAccountingService {
     static async replenishPettyCash(userId, amount, description, replenishedBy) {
         try {
             console.log('🔄 Replenishing petty cash:', amount, 'for user:', userId);
+            
+            // Get the user to determine their role and appropriate petty cash account
+            const User = require('../models/User');
+            const user = await User.findById(userId);
+            
+            if (!user) {
+                throw new Error('User not found');
+            }
+            
+            // Get the appropriate petty cash account based on user role
+            const { getPettyCashAccountByRole } = require('../utils/pettyCashUtils');
+            const pettyCashAccount = await getPettyCashAccountByRole(user.role);
+            
+            if (!pettyCashAccount) {
+                throw new Error(`No petty cash account found for role: ${user.role}`);
+            }
+            
+            console.log(`🔄 Replenishing ${user.role} petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
             
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
@@ -220,14 +278,14 @@ class DoubleEntryAccountingService {
             // Create double-entry entries
             const entries = [];
 
-            // Debit: Petty Cash (Asset)
+            // Debit: User's Specific Petty Cash Account (Asset)
             entries.push({
-                accountCode: await this.getPettyCashAccount(),
-                accountName: 'Petty Cash',
-                accountType: 'Asset',
+                accountCode: pettyCashAccount.code,
+                accountName: pettyCashAccount.name,
+                accountType: pettyCashAccount.type,
                 debit: amount,
                 credit: 0,
-                description: `Petty cash replenished`
+                description: `${user.firstName} ${user.lastName} petty cash replenished`
             });
 
             // Credit: Bank/Cash (Source)
@@ -237,7 +295,7 @@ class DoubleEntryAccountingService {
                 accountType: 'Asset',
                 debit: 0,
                 credit: amount,
-                description: `Cash used to replenish petty cash`
+                description: `Cash used to replenish ${user.firstName} ${user.lastName} petty cash`
             });
 
             const transactionEntry = new TransactionEntry({
@@ -255,6 +313,8 @@ class DoubleEntryAccountingService {
                 status: 'posted',
                 metadata: {
                     pettyCashUserId: userId,
+                    pettyCashUserRole: user.role,
+                    pettyCashAccountCode: pettyCashAccount.code,
                     replenishmentType: 'top_up',
                     transactionType: 'petty_cash_replenishment'
                 }
@@ -265,8 +325,8 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log('✅ Petty cash replenished successfully');
-            return { transaction, transactionEntry };
+            console.log(`✅ Petty cash replenished successfully for ${user.firstName} ${user.lastName} (${user.role})`);
+            return { transaction, transactionEntry, user, pettyCashAccount };
 
         } catch (error) {
             console.error('❌ Error replenishing petty cash:', error);

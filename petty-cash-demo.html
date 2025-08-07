@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Petty Cash Display Demo</title>
+    <link rel="stylesheet" href="petty-cash-display.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        
+        .demo-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .demo-header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .demo-header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .demo-header p {
+            color: #666;
+            font-size: 18px;
+        }
+        
+        .demo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+        
+        .demo-section {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .demo-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .json-display {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        
+        .text-display {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <div class="demo-header">
+            <h1>💰 Petty Cash Display Component</h1>
+            <p>Converting API Response to Beautiful Display</p>
+        </div>
+        
+        <div class="demo-grid">
+            <!-- HTML Display -->
+            <div class="demo-section">
+                <h3>🎨 HTML Display</h3>
+                <div id="html-display"></div>
+            </div>
+            
+            <!-- JSON Display -->
+            <div class="demo-section">
+                <h3>📄 JSON Format</h3>
+                <div id="json-display" class="json-display"></div>
+            </div>
+            
+            <!-- Text Display -->
+            <div class="demo-section">
+                <h3>📝 Text Format</h3>
+                <div id="text-display" class="text-display"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Petty Cash Display Component
+        class PettyCashDisplay {
+            constructor(apiResponse) {
+                this.apiResponse = apiResponse;
+                this.data = apiResponse.data;
+            }
+
+            toDisplayFormat() {
+                if (!this.apiResponse.success) {
+                    return {
+                        error: true,
+                        message: this.apiResponse.message || 'Failed to load petty cash data'
+                    };
+                }
+
+                const user = this.data.user;
+                const balance = this.data.pettyCashBalance;
+                const summary = this.data.summary;
+
+                return {
+                    success: true,
+                    display: {
+                        userName: `${user.firstName} ${user.lastName}`,
+                        userEmail: user.email,
+                        userRole: user.role,
+                        currentBalance: balance.currentBalance,
+                        formattedBalance: balance.formattedBalance,
+                        totalAllocated: balance.totalAllocated,
+                        totalExpenses: balance.totalExpenses,
+                        totalReplenished: balance.totalReplenished,
+                        totalTransactions: summary.totalTransactions,
+                        lastUpdated: new Date(summary.lastUpdated).toLocaleString(),
+                        status: this.getStatus(balance.currentBalance),
+                        statusColor: this.getStatusColor(balance.currentBalance)
+                    }
+                };
+            }
+
+            getStatus(balance) {
+                if (balance > 100) return 'Good';
+                if (balance > 50) return 'Moderate';
+                if (balance > 0) return 'Low';
+                return 'Empty';
+            }
+
+            getStatusColor(balance) {
+                if (balance > 100) return 'green';
+                if (balance > 50) return 'orange';
+                if (balance > 0) return 'red';
+                return 'gray';
+            }
+
+            toHTML() {
+                const display = this.toDisplayFormat();
+                
+                if (display.error) {
+                    return `
+                        <div class="petty-cash-error">
+                            <h3>❌ Error</h3>
+                            <p>${display.message}</p>
+                        </div>
+                    `;
+                }
+
+                const data = display.display;
+                
+                return `
+                    <div class="petty-cash-display">
+                        <div class="petty-cash-header">
+                            <h2>💰 Petty Cash Balance</h2>
+                            <div class="user-info">
+                                <strong>${data.userName}</strong>
+                                <span class="role">(${data.userRole})</span>
+                            </div>
+                        </div>
+                        
+                        <div class="petty-cash-balance">
+                            <div class="balance-amount ${data.statusColor}">
+                                <span class="amount">${data.formattedBalance}</span>
+                                <span class="status">${data.status}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="petty-cash-details">
+                            <div class="detail-row">
+                                <span class="label">Total Allocated:</span>
+                                <span class="value">$${data.totalAllocated.toFixed(2)}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="label">Total Expenses:</span>
+                                <span class="value">$${data.totalExpenses.toFixed(2)}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="label">Total Replenished:</span>
+                                <span class="value">$${data.totalReplenished.toFixed(2)}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="label">Total Transactions:</span>
+                                <span class="value">${data.totalTransactions}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="petty-cash-footer">
+                            <small>Last Updated: ${data.lastUpdated}</small>
+                        </div>
+                    </div>
+                `;
+            }
+
+            toJSON() {
+                return this.toDisplayFormat();
+            }
+
+            toText() {
+                const display = this.toDisplayFormat();
+                
+                if (display.error) {
+                    return `Error: ${display.message}`;
+                }
+
+                const data = display.display;
+                
+                return `
+Petty Cash Balance for ${data.userName}
+=====================================
+Current Balance: ${data.formattedBalance} (${data.status})
+Total Allocated: $${data.totalAllocated.toFixed(2)}
+Total Expenses: $${data.totalExpenses.toFixed(2)}
+Total Replenished: $${data.totalReplenished.toFixed(2)}
+Total Transactions: ${data.totalTransactions}
+Last Updated: ${data.lastUpdated}
+                `.trim();
+            }
+        }
+
+        // Sample API Response
+        const apiResponse = {
+            "success": true,
+            "message": "Successfully retrieved petty cash balance for Makomborero Madziwa",
+            "data": {
+                "user": {
+                    "_id": "67c023adae5e27657502e887",
+                    "firstName": "Makomborero",
+                    "lastName": "Madziwa",
+                    "email": "admin@alamait.com",
+                    "role": "admin"
+                },
+                "pettyCashBalance": {
+                    "totalAllocated": 200,
+                    "totalExpenses": 0,
+                    "totalReplenished": 0,
+                    "currentBalance": 200,
+                    "formattedBalance": "$200.00"
+                },
+                "summary": {
+                    "totalTransactions": 200,
+                    "lastUpdated": "2025-08-07T16:09:52.627Z"
+                }
+            }
+        };
+
+        // Create display instance
+        const pettyCashDisplay = new PettyCashDisplay(apiResponse);
+
+        // Display in different formats
+        document.getElementById('html-display').innerHTML = pettyCashDisplay.toHTML();
+        document.getElementById('json-display').textContent = JSON.stringify(pettyCashDisplay.toJSON(), null, 2);
+        document.getElementById('text-display').textContent = pettyCashDisplay.toText();
+    </script>
+</body>
+</html>
+
