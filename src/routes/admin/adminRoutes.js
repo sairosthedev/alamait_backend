@@ -251,7 +251,8 @@ router.get('/petty-cash/accounts', async (req, res) => {
         
         res.json({
             success: true,
-            pettyCashAccounts: accountsWithRoles,
+            accounts: accountsWithRoles,  // Return as 'accounts' for frontend compatibility
+            pettyCashAccounts: accountsWithRoles,  // Keep both for backward compatibility
             total: accountsWithRoles.length
         });
 

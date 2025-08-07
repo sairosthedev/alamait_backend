@@ -39,8 +39,9 @@ class DoubleEntryAccountingService {
                 transactionId,
                 date: new Date(),
                 description: `Petty cash allocation: ${description}`,
-                type: 'allocation',
+                type: 'other', // Changed from 'allocation' to 'other' since 'allocation' is not in enum
                 reference: `PETTY-${userId}`,
+                residence: await this.getDefaultResidence(), // Add required residence field
                 createdBy: allocatedBy._id
             });
 
@@ -128,8 +129,9 @@ class DoubleEntryAccountingService {
                 transactionId,
                 date: new Date(),
                 description: `Petty cash expense: ${description}`,
-                type: 'expense',
+                type: 'other', // Changed from 'expense' to 'other' since 'expense' is not in enum
                 reference: `PETTY-EXP-${userId}`,
+                residence: await this.getDefaultResidence(), // Add required residence field
                 createdBy: approvedBy._id
             });
 
@@ -205,8 +207,9 @@ class DoubleEntryAccountingService {
                 transactionId,
                 date: new Date(),
                 description: `Petty cash replenishment: ${description}`,
-                type: 'replenishment',
+                type: 'other', // Changed from 'replenishment' to 'other' since 'replenishment' is not in enum
                 reference: `PETTY-REP-${userId}`,
+                residence: await this.getDefaultResidence(), // Add required residence field
                 createdBy: replenishedBy._id
             });
 
@@ -1235,8 +1238,8 @@ class DoubleEntryAccountingService {
      * Get petty cash account
      */
     static async getPettyCashAccount() {
-        const accountCode = '1008'; // Petty Cash Account
-        const accountName = 'Petty Cash';
+        const accountCode = '1010'; // General Petty Cash Account (updated to match created accounts)
+        const accountName = 'General Petty Cash';
         
         let account = await Account.findOne({ code: accountCode });
         if (!account) {
@@ -1246,33 +1249,7 @@ class DoubleEntryAccountingService {
         return account.code;
     }
 
-    static async getExpenseAccountByCategory(category) {
-        let account = await Account.findOne({ 
-            name: `${category} Expense`,
-            type: 'Expense'
-        });
-        
-        if (!account) {
-            const code = await Account.getNextCode('Expense', 'Operating Expenses');
-            account = await this.getOrCreateAccount(code, `${category} Expense`, 'Expense');
-        }
-        
-        return account.code;
-    }
 
-    static async getPettyCashAccount() {
-        let account = await Account.findOne({ 
-            name: 'Petty Cash',
-            type: 'Asset'
-        });
-        
-        if (!account) {
-            const code = await Account.getNextCode('Asset', 'Current Assets');
-            account = await this.getOrCreateAccount(code, 'Petty Cash', 'Asset');
-        }
-        
-        return account.code;
-    }
 
     // Data retrieval helpers
     static async getRequestById(id) {
@@ -1290,6 +1267,20 @@ class DoubleEntryAccountingService {
 
     static async getInvoiceById(id) {
         return await Invoice.findById(id).populate('student residence');
+    }
+
+    /**
+     * Get default residence for petty cash transactions
+     */
+    static async getDefaultResidence() {
+        try {
+            const Residence = require('../models/Residence');
+            const defaultResidence = await Residence.findOne().sort({ createdAt: 1 });
+            return defaultResidence?._id || null;
+        } catch (error) {
+            console.error('Error getting default residence:', error);
+            return null;
+        }
     }
 }
 
