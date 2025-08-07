@@ -745,128 +745,284 @@ class FinanceController {
     /**
      * Get petty cash balance for a user
      */
+    /**
+     * Get petty cash balance for a specific user
+     * Returns detailed balance information including allocations, expenses, and replenishments
+     */
     static async getPettyCashBalance(req, res) {
         try {
-            const { userId } = req.params;
+            // Extract parameters with safe defaults
+            const { userId } = req.params || {};
+            
             console.log('💰 Getting petty cash balance for user:', userId);
+
+            // Validate required parameters
+            if (!userId) {
+                return res.status(400).json({ 
+                    error: 'User ID is required',
+                    message: 'Please provide a valid user ID'
+                });
+            }
 
             // Check if user exists
             const User = require('../models/User');
             const user = await User.findById(userId);
             if (!user) {
-                return res.status(404).json({ error: 'User not found' });
+                return res.status(404).json({ 
+                    error: 'User not found',
+                    message: `No user found with ID: ${userId}`
+                });
             }
 
-            // Get petty cash balance
+            // Get petty cash balance with detailed breakdown
             const balance = await DoubleEntryAccountingService.getPettyCashBalance(userId);
 
-            console.log('✅ Petty cash balance retrieved successfully');
+            console.log(`✅ Petty cash balance retrieved for ${user.firstName} ${user.lastName}: $${balance.currentBalance}`);
+
+            // Return structured response with readable data
             res.json({
                 success: true,
-                user: {
-                    _id: user._id,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    email: user.email
-                },
-                pettyCashBalance: balance
+                message: `Successfully retrieved petty cash balance for ${user.firstName} ${user.lastName}`,
+                data: {
+                    user: {
+                        _id: user._id,
+                        firstName: user.firstName,
+                        lastName: user.lastName,
+                        email: user.email,
+                        role: user.role
+                    },
+                    pettyCashBalance: {
+                        totalAllocated: balance.totalAllocated || 0,
+                        totalExpenses: balance.totalExpenses || 0,
+                        totalReplenished: balance.totalReplenished || 0,
+                        currentBalance: balance.currentBalance || 0,
+                        formattedBalance: `$${(balance.currentBalance || 0).toFixed(2)}`
+                    },
+                    summary: {
+                        totalTransactions: (balance.totalAllocated || 0) + (balance.totalExpenses || 0) + (balance.totalReplenished || 0),
+                        lastUpdated: new Date().toISOString()
+                    }
+                }
             });
 
         } catch (error) {
             console.error('❌ Error getting petty cash balance:', error);
-            res.status(500).json({ error: error.message });
+            res.status(500).json({ 
+                error: 'Internal server error',
+                message: 'Failed to retrieve petty cash balance',
+                details: error.message
+            });
         }
     }
 
     /**
-     * Get all petty cash balances
+     * Get all petty cash balances for all eligible users
+     * Returns comprehensive balance information for finance dashboard
      */
     static async getAllPettyCashBalances(req, res) {
         try {
-            console.log('💰 Getting all petty cash balances');
+            console.log('💰 Getting all petty cash balances for finance dashboard');
 
-            // Get all users with petty cash allocations
+            // Get all users eligible for petty cash
             const User = require('../models/User');
-            const users = await User.find({ role: { $in: ['admin', 'manager', 'staff'] } });
+            const eligibleRoles = [
+                'admin', 
+                'admin_assistant', 
+                'ceo_assistant',
+                'finance_admin', 
+                'finance_user', 
+                'finance_assistant',
+                'property_manager', 
+                'maintenance', 
+                'manager', 
+                'staff'
+            ];
+            
+            const users = await User.find({ 
+                role: { $in: eligibleRoles },
+                status: 'active'
+            }).sort({ firstName: 1, lastName: 1 });
 
+            console.log(`📊 Found ${users.length} eligible users for petty cash`);
+
+            // Get balances for each user
             const balances = [];
+            let totalSystemBalance = 0;
+            let totalAllocated = 0;
+            let totalExpenses = 0;
+            let totalReplenished = 0;
+
             for (const user of users) {
-                const balance = await DoubleEntryAccountingService.getPettyCashBalance(user._id);
-                if (balance.totalAllocated > 0 || balance.totalExpenses > 0 || balance.totalReplenished > 0) {
-                    balances.push({
-                        user: {
-                            _id: user._id,
-                            firstName: user.firstName,
-                            lastName: user.lastName,
-                            email: user.email,
-                            role: user.role
-                        },
-                        pettyCashBalance: balance
-                    });
+                try {
+                    const balance = await DoubleEntryAccountingService.getPettyCashBalance(user._id);
+                    
+                    // Only include users with actual petty cash activity
+                    if (balance.totalAllocated > 0 || balance.totalExpenses > 0 || balance.totalReplenished > 0) {
+                        const userBalance = {
+                            user: {
+                                _id: user._id,
+                                firstName: user.firstName,
+                                lastName: user.lastName,
+                                email: user.email,
+                                role: user.role,
+                                fullName: `${user.firstName} ${user.lastName}`
+                            },
+                            pettyCashBalance: {
+                                totalAllocated: balance.totalAllocated || 0,
+                                totalExpenses: balance.totalExpenses || 0,
+                                totalReplenished: balance.totalReplenished || 0,
+                                currentBalance: balance.currentBalance || 0,
+                                formattedBalance: `$${(balance.currentBalance || 0).toFixed(2)}`
+                            }
+                        };
+                        
+                        balances.push(userBalance);
+                        
+                        // Update system totals
+                        totalAllocated += balance.totalAllocated || 0;
+                        totalExpenses += balance.totalExpenses || 0;
+                        totalReplenished += balance.totalReplenished || 0;
+                        totalSystemBalance += balance.currentBalance || 0;
+                    }
+                } catch (userError) {
+                    console.error(`❌ Error getting balance for user ${user.email}:`, userError);
+                    // Continue with other users even if one fails
                 }
             }
 
-            console.log('✅ All petty cash balances retrieved successfully');
+            console.log(`✅ Retrieved petty cash balances for ${balances.length} users with activity`);
+
+            // Return structured response with readable data
             res.json({
                 success: true,
-                balances
+                message: `Successfully retrieved petty cash balances for ${balances.length} users`,
+                data: {
+                    balances: balances,
+                    summary: {
+                        totalUsers: balances.length,
+                        totalSystemBalance: totalSystemBalance,
+                        formattedSystemBalance: `$${totalSystemBalance.toFixed(2)}`,
+                        totalAllocated: totalAllocated,
+                        totalExpenses: totalExpenses,
+                        totalReplenished: totalReplenished,
+                        lastUpdated: new Date().toISOString()
+                    },
+                    filters: {
+                        eligibleRoles: eligibleRoles,
+                        totalEligibleUsers: users.length
+                    }
+                }
             });
 
         } catch (error) {
             console.error('❌ Error getting all petty cash balances:', error);
-            res.status(500).json({ error: error.message });
+            res.status(500).json({ 
+                error: 'Internal server error',
+                message: 'Failed to retrieve petty cash balances',
+                details: error.message
+            });
         }
     }
 
     /**
      * Get petty cash transactions for a user
      */
+    /**
+     * Get petty cash transactions for a user
+     * Supports optional date filtering
+     */
     static async getPettyCashTransactions(req, res) {
         try {
-            const { userId } = req.params;
-            const { startDate, endDate } = req.query;
+            // Extract parameters with safe defaults
+            const { userId } = req.params || {};
+            const queryParams = req.query || {};
+            const { startDate, endDate } = queryParams;
+            
             console.log('📊 Getting petty cash transactions for user:', userId);
+
+            // Validate required parameters
+            if (!userId) {
+                return res.status(400).json({ 
+                    error: 'User ID is required',
+                    message: 'Please provide a valid user ID'
+                });
+            }
 
             // Check if user exists
             const User = require('../models/User');
             const user = await User.findById(userId);
             if (!user) {
-                return res.status(404).json({ error: 'User not found' });
+                return res.status(404).json({ 
+                    error: 'User not found',
+                    message: `No user found with ID: ${userId}`
+                });
             }
 
-            // Build query
-            let query = {
+            // Build database query with readable structure
+            const baseQuery = {
                 sourceId: userId,
-                source: { $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] }
+                source: { 
+                    $in: [
+                        'petty_cash_allocation', 
+                        'petty_cash_expense', 
+                        'petty_cash_replenishment'
+                    ] 
+                }
             };
 
+            // Add date filtering if provided
+            let finalQuery = { ...baseQuery };
             if (startDate || endDate) {
-                query.date = {};
-                if (startDate) query.date.$gte = new Date(startDate);
-                if (endDate) query.date.$lte = new Date(endDate);
+                finalQuery.date = {};
+                
+                if (startDate) {
+                    finalQuery.date.$gte = new Date(startDate);
+                    console.log('📅 Filtering from start date:', startDate);
+                }
+                
+                if (endDate) {
+                    finalQuery.date.$lte = new Date(endDate);
+                    console.log('📅 Filtering to end date:', endDate);
+                }
             }
 
-            // Get transactions
+            // Get transactions with proper error handling
             const TransactionEntry = require('../models/TransactionEntry');
-            const transactions = await TransactionEntry.find(query)
+            const transactions = await TransactionEntry.find(finalQuery)
                 .sort({ date: -1 })
-                .populate('transactionId');
+                .populate('transactionId')
+                .lean(); // Use lean() for better performance
 
-            console.log('✅ Petty cash transactions retrieved successfully');
+            console.log(`✅ Retrieved ${transactions.length} petty cash transactions for user: ${user.firstName} ${user.lastName}`);
+
+            // Return structured response
             res.json({
                 success: true,
-                user: {
-                    _id: user._id,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    email: user.email
-                },
-                transactions
+                message: `Successfully retrieved ${transactions.length} petty cash transactions`,
+                data: {
+                    user: {
+                        _id: user._id,
+                        firstName: user.firstName,
+                        lastName: user.lastName,
+                        email: user.email,
+                        role: user.role
+                    },
+                    transactions: transactions,
+                    filters: {
+                        startDate: startDate || null,
+                        endDate: endDate || null,
+                        totalTransactions: transactions.length
+                    }
+                }
             });
 
         } catch (error) {
             console.error('❌ Error getting petty cash transactions:', error);
-            res.status(500).json({ error: error.message });
+            res.status(500).json({ 
+                error: 'Internal server error',
+                message: 'Failed to retrieve petty cash transactions',
+                details: error.message
+            });
         }
     }
 }
