@@ -961,7 +961,8 @@ class FinanceController {
             // Build database query with readable structure
             const baseQuery = {
                 sourceId: userId,
-                source: { 
+                source: 'manual',
+                'metadata.transactionType': { 
                     $in: [
                         'petty_cash_allocation', 
                         'petty_cash_expense', 
