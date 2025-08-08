@@ -151,6 +151,24 @@ router.post('/:id/send-to-finance',
     monthlyRequestController.sendToFinance
 );
 
+// Send template to finance for specific month approval (admin only)
+router.post('/templates/:templateId/send-to-finance', 
+    checkRole(['admin']), 
+    monthlyRequestController.sendToFinance
+);
+
+// Finance approve monthly request with expense creation
+router.patch('/:id/finance-approve', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    monthlyRequestController.financeApproveMonthlyRequest
+);
+
+// Get monthly requests pending finance approval
+router.get('/finance/pending', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    monthlyRequestController.getPendingFinanceApproval
+);
+
 // Approve monthly request (finance and admin)
 router.patch('/:id/approve', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 

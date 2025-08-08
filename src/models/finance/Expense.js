@@ -200,6 +200,7 @@ const expenseSchema = new mongoose.Schema({
 // Add indexes for common queries
 expenseSchema.index({ expenseId: 1 });
 expenseSchema.index({ requestId: 1 });
+expenseSchema.index({ monthlyRequestId: 1 });
 expenseSchema.index({ residence: 1 });
 expenseSchema.index({ category: 1 });
 expenseSchema.index({ paymentStatus: 1 });
