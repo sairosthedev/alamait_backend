@@ -1280,12 +1280,10 @@ exports.financeApproval = async (req, res) => {
             notes: notes || reason || '' // Use notes or reason
         };
         
-        // Update finance status
+        // Update finance status ONLY (do not change overall request status)
         if (isApproved) {
             request.financeStatus = 'approved';
-            // Also update the overall request status to approved when finance approves
-            request.status = 'approved';
-            console.log('✅ Setting financeStatus to approved and status to approved');
+            console.log('✅ Setting financeStatus to approved');
         } else if (isRejected) {
             request.financeStatus = 'rejected';
             console.log('❌ Setting financeStatus to rejected');
@@ -1397,6 +1395,7 @@ exports.financeApproval = async (req, res) => {
         
         console.log('✅ Finance approval completed successfully');
         console.log(`📊 Response includes: financeStatus=${response.financeStatus}, convertedToExpense=${response.convertedToExpense}`);
+        console.log(`📋 Request status remains: ${response.status} (only financeStatus was updated)`);
         console.log(`💰 Financial result: ${financialResult ? 'SUCCESS - All transactions created' : 'PARTIAL - Status updated but expense creation failed'}`);
         
         res.status(200).json(response);

@@ -85,7 +85,7 @@ async function testFinanceApprovalFixed() {
         console.log('\n📋 Summary of Finance Approval Process:');
         console.log('=========================================');
         console.log('1. ✅ Request.financeStatus = "approved"');
-        console.log('2. ✅ Request.status = "approved"');
+        console.log('2. ⚠️  Request.status remains "pending" (not changed by finance)');
         console.log('3. ✅ Request.convertedToExpense = true');
         console.log('4. 💰 Create Expense record');
         console.log('5. 💳 Create Transaction record');
@@ -124,3 +124,4 @@ async function testFinanceApprovalFixed() {
 }
 
 testFinanceApprovalFixed();
+
