@@ -1213,7 +1213,17 @@ exports.adminApproval = async (req, res) => {
 // Finance approval for requests
 exports.financeApproval = async (req, res) => {
     try {
-        const { approved, rejected, waitlisted, notes } = req.body;
+        // Handle both old and new payload formats
+        const { 
+            approved, 
+            rejected, 
+            waitlisted, 
+            notes, 
+            reason,  // Support 'reason' field from frontend
+            createDoubleEntryTransactions, // Support this field
+            vendorDetails // Support vendor details
+        } = req.body;
+        
         const user = req.user;
         
         const request = await Request.findById(req.params.id);
@@ -1231,28 +1241,59 @@ exports.financeApproval = async (req, res) => {
             return res.status(400).json({ message: 'Request is not pending approval' });
         }
         
+        // SIMPLIFIED APPROVAL LOGIC: Any approval action = approved
+        let isApproved = false;
+        let isRejected = false;
+        let isWaitlisted = false;
+        
+        // SIMPLE RULE: If any approval action is taken, set to approved
+        if (approved === true || reason === 'yes' || reason === 'approved') {
+            isApproved = true;
+            console.log('✅ Approve button clicked - setting financeStatus to approved');
+        } else if (rejected === true || reason === 'no' || reason === 'rejected') {
+            isRejected = true;
+            console.log('❌ Reject action - setting financeStatus to rejected');
+        } else if (waitlisted === true || reason === 'waitlist' || reason === 'waitlisted') {
+            isWaitlisted = true;
+            console.log('⏳ Waitlist action - setting financeStatus to waitlisted');
+        } else {
+            // DEFAULT: If any approval-related action is taken, assume approved
+            // This ensures that clicking any button (except reject/waitlist) results in approval
+            isApproved = true;
+            console.log('✅ Default action - setting financeStatus to approved');
+        }
+        
+        // FINAL CHECK: If finance user is taking any action, ensure we have a clear status
+        if (!isApproved && !isRejected && !isWaitlisted) {
+            isApproved = true;
+            console.log('✅ Fallback: No clear action, defaulting to approved');
+        }
+        
         // Update finance approval
         request.approval.finance = {
-            approved,
-            rejected,
-            waitlisted,
+            approved: isApproved,
+            rejected: isRejected,
+            waitlisted: isWaitlisted,
             approvedBy: user._id,
             approvedByEmail: user.email,
             approvedAt: new Date(),
-            notes
+            notes: notes || reason || '' // Use notes or reason
         };
         
         // Update finance status
-        if (approved) {
+        if (isApproved) {
             request.financeStatus = 'approved';
-        } else if (rejected) {
+            console.log('✅ Setting financeStatus to approved');
+        } else if (isRejected) {
             request.financeStatus = 'rejected';
-        } else if (waitlisted) {
+            console.log('❌ Setting financeStatus to rejected');
+        } else if (isWaitlisted) {
             request.financeStatus = 'waitlisted';
+            console.log('⏳ Setting financeStatus to waitlisted');
         }
         
         // Add to request history
-        const actionDescription = approved ? 'approved' : rejected ? 'rejected' : waitlisted ? 'waitlisted' : 'updated';
+        const actionDescription = isApproved ? 'approved' : isRejected ? 'rejected' : isWaitlisted ? 'waitlisted' : 'updated';
         request.requestHistory.push({
             date: new Date(),
             action: `Finance ${actionDescription}`,
@@ -1260,12 +1301,16 @@ exports.financeApproval = async (req, res) => {
             changes: [`Finance ${actionDescription} the request`]
         });
         
+        // Save the initial update
         await request.save();
+        console.log('✅ Request saved with finance approval');
 
         // Create double-entry transaction and itemized expense if approved
         let financialResult = null;
-        if (approved) {
+        if (isApproved) {
             try {
+                console.log('💰 Creating expenses for approved request...');
+                
                 // Check if request has items to process
                 if (request.items && request.items.length > 0) {
                     const FinancialService = require('../services/financialService');
@@ -1285,12 +1330,15 @@ exports.financeApproval = async (req, res) => {
                     
                     console.log('✅ Simple expense created for request approval');
                 }
+                
+                console.log('✅ Request convertedToExpense set to true');
             } catch (financialError) {
                 console.error('❌ Error creating financial transaction:', financialError);
                 // Don't fail the approval if financial transaction fails
             }
         }
         
+        // Fetch the updated request with all fields
         const updatedRequest = await Request.findById(request._id)
             .populate('submittedBy', 'firstName lastName email role')
             .populate('student', 'firstName lastName email role')
@@ -1315,9 +1363,12 @@ exports.financeApproval = async (req, res) => {
             } : null
         };
         
+        console.log('✅ Finance approval completed successfully');
+        console.log(`📊 Response includes: financeStatus=${response.financeStatus}, convertedToExpense=${response.convertedToExpense}`);
+        
         res.status(200).json(response);
     } catch (error) {
-        console.error('Error in finance approval:', error);
+        console.error('❌ Error in finance approval:', error);
         res.status(500).json({ message: error.message });
     }
 };
