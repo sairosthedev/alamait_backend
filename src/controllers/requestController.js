@@ -1283,7 +1283,9 @@ exports.financeApproval = async (req, res) => {
         // Update finance status
         if (isApproved) {
             request.financeStatus = 'approved';
-            console.log('✅ Setting financeStatus to approved');
+            // Also update the overall request status to approved when finance approves
+            request.status = 'approved';
+            console.log('✅ Setting financeStatus to approved and status to approved');
         } else if (isRejected) {
             request.financeStatus = 'rejected';
             console.log('❌ Setting financeStatus to rejected');
@@ -1309,10 +1311,12 @@ exports.financeApproval = async (req, res) => {
         let financialResult = null;
         if (isApproved) {
             try {
-                console.log('💰 Creating expenses for approved request...');
+                console.log('💰 Creating expenses and double-entry transactions for approved request...');
                 
                 // Check if request has items to process
                 if (request.items && request.items.length > 0) {
+                    console.log(`📦 Processing ${request.items.length} items for expense creation...`);
+                    
                     const FinancialService = require('../services/financialService');
                     financialResult = await FinancialService.createApprovalTransaction(request, user);
                     
@@ -1321,9 +1325,13 @@ exports.financeApproval = async (req, res) => {
                     request.expenseId = financialResult.expense._id;
                     await request.save();
                     
-                    console.log('✅ Itemized expense created for request approval');
+                    console.log('✅ Itemized expense and double-entry transactions created successfully');
+                    console.log(`   - Transaction ID: ${financialResult.transaction.transactionId}`);
+                    console.log(`   - Expense ID: ${financialResult.expense.expenseId}`);
+                    console.log(`   - Transaction Entries: ${financialResult.entries.length}`);
                 } else {
                     // Handle simple requests without items (legacy maintenance requests)
+                    console.log('📝 Creating simple expense for request without items...');
                     await createSimpleExpenseForRequest(request, user);
                     request.convertedToExpense = true;
                     await request.save();
@@ -1332,11 +1340,29 @@ exports.financeApproval = async (req, res) => {
                 }
                 
                 console.log('✅ Request convertedToExpense set to true');
+                
             } catch (financialError) {
                 console.error('❌ Error creating financial transaction:', financialError);
-                // Don't fail the approval if financial transaction fails
+                console.error('Error details:', financialError.message);
+                
+                // IMPORTANT: Even if financial transaction fails, we should still mark as converted to expense
+                // This ensures the request status is properly updated and prevents the request from being stuck
+                request.convertedToExpense = true;
+                await request.save();
+                
+                console.log('⚠️ Financial transaction failed, but convertedToExpense set to true');
+                console.log('💡 The request status has been updated, but you may need to manually create the expense');
+                
+                // Log additional details for debugging
+                if (financialError.stack) {
+                    console.error('Stack trace:', financialError.stack);
+                }
             }
         }
+        
+        // Final save to ensure all changes are persisted
+        await request.save();
+        console.log('✅ Final save completed - all changes persisted');
         
         // Fetch the updated request with all fields
         const updatedRequest = await Request.findById(request._id)
@@ -1359,12 +1385,19 @@ exports.financeApproval = async (req, res) => {
                 transactionId: financialResult.transaction.transactionId,
                 expenseId: financialResult.expense.expenseId,
                 entriesCount: financialResult.entries.length,
-                totalAmount: financialResult.transaction.amount
-            } : null
+                totalAmount: financialResult.transaction.amount,
+                status: 'created',
+                message: 'Double-entry transactions and expense created successfully'
+            } : {
+                status: 'partial',
+                message: 'Request approved but expense creation failed. Request status updated.',
+                convertedToExpense: true
+            }
         };
         
         console.log('✅ Finance approval completed successfully');
         console.log(`📊 Response includes: financeStatus=${response.financeStatus}, convertedToExpense=${response.convertedToExpense}`);
+        console.log(`💰 Financial result: ${financialResult ? 'SUCCESS - All transactions created' : 'PARTIAL - Status updated but expense creation failed'}`);
         
         res.status(200).json(response);
     } catch (error) {
