@@ -779,7 +779,20 @@ const createPayment = async (req, res) => {
             }
 
             // Insert all transaction entries into the TransactionEntry collection
-            const createdEntries = await TransactionEntry.insertMany(entries);
+            const createdEntries = await TransactionEntry.insertMany(entries.map(entry => ({
+                ...entry,
+                residence: payment.residence, // Add residence information to each entry
+                metadata: {
+                    ...entry.metadata,
+                    residenceId: payment.residence,
+                    residenceName: residenceExists ? residenceExists.name : 'Unknown',
+                    studentId: payment.student,
+                    paymentId: payment.paymentId,
+                    paymentMonth: payment.paymentMonth,
+                    paymentMethod: method,
+                    transactionType: transactionType
+                }
+            })));
             
             // Link the created entries to the main transaction
             await Transaction.findByIdAndUpdate(

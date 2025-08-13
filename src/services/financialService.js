@@ -15,21 +15,31 @@ class FinancialService {
         try {
             console.log('💰 Creating approval transaction for request:', request._id);
             
+            // Validate residence information
+            if (!request.residence) {
+                throw new Error('Request must have residence information for transaction creation');
+            }
+            
             // Generate unique transaction ID
             const transactionId = await this.generateTransactionId();
             
-            // Create main transaction
+            // Create main transaction with residence information
             const transaction = new Transaction({
                 transactionId,
                 date: new Date(),
                 description: `Request approval: ${request.title}`,
                 reference: request._id.toString(),
-                residence: request.residence,
-                residenceName: request.residence?.name || 'Unknown Residence'
+                residence: request.residence._id || request.residence, // Ensure we have the residence ID
+                residenceName: request.residence?.name || 'Unknown Residence',
+                type: 'approval',
+                createdBy: user._id,
+                amount: request.totalEstimatedCost || 0
             });
 
             await transaction.save();
             console.log('✅ Transaction created:', transaction._id);
+            console.log(`   Residence: ${transaction.residence}`);
+            console.log(`   Residence Name: ${transaction.residenceName}`);
 
             // Create transaction entries for each item
             const entries = [];
@@ -143,11 +153,14 @@ class FinancialService {
                 type: 'expense',
                 description: `Expense for ${item.description} - ${quotation.provider}`,
                 reference: `${request._id}-item-${itemIndex}`,
+                residence: request.residence._id || request.residence, // Add residence information
                 metadata: {
                     itemIndex,
                     vendorId: quotation.vendorId,
                     vendorName: quotation.provider,
-                    expenseCategory: quotation.expenseCategory
+                    expenseCategory: quotation.expenseCategory,
+                    residenceId: request.residence._id || request.residence,
+                    residenceName: request.residence?.name || 'Unknown'
                 }
             });
             entries.push(expenseEntry);
@@ -161,11 +174,14 @@ class FinancialService {
                 type: 'liability',
                 description: `Accounts payable to ${quotation.provider || 'General Vendor'} for ${item.description}`,
                 reference: `${request._id}-item-${itemIndex}`,
+                residence: request.residence._id || request.residence, // Add residence information
                 metadata: {
                     itemIndex,
                     vendorId: quotation.vendorId || null,
                     vendorName: quotation.provider || 'General Vendor',
-                    vendorCode: quotation.vendorCode || null
+                    vendorCode: quotation.vendorCode || null,
+                    residenceId: request.residence._id || request.residence,
+                    residenceName: request.residence?.name || 'Unknown'
                 }
             });
             entries.push(vendorEntry);
@@ -179,6 +195,7 @@ class FinancialService {
             }
 
             console.log(`✅ Created vendor transaction entries for ${quotation.provider}: $${quotation.amount}`);
+            console.log(`   Residence: ${request.residence._id || request.residence}`);
             return entries;
 
         } catch (error) {
@@ -215,9 +232,12 @@ class FinancialService {
                 type: 'expense',
                 description: `General expense for ${item.description}`,
                 reference: `${request._id}-item-${itemIndex}`,
+                residence: request.residence._id || request.residence, // Add residence information
                 metadata: {
                     itemIndex,
-                    expenseCategory: 'other_expenses'
+                    expenseCategory: 'other_expenses',
+                    residenceId: request.residence._id || request.residence,
+                    residenceName: request.residence?.name || 'Unknown'
                 }
             });
             entries.push(expenseEntry);
@@ -231,8 +251,11 @@ class FinancialService {
                 type: 'liability',
                 description: `Accounts payable for ${item.description}`,
                 reference: `${request._id}-item-${itemIndex}`,
+                residence: request.residence._id || request.residence, // Add residence information
                 metadata: {
-                    itemIndex
+                    itemIndex,
+                    residenceId: request.residence._id || request.residence,
+                    residenceName: request.residence?.name || 'Unknown'
                 }
             });
             entries.push(payableEntry);
@@ -241,6 +264,7 @@ class FinancialService {
             await TransactionEntry.insertMany(entries);
 
             console.log(`✅ Created general expense entries for item ${itemIndex}: $${item.totalCost}`);
+            console.log(`   Residence: ${request.residence._id || request.residence}`);
             return entries;
 
         } catch (error) {
@@ -450,9 +474,12 @@ class FinancialService {
                 type: 'liability',
                 description: `Payment to ${item.selectedQuotation?.provider || 'vendor'} for ${item.description}`,
                 reference: expense.expenseId,
+                residence: expense.residence, // Add residence information
                 metadata: {
                     vendorId: item.selectedQuotation?.vendorId,
-                    vendorName: item.selectedQuotation?.provider
+                    vendorName: item.selectedQuotation?.provider,
+                    residenceId: expense.residence._id || expense.residence,
+                    residenceName: expense.residence?.name || 'Unknown'
                 }
             });
             entries.push(vendorEntry);
@@ -466,8 +493,11 @@ class FinancialService {
                 type: 'asset',
                 description: `Payment for ${item.description}`,
                 reference: expense.expenseId,
+                residence: expense.residence, // Add residence information
                 metadata: {
-                    paymentMethod
+                    paymentMethod,
+                    residenceId: expense.residence._id || expense.residence,
+                    residenceName: expense.residence?.name || 'Unknown'
                 }
             });
             entries.push(paymentEntry);
@@ -481,6 +511,7 @@ class FinancialService {
             }
 
             console.log(`✅ Created payment entries for item: $${item.totalCost}`);
+            console.log(`   Residence: ${expense.residence._id || expense.residence}`);
             return entries;
 
         } catch (error) {

@@ -617,3 +617,4 @@ const residenceData = await api.get('/ceo/financial/overview?residence=residence
 **The CEO now has a powerful, efficient endpoint for comprehensive financial oversight!** 🚀
 
 
+
