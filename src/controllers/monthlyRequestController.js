@@ -6,6 +6,7 @@ const DoubleEntryAccountingService = require('../services/doubleEntryAccountingS
 const Account = require('../models/Account'); // Added for account lookup
 const AccountMappingService = require('../utils/accountMappingService'); // Added for account mapping
 
+const EmailNotificationService = require('../services/emailNotificationService');
 // Helper function to format description with month name
 function formatDescriptionWithMonth(description, month, year) {
     if (!description) return description;
@@ -1243,6 +1244,28 @@ exports.sendToFinance = async (req, res) => {
         }
 
         await monthlyRequest.save();
+
+        // Send email to finance users about pending approval (non-blocking)
+        if (monthlyRequest.isTemplate && month && year) {
+            EmailNotificationService.sendMonthlyRequestToFinance(
+                monthlyRequest,
+                user,
+                month,
+                year
+            ).catch(emailError => {
+                console.error('Failed to send monthly request email notification:', emailError);
+            });
+        } else {
+            // For regular requests without template, still notify finance
+            EmailNotificationService.sendMonthlyRequestToFinance(
+                { ...monthlyRequest.toObject(), month, year },
+                user,
+                month || monthlyRequest.month,
+                year || monthlyRequest.year
+            ).catch(emailError => {
+                console.error('Failed to send monthly request email notification:', emailError);
+            });
+        }
 
         // Auto-approve and convert to expenses for past/current months
         let autoApprovalResult = null;
@@ -4230,6 +4253,18 @@ exports.sendToFinance = async (req, res) => {
 
         await monthlyRequest.save();
 
+        // Notify finance via email
+        try {
+            await EmailNotificationService.sendMonthlyRequestToFinance(
+                monthlyRequest,
+                user,
+                month,
+                year
+            );
+        } catch (emailError) {
+            console.error('Failed to send monthly request (template) email notification:', emailError);
+        }
+
         // Update template with monthly approval record
         if (!template.monthlyApprovals) {
             template.monthlyApprovals = [];
@@ -4316,6 +4351,20 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
             user: user._id,
             changes: [`Status changed to ${approved ? 'approved' : 'rejected'}`]
         });
+
+        // Send email to submitter about approval state
+        try {
+            await EmailNotificationService.sendMonthlyRequestApprovalNotification(
+                monthlyRequest,
+                approved,
+                notes,
+                monthlyRequest.month,
+                monthlyRequest.year,
+                user
+            );
+        } catch (emailError) {
+            console.error('Failed to send monthly request approval email:', emailError);
+        }
 
         // Update template monthly approval if this is from a template
         if (monthlyRequest.templateId) {
