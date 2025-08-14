@@ -313,19 +313,23 @@ exports.getTransactionEntry = async (req, res) => {
   }
 };
 
-// Create manual transaction entry
+// Create transaction entry
 exports.createTransactionEntry = async (req, res) => {
   try {
-    const user = req.user;
     const {
       description,
       reference,
-      entries,
-      source = 'manual',
-      sourceId,
-      sourceModel = 'Request',
-      metadata = {}
+      residence, // Add residence requirement
+      entries
     } = req.body;
+
+    // Validate residence is provided
+    if (!residence) {
+      return res.status(400).json({
+        success: false,
+        message: 'Residence/entity is required for transaction creation'
+      });
+    }
 
     // Validate entries
     if (!entries || entries.length < 2) {
@@ -352,11 +356,15 @@ exports.createTransactionEntry = async (req, res) => {
       });
     }
 
-    // Create transaction first
+    // Create transaction first with residence information
     const transaction = new Transaction({
       date: new Date(),
       description,
-      reference
+      reference,
+      residence: residence._id || residence, // Ensure we have the residence ID
+      residenceName: residence?.name || 'Unknown Residence',
+      type: 'manual',
+      createdBy: req.user._id
     });
 
     await transaction.save();
@@ -380,7 +388,13 @@ exports.createTransactionEntry = async (req, res) => {
         debit: entry.debit || 0,
         credit: entry.credit || 0,
         type: account.type,
-        date: transaction.date
+        date: transaction.date,
+        residence: residence._id || residence, // Add residence information
+        metadata: {
+          residenceId: residence._id || residence,
+          residenceName: residence?.name || 'Unknown',
+          createdBy: req.user.email
+        }
       });
 
       await transactionEntry.save();

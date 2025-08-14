@@ -68,7 +68,7 @@ class FinancialReportsController {
      */
     static async generateMonthlyIncomeStatement(req, res) {
         try {
-            const { period, basis = 'cash' } = req.query;
+            const { period, basis = 'cash', residence } = req.query;
             
             if (!period) {
                 return res.status(400).json({
@@ -84,12 +84,19 @@ class FinancialReportsController {
                 });
             }
             
-            const monthlyIncomeStatement = await FinancialReportingService.generateMonthlyIncomeStatement(period, basis);
+            let monthlyIncomeStatement;
+            if (residence) {
+                // Use residence-filtered method
+                monthlyIncomeStatement = await FinancialReportingService.generateResidenceFilteredMonthlyIncomeStatement(period, residence, basis);
+            } else {
+                // Use regular method
+                monthlyIncomeStatement = await FinancialReportingService.generateMonthlyIncomeStatement(period, basis);
+            }
             
             res.json({
                 success: true,
                 data: monthlyIncomeStatement,
-                message: `Monthly income statement generated for ${period} (${basis} basis)`
+                message: `Monthly income statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
             });
             
         } catch (error) {
