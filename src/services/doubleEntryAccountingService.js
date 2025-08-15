@@ -751,17 +751,18 @@ class DoubleEntryAccountingService {
     }
 
     /**
-     * 4. STUDENT RENT PAYMENT (Cash Basis - No Invoice)
-     * Handles both current period payments and debt settlements
+     * 4. STUDENT RENT PAYMENT (Cash Basis + Accounts Receivable)
+     * Enhanced to handle both current period payments and previous month receivable collections
      */
     static async recordStudentRentPayment(payment, user) {
         try {
-            console.log('💰 Recording student rent payment (cash basis)');
+            console.log('💰 Recording student rent payment (cash basis + accounts receivable)');
             console.log(`   Payment ID: ${payment.paymentId}`);
             console.log(`   Student ID: ${payment.student}`);
             console.log(`   Amount: $${payment.totalAmount}`);
             console.log(`   Method: ${payment.method}`);
             console.log(`   Date: ${payment.date}`);
+            console.log(`   Payment Month: ${payment.paymentMonth}`);
             
             // 🚨 DUPLICATE TRANSACTION PREVENTION
             // Check if transaction already exists to prevent duplicates
@@ -782,10 +783,21 @@ class DoubleEntryAccountingService {
                 };
             }
             
-            // Check if student has outstanding debt
+            // Check if student has outstanding debt and payment month
             const Debtor = require('../models/Debtor');
             const debtor = await Debtor.findOne({ user: payment.student });
             const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
+            
+            // Determine if this is a previous month payment (accounts receivable)
+            const currentDate = new Date();
+            const currentMonth = currentDate.toISOString().slice(0, 7); // YYYY-MM
+            const paymentMonth = payment.paymentMonth;
+            const isPreviousMonthPayment = paymentMonth < currentMonth;
+            
+            console.log(`   Current Month: ${currentMonth}`);
+            console.log(`   Payment Month: ${paymentMonth}`);
+            console.log(`   Is Previous Month: ${isPreviousMonthPayment}`);
+            console.log(`   Has Outstanding Debt: ${studentHasOutstandingDebt}`);
             
             // Get student details for better descriptions
             let studentName = 'Student';
@@ -825,12 +837,28 @@ class DoubleEntryAccountingService {
                 transactionDate = new Date();
             }
 
+            // Determine transaction description based on payment type
+            let transactionDescription;
+            let paymentType;
+            
+            if (isPreviousMonthPayment) {
+                // Previous month payment = Accounts Receivable collection
+                transactionDescription = `Accounts receivable collection from ${studentName} for ${paymentMonth}`;
+                paymentType = 'accounts_receivable_collection';
+            } else if (studentHasOutstandingDebt) {
+                // Current month but has outstanding debt
+                transactionDescription = `Debt settlement from ${studentName}`;
+                paymentType = 'debt_settlement';
+            } else {
+                // Current month, no outstanding debt
+                transactionDescription = `Rent received from ${studentName} for ${paymentMonth}`;
+                paymentType = 'current_payment';
+            }
+
             const transaction = new Transaction({
                 transactionId,
                 date: transactionDate,
-                description: studentHasOutstandingDebt ? 
-                    `Debt settlement from ${studentName}` :
-                    `Rent received from ${studentName}`,
+                description: transactionDescription,
                 type: 'payment',
                 reference: payment._id.toString(),
                 residence: residenceId,
@@ -844,7 +872,31 @@ class DoubleEntryAccountingService {
             // Create double-entry entries based on payment type
             const entries = [];
 
-            if (studentHasOutstandingDebt) {
+            if (isPreviousMonthPayment) {
+                // Previous month payment = Accounts Receivable Collection
+                console.log('💰 Recording accounts receivable collection for previous month');
+                
+                // Debit: Cash/Bank (Payment Method)
+                entries.push({
+                    accountCode: await this.getPaymentSourceAccount(payment.method),
+                    accountName: this.getPaymentAccountName(payment.method),
+                    accountType: 'Asset',
+                    debit: payment.totalAmount,
+                    credit: 0,
+                    description: `Collection of accounts receivable via ${payment.method}`
+                });
+
+                // Credit: Accounts Receivable (reduce the receivable)
+                entries.push({
+                    accountCode: await this.getAccountsReceivableAccount(),
+                    accountName: 'Accounts Receivable',
+                    accountType: 'Asset',
+                    debit: 0,
+                    credit: payment.totalAmount,
+                    description: `Collection of outstanding receivable from ${studentName} for ${paymentMonth}`
+                });
+                
+            } else if (studentHasOutstandingDebt) {
                 // Student has outstanding debt - this payment settles the debt
                 console.log('💰 Recording debt settlement payment');
                 
@@ -888,7 +940,7 @@ class DoubleEntryAccountingService {
                     accountType: 'Income',
                     debit: 0,
                     credit: payment.totalAmount,
-                    description: `Rent income from ${studentName}`
+                    description: `Rent income from ${studentName} for ${paymentMonth}`
                 });
             }
 
@@ -896,9 +948,7 @@ class DoubleEntryAccountingService {
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
                 date: transactionDate,
-                description: studentHasOutstandingDebt ? 
-                    `Debt settlement from ${studentName}` :
-                    `Rent payment from ${studentName}`,
+                description: transactionDescription,
                 reference: payment._id.toString(),
                 entries,
                 totalDebit: payment.totalAmount,
@@ -910,9 +960,12 @@ class DoubleEntryAccountingService {
                 createdBy: user.email,
                 status: 'posted',
                 metadata: {
-                    paymentType: studentHasOutstandingDebt ? 'debt_settlement' : 'current_payment',
+                    paymentType: paymentType,
+                    paymentMonth: paymentMonth,
+                    isPreviousMonth: isPreviousMonthPayment,
                     studentHasOutstandingDebt: studentHasOutstandingDebt,
-                    studentBalance: debtor ? debtor.currentBalance : 0
+                    studentBalance: debtor ? debtor.currentBalance : 0,
+                    accountsReceivableCollection: isPreviousMonthPayment
                 }
             });
 
@@ -923,7 +976,12 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log(`✅ Student payment recorded (${studentHasOutstandingDebt ? 'debt settlement' : 'current period'})`);
+            console.log(`✅ Student payment recorded (${paymentType})`);
+            if (isPreviousMonthPayment) {
+                console.log(`   📊 This payment collects accounts receivable for ${paymentMonth}`);
+                console.log(`   💰 Proper double-entry: Cash ↑, Accounts Receivable ↓`);
+            }
+            
             return { transaction, transactionEntry };
 
         } catch (error) {
