@@ -582,8 +582,8 @@ class FinanceController {
      */
     static async allocatePettyCash(req, res) {
         try {
-            const { userId, amount, description } = req.body;
-            console.log('💰 Allocating petty cash to user:', userId, 'amount:', amount);
+            const { userId, amount, description, residence, sourceAccount, targetAccount } = req.body;
+            console.log('💰 Allocating petty cash to user:', userId, 'amount:', amount, 'residence:', residence);
 
             // Validate input
             if (!userId || !amount || amount <= 0) {
@@ -604,7 +604,8 @@ class FinanceController {
                 userId, 
                 amount, 
                 description || `Petty cash allocation for ${user.firstName} ${user.lastName}`,
-                req.user
+                req.user,
+                residence // Pass residence to the service
             );
 
             console.log('✅ Petty cash allocated successfully');
@@ -617,7 +618,8 @@ class FinanceController {
                     amount,
                     description: result.transactionEntry.description,
                     transactionId: result.transaction.transactionId,
-                    date: result.transaction.date
+                    date: result.transaction.date,
+                    residence: result.transaction.residence // Include residence in response
                 }
             });
 
@@ -633,8 +635,8 @@ class FinanceController {
      */
     static async recordPettyCashExpense(req, res) {
         try {
-            const { userId, amount, description, expenseCategory } = req.body;
-            console.log('💸 Recording petty cash expense for user:', userId, 'amount:', amount);
+            const { userId, amount, description, expenseCategory, residence } = req.body;
+            console.log('💸 Recording petty cash expense for user:', userId, 'amount:', amount, 'residence:', residence);
 
             // Validate input
             if (!userId || !amount || amount <= 0 || !description || !expenseCategory) {
@@ -664,7 +666,8 @@ class FinanceController {
                 amount,
                 description,
                 expenseCategory,
-                req.user
+                req.user,
+                residence // Pass residence to the service
             );
 
             console.log('✅ Petty cash expense recorded successfully');
@@ -678,7 +681,8 @@ class FinanceController {
                     description,
                     expenseCategory,
                     transactionId: result.transaction?.transactionId,
-                    remainingBalance: balance.currentBalance - amount
+                    remainingBalance: balance.currentBalance - amount,
+                    residence: result.transaction?.residence // Include residence in response
                 }
             });
 
@@ -694,8 +698,8 @@ class FinanceController {
      */
     static async replenishPettyCash(req, res) {
         try {
-            const { userId, amount, description } = req.body;
-            console.log('🔄 Replenishing petty cash for user:', userId, 'amount:', amount);
+            const { userId, amount, description, residence } = req.body;
+            console.log('🔄 Replenishing petty cash for user:', userId, 'amount:', amount, 'residence:', residence);
 
             // Validate input
             if (!userId || !amount || amount <= 0) {
@@ -716,7 +720,8 @@ class FinanceController {
                 userId,
                 amount,
                 description || `Petty cash replenishment for ${user.firstName} ${user.lastName}`,
-                req.user
+                req.user,
+                residence // Pass residence to the service
             );
 
             // Get updated balance
@@ -732,7 +737,8 @@ class FinanceController {
                     amount,
                     description: result.transactionEntry.description,
                     transactionId: result.transaction.transactionId,
-                    newBalance: balance.currentBalance
+                    newBalance: balance.currentBalance,
+                    residence: result.transaction.residence // Include residence in response
                 }
             });
 

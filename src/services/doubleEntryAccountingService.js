@@ -30,9 +30,9 @@ class DoubleEntryAccountingService {
     /**
      * Allocate petty cash to a user
      */
-    static async allocatePettyCash(userId, amount, description, allocatedBy) {
+    static async allocatePettyCash(userId, amount, description, allocatedBy, residence = null) {
         try {
-            console.log('💰 Allocating petty cash:', amount, 'to user:', userId);
+            console.log('💰 Allocating petty cash:', amount, 'to user:', userId, 'residence:', residence);
             
             // Get the user to determine their role and appropriate petty cash account
             const User = require('../models/User');
@@ -59,7 +59,7 @@ class DoubleEntryAccountingService {
                 description: `Petty cash allocation: ${description}`,
                 type: 'other', // Changed from 'allocation' to 'other' since 'allocation' is not in enum
                 reference: `PETTY-${userId}`,
-                residence: await this.getDefaultResidence(), // Add required residence field
+                residence: residence || await this.getDefaultResidence(), // Use provided residence or fallback to default
                 createdBy: allocatedBy._id
             });
 
@@ -127,9 +127,9 @@ class DoubleEntryAccountingService {
     /**
      * Record petty cash expense
      */
-    static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy) {
+    static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy, residence = null) {
         try {
-            console.log('💸 Recording petty cash expense:', amount, 'by user:', userId);
+            console.log('💸 Recording petty cash expense:', amount, 'by user:', userId, 'residence:', residence);
             
             // Get the user to determine their role and appropriate petty cash account
             const User = require('../models/User');
@@ -170,7 +170,7 @@ class DoubleEntryAccountingService {
                 description: `Petty cash expense: ${description}`,
                 type: 'other', // Changed from 'expense' to 'other' since 'expense' is not in enum
                 reference: `PETTY-EXP-${userId}`,
-                residence: await this.getDefaultResidence(), // Add required residence field
+                residence: residence || await this.getDefaultResidence(), // Use provided residence or fallback to default
                 createdBy: approvedBy._id
             });
 
@@ -240,9 +240,9 @@ class DoubleEntryAccountingService {
     /**
      * Replenish petty cash
      */
-    static async replenishPettyCash(userId, amount, description, replenishedBy) {
+    static async replenishPettyCash(userId, amount, description, replenishedBy, residence = null) {
         try {
-            console.log('🔄 Replenishing petty cash:', amount, 'for user:', userId);
+            console.log('🔄 Replenishing petty cash:', amount, 'for user:', userId, 'residence:', residence);
             
             // Get the user to determine their role and appropriate petty cash account
             const User = require('../models/User');
@@ -269,7 +269,7 @@ class DoubleEntryAccountingService {
                 description: `Petty cash replenishment: ${description}`,
                 type: 'other', // Changed from 'replenishment' to 'other' since 'replenishment' is not in enum
                 reference: `PETTY-REP-${userId}`,
-                residence: await this.getDefaultResidence(), // Add required residence field
+                residence: residence || await this.getDefaultResidence(), // Use provided residence or fallback to default
                 createdBy: replenishedBy._id
             });
 
