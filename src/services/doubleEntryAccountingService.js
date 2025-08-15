@@ -335,76 +335,82 @@ class DoubleEntryAccountingService {
     }
 
     /**
-     * Get petty cash balance for a user
+     * Get petty cash balance for a user based on transaction entries
+     * This method calculates balance from actual double-entry transactions
      */
     static async getPettyCashBalance(userId) {
         try {
-            const allocations = await TransactionEntry.aggregate([
+            console.log('💰 Getting petty cash balance for user:', userId);
+            
+            // Get user to determine their role and petty cash account
+            const User = require('../models/User');
+            const user = await User.findById(userId);
+            if (!user) {
+                throw new Error('User not found');
+            }
+
+            // Get the appropriate petty cash account based on user role
+            const pettyCashAccountCode = await this.getPettyCashAccountCodeByRole(user.role);
+            console.log(`💰 Using petty cash account code: ${pettyCashAccountCode} for user role: ${user.role}`);
+
+            // Calculate balance from transaction entries for the petty cash account
+            const pettyCashEntries = await TransactionEntry.aggregate([
                 {
                     $match: {
-                        source: 'manual',
-                        'metadata.transactionType': 'petty_cash_allocation',
-                        sourceId: userId,
-                        status: 'posted'
+                        status: 'posted',
+                        'entries.accountCode': pettyCashAccountCode
+                    }
+                },
+                {
+                    $unwind: '$entries'
+                },
+                {
+                    $match: {
+                        'entries.accountCode': pettyCashAccountCode
                     }
                 },
                 {
                     $group: {
                         _id: null,
-                        totalAllocated: { $sum: '$totalDebit' }
+                        totalDebits: { $sum: '$entries.debit' },
+                        totalCredits: { $sum: '$entries.credit' }
                     }
                 }
             ]);
 
-            const expenses = await TransactionEntry.aggregate([
-                {
-                    $match: {
-                        source: 'manual',
-                        'metadata.transactionType': 'petty_cash_expense',
-                        sourceId: userId,
-                        status: 'posted'
-                    }
-                },
-                {
-                    $group: {
-                        _id: null,
-                        totalExpenses: { $sum: '$totalDebit' }
-                    }
-                }
-            ]);
+            // Calculate balance: Debits increase petty cash, Credits decrease petty cash
+            const totalDebits = pettyCashEntries[0]?.totalDebits || 0;
+            const totalCredits = pettyCashEntries[0]?.totalCredits || 0;
+            const currentBalance = totalDebits - totalCredits;
 
-            const replenishments = await TransactionEntry.aggregate([
-                {
-                    $match: {
-                        source: 'manual',
-                        'metadata.transactionType': 'petty_cash_replenishment',
-                        sourceId: userId,
-                        status: 'posted'
-                    }
-                },
-                {
-                    $group: {
-                        _id: null,
-                        totalReplenished: { $sum: '$totalDebit' }
-                    }
-                }
-            ]);
-
-            const totalAllocated = allocations[0]?.totalAllocated || 0;
-            const totalExpenses = expenses[0]?.totalExpenses || 0;
-            const totalReplenished = replenishments[0]?.totalReplenished || 0;
+            console.log(`💰 Petty cash balance calculation: Debits: $${totalDebits}, Credits: $${totalCredits}, Balance: $${currentBalance}`);
 
             return {
-                totalAllocated,
-                totalExpenses,
-                totalReplenished,
-                currentBalance: totalAllocated + totalReplenished - totalExpenses
+                totalAllocated: totalDebits,
+                totalExpenses: totalCredits,
+                totalReplenished: 0, // Will be calculated separately if needed
+                currentBalance: currentBalance
             };
 
         } catch (error) {
             console.error('❌ Error getting petty cash balance:', error);
             throw error;
         }
+    }
+
+    /**
+     * Get petty cash account code based on user role
+     */
+    static async getPettyCashAccountCodeByRole(userRole) {
+        const roleToAccountCode = {
+            'admin': '1011',
+            'finance_admin': '1012',
+            'finance_user': '1012',
+            'property_manager': '1013',
+            'maintenance': '1014'
+        };
+        
+        return roleToAccountCode[userRole] || '1010'; // Default to general petty cash
     }
 
     /**
