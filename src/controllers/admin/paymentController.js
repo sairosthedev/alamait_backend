@@ -756,6 +756,8 @@ const createPayment = async (req, res) => {
         if (method && method.toLowerCase().includes('bank')) {
             receivingAccount = await Account.findOne({ code: '1000' }); // Bank
         } else if (method && method.toLowerCase().includes('cash')) {
+            receivingAccount = await Account.findOne({ code: '1000' }); // Bank
+        } else if (method && method.toLowerCase().includes('cash')) {
             receivingAccount = await Account.findOne({ code: '1015' }); // Cash
         }
         // Add more payment methods as needed
@@ -768,9 +770,21 @@ const createPayment = async (req, res) => {
         const studentName = studentExists ? `${studentExists.firstName} ${studentExists.lastName}` : 'Student';
         
         if (receivingAccount && rentAccount && studentAccount && totalAmount > 0) {
+            // Check if student has accrued rental income (from rental accrual system)
+            const accruedRentals = await TransactionEntry.find({
+                source: 'rental_accrual',
+                'metadata.studentId': payment.student,
+                status: 'posted'
+            }).sort({ date: 1 });
+
+            // Calculate total accrued vs. total paid to determine payment type
+            const totalAccrued = accruedRentals.reduce((sum, entry) => sum + entry.totalDebit, 0);
+            const totalPaid = debtor ? debtor.totalPaid : 0;
+            const outstandingAccrued = totalAccrued - totalPaid;
+            
             // Determine if this is a debt settlement or current period payment
-            // Check if student has outstanding debt
             const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
+            const hasAccruedRentals = accruedRentals.length > 0;
             
             // Create the main transaction
             const txn = await Transaction.create({
@@ -784,8 +798,8 @@ const createPayment = async (req, res) => {
             let entries = [];
             let transactionType = 'current_payment';
 
-            if (studentHasOutstandingDebt) {
-                // Student has outstanding debt - this payment settles the debt
+            if (studentHasOutstandingDebt || hasAccruedRentals) {
+                // Student has outstanding debt or accrued rentals - this payment settles the debt
                 transactionType = 'debt_settlement';
                 
                 entries = [
@@ -806,8 +820,33 @@ const createPayment = async (req, res) => {
                         description: `Settlement of outstanding debt by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
                     }
                 ];
+
+                // If this payment settles accrued rentals, create additional entry to recognize income
+                if (hasAccruedRentals && outstandingAccrued > 0) {
+                    const amountToRecognize = Math.min(totalAmount, outstandingAccrued);
+                    
+                    if (amountToRecognize > 0) {
+                        // Add rental income recognition entry
+                        entries.push({
+                            transaction: txn._id,
+                            account: rentAccount._id,
+                            debit: 0,
+                            credit: amountToRecognize,
+                            type: rentAccount.type || 'income',
+                            description: `Rental income recognized from ${studentName} for accrued period (${payment.paymentId})`
+                        });
+
+                        // Adjust the Accounts Receivable entry to balance
+                        const arEntry = entries.find(e => e.account.toString() === studentAccount._id.toString());
+                        if (arEntry) {
+                            arEntry.credit = arEntry.credit - amountToRecognize;
+                        }
+
+                        console.log(`💰 Payment ${amountToRecognize.toFixed(2)} recognized as rental income from accrued rentals`);
+                    }
+                }
             } else {
-                // Student has no outstanding debt - this is current period payment
+                // Student has no outstanding debt or accrued rentals - this is current period payment
                 transactionType = 'current_payment';
                 
                 entries = [
@@ -850,7 +889,11 @@ const createPayment = async (req, res) => {
                     paymentId: payment.paymentId,
                     paymentMonth: payment.paymentMonth,
                     paymentMethod: method,
-                    transactionType: transactionType
+                    transactionType: transactionType,
+                    hasAccruedRentals: hasAccruedRentals,
+                    totalAccrued: totalAccrued,
+                    outstandingAccrued: outstandingAccrued,
+                    amountRecognized: hasAccruedRentals ? Math.min(totalAmount, outstandingAccrued) : 0
                 }
             })));
             
@@ -874,13 +917,22 @@ const createPayment = async (req, res) => {
                     sourceId: payment._id,
                     transactionType: transactionType,
                     studentHasOutstandingDebt: studentHasOutstandingDebt,
+                    hasAccruedRentals: hasAccruedRentals,
+                    totalAccrued: totalAccrued,
+                    outstandingAccrued: outstandingAccrued,
                     studentBalance: debtor ? debtor.currentBalance : 0,
                     description: `Admin payment converted to ${receivingAccount.name} as ${transactionType === 'debt_settlement' ? 'Debt Settlement' : 'Current Payment'} for ${studentName}`,
-                    entriesCreated: createdEntries.length
+                    entriesCreated: createdEntries.length,
+                    accountingNotes: hasAccruedRentals ? 
+                        `Payment settles ${Math.min(totalAmount, outstandingAccrued).toFixed(2)} of accrued rental income` : 
+                        'Standard payment processing'
                 }
             });
 
             console.log(`Payment ${payment.paymentId} converted to transaction ${txn._id} with ${createdEntries.length} entries (${transactionType})`);
+            if (hasAccruedRentals) {
+                console.log(`💰 Integrated with rental accrual system: ${outstandingAccrued.toFixed(2)} outstanding accrued rentals`);
+            }
         } else {
             console.log(`Skipping transaction creation for payment ${payment.paymentId} - missing accounts or zero amount`);
         }

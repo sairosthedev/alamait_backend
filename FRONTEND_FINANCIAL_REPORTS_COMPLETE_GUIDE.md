@@ -336,3 +336,5 @@ const fetchFinancialReports = async () => {
 4. **Display the results** in your UI
 
 Your financial reports will now show **everything they're supposed to show** following proper accounting standards! 🎯
+
+
