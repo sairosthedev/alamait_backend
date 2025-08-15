@@ -979,6 +979,82 @@ exports.bulkCreateDebtors = async (req, res) => {
     }
 };
 
+// Sync payment history for a specific debtor
+exports.syncDebtorPaymentHistory = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { forceUpdate = false } = req.query;
+        
+        const PaymentHistorySyncService = require('../../services/paymentHistorySyncService');
+        
+        const result = await PaymentHistorySyncService.syncDebtorPaymentHistory(id, forceUpdate === 'true');
+        
+        res.status(200).json({
+            success: true,
+            message: result.message,
+            result
+        });
+        
+    } catch (error) {
+        console.error('Error syncing debtor payment history:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error syncing payment history',
+            error: error.message
+        });
+    }
+};
+
+// Sync payment history for all debtors
+exports.syncAllDebtorsPaymentHistory = async (req, res) => {
+    try {
+        const { forceUpdate = false } = req.query;
+        
+        const PaymentHistorySyncService = require('../../services/paymentHistorySyncService');
+        
+        const result = await PaymentHistorySyncService.syncAllDebtorsPaymentHistory(forceUpdate === 'true');
+        
+        res.status(200).json({
+            success: true,
+            message: 'Payment history sync completed for all debtors',
+            result
+        });
+        
+    } catch (error) {
+        console.error('Error syncing all debtors payment history:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error syncing all debtors payment history',
+            error: error.message
+        });
+    }
+};
+
+// Validate payment history for a debtor
+exports.validateDebtorPaymentHistory = async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const PaymentHistorySyncService = require('../../services/paymentHistorySyncService');
+        
+        const validation = await PaymentHistorySyncService.validatePaymentHistory(id);
+        
+        res.status(200).json({
+            success: true,
+            message: 'Payment history validation completed',
+            validation
+        });
+        
+    } catch (error) {
+        console.error('Error validating debtor payment history:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error validating payment history',
+            error: error.message
+        });
+    }
+};
+
 /**
  * Bulk create debtor accounts for students without debtors
  */

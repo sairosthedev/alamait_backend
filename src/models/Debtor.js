@@ -341,6 +341,35 @@ const debtorSchema = new mongoose.Schema({
       min: 0
     },
     
+    // Expected Amount Components
+    expectedComponents: {
+      rent: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      admin: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      deposit: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      utilities: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      other: {
+        type: Number,
+        default: 0,
+        min: 0
+      }
+    },
+    
     // Paid Amount
     paidAmount: {
       type: Number,
@@ -348,11 +377,69 @@ const debtorSchema = new mongoose.Schema({
       min: 0
     },
     
+    // Paid Amount Components
+    paidComponents: {
+      rent: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      admin: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      deposit: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      utilities: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      other: {
+        type: Number,
+        default: 0,
+        min: 0
+      }
+    },
+    
     // Outstanding Amount
     outstandingAmount: {
       type: Number,
       default: 0,
       min: 0
+    },
+    
+    // Outstanding Amount Components
+    outstandingComponents: {
+      rent: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      admin: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      deposit: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      utilities: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      other: {
+        type: Number,
+        default: 0,
+        min: 0
+      }
     },
     
     // Payment Status
@@ -768,31 +855,80 @@ debtorSchema.methods.addPayment = async function(paymentData) {
   // Update or create monthly payment summary
   let monthlyPayment = this.monthlyPayments.find(mp => mp.month === allocatedMonth);
   if (!monthlyPayment) {
+    // Calculate expected amount for this month - only rent is guaranteed monthly
+    const expectedRent = this.billingPeriod?.amount?.monthly || this.roomPrice || 0;
+    const expectedAdmin = 0; // Admin fees are conditional, not monthly
+    const expectedDeposit = 0; // Deposits are typically one-time
+    
     monthlyPayment = {
       month: allocatedMonth,
-      expectedAmount: this.billingPeriod?.amount?.monthly || 0,
+      expectedAmount: expectedRent + expectedAdmin + expectedDeposit,
+      expectedComponents: {
+        rent: expectedRent,
+        admin: expectedAdmin,
+        deposit: expectedDeposit,
+        utilities: 0,
+        other: 0
+      },
       paidAmount: 0,
-      outstandingAmount: this.billingPeriod?.amount?.monthly || 0,
+      paidComponents: {
+        rent: 0,
+        admin: 0,
+        deposit: 0,
+        utilities: 0,
+        other: 0
+      },
+      outstandingAmount: expectedRent + expectedAdmin + expectedDeposit,
+      outstandingComponents: {
+        rent: expectedRent,
+        admin: expectedAdmin,
+        deposit: expectedDeposit,
+        utilities: 0,
+        other: 0
+      },
       status: 'unpaid',
       paymentCount: 0,
-      paymentIds: []
+      paymentIds: [],
+      lastPaymentDate: null,
+      updatedAt: new Date()
     };
     this.monthlyPayments.push(monthlyPayment);
   }
   
-  // Update monthly payment summary
+  // Update monthly payment summary with component breakdown
   monthlyPayment.paidAmount += amount;
-  monthlyPayment.outstandingAmount = Math.max(0, monthlyPayment.expectedAmount - monthlyPayment.paidAmount);
+  
+  // Update paid components
+  monthlyPayment.paidComponents.rent += components.rent || 0;
+  monthlyPayment.paidComponents.admin += components.adminFee || 0;
+  monthlyPayment.paidComponents.deposit += components.deposit || 0;
+  
+  // Calculate outstanding amounts for each component
+  monthlyPayment.outstandingComponents.rent = Math.max(0, monthlyPayment.expectedComponents.rent - monthlyPayment.paidComponents.rent);
+  monthlyPayment.outstandingComponents.admin = Math.max(0, monthlyPayment.expectedComponents.admin - monthlyPayment.paidComponents.admin);
+  monthlyPayment.outstandingComponents.deposit = Math.max(0, monthlyPayment.expectedComponents.deposit - monthlyPayment.paidComponents.deposit);
+  
+  // Total outstanding amount
+  monthlyPayment.outstandingAmount = monthlyPayment.outstandingComponents.rent + 
+                                   monthlyPayment.outstandingComponents.admin + 
+                                   monthlyPayment.outstandingComponents.deposit;
+  
   monthlyPayment.paymentCount += 1;
   monthlyPayment.paymentIds.push(paymentId);
   monthlyPayment.lastPaymentDate = paymentDate;
   monthlyPayment.updatedAt = new Date();
   
-  // Update status based on payment
-  if (monthlyPayment.paidAmount >= monthlyPayment.expectedAmount) {
+  // Update status based on all components
+  const totalExpected = monthlyPayment.expectedComponents.rent + 
+                        monthlyPayment.expectedComponents.admin + 
+                        monthlyPayment.expectedComponents.deposit;
+  
+  if (monthlyPayment.paidAmount >= totalExpected) {
     monthlyPayment.status = 'paid';
   } else if (monthlyPayment.paidAmount > 0) {
     monthlyPayment.status = 'partial';
+  } else {
+    monthlyPayment.status = 'unpaid';
   }
   
   // Update financial summary
@@ -804,11 +940,15 @@ debtorSchema.methods.addPayment = async function(paymentData) {
   // Update current period if this is the current month
   const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
   if (allocatedMonth === currentMonth) {
+    this.financialSummary = this.financialSummary || {};
     this.financialSummary.currentPeriod = {
       month: currentMonth,
       expectedAmount: monthlyPayment.expectedAmount,
+      expectedComponents: monthlyPayment.expectedComponents,
       paidAmount: monthlyPayment.paidAmount,
+      paidComponents: monthlyPayment.paidComponents,
       outstandingAmount: monthlyPayment.outstandingAmount,
+      outstandingComponents: monthlyPayment.outstandingComponents,
       status: monthlyPayment.status
     };
   }
@@ -817,13 +957,17 @@ debtorSchema.methods.addPayment = async function(paymentData) {
   const currentYear = new Date().getFullYear();
   const yearMonth = allocatedMonth.split('-');
   if (parseInt(yearMonth[0]) === currentYear) {
+    this.financialSummary = this.financialSummary || {};
+    this.financialSummary.yearToDate = this.financialSummary.yearToDate || {};
     this.financialSummary.yearToDate.year = currentYear;
-    this.financialSummary.yearToDate.totalPaid += amount;
-    this.financialSummary.yearToDate.paymentCount += 1;
+    this.financialSummary.yearToDate.totalPaid = (this.financialSummary.yearToDate.totalPaid || 0) + amount;
+    this.financialSummary.yearToDate.paymentCount = (this.financialSummary.yearToDate.paymentCount || 0) + 1;
   }
   
   // Update historical data
-  this.financialSummary.historical.totalPayments += 1;
+  this.financialSummary = this.financialSummary || {};
+  this.financialSummary.historical = this.financialSummary.historical || {};
+  this.financialSummary.historical.totalPayments = (this.financialSummary.historical.totalPayments || 0) + 1;
   this.financialSummary.historical.lastPaymentDate = paymentDate;
   this.financialSummary.historical.averagePaymentAmount = 
     this.financialSummary.historical.totalPayments > 0 
@@ -858,8 +1002,29 @@ debtorSchema.methods.getMonthlyPaymentSummary = function(month) {
   return this.monthlyPayments.find(mp => mp.month === month) || {
     month,
     expectedAmount: this.billingPeriod?.amount?.monthly || 0,
+    expectedComponents: {
+      rent: this.billingPeriod?.amount?.monthly || 0,
+      admin: 0, // Admin fees are conditional, not monthly
+      deposit: 0, // Deposits are typically one-time
+      utilities: 0,
+      other: 0
+    },
     paidAmount: 0,
+    paidComponents: {
+      rent: 0,
+      admin: 0,
+      deposit: 0,
+      utilities: 0,
+      other: 0
+    },
     outstandingAmount: this.billingPeriod?.amount?.monthly || 0,
+    outstandingComponents: {
+      rent: this.billingPeriod?.amount?.monthly || 0,
+      admin: 0, // Admin fees are conditional, not monthly
+      deposit: 0, // Deposits are typically one-time
+      utilities: 0,
+      other: 0
+    },
     status: 'unpaid',
     paymentCount: 0,
     paymentIds: []

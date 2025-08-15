@@ -54,4 +54,13 @@ router.post('/bulk-create-for-students', debtorController.bulkCreateDebtorsForSt
 // Delete debtor account (only if no outstanding balance)
 router.delete('/:id', debtorController.deleteDebtor);
 
+// Sync payment history for a specific debtor
+router.post('/:id/sync-payment-history', debtorController.syncDebtorPaymentHistory);
+
+// Sync payment history for all debtors
+router.post('/sync-all-payment-history', debtorController.syncAllDebtorsPaymentHistory);
+
+// Validate payment history for a debtor
+router.get('/:id/validate-payment-history', debtorController.validateDebtorPaymentHistory);
+
 module.exports = router; 

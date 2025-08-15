@@ -28,35 +28,46 @@ class FinancialReportingService {
             
             console.log(`Generating income statement for ${period} from ${startDate} to ${endDate}`);
             
-            // Get all transaction entries for the period (without metadata filter)
+            // Get all transaction entries for the period with residence info
             const entries = await TransactionEntry.find({
                 date: { $gte: startDate, $lte: endDate }
-            }).populate('entries');
+            }).populate('residence');
             
             console.log(`Found ${entries.length} transaction entries for the period`);
             
             // Calculate revenue and expenses from transaction entries
             const revenue = {};
             const expenses = {};
+            const residences = new Set();
             
             entries.forEach(entry => {
-                entry.entries.forEach(line => {
-                    const accountCode = line.accountCode;
-                    const accountName = line.accountName;
-                    const accountType = line.accountType;
-                    const debit = line.debit || 0;
-                    const credit = line.credit || 0;
-                    
-                    if (accountType === 'Income' || accountType === 'income') {
-                        const key = `${accountCode} - ${accountName}`;
-                        if (!revenue[key]) revenue[key] = 0;
-                        revenue[key] += credit - debit; // Income increases with credit
-                    } else if (accountType === 'Expense' || accountType === 'expense') {
-                        const key = `${accountCode} - ${accountName}`;
-                        if (!expenses[key]) expenses[key] = 0;
-                        expenses[key] += debit - credit; // Expenses increase with debit
-                    }
-                });
+                const residence = entry.residence;
+                const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
+                residences.add(residenceName);
+                
+                console.log(`Processing transaction: ${entry.source} - $${entry.totalDebit} at ${residenceName}`);
+                
+                if (entry.entries && entry.entries.length > 0) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        console.log(`  Entry: ${accountCode} - ${accountName} (${accountType}): Dr. $${debit} Cr. $${credit}`);
+                        
+                        if (accountType === 'Income' || accountType === 'income') {
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!revenue[key]) revenue[key] = 0;
+                            revenue[key] += credit - debit; // Income increases with credit
+                        } else if (accountType === 'Expense' || accountType === 'expense') {
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!expenses[key]) expenses[key] = 0;
+                            expenses[key] += debit - credit; // Expenses increase with debit
+                        }
+                    });
+                }
             });
             
             // Calculate totals
@@ -65,6 +76,7 @@ class FinancialReportingService {
             const netIncome = totalRevenue - totalExpenses;
             
             console.log(`Revenue: $${totalRevenue}, Expenses: $${totalExpenses}, Net Income: $${netIncome}`);
+            console.log(`Residences included: ${Array.from(residences).join(', ')}`);
             
             return {
                 period,
@@ -79,11 +91,120 @@ class FinancialReportingService {
                 },
                 net_income: netIncome,
                 gross_profit: totalRevenue,
-                operating_income: netIncome
+                operating_income: netIncome,
+                residences_included: true,
+                residences_processed: Array.from(residences),
+                transaction_count: entries.length
             };
             
         } catch (error) {
             console.error('Error generating income statement:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Comprehensive Monthly Income Statement (Profit & Loss by Month)
+     */
+    static async generateComprehensiveMonthlyIncomeStatement(period, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating comprehensive monthly income statement for ${period}`);
+            
+            // Get all transaction entries for the period with residence info
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            }).populate('residence');
+            
+            console.log(`Found ${entries.length} transaction entries for the period`);
+            
+            // Initialize monthly data structure
+            const monthlyData = {};
+            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                               'July', 'August', 'September', 'October', 'November', 'December'];
+            
+            // Initialize all months
+            for (let i = 0; i < 12; i++) {
+                monthlyData[i] = {
+                    month: monthNames[i],
+                    monthNumber: i + 1,
+                    revenue: {},
+                    expenses: {},
+                    total_revenue: 0,
+                    total_expenses: 0,
+                    net_income: 0,
+                    residences: new Set(),
+                    transaction_count: 0
+                };
+            }
+            
+            // Process each transaction entry
+            entries.forEach(entry => {
+                const month = entry.date.getMonth(); // 0-11
+                const residence = entry.residence;
+                const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
+                
+                monthlyData[month].residences.add(residenceName);
+                monthlyData[month].transaction_count++;
+                
+                if (entry.entries && entry.entries.length > 0) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        if (accountType === 'Income' || accountType === 'income') {
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!monthlyData[month].revenue[key]) monthlyData[month].revenue[key] = 0;
+                            monthlyData[month].revenue[key] += credit - debit;
+                            monthlyData[month].total_revenue += credit - debit;
+                        } else if (accountType === 'Expense' || accountType === 'expense') {
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!monthlyData[month].expenses[key]) monthlyData[month].expenses[key] = 0;
+                            monthlyData[month].expenses[key] += debit - credit;
+                            monthlyData[month].total_expenses += debit - credit;
+                        }
+                    });
+                }
+            });
+            
+            // Calculate net income for each month
+            Object.values(monthlyData).forEach(month => {
+                month.net_income = month.total_revenue - month.total_expenses;
+                month.residences = Array.from(month.residences);
+            });
+            
+            // Calculate year totals
+            const yearTotals = {
+                total_revenue: 0,
+                total_expenses: 0,
+                net_income: 0,
+                total_transactions: 0
+            };
+            
+            Object.values(monthlyData).forEach(month => {
+                yearTotals.total_revenue += month.total_revenue;
+                yearTotals.total_expenses += month.total_expenses;
+                yearTotals.net_income += month.net_income;
+                yearTotals.total_transactions += month.transaction_count;
+            });
+            
+            return {
+                period,
+                basis,
+                monthly_breakdown: monthlyData,
+                year_totals: yearTotals,
+                month_names: monthNames,
+                residences_included: true,
+                data_sources: ['TransactionEntry']
+            };
+            
+        } catch (error) {
+            console.error('Error generating comprehensive monthly income statement:', error);
             throw error;
         }
     }
@@ -648,19 +769,23 @@ class FinancialReportingService {
                         const key = `${accountCode} - ${accountName}`;
                         if (!accountBalances[key]) {
                             accountBalances[key] = {
-                                accountCode,
-                                accountName,
-                                accountType,
-                                balance: 0
+                                code: accountCode,
+                                name: accountName,
+                                type: accountType,
+                                balance: 0,
+                                debit_total: 0,
+                                credit_total: 0
                             };
                         }
                         
+                        // Track totals
+                        accountBalances[key].debit_total += debit;
+                        accountBalances[key].credit_total += credit;
+                        
                         // Calculate balance based on account type
-                        if (accountType === 'Asset' || accountType === 'asset') {
+                        if (accountType === 'Asset' || accountType === 'Expense') {
                             accountBalances[key].balance += debit - credit;
-                        } else if (accountType === 'Liability' || accountType === 'liability') {
-                            accountBalances[key].balance += credit - debit;
-                        } else if (accountType === 'Equity' || accountType === 'equity') {
+                        } else {
                             accountBalances[key].balance += credit - debit;
                         }
                     });
@@ -900,41 +1025,58 @@ class FinancialReportingService {
             
             console.log(`Generating balance sheet as of ${asOfDate}`);
             
-            // Get all transaction entries up to the specified date
+            // Get all transaction entries up to the specified date with residence info
             const entries = await TransactionEntry.find({
                 date: { $lte: asOfDate }
-            }).populate('entries');
+            }).populate('residence');
             
             console.log(`Found ${entries.length} transaction entries up to ${asOfDate}`);
             
             // Calculate account balances
             const accountBalances = {};
+            const residences = new Set();
             
             entries.forEach(entry => {
-                entry.entries.forEach(line => {
-                    const accountCode = line.accountCode;
-                    const accountName = line.accountName;
-                    const accountType = line.accountType;
-                    const debit = line.debit || 0;
-                    const credit = line.credit || 0;
-                    
-                    const key = `${accountCode} - ${accountName}`;
-                    if (!accountBalances[key]) {
-                        accountBalances[key] = {
-                            code: accountCode,
-                            name: accountName,
-                            type: accountType,
-                            balance: 0
-                        };
-                    }
-                    
-                    // Calculate balance based on account type
-                    if (accountType === 'Asset' || accountType === 'Expense') {
-                        accountBalances[key].balance += debit - credit;
-                    } else {
-                        accountBalances[key].balance += credit - debit;
-                    }
-                });
+                const residence = entry.residence;
+                const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
+                residences.add(residenceName);
+                
+                console.log(`Processing transaction: ${entry.source} - $${entry.totalDebit} at ${residenceName}`);
+                
+                if (entry.entries && entry.entries.length > 0) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        console.log(`  Entry: ${accountCode} - ${accountName} (${accountType}): Dr. $${debit} Cr. $${credit}`);
+                        
+                        const key = `${accountCode} - ${accountName}`;
+                        if (!accountBalances[key]) {
+                            accountBalances[key] = {
+                                code: accountCode,
+                                name: accountName,
+                                type: accountType,
+                                balance: 0,
+                                debit_total: 0,
+                                credit_total: 0
+                            };
+                        }
+                        
+                        // Track totals
+                        accountBalances[key].debit_total += debit;
+                        accountBalances[key].credit_total += credit;
+                        
+                        // Calculate balance based on account type
+                        if (accountType === 'Asset' || accountType === 'Expense') {
+                            accountBalances[key].balance += debit - credit;
+                        } else {
+                            accountBalances[key].balance += credit - debit;
+                        }
+                    });
+                }
             });
             
             // Group by account type
@@ -948,32 +1090,95 @@ class FinancialReportingService {
                 const key = `${account.code} - ${account.name}`;
                 switch (account.type) {
                     case 'Asset':
-                        assets[key] = account.balance;
+                        assets[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
                         break;
                     case 'Liability':
-                        liabilities[key] = account.balance;
+                        liabilities[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
                         break;
                     case 'Equity':
-                        equity[key] = account.balance;
+                        equity[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
                         break;
                     case 'Income':
-                        income[key] = account.balance;
+                        income[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
                         break;
                     case 'Expense':
-                        expenses[key] = account.balance;
+                        expenses[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
                         break;
                 }
             });
             
             // Calculate totals
-            const totalAssets = Object.values(assets).reduce((sum, amount) => sum + amount, 0);
-            const totalLiabilities = Object.values(liabilities).reduce((sum, amount) => sum + amount, 0);
-            const totalEquity = Object.values(equity).reduce((sum, amount) => sum + amount, 0);
-            const totalIncome = Object.values(income).reduce((sum, amount) => sum + amount, 0);
-            const totalExpenses = Object.values(expenses).reduce((sum, amount) => sum + amount, 0);
+            const totalAssets = Object.values(assets).reduce((sum, account) => sum + account.balance, 0);
+            const totalLiabilities = Object.values(liabilities).reduce((sum, account) => sum + account.balance, 0);
+            const totalEquity = Object.values(equity).reduce((sum, account) => sum + account.balance, 0);
+            const totalIncome = Object.values(income).reduce((sum, account) => sum + account.balance, 0);
+            const totalExpenses = Object.values(expenses).reduce((sum, account) => sum + account.balance, 0);
             
             // Calculate retained earnings
             const retainedEarnings = totalIncome - totalExpenses;
+            
+            console.log(`Balance Sheet Summary as of ${asOfDate}:`);
+            console.log(`  Total Assets: $${totalAssets}`);
+            console.log(`  Total Liabilities: $${totalLiabilities}`);
+            console.log(`  Total Equity: $${totalEquity + retainedEarnings}`);
+            console.log(`  Residences included: ${Array.from(residences).join(', ')}`);
+            
+            // Show detailed account breakdown
+            console.log('\n📊 Detailed Account Breakdown:');
+            console.log('ASSETS:');
+            Object.entries(assets).forEach(([key, account]) => {
+                console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total})`);
+            });
+            
+            console.log('LIABILITIES:');
+            Object.entries(liabilities).forEach(([key, account]) => {
+                console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total})`);
+            });
+            
+            console.log('EQUITY:');
+            Object.entries(equity).forEach(([key, account]) => {
+                console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total})`);
+            });
+            
+            console.log('INCOME:');
+            Object.entries(income).forEach(([key, account]) => {
+                console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total})`);
+            });
+            
+            console.log('EXPENSES:');
+            Object.entries(expenses).forEach(([key, account]) => {
+                console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total})`);
+            });
             
             return {
                 asOf,
@@ -991,12 +1196,24 @@ class FinancialReportingService {
                     retained_earnings: retainedEarnings,
                     total_equity: totalEquity + retainedEarnings
                 },
+                income: {
+                    ...income,
+                    total_income: totalIncome
+                },
+                expenses: {
+                    ...expenses,
+                    total_expenses: totalExpenses
+                },
                 accounting_equation: {
                     assets: totalAssets,
                     liabilities: totalLiabilities,
                     equity: totalEquity + retainedEarnings,
                     balanced: Math.abs((totalAssets - (totalLiabilities + totalEquity + retainedEarnings))) < 0.01
-                }
+                },
+                residences_included: true,
+                residences_processed: Array.from(residences),
+                transaction_count: entries.length,
+                account_details: accountBalances
             };
             
         } catch (error) {
@@ -1020,6 +1237,8 @@ class FinancialReportingService {
                 date: { $gte: startDate, $lte: endDate }
             }).populate('entries');
             
+            console.log(`Found ${entries.length} transaction entries for ${period}`);
+            
             // Calculate cash flows by source
             const operatingActivities = {
                 cash_received_from_customers: 0,
@@ -1038,34 +1257,68 @@ class FinancialReportingService {
             };
             
             entries.forEach(entry => {
-                entry.entries.forEach(line => {
-                    const accountCode = line.accountCode;
-                    const accountName = line.accountName;
-                    const debit = line.debit || 0;
-                    const credit = line.credit || 0;
-                    
-                    // Operating activities - cash accounts and income/expense
-                    if (accountCode.startsWith('100') || accountCode.startsWith('101')) { // Cash accounts
-                        if (entry.source === 'payment') {
+                const residence = entry.residence;
+                const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
+                
+                console.log(`Processing transaction: ${entry.source} - $${entry.totalDebit} at ${residenceName}`);
+                
+                // Process each entry line
+                if (entry.entries && entry.entries.length > 0) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        console.log(`  Entry: ${accountCode} - ${accountName} (${accountType}): Dr. $${debit} Cr. $${credit}`);
+                        
+                        // Operating activities - cash accounts and income/expense
+                        if (accountCode.startsWith('100') || accountCode.startsWith('101')) { // Cash accounts
+                            if (entry.source === 'payment') {
+                                operatingActivities.cash_received_from_customers += credit;
+                            } else if (entry.source === 'expense_payment' || accountName.toLowerCase().includes('expense')) {
+                                operatingActivities.cash_paid_for_expenses += debit;
+                            }
+                        }
+                        
+                        // Income accounts (credit increases income)
+                        if (accountType === 'Income' || accountType === 'income') {
                             operatingActivities.cash_received_from_customers += credit;
-                        } else if (entry.source === 'expense_payment') {
+                        }
+                        
+                        // Expense accounts (debit increases expenses)
+                        if (accountType === 'Expense' || accountType === 'expense') {
                             operatingActivities.cash_paid_for_expenses += debit;
                         }
-                    }
-                });
+                        
+                        // Investing activities
+                        if (accountName.toLowerCase().includes('equipment') || accountName.toLowerCase().includes('furniture')) {
+                            investingActivities.purchase_of_equipment += debit;
+                        } else if (accountName.toLowerCase().includes('building') || accountName.toLowerCase().includes('construction')) {
+                            investingActivities.purchase_of_buildings += debit;
+                        }
+                    });
+                }
             });
             
             const netOperatingCashFlow = operatingActivities.cash_received_from_customers - 
                                        operatingActivities.cash_paid_to_suppliers - 
                                        operatingActivities.cash_paid_for_expenses;
             
-            const netInvestingCashFlow = investingActivities.purchase_of_equipment + 
-                                       investingActivities.purchase_of_buildings;
+            const netInvestingCashFlow = -(investingActivities.purchase_of_equipment + 
+                                       investingActivities.purchase_of_buildings);
             
             const netFinancingCashFlow = financingActivities.owners_contribution + 
                                        financingActivities.loan_proceeds;
             
             const netChangeInCash = netOperatingCashFlow + netInvestingCashFlow + netFinancingCashFlow;
+            
+            console.log(`Cash Flow Summary for ${period}:`);
+            console.log(`  Operating: $${netOperatingCashFlow}`);
+            console.log(`  Investing: $${netInvestingCashFlow}`);
+            console.log(`  Financing: $${netFinancingCashFlow}`);
+            console.log(`  Net Change: $${netChangeInCash}`);
             
             return {
                 period,
@@ -1075,7 +1328,11 @@ class FinancialReportingService {
                 financing_activities: financingActivities,
                 net_change_in_cash: netChangeInCash,
                 cash_at_beginning: 0, // Would need to calculate from previous period
-                cash_at_end: netChangeInCash
+                cash_at_end: netChangeInCash,
+                residences_included: true,
+                data_sources: ['TransactionEntry'],
+                transaction_count: entries.length,
+                residences_processed: entries.filter(e => e.residence).length
             };
             
         } catch (error) {
@@ -1775,6 +2032,161 @@ class FinancialReportingService {
             
         } catch (error) {
             console.error('Error generating residence-filtered cash flow:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Comprehensive Monthly Cash Flow Statement
+     */
+    static async generateComprehensiveMonthlyCashFlow(period, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating comprehensive monthly cash flow statement for ${period}`);
+            
+            // Get all transaction entries for the period with residence info
+            const entries = await TransactionEntry.find({
+                date: { $gte: startDate, $lte: endDate }
+            }).populate('residence');
+            
+            console.log(`Found ${entries.length} transaction entries for ${period}`);
+            
+            // Initialize monthly data structure
+            const monthlyData = {};
+            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                               'July', 'August', 'September', 'October', 'November', 'December'];
+            
+            // Initialize all months
+            for (let i = 0; i < 12; i++) {
+                monthlyData[i] = {
+                    month: monthNames[i],
+                    monthNumber: i + 1,
+                    operating_activities: {
+                        cash_received_from_customers: 0,
+                        cash_paid_to_suppliers: 0,
+                        cash_paid_for_expenses: 0
+                    },
+                    investing_activities: {
+                        purchase_of_equipment: 0,
+                        purchase_of_buildings: 0
+                    },
+                    financing_activities: {
+                        owners_contribution: 0,
+                        loan_proceeds: 0
+                    },
+                    net_cash_flow: 0,
+                    residences: new Set(),
+                    transaction_count: 0
+                };
+            }
+            
+            // Process each transaction entry
+            entries.forEach(entry => {
+                const month = entry.date.getMonth(); // 0-11
+                const residence = entry.residence;
+                const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
+                
+                monthlyData[month].residences.add(residenceName);
+                monthlyData[month].transaction_count++;
+                
+                if (entry.entries && entry.entries.length > 0) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        // Operating activities - cash accounts and income/expense
+                        if (accountCode.startsWith('100') || accountCode.startsWith('101')) { // Cash accounts
+                            if (entry.source === 'payment') {
+                                monthlyData[month].operating_activities.cash_received_from_customers += credit;
+                            } else if (entry.source === 'expense_payment' || accountName.toLowerCase().includes('expense')) {
+                                monthlyData[month].operating_activities.cash_paid_for_expenses += debit;
+                            }
+                        }
+                        
+                        // Income accounts (credit increases income)
+                        if (accountType === 'Income' || accountType === 'income') {
+                            monthlyData[month].operating_activities.cash_received_from_customers += credit;
+                        }
+                        
+                        // Expense accounts (debit increases expenses)
+                        if (accountType === 'Expense' || accountType === 'expense') {
+                            monthlyData[month].operating_activities.cash_paid_for_expenses += debit;
+                        }
+                        
+                        // Investing activities
+                        if (accountName.toLowerCase().includes('equipment') || accountName.toLowerCase().includes('furniture')) {
+                            monthlyData[month].investing_activities.purchase_of_equipment += debit;
+                        } else if (accountName.toLowerCase().includes('building') || accountName.toLowerCase().includes('construction')) {
+                            monthlyData[month].investing_activities.purchase_of_buildings += debit;
+                        }
+                    });
+                }
+            });
+            
+            // Calculate net cash flow for each month
+            Object.values(monthlyData).forEach(month => {
+                const netOperating = month.operating_activities.cash_received_from_customers - 
+                                   month.operating_activities.cash_paid_to_suppliers - 
+                                   month.operating_activities.cash_paid_for_expenses;
+                
+                const netInvesting = -(month.investing_activities.purchase_of_equipment + 
+                                     month.investing_activities.purchase_of_buildings);
+                
+                const netFinancing = month.financing_activities.owners_contribution + 
+                                   month.financing_activities.loan_proceeds;
+                
+                month.net_cash_flow = netOperating + netInvesting + netFinancing;
+                month.residences = Array.from(month.residences);
+            });
+            
+            // Calculate year totals
+            const yearTotals = {
+                operating: {
+                    cash_received_from_customers: 0,
+                    cash_paid_to_suppliers: 0,
+                    cash_paid_for_expenses: 0
+                },
+                investing: {
+                    purchase_of_equipment: 0,
+                    purchase_of_buildings: 0
+                },
+                financing: {
+                    owners_contribution: 0,
+                    loan_proceeds: 0
+                },
+                net_cash_flow: 0,
+                total_transactions: 0
+            };
+            
+            Object.values(monthlyData).forEach(month => {
+                yearTotals.operating.cash_received_from_customers += month.operating_activities.cash_received_from_customers;
+                yearTotals.operating.cash_paid_to_suppliers += month.operating_activities.cash_paid_to_suppliers;
+                yearTotals.operating.cash_paid_for_expenses += month.operating_activities.cash_paid_for_expenses;
+                yearTotals.investing.purchase_of_equipment += month.investing_activities.purchase_of_equipment;
+                yearTotals.investing.purchase_of_buildings += month.investing_activities.purchase_of_buildings;
+                yearTotals.financing.owners_contribution += month.financing_activities.owners_contribution;
+                yearTotals.financing.loan_proceeds += month.financing_activities.loan_proceeds;
+                yearTotals.net_cash_flow += month.net_cash_flow;
+                yearTotals.total_transactions += month.transaction_count;
+            });
+            
+            return {
+                period,
+                basis,
+                monthly_breakdown: monthlyData,
+                year_totals: yearTotals,
+                month_names: monthNames,
+                residences_included: true,
+                data_sources: ['TransactionEntry']
+            };
+            
+        } catch (error) {
+            console.error('Error generating comprehensive monthly cash flow statement:', error);
             throw error;
         }
     }
