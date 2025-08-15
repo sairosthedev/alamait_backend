@@ -1808,52 +1808,48 @@ class FinancialReportingService {
             
             console.log(`Generating residence-filtered income statement for ${period}, residence: ${residenceId}`);
             
-            // Get all transaction entries for the period, filtered by residence
+            // Get transaction entries for the specific residence
             const entries = await TransactionEntry.find({
                 date: { $gte: startDate, $lte: endDate },
-                residence: residenceId // Direct residence filtering
-            }).populate('entries');
+                residence: residenceId
+            }).populate('residence');
             
-            console.log(`Found ${entries.length} transaction entries for the period and residence ${residenceId}`);
+            console.log(`Found ${entries.length} transaction entries for residence ${residenceId}`);
             
             // Calculate revenue and expenses
             const revenue = {};
             const expenses = {};
             
             entries.forEach(entry => {
-                entry.entries.forEach(line => {
-                    const accountCode = line.accountCode;
-                    const accountName = line.accountName;
-                    const accountType = line.accountType;
-                    const debit = line.debit || 0;
-                    const credit = line.credit || 0;
-                    
-                    if (accountType === 'Income' || accountType === 'income') {
-                        const key = `${accountCode} - ${accountName}`;
-                        if (!revenue[key]) revenue[key] = 0;
-                        revenue[key] += credit - debit; // Income increases with credit
-                    } else if (accountType === 'Expense' || accountType === 'expense') {
-                        const key = `${accountCode} - ${accountName}`;
-                        if (!expenses[key]) expenses[key] = 0;
-                        expenses[key] += debit - credit; // Expenses increase with debit
-                    }
-                });
+                if (entry.entries && entry.entries.length > 0) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        if (accountType === 'Income' || accountType === 'income') {
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!revenue[key]) revenue[key] = 0;
+                            revenue[key] += credit - debit;
+                        } else if (accountType === 'Expense' || accountType === 'expense') {
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!expenses[key]) expenses[key] = 0;
+                            expenses[key] += debit - credit;
+                        }
+                    });
+                }
             });
             
-            // Calculate totals
             const totalRevenue = Object.values(revenue).reduce((sum, amount) => sum + amount, 0);
             const totalExpenses = Object.values(expenses).reduce((sum, amount) => sum + amount, 0);
             const netIncome = totalRevenue - totalExpenses;
             
-            // Get residence info
-            const residenceInfo = await Residence.findById(residenceId).select('name address').lean();
-            
-            console.log(`Residence: ${residenceInfo?.name}, Revenue: $${totalRevenue}, Expenses: $${totalExpenses}, Net Income: $${netIncome}`);
-            
             return {
                 period,
-                residence: residenceInfo,
                 basis,
+                residence: residenceId,
                 revenue: {
                     ...revenue,
                     total_revenue: totalRevenue
@@ -1864,7 +1860,8 @@ class FinancialReportingService {
                 },
                 net_income: netIncome,
                 gross_profit: totalRevenue,
-                operating_income: netIncome
+                operating_income: netIncome,
+                transaction_count: entries.length
             };
             
         } catch (error) {
@@ -1880,58 +1877,121 @@ class FinancialReportingService {
         try {
             const asOfDate = new Date(asOf);
             
-            console.log(`Generating residence-filtered balance sheet as of ${asOf}, residence: ${residenceId}`);
+            console.log(`Generating residence-filtered balance sheet as of ${asOfDate}, residence: ${residenceId}`);
             
-            // Get all transaction entries up to the asOf date, filtered by residence
+            // Get transaction entries for the specific residence up to the date
             const entries = await TransactionEntry.find({
                 date: { $lte: asOfDate },
-                residence: residenceId // Direct residence filtering
-            }).populate('entries');
+                residence: residenceId
+            }).populate('residence');
             
-            console.log(`Found ${entries.length} transaction entries up to ${asOf} for residence ${residenceId}`);
+            console.log(`Found ${entries.length} transaction entries for residence ${residenceId}`);
             
-            // Calculate account balances
+            // Calculate account balances (same logic as regular balance sheet)
+            const accountBalances = {};
+            
+            entries.forEach(entry => {
+                if (entry.entries && entry.entries.length > 0) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        const key = `${accountCode} - ${accountName}`;
+                        if (!accountBalances[key]) {
+                            accountBalances[key] = {
+                                code: accountCode,
+                                name: accountName,
+                                type: accountType,
+                                balance: 0,
+                                debit_total: 0,
+                                credit_total: 0
+                            };
+                        }
+                        
+                        accountBalances[key].debit_total += debit;
+                        accountBalances[key].credit_total += credit;
+                        
+                        if (accountType === 'Asset' || accountType === 'Expense') {
+                            accountBalances[key].balance += debit - credit;
+                        } else {
+                            accountBalances[key].balance += credit - debit;
+                        }
+                    });
+                }
+            });
+            
+            // Group by account type and calculate totals
             const assets = {};
             const liabilities = {};
             const equity = {};
+            const income = {};
+            const expenses = {};
             
-            entries.forEach(entry => {
-                entry.entries.forEach(line => {
-                    const accountCode = line.accountCode;
-                    const accountName = line.accountName;
-                    const accountType = line.accountType;
-                    const debit = line.debit || 0;
-                    const credit = line.credit || 0;
-                    
-                    const key = `${accountCode} - ${accountName}`;
-                    
-                    if (accountType === 'Asset' || accountType === 'asset') {
-                        if (!assets[key]) assets[key] = 0;
-                        assets[key] += debit - credit; // Assets increase with debit
-                    } else if (accountType === 'Liability' || accountType === 'liability') {
-                        if (!liabilities[key]) liabilities[key] = 0;
-                        liabilities[key] += credit - debit; // Liabilities increase with credit
-                    } else if (accountType === 'Equity' || accountType === 'equity') {
-                        if (!equity[key]) equity[key] = 0;
-                        equity[key] += credit - debit; // Equity increases with credit
-                    }
-                });
+            Object.values(accountBalances).forEach(account => {
+                const key = `${account.code} - ${account.name}`;
+                switch (account.type) {
+                    case 'Asset':
+                        assets[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
+                        break;
+                    case 'Liability':
+                        liabilities[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
+                        break;
+                    case 'Equity':
+                        equity[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
+                        break;
+                    case 'Income':
+                        income[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
+                        break;
+                    case 'Expense':
+                        expenses[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
+                        break;
+                }
             });
             
-            // Calculate totals
-            const totalAssets = Object.values(assets).reduce((sum, amount) => sum + amount, 0);
-            const totalLiabilities = Object.values(liabilities).reduce((sum, amount) => sum + amount, 0);
-            const totalEquity = Object.values(equity).reduce((sum, amount) => sum + amount, 0);
-            
-            // Get residence info
-            const residenceInfo = await Residence.findById(residenceId).select('name address').lean();
-            
-            console.log(`Residence: ${residenceInfo?.name}, Assets: $${totalAssets}, Liabilities: $${totalLiabilities}, Equity: $${totalEquity}`);
+            const totalAssets = Object.values(assets).reduce((sum, account) => sum + account.balance, 0);
+            const totalLiabilities = Object.values(liabilities).reduce((sum, account) => sum + account.balance, 0);
+            const totalEquity = Object.values(equity).reduce((sum, account) => sum + account.balance, 0);
+            const totalIncome = Object.values(income).reduce((sum, account) => sum + account.balance, 0);
+            const totalExpenses = Object.values(expenses).reduce((sum, account) => sum + account.balance, 0);
+            const retainedEarnings = totalIncome - totalExpenses;
             
             return {
                 asOf,
-                residence: residenceInfo,
                 basis,
+                residence: residenceId,
                 assets: {
                     ...assets,
                     total_assets: totalAssets
@@ -1942,9 +2002,24 @@ class FinancialReportingService {
                 },
                 equity: {
                     ...equity,
-                    total_equity: totalEquity
+                    retained_earnings: retainedEarnings,
+                    total_equity: totalEquity + retainedEarnings
                 },
-                total_liabilities_and_equity: totalLiabilities + totalEquity
+                income: {
+                    ...income,
+                    total_income: totalIncome
+                },
+                expenses: {
+                    ...expenses,
+                    total_expenses: totalExpenses
+                },
+                accounting_equation: {
+                    assets: totalAssets,
+                    liabilities: totalLiabilities,
+                    equity: totalEquity + retainedEarnings,
+                    balanced: Math.abs((totalAssets - (totalLiabilities + totalEquity + retainedEarnings))) < 0.01
+                },
+                transaction_count: entries.length
             };
             
         } catch (error) {
@@ -1956,141 +2031,39 @@ class FinancialReportingService {
     /**
      * Generate Residence-Filtered Cash Flow Statement
      */
-    static async generateResidenceFilteredCashFlow(period, residenceId, basis = 'cash') {
+    static async generateResidenceFilteredCashFlowStatement(period, residenceId, basis = 'cash') {
         try {
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
             
-            console.log(`Generating residence-filtered cash flow for ${period}, residence: ${residenceId}`);
+            console.log(`Generating residence-filtered cash flow statement for ${period}, residence: ${residenceId}`);
             
-            // Get all transaction entries for the period, filtered by residence
+            // Get transaction entries for the specific residence
             const entries = await TransactionEntry.find({
                 date: { $gte: startDate, $lte: endDate },
-                residence: residenceId // Direct residence filtering
-            }).populate('entries');
-            
-            console.log(`Found ${entries.length} transaction entries for the period and residence ${residenceId}`);
-            
-            // Calculate cash flows by activity type
-            const operating = {};
-            const investing = {};
-            const financing = {};
-            
-            entries.forEach(entry => {
-                entry.entries.forEach(line => {
-                    const accountCode = line.accountCode;
-                    const accountType = line.accountType;
-                    const debit = line.debit || 0;
-                    const credit = line.credit || 0;
-                    
-                    const month = new Date(entry.date).toLocaleString('default', { month: 'long' }).toLowerCase();
-                    const cashFlow = this.calculateCashFlow(accountType, debit, credit);
-                    const activityType = this.getCashFlowActivityType(accountCode, accountType);
-                    
-                    if (activityType === 'operating') {
-                        if (!operating[month]) operating[month] = 0;
-                        operating[month] += cashFlow;
-                    } else if (activityType === 'investing') {
-                        if (!investing[month]) investing[month] = 0;
-                        investing[month] += cashFlow;
-                    } else if (activityType === 'financing') {
-                        if (!financing[month]) financing[month] = 0;
-                        financing[month] += cashFlow;
-                    }
-                });
-            });
-            
-            // Calculate totals
-            const totalOperating = Object.values(operating).reduce((sum, amount) => sum + amount, 0);
-            const totalInvesting = Object.values(investing).reduce((sum, amount) => sum + amount, 0);
-            const totalFinancing = Object.values(financing).reduce((sum, amount) => sum + amount, 0);
-            const netCashFlow = totalOperating + totalInvesting + totalFinancing;
-            
-            // Get residence info
-            const residenceInfo = await Residence.findById(residenceId).select('name address').lean();
-            
-            console.log(`Residence: ${residenceInfo?.name}, Operating: $${totalOperating}, Investing: $${totalInvesting}, Financing: $${totalFinancing}, Net: $${netCashFlow}`);
-            
-            return {
-                period,
-                residence: residenceInfo,
-                basis,
-                operating_activities: {
-                    ...operating,
-                    total: totalOperating
-                },
-                investing_activities: {
-                    ...investing,
-                    total: totalInvesting
-                },
-                financing_activities: {
-                    ...financing,
-                    total: totalFinancing
-                },
-                net_cash_flow: netCashFlow
-            };
-            
-        } catch (error) {
-            console.error('Error generating residence-filtered cash flow:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Generate Comprehensive Monthly Cash Flow Statement
-     */
-    static async generateComprehensiveMonthlyCashFlow(period, basis = 'cash') {
-        try {
-            const startDate = new Date(`${period}-01-01`);
-            const endDate = new Date(`${period}-12-31`);
-            
-            console.log(`Generating comprehensive monthly cash flow statement for ${period}`);
-            
-            // Get all transaction entries for the period with residence info
-            const entries = await TransactionEntry.find({
-                date: { $gte: startDate, $lte: endDate }
+                residence: residenceId
             }).populate('residence');
             
-            console.log(`Found ${entries.length} transaction entries for ${period}`);
+            console.log(`Found ${entries.length} transaction entries for residence ${residenceId}`);
             
-            // Initialize monthly data structure
-            const monthlyData = {};
-            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
-                               'July', 'August', 'September', 'October', 'November', 'December'];
+            // Calculate cash flows
+            const operatingActivities = {
+                cash_received_from_customers: 0,
+                cash_paid_to_suppliers: 0,
+                cash_paid_for_expenses: 0
+            };
             
-            // Initialize all months
-            for (let i = 0; i < 12; i++) {
-                monthlyData[i] = {
-                    month: monthNames[i],
-                    monthNumber: i + 1,
-                    operating_activities: {
-                        cash_received_from_customers: 0,
-                        cash_paid_to_suppliers: 0,
-                        cash_paid_for_expenses: 0
-                    },
-                    investing_activities: {
-                        purchase_of_equipment: 0,
-                        purchase_of_buildings: 0
-                    },
-                    financing_activities: {
-                        owners_contribution: 0,
-                        loan_proceeds: 0
-                    },
-                    net_cash_flow: 0,
-                    residences: new Set(),
-                    transaction_count: 0
-                };
-            }
+            const investingActivities = {
+                purchase_of_equipment: 0,
+                purchase_of_buildings: 0
+            };
             
-            // Process each transaction entry
+            const financingActivities = {
+                owners_contribution: 0,
+                loan_proceeds: 0
+            };
+            
             entries.forEach(entry => {
-                const month = entry.date.getMonth(); // 0-11
-                const residence = entry.residence;
-                const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
-                
-                monthlyData[month].residences.add(residenceName);
-                monthlyData[month].transaction_count++;
-                
                 if (entry.entries && entry.entries.length > 0) {
                     entry.entries.forEach(line => {
                         const accountCode = line.accountCode;
@@ -2099,94 +2072,58 @@ class FinancialReportingService {
                         const debit = line.debit || 0;
                         const credit = line.credit || 0;
                         
-                        // Operating activities - cash accounts and income/expense
+                        // Operating activities
                         if (accountCode.startsWith('100') || accountCode.startsWith('101')) { // Cash accounts
                             if (entry.source === 'payment') {
-                                monthlyData[month].operating_activities.cash_received_from_customers += credit;
+                                operatingActivities.cash_received_from_customers += credit;
                             } else if (entry.source === 'expense_payment' || accountName.toLowerCase().includes('expense')) {
-                                monthlyData[month].operating_activities.cash_paid_for_expenses += debit;
+                                operatingActivities.cash_paid_for_expenses += debit;
                             }
                         }
                         
-                        // Income accounts (credit increases income)
                         if (accountType === 'Income' || accountType === 'income') {
-                            monthlyData[month].operating_activities.cash_received_from_customers += credit;
+                            operatingActivities.cash_received_from_customers += credit;
                         }
                         
-                        // Expense accounts (debit increases expenses)
                         if (accountType === 'Expense' || accountType === 'expense') {
-                            monthlyData[month].operating_activities.cash_paid_for_expenses += debit;
+                            operatingActivities.cash_paid_for_expenses += debit;
                         }
                         
                         // Investing activities
                         if (accountName.toLowerCase().includes('equipment') || accountName.toLowerCase().includes('furniture')) {
-                            monthlyData[month].investing_activities.purchase_of_equipment += debit;
+                            investingActivities.purchase_of_equipment += debit;
                         } else if (accountName.toLowerCase().includes('building') || accountName.toLowerCase().includes('construction')) {
-                            monthlyData[month].investing_activities.purchase_of_buildings += debit;
+                            investingActivities.purchase_of_buildings += debit;
                         }
                     });
                 }
             });
             
-            // Calculate net cash flow for each month
-            Object.values(monthlyData).forEach(month => {
-                const netOperating = month.operating_activities.cash_received_from_customers - 
-                                   month.operating_activities.cash_paid_to_suppliers - 
-                                   month.operating_activities.cash_paid_for_expenses;
-                
-                const netInvesting = -(month.investing_activities.purchase_of_equipment + 
-                                     month.investing_activities.purchase_of_buildings);
-                
-                const netFinancing = month.financing_activities.owners_contribution + 
-                                   month.financing_activities.loan_proceeds;
-                
-                month.net_cash_flow = netOperating + netInvesting + netFinancing;
-                month.residences = Array.from(month.residences);
-            });
+            const netOperating = operatingActivities.cash_received_from_customers - 
+                               operatingActivities.cash_paid_to_suppliers - 
+                               operatingActivities.cash_paid_for_expenses;
             
-            // Calculate year totals
-            const yearTotals = {
-                operating: {
-                    cash_received_from_customers: 0,
-                    cash_paid_to_suppliers: 0,
-                    cash_paid_for_expenses: 0
-                },
-                investing: {
-                    purchase_of_equipment: 0,
-                    purchase_of_buildings: 0
-                },
-                financing: {
-                    owners_contribution: 0,
-                    loan_proceeds: 0
-                },
-                net_cash_flow: 0,
-                total_transactions: 0
-            };
+            const netInvesting = -(investingActivities.purchase_of_equipment + 
+                                 investingActivities.purchase_of_buildings);
             
-            Object.values(monthlyData).forEach(month => {
-                yearTotals.operating.cash_received_from_customers += month.operating_activities.cash_received_from_customers;
-                yearTotals.operating.cash_paid_to_suppliers += month.operating_activities.cash_paid_to_suppliers;
-                yearTotals.operating.cash_paid_for_expenses += month.operating_activities.cash_paid_for_expenses;
-                yearTotals.investing.purchase_of_equipment += month.investing_activities.purchase_of_equipment;
-                yearTotals.investing.purchase_of_buildings += month.investing_activities.purchase_of_buildings;
-                yearTotals.financing.owners_contribution += month.financing_activities.owners_contribution;
-                yearTotals.financing.loan_proceeds += month.financing_activities.loan_proceeds;
-                yearTotals.net_cash_flow += month.net_cash_flow;
-                yearTotals.total_transactions += month.transaction_count;
-            });
+            const netFinancing = financingActivities.owners_contribution + 
+                               financingActivities.loan_proceeds;
+            
+            const netChangeInCash = netOperating + netInvesting + netFinancing;
             
             return {
                 period,
                 basis,
-                monthly_breakdown: monthlyData,
-                year_totals: yearTotals,
-                month_names: monthNames,
-                residences_included: true,
-                data_sources: ['TransactionEntry']
+                residence: residenceId,
+                operating_activities: operatingActivities,
+                investing_activities: investingActivities,
+                financing_activities: financingActivities,
+                net_change_in_cash: netChangeInCash,
+                transaction_count: entries.length
             };
             
         } catch (error) {
-            console.error('Error generating comprehensive monthly cash flow statement:', error);
+            console.error('Error generating residence-filtered cash flow statement:', error);
             throw error;
         }
     }

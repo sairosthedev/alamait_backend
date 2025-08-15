@@ -663,6 +663,86 @@ class FinancialReportsController {
             });
         }
     }
+
+    /**
+     * Generate Comprehensive Monthly Income Statement
+     * GET /api/financial-reports/comprehensive-monthly-income
+     */
+    static async generateComprehensiveMonthlyIncomeStatement(req, res) {
+        try {
+            const { period, basis = 'cash' } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2025)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            const monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
+            
+            res.json({
+                success: true,
+                data: monthlyIncomeStatement,
+                message: `Comprehensive monthly income statement generated for ${period} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating comprehensive monthly income statement:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating comprehensive monthly income statement',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Generate Comprehensive Monthly Cash Flow Statement
+     * GET /api/financial-reports/comprehensive-monthly-cash-flow
+     */
+    static async generateComprehensiveMonthlyCashFlow(req, res) {
+        try {
+            const { period, basis = 'cash' } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2025)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            const monthlyCashFlow = await FinancialReportingService.generateComprehensiveMonthlyCashFlow(period, basis);
+            
+            res.json({
+                success: true,
+                data: monthlyCashFlow,
+                message: `Comprehensive monthly cash flow statement generated for ${period} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating comprehensive monthly cash flow statement:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating comprehensive monthly cash flow statement',
+                error: error.message
+            });
+        }
+    }
 }
 
 module.exports = FinancialReportsController; 

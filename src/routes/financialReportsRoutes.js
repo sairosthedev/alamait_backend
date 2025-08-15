@@ -26,6 +26,12 @@ router.get('/income-statement', FinancialReportsController.generateIncomeStateme
 router.get('/monthly-income-statement', FinancialReportsController.generateMonthlyIncomeStatement);
 
 /**
+ * Comprehensive Monthly Income Statement (Detailed monthly breakdown)
+ * GET /api/financial-reports/comprehensive-monthly-income?period=2025&basis=cash
+ */
+router.get('/comprehensive-monthly-income', FinancialReportsController.generateComprehensiveMonthlyIncomeStatement);
+
+/**
  * Monthly Expenses
  * GET /api/financial-reports/monthly-expenses?period=2025&basis=cash
  */
@@ -42,6 +48,12 @@ router.get('/monthly-balance-sheet', FinancialReportsController.generateMonthlyB
  * GET /api/financial-reports/monthly-cash-flow?period=2025&basis=cash
  */
 router.get('/monthly-cash-flow', FinancialReportsController.generateMonthlyCashFlow);
+
+/**
+ * Comprehensive Monthly Cash Flow (Detailed monthly breakdown)
+ * GET /api/financial-reports/comprehensive-monthly-cash-flow?period=2025&basis=cash
+ */
+router.get('/comprehensive-monthly-cash-flow', FinancialReportsController.generateComprehensiveMonthlyCashFlow);
 
 /**
  * Balance Sheet

@@ -110,7 +110,7 @@ class TransactionController {
      */
     static async getTransactionSummary(req, res) {
         try {
-            const { startDate, endDate, type, account, status, source, userId } = req.query;
+            const { startDate, endDate, type, account, status, source, userId, residence } = req.query;
             
             console.log('🔍 Fetching transaction summary with filters:', req.query);
             
@@ -124,14 +124,17 @@ class TransactionController {
             }
             
             if (type && type !== 'all') {
-                if (type === 'petty_cash') {
-                    query.source = 'manual';
-                    query['metadata.transactionType'] = { 
-                        $in: ['petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'] 
-                    };
+                if (type === 'debit') {
+                    query.totalDebit = { $gt: 0 };
+                } else if (type === 'credit') {
+                    query.totalCredit = { $gt: 0 };
                 } else {
                     query.type = type;
                 }
+            }
+            
+            if (account && account !== 'all') {
+                query['entries.accountCode'] = account;
             }
             
             if (source && source !== 'all') {
@@ -142,38 +145,37 @@ class TransactionController {
                 query.sourceId = userId;
             }
             
-            if (account && account !== 'all') {
-                query['entries.accountCode'] = account;
+            // 🎯 ADD RESIDENCE FILTERING
+            if (residence) {
+                query.residence = residence;
             }
             
-            // Get transaction entries
-            const transactionEntries = await TransactionEntry.find(query).lean();
+            // Get transaction entries with residence population
+            const transactionEntries = await TransactionEntry.find(query)
+                .populate('residence', 'name address')
+                .lean();
             
-            // Calculate summary
-            let totalTransactions = transactionEntries.length;
-            let totalAmount = 0;
-            let byType = {};
-            let byMonth = {};
+            const totalTransactions = transactionEntries.length;
+            const totalAmount = transactionEntries.reduce((sum, entry) => {
+                return sum + (entry.totalDebit || 0) + (entry.totalCredit || 0);
+            }, 0);
             
+            // Group by type
+            const byType = {};
             transactionEntries.forEach(entry => {
-                const amount = entry.totalDebit || entry.totalCredit || 0;
-                totalAmount += amount;
-                
-                // Group by type
                 const type = entry.type || 'transaction';
-                if (!byType[type]) {
-                    byType[type] = { count: 0, amount: 0 };
-                }
+                if (!byType[type]) byType[type] = { count: 0, amount: 0 };
                 byType[type].count++;
-                byType[type].amount += amount;
-                
-                // Group by month
-                const month = new Date(entry.date).toISOString().substring(0, 7);
-                if (!byMonth[month]) {
-                    byMonth[month] = { count: 0, amount: 0 };
-                }
+                byType[type].amount += (entry.totalDebit || 0) + (entry.totalCredit || 0);
+            });
+            
+            // Group by month
+            const byMonth = {};
+            transactionEntries.forEach(entry => {
+                const month = new Date(entry.date).toLocaleString('default', { month: 'long' });
+                if (!byMonth[month]) byMonth[month] = { count: 0, amount: 0 };
                 byMonth[month].count++;
-                byMonth[month].amount += amount;
+                byMonth[month].amount += (entry.totalDebit || 0) + (entry.totalCredit || 0);
             });
             
             // Get recent transactions
@@ -185,7 +187,8 @@ class TransactionController {
                     date: entry.date,
                     description: entry.description,
                     amount: entry.totalDebit || entry.totalCredit || 0,
-                    type: entry.type || 'transaction'
+                    type: entry.type || 'transaction',
+                    residence: entry.residence // Include residence info
                 }));
             
             res.status(200).json({
@@ -195,7 +198,14 @@ class TransactionController {
                     totalAmount,
                     byType,
                     byMonth,
-                    recentTransactions
+                    recentTransactions,
+                    filters: {
+                        residence: residence || 'all',
+                        startDate,
+                        endDate,
+                        type: type || 'all',
+                        account: account || 'all'
+                    }
                 }
             });
             
@@ -214,7 +224,7 @@ class TransactionController {
      */
     static async getTransactionEntries(req, res) {
         try {
-            const { page = 1, limit = 50, startDate, endDate, type, account, status } = req.query;
+            const { page = 1, limit = 50, startDate, endDate, type, account, status, residence } = req.query;
             
             console.log('🔍 Fetching transaction entries with filters:', req.query);
             
@@ -241,13 +251,19 @@ class TransactionController {
                 query['entries.accountCode'] = account;
             }
             
+            // 🎯 ADD RESIDENCE FILTERING
+            if (residence) {
+                query.residence = residence;
+            }
+            
             const skip = (parseInt(page) - 1) * parseInt(limit);
             
-            // Get transaction entries
+            // Get transaction entries with residence population
             const transactionEntries = await TransactionEntry.find(query)
                 .sort({ date: -1 })
                 .skip(skip)
                 .limit(parseInt(limit))
+                .populate('residence', 'name address') // Populate residence info
                 .lean();
             
             const total = await TransactionEntry.countDocuments(query);
@@ -261,6 +277,7 @@ class TransactionController {
                 type: entry.type || 'transaction',
                 totalDebit: entry.totalDebit || 0,
                 totalCredit: entry.totalCredit || 0,
+                residence: entry.residence, // Include residence info
                 entries: entry.entries || []
             }));
             
