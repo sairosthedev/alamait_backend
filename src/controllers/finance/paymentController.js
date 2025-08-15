@@ -132,7 +132,7 @@ exports.getStudentPayments = async (req, res) => {
                 adminFee: payment.adminFee || 0,
                 deposit: payment.deposit || 0,
                 amount: payment.totalAmount,
-                datePaid: payment.date.toISOString().split('T')[0],
+                datePaid: safeDateFormat(payment.date),
                 paymentType: paymentType,
                 status: payment.status,
                 proof: payment.proofOfPayment?.fileUrl || null,
@@ -415,7 +415,7 @@ exports.getPaymentsByStudent = async (req, res) => {
                 adminFee: payment.adminFee || 0,
                 deposit: payment.deposit || 0,
                 amount: payment.totalAmount,
-                datePaid: payment.date.toISOString().split('T')[0],
+                datePaid: safeDateFormat(payment.date),
                 paymentType: paymentType,
                 status: payment.status,
                 proof: payment.proofOfPayment?.fileUrl || null,
@@ -565,6 +565,39 @@ const findStudentById = async (studentId) => {
         return null;
     } catch (error) {
         console.error('Error in findStudentById:', error);
+        return null;
+    }
+}; 
+
+// Helper function to safely format dates
+const safeDateFormat = (date) => {
+    if (!date) return null;
+    
+    try {
+        // If it's already a Date object
+        if (date instanceof Date) {
+            return date.toISOString().split('T')[0];
+        }
+        
+        // If it's a string, try to parse it
+        if (typeof date === 'string') {
+            const parsedDate = new Date(date);
+            if (!isNaN(parsedDate.getTime())) {
+                return parsedDate.toISOString().split('T')[0];
+            }
+        }
+        
+        // If it's a number (timestamp), try to parse it
+        if (typeof date === 'number') {
+            const parsedDate = new Date(date);
+            if (!isNaN(parsedDate.getTime())) {
+                return parsedDate.toISOString().split('T')[0];
+            }
+        }
+        
+        return null;
+    } catch (error) {
+        console.error('Error formatting date:', error);
         return null;
     }
 }; 

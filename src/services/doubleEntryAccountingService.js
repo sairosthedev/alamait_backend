@@ -757,6 +757,11 @@ class DoubleEntryAccountingService {
     static async recordStudentRentPayment(payment, user) {
         try {
             console.log('💰 Recording student rent payment (cash basis)');
+            console.log(`   Payment ID: ${payment.paymentId}`);
+            console.log(`   Student ID: ${payment.student}`);
+            console.log(`   Amount: $${payment.totalAmount}`);
+            console.log(`   Method: ${payment.method}`);
+            console.log(`   Date: ${payment.date}`);
             
             // 🚨 DUPLICATE TRANSACTION PREVENTION
             // Check if transaction already exists to prevent duplicates
@@ -782,19 +787,50 @@ class DoubleEntryAccountingService {
             const debtor = await Debtor.findOne({ user: payment.student });
             const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
             
+            // Get student details for better descriptions
+            let studentName = 'Student';
+            try {
+                const User = require('../models/User');
+                const student = await User.findById(payment.student).select('firstName lastName');
+                if (student) {
+                    studentName = `${student.firstName} ${student.lastName}`;
+                }
+            } catch (error) {
+                console.log('⚠️ Could not fetch student details, using default name');
+            }
+            
             const transactionId = await this.generateTransactionId();
+            
             // Ensure we have a valid residence ID
             const residenceId = payment.residence || (debtor && debtor.residence);
             if (!residenceId) {
                 throw new Error('Residence ID is required for transaction creation');
             }
 
+            // Safely handle the date field
+            let transactionDate;
+            try {
+                if (payment.date instanceof Date) {
+                    transactionDate = payment.date;
+                } else if (typeof payment.date === 'string') {
+                    transactionDate = new Date(payment.date);
+                    if (isNaN(transactionDate.getTime())) {
+                        throw new Error('Invalid date string');
+                    }
+                } else {
+                    transactionDate = new Date();
+                }
+            } catch (error) {
+                console.log('⚠️ Invalid payment date, using current date');
+                transactionDate = new Date();
+            }
+
             const transaction = new Transaction({
                 transactionId,
-                date: payment.date || new Date(),
+                date: transactionDate,
                 description: studentHasOutstandingDebt ? 
-                    `Debt settlement from ${payment.student?.firstName || 'Student'}` :
-                    `Rent received from ${payment.student?.firstName || 'Student'}`,
+                    `Debt settlement from ${studentName}` :
+                    `Rent received from ${studentName}`,
                 type: 'payment',
                 reference: payment._id.toString(),
                 residence: residenceId,
@@ -803,6 +839,7 @@ class DoubleEntryAccountingService {
             });
 
             await transaction.save();
+            console.log(`✅ Transaction created: ${transaction.transactionId}`);
 
             // Create double-entry entries based on payment type
             const entries = [];
@@ -828,7 +865,7 @@ class DoubleEntryAccountingService {
                     accountType: 'Asset',
                     debit: 0,
                     credit: payment.totalAmount,
-                    description: `Settlement of outstanding debt from ${payment.student?.firstName || 'Student'}`
+                    description: `Settlement of outstanding debt from ${studentName}`
                 });
             } else {
                 // Student has no outstanding debt - this is current period payment
@@ -851,17 +888,17 @@ class DoubleEntryAccountingService {
                     accountType: 'Income',
                     debit: 0,
                     credit: payment.totalAmount,
-                    description: `Rent income from ${payment.student?.firstName || 'Student'}`
+                    description: `Rent income from ${studentName}`
                 });
             }
 
             // Create transaction entry
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: payment.date || new Date(),
+                date: transactionDate,
                 description: studentHasOutstandingDebt ? 
-                    `Debt settlement from ${payment.student?.firstName || 'Student'}` :
-                    `Rent payment from ${payment.student?.firstName || 'Student'}`,
+                    `Debt settlement from ${studentName}` :
+                    `Rent payment from ${studentName}`,
                 reference: payment._id.toString(),
                 entries,
                 totalDebit: payment.totalAmount,
@@ -880,6 +917,7 @@ class DoubleEntryAccountingService {
             });
 
             await transactionEntry.save();
+            console.log(`✅ Transaction entry created: ${transactionEntry._id}`);
             
             // Update transaction with entry reference
             transaction.entries = [transactionEntry._id];
@@ -890,6 +928,8 @@ class DoubleEntryAccountingService {
 
         } catch (error) {
             console.error('❌ Error recording student rent payment:', error);
+            console.error('   Error details:', error.message);
+            console.error('   Stack trace:', error.stack);
             throw error;
         }
     }

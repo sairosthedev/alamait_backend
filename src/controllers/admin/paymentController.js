@@ -573,21 +573,68 @@ const createPayment = async (req, res) => {
         // Update debtor account if exists, create if not
         let debtor = await Debtor.findOne({ user: student });
         if (!debtor) {
-            // Create debtor account automatically using enhanced service
-            const { createDebtorForStudent } = require('../../services/debtorService');
-            
-            debtor = await createDebtorForStudent(studentExists, {
-                residenceId: residence,
-                roomNumber: room,
-                createdBy: req.user._id
-            });
-            
-            console.log(`✅ Created enhanced debtor account for student: ${studentExists.firstName} ${studentExists.lastName}`);
+            try {
+                console.log('🏗️  Creating new debtor account for student...');
+                // Create debtor account automatically using enhanced service
+                const { createDebtorForStudent } = require('../../services/debtorService');
+                
+                debtor = await createDebtorForStudent(studentExists, {
+                    residenceId: residence,
+                    roomNumber: room,
+                    createdBy: req.user._id,
+                    startDate: date, // Use payment date as start date
+                    roomPrice: totalAmount // Use payment amount as room price reference
+                });
+                
+                console.log(`✅ Created enhanced debtor account for student: ${studentExists.firstName} ${studentExists.lastName}`);
+                console.log(`   Debtor ID: ${debtor._id}`);
+                console.log(`   Debtor Code: ${debtor.debtorCode}`);
+            } catch (debtorCreationError) {
+                console.error('❌ Error creating debtor account:', debtorCreationError);
+                console.error('   Error details:', debtorCreationError.message);
+                console.error('   Stack trace:', debtorCreationError.stack);
+                // Continue with payment creation even if debtor creation fails
+            }
         }
 
         // Add payment to debtor account
         if (debtor) {
-            await debtor.addPayment(totalAmount, `Payment ${paymentId} - ${paymentMonth}`);
+            try {
+                console.log('💰 Updating debtor account...');
+                console.log(`   Debtor ID: ${debtor._id}`);
+                console.log(`   Current Balance: $${debtor.currentBalance}`);
+                console.log(`   Total Owed: $${debtor.totalOwed}`);
+                console.log(`   Total Paid: $${debtor.totalPaid}`);
+                
+                // Call addPayment with proper data structure
+                await debtor.addPayment({
+                    paymentId: payment.paymentId,
+                    amount: totalAmount,
+                    allocatedMonth: paymentMonth,
+                    components: {
+                        rent: rent,
+                        admin: admin,
+                        deposit: deposit
+                    },
+                    paymentMethod: method,
+                    paymentDate: payment.date || new Date(),
+                    status: 'Confirmed',
+                    notes: `Payment ${paymentId} - ${paymentMonth}`,
+                    createdBy: req.user._id
+                });
+                
+                console.log('✅ Debtor account updated successfully');
+                console.log(`   New Balance: $${debtor.currentBalance}`);
+                console.log(`   New Total Paid: $${debtor.totalPaid}`);
+                
+            } catch (debtorError) {
+                console.error('❌ Error updating debtor account:', debtorError);
+                console.error('   Error details:', debtorError.message);
+                console.error('   Stack trace:', debtorError.stack);
+                // Don't fail the payment creation, but log the error
+            }
+        } else {
+            console.log('⚠️  No debtor account available for payment update');
         }
 
         // Record double-entry accounting transaction
@@ -600,16 +647,29 @@ const createPayment = async (req, res) => {
             console.log(`   Residence: ${payment.residence}`);
             console.log(`   Amount: $${payment.totalAmount}`);
             console.log(`   Method: ${payment.method}`);
+            console.log(`   Date: ${payment.date}`);
+            console.log(`   Date Type: ${typeof payment.date}`);
+            console.log(`   Date Valid: ${payment.date instanceof Date ? 'Yes' : 'No'}`);
             
             const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(payment, req.user);
             
             console.log('✅ Double-entry accounting transaction created for payment');
             console.log(`   Transaction ID: ${accountingResult.transaction.transactionId}`);
-            console.log(`   Amount: $${accountingResult.transaction.amount}`);
+            console.log(`   Transaction Entry ID: ${accountingResult.transactionEntry._id}`);
+            console.log(`   Amount: $${accountingResult.transactionEntry.totalDebit}`);
         } catch (accountingError) {
             console.error('❌ Error creating accounting transaction:', accountingError);
             console.error('   Error details:', accountingError.message);
             console.error('   Stack trace:', accountingError.stack);
+            console.error('   Payment data:', {
+                paymentId: payment.paymentId,
+                student: payment.student,
+                residence: payment.residence,
+                totalAmount: payment.totalAmount,
+                method: payment.method,
+                date: payment.date,
+                dateType: typeof payment.date
+            });
             // Don't fail the payment creation, but log the error
         }
 
