@@ -29,6 +29,7 @@ class DoubleEntryAccountingService {
     
     /**
      * Allocate petty cash to a user
+     * Residence is REQUIRED for proper financial tracking
      */
     static async allocatePettyCash(userId, amount, description, allocatedBy, residence = null) {
         try {
@@ -41,6 +42,24 @@ class DoubleEntryAccountingService {
             if (!user) {
                 throw new Error('User not found');
             }
+            
+            // ENFORCE RESIDENCE REQUIREMENT
+            if (!residence) {
+                console.log('⚠️ No residence provided, getting default residence');
+                residence = await this.getDefaultResidence();
+                if (!residence) {
+                    throw new Error('Residence is required for petty cash allocation. No default residence available.');
+                }
+            }
+            
+            // Validate residence exists
+            const Residence = require('../models/Residence');
+            const residenceDoc = await Residence.findById(residence);
+            if (!residenceDoc) {
+                throw new Error(`Invalid residence ID: ${residence}`);
+            }
+            
+            console.log(`🏠 Using residence: ${residenceDoc.name} (${residence})`);
             
             // Get the appropriate petty cash account based on user role
             const { getPettyCashAccountByRole } = require('../utils/pettyCashUtils');
@@ -59,7 +78,8 @@ class DoubleEntryAccountingService {
                 description: `Petty cash allocation: ${description}`,
                 type: 'other', // Changed from 'allocation' to 'other' since 'allocation' is not in enum
                 reference: `PETTY-${userId}`,
-                residence: residence || await this.getDefaultResidence(), // Use provided residence or fallback to default
+                residence: residence, // Always use validated residence
+                residenceName: residenceDoc.name, // Include residence name for better tracking
                 createdBy: allocatedBy._id
             });
 
@@ -75,7 +95,8 @@ class DoubleEntryAccountingService {
                 accountType: pettyCashAccount.type,
                 debit: amount,
                 credit: 0,
-                description: `Petty cash allocated to ${user.firstName} ${user.lastName} (${user.role})`
+                description: `Petty cash allocated to ${user.firstName} ${user.lastName} (${user.role}) - ${residenceDoc.name}`,
+                residence: residence // Include residence in entry for better tracking
             });
 
             // Credit: Bank/Cash (Source)
@@ -85,7 +106,8 @@ class DoubleEntryAccountingService {
                 accountType: 'Asset',
                 debit: 0,
                 credit: amount,
-                description: `Cash withdrawn for petty cash allocation to ${user.firstName} ${user.lastName}`
+                description: `Cash withdrawn for petty cash allocation to ${user.firstName} ${user.lastName} - ${residenceDoc.name}`,
+                residence: residence // Include residence in entry for better tracking
             });
 
             const transactionEntry = new TransactionEntry({
@@ -101,12 +123,15 @@ class DoubleEntryAccountingService {
                 sourceModel: 'Request',
                 createdBy: allocatedBy.email,
                 status: 'posted',
+                residence: residence, // Include residence in transaction entry
                 metadata: {
                     pettyCashUserId: userId,
                     pettyCashUserRole: user.role,
                     pettyCashAccountCode: pettyCashAccount.code,
                     allocationType: 'initial',
-                    transactionType: 'petty_cash_allocation'
+                    transactionType: 'petty_cash_allocation',
+                    residenceId: residence,
+                    residenceName: residenceDoc.name
                 }
             });
 
@@ -115,8 +140,8 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log(`✅ Petty cash allocated successfully to ${user.firstName} ${user.lastName} (${user.role})`);
-            return { transaction, transactionEntry, user, pettyCashAccount };
+            console.log(`✅ Petty cash allocated successfully to ${user.firstName} ${user.lastName} (${user.role}) for residence: ${residenceDoc.name}`);
+            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc };
 
         } catch (error) {
             console.error('❌ Error allocating petty cash:', error);
@@ -126,6 +151,7 @@ class DoubleEntryAccountingService {
 
     /**
      * Record petty cash expense
+     * Residence is REQUIRED for proper financial tracking
      */
     static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy, residence = null) {
         try {
@@ -138,6 +164,24 @@ class DoubleEntryAccountingService {
             if (!user) {
                 throw new Error('User not found');
             }
+            
+            // ENFORCE RESIDENCE REQUIREMENT
+            if (!residence) {
+                console.log('⚠️ No residence provided, getting default residence');
+                residence = await this.getDefaultResidence();
+                if (!residence) {
+                    throw new Error('Residence is required for petty cash expense. No default residence available.');
+                }
+            }
+            
+            // Validate residence exists
+            const Residence = require('../models/Residence');
+            const residenceDoc = await Residence.findById(residence);
+            if (!residenceDoc) {
+                throw new Error(`Invalid residence ID: ${residence}`);
+            }
+            
+            console.log(`🏠 Using residence: ${residenceDoc.name} (${residence})`);
             
             // Get the appropriate petty cash account based on user role
             const { getPettyCashAccountByRole } = require('../utils/pettyCashUtils');
@@ -170,7 +214,8 @@ class DoubleEntryAccountingService {
                 description: `Petty cash expense: ${description}`,
                 type: 'other', // Changed from 'expense' to 'other' since 'expense' is not in enum
                 reference: `PETTY-EXP-${userId}`,
-                residence: residence || await this.getDefaultResidence(), // Use provided residence or fallback to default
+                residence: residence, // Always use validated residence
+                residenceName: residenceDoc.name, // Include residence name for better tracking
                 createdBy: approvedBy._id
             });
 
@@ -186,7 +231,8 @@ class DoubleEntryAccountingService {
                 accountType: 'Expense',
                 debit: amount,
                 credit: 0,
-                description: `Petty cash expense: ${description}`
+                description: `Petty cash expense: ${description} - ${residenceDoc.name}`,
+                residence: residence // Include residence in entry for better tracking
             });
 
             // Credit: User's Specific Petty Cash Account (Asset)
@@ -196,7 +242,8 @@ class DoubleEntryAccountingService {
                 accountType: pettyCashAccount.type,
                 debit: 0,
                 credit: amount,
-                description: `${user.firstName} ${user.lastName} petty cash used for ${description}`
+                description: `${user.firstName} ${user.lastName} petty cash used for ${description} - ${residenceDoc.name}`,
+                residence: residence // Include residence in entry for better tracking
             });
 
             const transactionEntry = new TransactionEntry({
@@ -212,6 +259,7 @@ class DoubleEntryAccountingService {
                 sourceModel: 'Request',
                 createdBy: approvedBy.email,
                 status: 'posted',
+                residence: residence, // Include residence in transaction entry
                 metadata: {
                     pettyCashUserId: userId,
                     pettyCashUserRole: user.role,
@@ -219,7 +267,9 @@ class DoubleEntryAccountingService {
                     expenseCategory,
                     expenseDescription: description,
                     expenseAmount: amount,
-                    transactionType: 'petty_cash_expense'
+                    transactionType: 'petty_cash_expense',
+                    residenceId: residence,
+                    residenceName: residenceDoc.name
                 }
             });
 
@@ -228,8 +278,8 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log(`✅ Petty cash expense recorded successfully for ${user.firstName} ${user.lastName} (${user.role})`);
-            return { transaction, transactionEntry, user, pettyCashAccount };
+            console.log(`✅ Petty cash expense recorded successfully for ${user.firstName} ${user.lastName} (${user.role}) at residence: ${residenceDoc.name}`);
+            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc };
 
         } catch (error) {
             console.error('❌ Error recording petty cash expense:', error);
@@ -252,12 +302,20 @@ class DoubleEntryAccountingService {
                 throw new Error('User not found');
             }
             
-            // Get the appropriate petty cash account based on user role
-            const { getPettyCashAccountByRole } = require('../utils/pettyCashUtils');
-            const pettyCashAccount = await getPettyCashAccountByRole(user.role);
+            // ENFORCE RESIDENCE REQUIREMENT
+            if (!residence) {
+                console.log('⚠️ No residence provided, getting default residence');
+                residence = await this.getDefaultResidence();
+                if (!residence) {
+                    throw new Error('Residence is required for petty cash replenishment. No default residence available.');
+                }
+            }
             
-            if (!pettyCashAccount) {
-                throw new Error(`No petty cash account found for role: ${user.role}`);
+            // Validate residence exists
+            const Residence = require('../models/Residence');
+            const residenceDoc = await Residence.findById(residence);
+            if (!residenceDoc) {
+                throw new Error(`Invalid residence ID: ${residence}`);
             }
             
             console.log(`🔄 Replenishing ${user.role} petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
@@ -269,7 +327,8 @@ class DoubleEntryAccountingService {
                 description: `Petty cash replenishment: ${description}`,
                 type: 'other', // Changed from 'replenishment' to 'other' since 'replenishment' is not in enum
                 reference: `PETTY-REP-${userId}`,
-                residence: residence || await this.getDefaultResidence(), // Use provided residence or fallback to default
+                residence: residence, // Always use validated residence
+                residenceName: residenceDoc.name, // Include residence name for better tracking
                 createdBy: replenishedBy._id
             });
 
@@ -285,7 +344,8 @@ class DoubleEntryAccountingService {
                 accountType: pettyCashAccount.type,
                 debit: amount,
                 credit: 0,
-                description: `${user.firstName} ${user.lastName} petty cash replenished`
+                description: `${user.firstName} ${user.lastName} petty cash replenished - ${residenceDoc.name}`,
+                residence: residence // Include residence in entry for better tracking
             });
 
             // Credit: Bank/Cash (Source)
@@ -295,7 +355,8 @@ class DoubleEntryAccountingService {
                 accountType: 'Asset',
                 debit: 0,
                 credit: amount,
-                description: `Cash used to replenish ${user.firstName} ${user.lastName} petty cash`
+                description: `Cash used to replenish ${user.firstName} ${user.lastName} petty cash - ${residenceDoc.name}`,
+                residence: residence // Include residence in entry for better tracking
             });
 
             const transactionEntry = new TransactionEntry({
@@ -311,12 +372,15 @@ class DoubleEntryAccountingService {
                 sourceModel: 'Request',
                 createdBy: replenishedBy.email,
                 status: 'posted',
+                residence: residence, // Include residence in transaction entry
                 metadata: {
                     pettyCashUserId: userId,
                     pettyCashUserRole: user.role,
                     pettyCashAccountCode: pettyCashAccount.code,
                     replenishmentType: 'top_up',
-                    transactionType: 'petty_cash_replenishment'
+                    transactionType: 'petty_cash_replenishment',
+                    residenceId: residence,
+                    residenceName: residenceDoc.name
                 }
             });
 
@@ -325,8 +389,8 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log(`✅ Petty cash replenished successfully for ${user.firstName} ${user.lastName} (${user.role})`);
-            return { transaction, transactionEntry, user, pettyCashAccount };
+            console.log(`✅ Petty cash replenished successfully for ${user.firstName} ${user.lastName} (${user.role}) for residence: ${residenceDoc.name}`);
+            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc };
 
         } catch (error) {
             console.error('❌ Error replenishing petty cash:', error);

@@ -578,7 +578,7 @@ class FinanceController {
 
     /**
      * Allocate petty cash to a user
-     * Finance only needs to select user and amount
+     * Residence is REQUIRED for proper financial tracking
      */
     static async allocatePettyCash(req, res) {
         try {
@@ -592,6 +592,13 @@ class FinanceController {
                 });
             }
 
+            // ENFORCE RESIDENCE REQUIREMENT
+            if (!residence) {
+                return res.status(400).json({
+                    error: 'Residence is required for petty cash allocation. Please provide a valid residence ID.'
+                });
+            }
+
             // Check if user exists
             const User = require('../models/User');
             const user = await User.findById(userId);
@@ -599,13 +606,22 @@ class FinanceController {
                 return res.status(404).json({ error: 'User not found' });
             }
 
+            // Validate residence exists
+            const Residence = require('../models/Residence');
+            const residenceDoc = await Residence.findById(residence);
+            if (!residenceDoc) {
+                return res.status(400).json({ error: 'Invalid residence ID provided' });
+            }
+
+            console.log(`🏠 Allocating petty cash for residence: ${residenceDoc.name}`);
+
             // Allocate petty cash
             const result = await DoubleEntryAccountingService.allocatePettyCash(
                 userId, 
                 amount, 
                 description || `Petty cash allocation for ${user.firstName} ${user.lastName}`,
                 req.user,
-                residence // Pass residence to the service
+                residence // Pass validated residence to the service
             );
 
             console.log('✅ Petty cash allocated successfully');
@@ -619,7 +635,10 @@ class FinanceController {
                     description: result.transactionEntry.description,
                     transactionId: result.transaction.transactionId,
                     date: result.transaction.date,
-                    residence: result.transaction.residence // Include residence in response
+                    residence: {
+                        id: result.transaction.residence,
+                        name: result.transaction.residenceName
+                    }
                 }
             });
 
@@ -632,6 +651,7 @@ class FinanceController {
     /**
      * Record petty cash expense
      * Finance approves petty cash expenses
+     * Residence is REQUIRED for proper financial tracking
      */
     static async recordPettyCashExpense(req, res) {
         try {
@@ -645,12 +665,28 @@ class FinanceController {
                 });
             }
 
+            // ENFORCE RESIDENCE REQUIREMENT
+            if (!residence) {
+                return res.status(400).json({
+                    error: 'Residence is required for petty cash expense. Please provide a valid residence ID.'
+                });
+            }
+
             // Check if user exists
             const User = require('../models/User');
             const user = await User.findById(userId);
             if (!user) {
                 return res.status(404).json({ error: 'User not found' });
             }
+
+            // Validate residence exists
+            const Residence = require('../models/Residence');
+            const residenceDoc = await Residence.findById(residence);
+            if (!residenceDoc) {
+                return res.status(400).json({ error: 'Invalid residence ID provided' });
+            }
+
+            console.log(`🏠 Recording petty cash expense for residence: ${residenceDoc.name}`);
 
             // Check petty cash balance
             const balance = await DoubleEntryAccountingService.getPettyCashBalance(userId);
@@ -667,7 +703,7 @@ class FinanceController {
                 description,
                 expenseCategory,
                 req.user,
-                residence // Pass residence to the service
+                residence // Pass validated residence to the service
             );
 
             console.log('✅ Petty cash expense recorded successfully');
@@ -682,7 +718,10 @@ class FinanceController {
                     expenseCategory,
                     transactionId: result.transaction?.transactionId,
                     remainingBalance: balance.currentBalance - amount,
-                    residence: result.transaction?.residence // Include residence in response
+                    residence: {
+                        id: result.transaction?.residence,
+                        name: result.transaction?.residenceName
+                    }
                 }
             });
 
@@ -695,6 +734,7 @@ class FinanceController {
     /**
      * Replenish petty cash for a user
      * Finance can top up petty cash
+     * Residence is REQUIRED for proper financial tracking
      */
     static async replenishPettyCash(req, res) {
         try {
@@ -708,6 +748,13 @@ class FinanceController {
                 });
             }
 
+            // ENFORCE RESIDENCE REQUIREMENT
+            if (!residence) {
+                return res.status(400).json({
+                    error: 'Residence is required for petty cash replenishment. Please provide a valid residence ID.'
+                });
+            }
+
             // Check if user exists
             const User = require('../models/User');
             const user = await User.findById(userId);
@@ -715,13 +762,22 @@ class FinanceController {
                 return res.status(404).json({ error: 'User not found' });
             }
 
+            // Validate residence exists
+            const Residence = require('../models/Residence');
+            const residenceDoc = await Residence.findById(residence);
+            if (!residenceDoc) {
+                return res.status(400).json({ error: 'Invalid residence ID provided' });
+            }
+
+            console.log(`🏠 Replenishing petty cash for residence: ${residenceDoc.name}`);
+
             // Replenish petty cash
             const result = await DoubleEntryAccountingService.replenishPettyCash(
                 userId,
                 amount,
                 description || `Petty cash replenishment for ${user.firstName} ${user.lastName}`,
                 req.user,
-                residence // Pass residence to the service
+                residence // Pass validated residence to the service
             );
 
             // Get updated balance
@@ -738,7 +794,10 @@ class FinanceController {
                     description: result.transactionEntry.description,
                     transactionId: result.transaction.transactionId,
                     newBalance: balance.currentBalance,
-                    residence: result.transaction.residence // Include residence in response
+                    residence: {
+                        id: result.transaction?.residence,
+                        name: result.transaction?.residenceName
+                    }
                 }
             });
 
