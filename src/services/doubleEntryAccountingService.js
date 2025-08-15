@@ -152,10 +152,11 @@ class DoubleEntryAccountingService {
     /**
      * Record petty cash expense
      * Residence is REQUIRED for proper financial tracking
+     * Links to original expense if expenseId provided
      */
-    static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy, residence = null) {
+    static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy, residence = null, expenseId = null) {
         try {
-            console.log('💸 Recording petty cash expense:', amount, 'by user:', userId, 'residence:', residence);
+            console.log('💸 Recording petty cash expense:', amount, 'by user:', userId, 'residence:', residence, 'expenseId:', expenseId);
             
             // Get the user to determine their role and appropriate petty cash account
             const User = require('../models/User');
@@ -269,7 +270,10 @@ class DoubleEntryAccountingService {
                     expenseAmount: amount,
                     transactionType: 'petty_cash_expense',
                     residenceId: residence,
-                    residenceName: residenceDoc.name
+                    residenceName: residenceDoc.name,
+                    expenseId: expenseId, // Link to original expense
+                    paymentMethod: 'Petty Cash',
+                    paymentReference: `PC-${Date.now()}`
                 }
             });
 
@@ -279,7 +283,10 @@ class DoubleEntryAccountingService {
             await transaction.save();
 
             console.log(`✅ Petty cash expense recorded successfully for ${user.firstName} ${user.lastName} (${user.role}) at residence: ${residenceDoc.name}`);
-            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc };
+            if (expenseId) {
+                console.log(`🔗 Linked to expense: ${expenseId}`);
+            }
+            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc, expenseId };
 
         } catch (error) {
             console.error('❌ Error recording petty cash expense:', error);

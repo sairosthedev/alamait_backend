@@ -652,11 +652,12 @@ class FinanceController {
      * Record petty cash expense
      * Finance approves petty cash expenses
      * Residence is REQUIRED for proper financial tracking
+     * Updates expense status to "Paid" when using petty cash
      */
     static async recordPettyCashExpense(req, res) {
         try {
-            const { userId, amount, description, expenseCategory, residence } = req.body;
-            console.log('💸 Recording petty cash expense for user:', userId, 'amount:', amount, 'residence:', residence);
+            const { userId, amount, description, expenseCategory, residence, expenseId } = req.body;
+            console.log('💸 Recording petty cash expense for user:', userId, 'amount:', amount, 'residence:', residence, 'expenseId:', expenseId);
 
             // Validate input
             if (!userId || !amount || amount <= 0 || !description || !expenseCategory) {
@@ -696,6 +697,36 @@ class FinanceController {
                 });
             }
 
+            // Update expense status to "Paid" if expenseId is provided
+            let expenseUpdateResult = null;
+            if (expenseId) {
+                try {
+                    const Expense = require('../models/finance/Expense');
+                    const expense = await Expense.findById(expenseId);
+                    
+                    if (expense) {
+                        console.log(`📝 Updating expense ${expenseId} status to "Paid"`);
+                        
+                        // Update expense status and payment information
+                        expense.paymentStatus = 'Paid';
+                        expense.paymentMethod = 'Petty Cash';
+                        expense.paidDate = new Date();
+                        expense.paymentReference = `PC-${Date.now()}`;
+                        expense.notes = expense.notes ? `${expense.notes} | Paid with petty cash on ${new Date().toLocaleDateString()}` : `Paid with petty cash on ${new Date().toLocaleDateString()}`;
+                        
+                        await expense.save();
+                        expenseUpdateResult = expense;
+                        
+                        console.log(`✅ Expense ${expenseId} status updated to "Paid"`);
+                    } else {
+                        console.log(`⚠️ Expense ${expenseId} not found, proceeding without expense update`);
+                    }
+                } catch (expenseError) {
+                    console.error('⚠️ Error updating expense status:', expenseError);
+                    // Continue with petty cash transaction even if expense update fails
+                }
+            }
+
             // Record petty cash expense
             const result = await DoubleEntryAccountingService.recordPettyCashExpense(
                 userId,
@@ -703,7 +734,8 @@ class FinanceController {
                 description,
                 expenseCategory,
                 req.user,
-                residence // Pass validated residence to the service
+                residence, // Pass validated residence to the service
+                expenseId // Pass expenseId to link the transaction
             );
 
             console.log('✅ Petty cash expense recorded successfully');
@@ -721,7 +753,11 @@ class FinanceController {
                     residence: {
                         id: result.transaction?.residence,
                         name: result.transaction?.residenceName
-                    }
+                    },
+                    expenseUpdated: !!expenseUpdateResult,
+                    expenseId: expenseId || null,
+                    paymentMethod: 'Petty Cash',
+                    paymentReference: expenseUpdateResult?.paymentReference || `PC-${Date.now()}`
                 }
             });
 
