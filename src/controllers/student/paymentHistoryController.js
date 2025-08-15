@@ -4,7 +4,51 @@ const Booking = require('../../models/Booking');
 const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const multer = require('multer');
+const multerS3 = require('multer-s3');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
+const { sendEmail } = require('../../utils/email');
+
+// Helper function to safely format dates
+const safeDateFormat = (date) => {
+    if (!date) return null;
+    
+    try {
+        // If it's already a Date object
+        if (date instanceof Date) {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+        
+        // If it's a string, try to parse it
+        if (typeof date === 'string') {
+            const parsedDate = new Date(date);
+            if (!isNaN(parsedDate.getTime())) {
+                const year = parsedDate.getFullYear();
+                const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
+                const day = String(parsedDate.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            }
+        }
+        
+        // If it's a number (timestamp), try to parse it
+        if (typeof date === 'number') {
+            const parsedDate = new Date(date);
+            if (!isNaN(parsedDate.getTime())) {
+                const year = parsedDate.getFullYear();
+                const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
+                const day = String(parsedDate.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            }
+        }
+        
+        return null;
+    } catch (error) {
+        console.error('Error formatting date:', error);
+        return null;
+    }
+};
 
 // Configure multer for temporary file storage (we'll upload to S3 manually)
 const upload = multer({
@@ -355,7 +399,7 @@ exports.getPaymentHistory = async (req, res) => {
                 rent: payment.rentAmount || 0,
                 admin: payment.adminFee || 0,
                 deposit: payment.deposit || 0,
-                startDate: date.toISOString().split('T')[0],
+                startDate: safeDateFormat(date),
                 proofOfPayment: payment.proofOfPayment ? {
                     fileUrl: payment.proofOfPayment.fileUrl,
                     fileName: payment.proofOfPayment.fileName,
