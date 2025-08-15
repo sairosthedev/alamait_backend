@@ -57,7 +57,7 @@ const expenseItemSchema = new mongoose.Schema({
     paidDate: Date,
     paymentMethod: {
         type: String,
-        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal']
+        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal', 'Petty Cash']
     },
     receiptImage: {
         fileUrl: String,
@@ -112,7 +112,7 @@ const expenseSchema = new mongoose.Schema({
     },
     paymentMethod: {
         type: String,
-        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal'],
+        enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks', 'MasterCard', 'Visa', 'PayPal', 'Petty Cash'],
         required: function() { return this.paymentStatus === 'Paid'; }
     },
     paymentIcon: {
@@ -192,6 +192,18 @@ const expenseSchema = new mongoose.Schema({
     expenseAccountCode: {
         type: String,
         required: false
+    },
+    
+    // Notes and additional information
+    notes: {
+        type: String,
+        trim: true
+    },
+    
+    // Payment reference for tracking
+    paymentReference: {
+        type: String,
+        trim: true
     }
 }, {
     timestamps: true
