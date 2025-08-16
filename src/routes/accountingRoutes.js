@@ -11,6 +11,10 @@ router.get('/balance-sheet', AccountingController.getMonthlyBalanceSheet);
 router.get('/balance-sheet-breakdown', AccountingController.getMonthlyBreakdownBalanceSheet);
 router.get('/balance-sheet-monthly', AccountingController.getMonthlyBalanceSheetWithCodes);
 
+// Get monthly progression for all residences
+router.get('/income-statement/residences/monthly', AccountingController.getMonthlyProgressionIncomeStatement);
+router.get('/cash-flow/residences/monthly', AccountingController.getMonthlyProgressionCashFlow);
+
 // Get balance sheet by residence
 router.get('/balance-sheet/residence/:residenceId', AccountingController.getBalanceSheetByResidence);
 router.get('/balance-sheet/residences', AccountingController.getBalanceSheetAllResidences);

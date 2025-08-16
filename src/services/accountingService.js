@@ -788,6 +788,361 @@ class AccountingService {
             throw error;
         }
     }
+
+    /**
+     * Generate Monthly Progression for Income Statement - All Residences
+     * Shows every month from January to December for each residence
+     */
+    static async generateMonthlyProgressionIncomeStatement(year) {
+        try {
+            console.log(`📊 Generating Monthly Progression Income Statement for ${year} - All Residences...`);
+            
+            // Get all residences
+            const residences = await mongoose.connection.db
+                .collection('residences')
+                .find({}).toArray();
+            
+            const monthlyProgression = {};
+            
+            // Generate monthly progression for each month (Jan-Dec)
+            for (let month = 1; month <= 12; month++) {
+                const monthData = {
+                    month,
+                    year,
+                    monthName: new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' }),
+                    residences: {},
+                    overall: null,
+                    summary: {
+                        totalResidences: residences.length,
+                        totalRevenue: 0,
+                        totalExpenses: 0,
+                        totalNetIncome: 0
+                    }
+                };
+                
+                let monthTotalRevenue = 0;
+                let monthTotalExpenses = 0;
+                let monthTotalNetIncome = 0;
+                
+                // Generate income statement for each residence for this month
+                for (const residence of residences) {
+                    const residenceId = residence._id.toString();
+                    const incomeStatement = await this.generateMonthlyIncomeStatementByResidence(month, year, residenceId);
+                    
+                    monthData.residences[residenceId] = {
+                        ...incomeStatement,
+                        residenceDetails: {
+                            id: residenceId,
+                            name: residence.name,
+                            address: residence.address || 'N/A',
+                            type: residence.type || 'N/A'
+                        }
+                    };
+                    
+                    monthTotalRevenue += incomeStatement.revenue.total;
+                    monthTotalExpenses += incomeStatement.expenses.total;
+                    monthTotalNetIncome += incomeStatement.netIncome;
+                }
+                
+                // Generate overall income statement for this month
+                const overallIncomeStatement = await this.generateMonthlyIncomeStatement(month, year);
+                monthData.overall = {
+                    ...overallIncomeStatement,
+                    residenceDetails: { name: 'All Residences Combined' }
+                };
+                
+                // Update month summary
+                monthData.summary.totalRevenue = monthTotalRevenue;
+                monthData.summary.totalExpenses = monthTotalExpenses;
+                monthData.summary.totalNetIncome = monthTotalNetIncome;
+                
+                monthlyProgression[month] = monthData;
+            }
+            
+            return {
+                year,
+                monthlyProgression,
+                summary: {
+                    totalResidences: residences.length,
+                    totalRevenue: monthlyProgression[12]?.summary.totalRevenue || 0,
+                    totalExpenses: monthlyProgression[12]?.summary.totalExpenses || 0,
+                    totalNetIncome: monthlyProgression[12]?.summary.totalNetIncome || 0
+                }
+            };
+            
+        } catch (error) {
+            console.error('❌ Error generating monthly progression income statement:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Monthly Progression for Cash Flow - All Residences
+     * Shows every month from January to December for each residence
+     */
+    static async generateMonthlyProgressionCashFlow(year) {
+        try {
+            console.log(`💸 Generating Monthly Progression Cash Flow for ${year} - All Residences...`);
+            
+            // Get all residences
+            const residences = await mongoose.connection.db
+                .collection('residences')
+                .find({}).toArray();
+            
+            const monthlyProgression = {};
+            
+            // Generate monthly progression for each month (Jan-Dec)
+            for (let month = 1; month <= 12; month++) {
+                const monthData = {
+                    month,
+                    year,
+                    monthName: new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' }),
+                    residences: {},
+                    overall: null,
+                    summary: {
+                        totalResidences: residences.length,
+                        totalNetOperatingCash: 0,
+                        totalNetChangeInCash: 0,
+                        totalEndingCash: 0
+                    }
+                };
+                
+                let monthTotalNetOperatingCash = 0;
+                let monthTotalNetChangeInCash = 0;
+                let monthTotalEndingCash = 0;
+                
+                // Generate cash flow for each residence for this month
+                for (const residence of residences) {
+                    const residenceId = residence._id.toString();
+                    const cashFlow = await this.generateMonthlyCashFlowStatementByResidence(month, year, residenceId);
+                    
+                    monthData.residences[residenceId] = {
+                        ...cashFlow,
+                        residenceDetails: {
+                            id: residenceId,
+                            name: residence.name,
+                            address: residence.address || 'N/A',
+                            type: residence.type || 'N/A'
+                        }
+                    };
+                    
+                    monthTotalNetOperatingCash += cashFlow.operatingActivities.netOperatingCash;
+                    monthTotalNetChangeInCash += cashFlow.netChangeInCash;
+                    monthTotalEndingCash += cashFlow.cashPositions.ending;
+                }
+                
+                // Generate overall cash flow for this month
+                const overallCashFlow = await this.generateMonthlyCashFlowStatement(month, year);
+                monthData.overall = {
+                    ...overallCashFlow,
+                    residenceDetails: { name: 'All Residences Combined' }
+                };
+                
+                // Update month summary
+                monthData.summary.totalNetOperatingCash = monthTotalNetOperatingCash;
+                monthData.summary.totalNetChangeInCash = monthTotalNetChangeInCash;
+                monthData.summary.totalEndingCash = monthTotalEndingCash;
+                
+                monthlyProgression[month] = monthData;
+            }
+            
+            return {
+                year,
+                monthlyProgression,
+                summary: {
+                    totalResidences: residences.length,
+                    totalNetOperatingCash: monthlyProgression[12]?.summary.totalNetOperatingCash || 0,
+                    totalNetChangeInCash: monthlyProgression[12]?.summary.totalNetChangeInCash || 0,
+                    totalEndingCash: monthlyProgression[12]?.summary.totalEndingCash || 0
+                }
+            };
+            
+        } catch (error) {
+            console.error('❌ Error generating monthly progression cash flow:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Monthly Income Statement by Residence (Accrual Basis)
+     */
+    static async generateMonthlyIncomeStatementByResidence(month, year, residenceId) {
+        try {
+            console.log(`📊 Generating Income Statement for ${month}/${year} - Residence: ${residenceId}...`);
+            
+            const monthStart = new Date(year, month - 1, 1);
+            const monthEnd = new Date(year, month, 0);
+            
+            // Get all accrual entries for this month and residence (accrual basis)
+            const accrualEntries = await TransactionEntry.find({
+                'metadata.type': 'rent_accrual',
+                'metadata.accrualMonth': month,
+                'metadata.accrualYear': year,
+                date: { $gte: monthStart, $lte: monthEnd },
+                residence: residenceId
+            });
+            
+            console.log(`📊 Found ${accrualEntries.length} accrual entries for ${month}/${year} - Residence: ${residenceId}`);
+            
+            // Calculate totals from accrual entries
+            let totalRentalIncome = 0;
+            let totalAdminIncome = 0;
+            
+            for (const entry of accrualEntries) {
+                if (entry.entries && Array.isArray(entry.entries)) {
+                    for (const subEntry of entry.entries) {
+                        if (subEntry.accountCode === '4000') { // Rental Income - Residential
+                            totalRentalIncome += subEntry.credit || 0;
+                        } else if (subEntry.accountCode === '4100') { // Administrative Income
+                            totalAdminIncome += subEntry.credit || 0;
+                        }
+                    }
+                }
+            }
+            
+            const totalRevenue = totalRentalIncome + totalAdminIncome;
+            
+            // For now, no expenses in accrual system
+            const totalExpenses = 0;
+            const netIncome = totalRevenue - totalExpenses;
+            
+            console.log(`📊 Calculated for Residence ${residenceId}: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total $${totalRevenue}`);
+            
+            return {
+                month,
+                year,
+                period: `${month}/${year}`,
+                residence: residenceId,
+                revenue: {
+                    rentalIncome: totalRentalIncome,
+                    adminIncome: totalAdminIncome,
+                    total: totalRevenue
+                },
+                expenses: {
+                    total: totalExpenses,
+                    breakdown: {}
+                },
+                netIncome,
+                basis: 'accrual' // Shows income when earned, not when received
+            };
+            
+        } catch (error) {
+            console.error('❌ Error generating income statement by residence:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Monthly Cash Flow Statement by Residence
+     */
+    static async generateMonthlyCashFlowStatementByResidence(month, year, residenceId) {
+        try {
+            console.log(`💸 Generating Cash Flow Statement for ${month}/${year} - Residence: ${residenceId}...`);
+            
+            const monthStart = new Date(year, month - 1, 1);
+            const monthEnd = new Date(year, month, 0);
+            
+            // Operating Activities
+            const cashCollections = await this.getCashCollectionsByResidence(monthStart, monthEnd, residenceId);
+            const cashPayments = await this.getCashPaymentsByResidence(monthStart, monthEnd, residenceId);
+            const netOperatingCash = cashCollections - cashPayments;
+            
+            // Investing Activities
+            const investingCash = await this.getInvestingCashFlowByResidence(monthStart, monthEnd, residenceId);
+            
+            // Financing Activities
+            const financingCash = await this.getFinancingCashFlowByResidence(monthStart, monthEnd, residenceId);
+            
+            // Net Change in Cash
+            const netChangeInCash = netOperatingCash + investingCash + financingCash;
+            
+            // Beginning and Ending Cash
+            const beginningCash = await this.getAccountBalance('1001', monthStart, residenceId);
+            const endingCash = beginningCash + netChangeInCash;
+            
+            return {
+                month,
+                year,
+                period: `${month}/${year}`,
+                residence: residenceId,
+                operatingActivities: {
+                    cashCollections,
+                    cashPayments,
+                    netOperatingCash
+                },
+                investingActivities: {
+                    netCash: investingCash
+                },
+                financingActivities: {
+                    netCash: financingCash
+                },
+                netChangeInCash,
+                cashPositions: {
+                    beginning: beginningCash,
+                    ending: endingCash
+                }
+            };
+            
+        } catch (error) {
+            console.error('❌ Error generating cash flow statement by residence:', error);
+            throw error;
+        }
+    }
+
+    // Helper methods for residence-specific cash flow
+    static async getCashCollectionsByResidence(startDate, endDate, residenceId) {
+        const entries = await TransactionEntry.find({
+            'entries.accountCode': '1001', // Bank - look inside nested entries array
+            date: { $gte: startDate, $lte: endDate },
+            status: 'posted',
+            residence: residenceId
+        });
+        
+        let totalCollections = 0;
+        for (const entry of entries) {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                for (const subEntry of entry.entries) {
+                    if (subEntry.accountCode === '1001' && subEntry.debit > 0) {
+                        totalCollections += subEntry.debit;
+                    }
+                }
+            }
+        }
+        
+        return totalCollections;
+    }
+    
+    static async getCashPaymentsByResidence(startDate, endDate, residenceId) {
+        const entries = await TransactionEntry.find({
+            'entries.accountCode': '1001', // Bank - look inside nested entries array
+            date: { $gte: startDate, $lte: endDate },
+            status: 'posted',
+            residence: residenceId
+        });
+        
+        let totalPayments = 0;
+        for (const entry of entries) {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                for (const subEntry of entry.entries) {
+                    if (subEntry.accountCode === '1001' && subEntry.credit > 0) {
+                        totalPayments += subEntry.credit;
+                    }
+                }
+            }
+        }
+        
+        return totalPayments;
+    }
+    
+    static async getInvestingCashFlowByResidence(startDate, endDate, residenceId) {
+        // For now, return 0 (no major investments)
+        return 0;
+    }
+    
+    static async getFinancingCashFlowByResidence(startDate, endDate, residenceId) {
+        // For now, return 0 (no financing activities)
+        return 0;
+    }
 }
 
 module.exports = AccountingService;

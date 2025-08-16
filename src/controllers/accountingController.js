@@ -266,6 +266,68 @@ class AccountingController {
             });
         }
     }
+
+    /**
+     * Get monthly progression for income statement - all residences (January through December)
+     * GET /api/accounting/income-statement/residences/monthly
+     */
+    static async getMonthlyProgressionIncomeStatement(req, res) {
+        try {
+            const { year } = req.query;
+            
+            if (!year) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Year is required' 
+                });
+            }
+            
+            const monthlyProgression = await AccountingService.generateMonthlyProgressionIncomeStatement(
+                parseInt(year)
+            );
+            
+            res.json({ success: true, data: monthlyProgression });
+            
+        } catch (error) {
+            console.error('❌ Error getting monthly progression income statement:', error);
+            res.status(500).json({ 
+                success: false, 
+                message: 'Error getting monthly progression income statement', 
+                error: error.message 
+            });
+        }
+    }
+
+    /**
+     * Get monthly progression for cash flow - all residences (January through December)
+     * GET /api/accounting/cash-flow/residences/monthly
+     */
+    static async getMonthlyProgressionCashFlow(req, res) {
+        try {
+            const { year } = req.query;
+            
+            if (!year) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Year is required' 
+                });
+            }
+            
+            const monthlyProgression = await AccountingService.generateMonthlyProgressionCashFlow(
+                parseInt(year)
+            );
+            
+            res.json({ success: true, data: monthlyProgression });
+            
+        } catch (error) {
+            console.error('❌ Error getting monthly progression cash flow:', error);
+            res.status(500).json({ 
+                success: false, 
+                message: 'Error getting monthly progression cash flow', 
+                error: error.message 
+            });
+        }
+    }
     
     /**
      * Generate monthly cash flow statement
