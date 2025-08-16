@@ -56,8 +56,8 @@ class MonthlyFinancialService {
                         if (!monthlyData[monthName].revenue[key]) {
                             monthlyData[monthName].revenue[key] = 0;
                         }
-                        monthlyData[monthName].revenue[key] += credit - debit;
-                        monthlyData[monthName].total_revenue += credit - debit;
+                        monthlyData[monthName].revenue[key] += debit; // Income increases with debit in this system
+                        monthlyData[monthName].total_revenue += debit; // Income increases with debit in this system
                     } else if (accountType === 'Expense' || accountType === 'expense') {
                         const key = `${accountCode} - ${accountName}`;
                         if (!monthlyData[monthName].expenses[key]) {

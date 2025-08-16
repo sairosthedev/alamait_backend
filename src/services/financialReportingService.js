@@ -60,7 +60,7 @@ class FinancialReportingService {
                         if (accountType === 'Income' || accountType === 'income') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!revenue[key]) revenue[key] = 0;
-                            revenue[key] += credit - debit; // Income increases with credit
+                            revenue[key] += debit; // Income increases with debit in this system
                         } else if (accountType === 'Expense' || accountType === 'expense') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!expenses[key]) expenses[key] = 0;
@@ -160,8 +160,8 @@ class FinancialReportingService {
                         if (accountType === 'Income' || accountType === 'income') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!monthlyData[month].revenue[key]) monthlyData[month].revenue[key] = 0;
-                            monthlyData[month].revenue[key] += credit - debit;
-                            monthlyData[month].total_revenue += credit - debit;
+                            monthlyData[month].revenue[key] += debit; // Income increases with debit in this system
+                            monthlyData[month].total_revenue += debit; // Income increases with debit in this system
                         } else if (accountType === 'Expense' || accountType === 'expense') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!monthlyData[month].expenses[key]) monthlyData[month].expenses[key] = 0;
@@ -264,8 +264,8 @@ class FinancialReportingService {
                         if (!monthlyData[monthName].revenue[key]) {
                             monthlyData[monthName].revenue[key] = 0;
                         }
-                        monthlyData[monthName].revenue[key] += credit - debit;
-                        monthlyData[monthName].total_revenue += credit - debit;
+                        monthlyData[monthName].revenue[key] += debit; // Income increases with debit in this system
+                        monthlyData[monthName].total_revenue += debit; // Income increases with debit in this system
                     } else if (accountType === 'Expense' || accountType === 'expense') {
                         const key = `${accountCode} - ${accountName}`;
                         if (!monthlyData[monthName].expenses[key]) {
@@ -399,8 +399,8 @@ class FinancialReportingService {
                         if (!monthlyData[monthName].revenue[key]) {
                             monthlyData[monthName].revenue[key] = 0;
                         }
-                        monthlyData[monthName].revenue[key] += credit - debit;
-                        monthlyData[monthName].total_revenue += credit - debit;
+                        monthlyData[monthName].revenue[key] += debit; // Income increases with debit in this system
+                        monthlyData[monthName].total_revenue += debit; // Income increases with debit in this system
                     } else if (accountType === 'Expense' || accountType === 'expense') {
                         const key = `${accountCode} - ${accountName}`;
                         if (!monthlyData[monthName].expenses[key]) {
@@ -1787,7 +1787,7 @@ class FinancialReportingService {
         } else if (accountType === 'Liability' || accountType === 'liability') {
             return debit - credit; // Liability increase = cash inflow
         } else if (accountType === 'Income' || accountType === 'income') {
-            return credit - debit; // Income increase = cash inflow
+            return debit; // Income increase = cash inflow (income increases with debit in this system)
         } else if (accountType === 'Expense' || accountType === 'expense') {
             return debit - credit; // Expense increase = cash outflow
         }
@@ -1832,7 +1832,7 @@ class FinancialReportingService {
                         if (accountType === 'Income' || accountType === 'income') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!revenue[key]) revenue[key] = 0;
-                            revenue[key] += credit - debit;
+                            revenue[key] += debit; // Income increases with debit in this system
                         } else if (accountType === 'Expense' || accountType === 'expense') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!expenses[key]) expenses[key] = 0;
