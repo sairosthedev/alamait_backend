@@ -1,85 +1,72 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
-const Account = require('./src/models/Account');
 
 async function checkAvailableAccounts() {
     try {
-        console.log('🔗 Connecting to database...');
-        
         if (!process.env.MONGODB_URI) {
             console.log('❌ MONGODB_URI not found in environment variables');
             return;
         }
-
-        await mongoose.connect(process.env.MONGODB_URI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true
-        });
-
-        console.log('✅ Connected to database');
-
+        
+        console.log('🔌 Connecting to MongoDB...');
+        await mongoose.connect(process.env.MONGODB_URI);
+        console.log('✅ Connected to MongoDB');
+        
+        console.log('\n📊 Available Accounts in Chart of Accounts:');
+        console.log('==========================================');
+        
         // Get all accounts
-        const accounts = await Account.find({});
+        const accounts = await mongoose.connection.db.collection('accounts').find({}).toArray();
+        console.log(`💰 Total Accounts: ${accounts.length}`);
         
-        if (accounts.length === 0) {
-            console.log('❌ No accounts found in database');
-            return;
-        }
-
-        console.log(`\n📊 Found ${accounts.length} accounts in database:`);
-        console.log('=' .repeat(80));
-        
-        accounts.forEach((account, index) => {
-            console.log(`${index + 1}. Account Code: ${account.accountCode}`);
-            console.log(`   Account Name: ${account.accountName}`);
-            console.log(`   Account Type: ${account.accountType}`);
-            console.log(`   Description: ${account.description || 'N/A'}`);
-            console.log('---');
+        // Group by type
+        const accountsByType = {};
+        accounts.forEach(account => {
+            if (!accountsByType[account.type]) {
+                accountsByType[account.type] = [];
+            }
+            accountsByType[account.type].push(account);
         });
-
+        
+        // Show accounts by type
+        Object.keys(accountsByType).forEach(type => {
+            console.log(`\n📋 ${type} Accounts:`);
+            console.log('─'.repeat(50));
+            accountsByType[type].forEach(account => {
+                console.log(`   ${account.code} - ${account.name}`);
+            });
+        });
+        
         // Look for specific account types we need
-        console.log('\n🔍 Looking for specific accounts we need:');
+        console.log('\n🔍 Looking for Required Account Types:');
+        console.log('=====================================');
         
-        const expenseAccounts = accounts.filter(acc => 
-            acc.accountType === 'Expense' || 
-            acc.accountName.toLowerCase().includes('expense') ||
-            acc.accountName.toLowerCase().includes('maintenance')
-        );
+        const bankAccounts = accounts.filter(a => a.name.toLowerCase().includes('bank') || a.name.toLowerCase().includes('cash'));
+        const rentAccounts = accounts.filter(a => a.name.toLowerCase().includes('rent') || a.name.toLowerCase().includes('income'));
+        const adminAccounts = accounts.filter(a => a.name.toLowerCase().includes('admin') || a.name.toLowerCase().includes('administrative'));
+        const depositAccounts = accounts.filter(a => a.name.toLowerCase().includes('deposit') || a.name.toLowerCase().includes('security'));
         
-        const liabilityAccounts = accounts.filter(acc => 
-            acc.accountType === 'Liability' || 
-            acc.accountName.toLowerCase().includes('payable')
-        );
-
-        console.log('\n💰 Expense Accounts:');
-        expenseAccounts.forEach(acc => {
-            console.log(`   - ${acc.accountName} (${acc.accountCode}) - ${acc.accountType}`);
-        });
-
-        console.log('\n💳 Liability Accounts:');
-        liabilityAccounts.forEach(acc => {
-            console.log(`   - ${acc.accountName} (${acc.accountCode}) - ${acc.accountType}`);
-        });
-
+        console.log(`🏦 Bank/Cash Accounts: ${bankAccounts.length}`);
+        bankAccounts.forEach(acc => console.log(`   ${acc.code} - ${acc.name}`));
+        
+        console.log(`🏠 Rent/Income Accounts: ${rentAccounts.length}`);
+        rentAccounts.forEach(acc => console.log(`   ${acc.code} - ${acc.name}`));
+        
+        console.log(`📋 Admin Accounts: ${adminAccounts.length}`);
+        adminAccounts.forEach(acc => console.log(`   ${acc.code} - ${acc.name}`));
+        
+        console.log(`💰 Deposit Accounts: ${depositAccounts.length}`);
+        depositAccounts.forEach(acc => console.log(`   ${acc.code} - ${acc.name}`));
+        
     } catch (error) {
-        console.error('❌ Error:', error);
+        console.error('❌ Error:', error.message);
     } finally {
-        await mongoose.disconnect();
-        console.log('🔌 Disconnected from database');
+        if (mongoose.connection.readyState === 1) {
+            await mongoose.disconnect();
+            console.log('\n🔌 Disconnected from MongoDB');
+        }
     }
 }
 
-// Run the script
-if (require.main === module) {
-    checkAvailableAccounts()
-        .then(() => {
-            console.log('\n🎉 Account check completed!');
-            process.exit(0);
-        })
-        .catch((error) => {
-            console.error('\n💥 Account check failed:', error);
-            process.exit(1);
-        });
-}
-
-module.exports = { checkAvailableAccounts }; 
+console.log('🔍 Checking Available Accounts...');
+checkAvailableAccounts(); 

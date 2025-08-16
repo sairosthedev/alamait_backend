@@ -121,23 +121,74 @@ class RentalAccrualController {
      */
     static async getOutstandingBalances(req, res) {
         try {
-            const balances = await RentalAccrualService.getOutstandingRentBalances();
+            const result = await RentalAccrualService.getOutstandingRentBalances();
             
-            // Calculate summary statistics
-            const totalOutstanding = balances.reduce((sum, student) => sum + student.totalOutstanding, 0);
-            const totalStudents = balances.length;
-            const overdueStudents = balances.filter(student => student.daysOverdue > 0).length;
+            // The service returns { students: [...], summary: {...} }
+            const { students, summary } = result;
+            
+            // Add residence breakdown
+            const residenceBreakdown = {};
+            let totalCollected = 0;
+            let totalRentCollected = 0;
+            let totalAdminCollected = 0;
+            let totalDepositCollected = 0;
+            
+            students.forEach(student => {
+                const residence = student.residence || 'Unknown';
+                if (!residenceBreakdown[residence]) {
+                    residenceBreakdown[residence] = {
+                        students: [],
+                        totalOutstanding: 0,
+                        totalMonthlyRent: 0,
+                        totalMonthlyAdminFees: 0,
+                        totalCollected: 0,
+                        totalRentCollected: 0,
+                        totalAdminCollected: 0,
+                        totalDepositCollected: 0,
+                        totalShouldBeOwed: 0
+                    };
+                }
+                
+                residenceBreakdown[residence].students.push(student);
+                residenceBreakdown[residence].totalOutstanding += student.totalOutstanding || 0;
+                residenceBreakdown[residence].totalMonthlyRent += student.monthlyRent || 0;
+                residenceBreakdown[residence].totalMonthlyAdminFees += student.monthlyAdminFee || 0;
+                residenceBreakdown[residence].totalShouldBeOwed += student.totalShouldBeOwed || 0;
+                residenceBreakdown[residence].totalCollected += student.totalPaid || 0;
+                
+                // Add payment type breakdowns
+                if (student.totalRentPaid !== undefined) {
+                    residenceBreakdown[residence].totalRentCollected += student.totalRentPaid;
+                    residenceBreakdown[residence].totalAdminCollected += student.totalAdminPaid;
+                    residenceBreakdown[residence].totalDepositCollected += student.totalDepositPaid;
+                }
+                
+                totalCollected += student.totalPaid || 0;
+                totalRentCollected += student.totalRentPaid || 0;
+                totalAdminCollected += student.totalAdminPaid || 0;
+                totalDepositCollected += student.totalDepositPaid || 0;
+            });
             
             res.json({
                 success: true,
                 data: {
                     summary: {
-                        totalOutstanding,
-                        totalStudents,
-                        overdueStudents,
-                        averageOutstanding: totalStudents > 0 ? totalOutstanding / totalStudents : 0
+                        ...summary,
+                        totalCollected,
+                        totalRentCollected,
+                        totalAdminCollected,
+                        totalDepositCollected
                     },
-                    students: balances
+                    students,
+                    residenceBreakdown,
+                    overallTotals: {
+                        totalStudents: students.length,
+                        totalMonthlyRent: Object.values(residenceBreakdown).reduce((sum, r) => sum + r.totalMonthlyRent, 0),
+                        totalMonthlyAdminFees: Object.values(residenceBreakdown).reduce((sum, r) => sum + r.totalMonthlyAdminFees, 0),
+                        totalShouldBeOwed: Object.values(residenceBreakdown).reduce((sum, r) => sum + r.totalShouldBeOwed, 0),
+                        totalCollected,
+                        totalOutstanding: summary.totalOutstanding
+                    }
                 }
             });
             
