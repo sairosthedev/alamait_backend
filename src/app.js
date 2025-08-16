@@ -313,6 +313,10 @@ app.use('/api/finance/income', financeIncomeRoutes);
 const financialReportsRoutes = require('./routes/financialReportsRoutes');
 app.use('/api/financial-reports', financialReportsRoutes);
 
+// Rental Accrual routes
+const rentalAccrualRoutes = require('./routes/rentalAccrualRoutes');
+app.use('/api/rental-accrual', rentalAccrualRoutes);
+
 // Transaction creation routes
 const transactionCreationRoutes = require('./routes/finance/transactionRoutes');
 app.use('/api/finance/transactions', transactionCreationRoutes);

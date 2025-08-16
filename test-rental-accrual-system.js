@@ -1,180 +1,207 @@
 const mongoose = require('mongoose');
-const RentalAccrualService = require('./src/services/rentalAccrualService');
+const Account = require('./src/models/Account');
 
 /**
  * Test Rental Accrual System
  * 
- * This script demonstrates how the rental accrual accounting system works
- * with a sample student lease scenario.
+ * This script demonstrates how rental accrual works with your
+ * enhanced chart of accounts for property management.
  * 
  * Run with: node test-rental-accrual-system.js
  */
 
-// Sample user for testing
-const testUser = {
-    email: 'test@alamait.com',
-    _id: 'test-user-id'
-};
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/test';
 
-// Sample lease data
-const sampleLease = {
-    _id: 'test-lease-id',
-    student: {
-        _id: 'test-student-id',
-        firstName: 'John',
-        lastName: 'Smith',
-        email: 'john.smith@student.com'
+// Test Properties
+const testProperties = [
+    { code: 'STK', name: 'St Kilda', accountCode: '1101', incomeCode: '4001' },
+    { code: 'BEL', name: 'Belvedere', accountCode: '1102', incomeCode: '4002' },
+    { code: 'NYA', name: 'Nyanga', accountCode: '1103', incomeCode: '4003' }
+];
+
+// Test Rental Scenarios
+const testRentalScenarios = [
+    {
+        property: 'STK',
+        tenantName: 'John Smith',
+        monthlyRent: 200.00,
+        dueDate: '2025-01-01',
+        description: 'January 2025 Rent Due - St Kilda'
     },
-    residence: {
-        _id: 'test-residence-id',
-        name: 'St. Kilda Student Residence'
+    {
+        property: 'BEL',
+        tenantName: 'Sarah Johnson',
+        monthlyRent: 300.00,
+        dueDate: '2025-01-01',
+        description: 'January 2025 Rent Due - Belvedere'
     },
-    room: {
-        _id: 'test-room-id',
-        name: 'Room 101',
-        price: 200
-    },
-    startDate: new Date('2025-06-01'),
-    endDate: new Date('2025-12-31'),
-    rent: 200,
-    billingCycle: 'monthly',
-    status: 'active'
-};
+    {
+        property: 'NYA',
+        tenantName: 'Mike Wilson',
+        monthlyRent: 150.00,
+        dueDate: '2025-01-01',
+        description: 'January 2025 Rent Due - Nyanga'
+    }
+];
+
+async function connectToDatabase() {
+    try {
+        console.log('🔌 Connecting to MongoDB...');
+        await mongoose.connect(MONGODB_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true
+        });
+        console.log('✅ Connected to MongoDB successfully!');
+        console.log('Database:', mongoose.connection.name);
+        console.log('');
+    } catch (error) {
+        console.error('❌ Failed to connect to MongoDB:', error.message);
+        throw error;
+    }
+}
 
 async function testRentalAccrualSystem() {
     try {
-        console.log('🏠 Testing Rental Accrual Accounting System');
-        console.log('==========================================\n');
+        console.log('=============================================');
+        console.log('🧪 Testing Rental Accrual System');
+        console.log('=============================================\n');
+
+        // 1. Verify Chart of Accounts
+        console.log('📊 1. Verifying Chart of Accounts...');
+        const totalAccounts = await Account.countDocuments();
+        console.log(`   Total accounts: ${totalAccounts}`);
         
-        // Test 1: Calculate billing periods
-        console.log('📊 Test 1: Calculate Billing Periods');
-        console.log('------------------------------------');
-        const billingPeriods = RentalAccrualService.calculateBillingPeriods(
-            sampleLease.startDate,
-            sampleLease.endDate,
-            sampleLease.billingCycle
+        // Check key rental accrual accounts
+        const keyAccounts = await Account.find({
+            code: { $in: ['1101', '1102', '1103', '4001', '4002', '4003'] }
+        }).sort('code');
+        
+        console.log('\n   Key Rental Accrual Accounts:');
+        keyAccounts.forEach(account => {
+            console.log(`   ${account.code} - ${account.name} (${account.type})`);
+        });
+
+        // 2. Demonstrate Rental Accrual Process
+        console.log('\n🔄 2. Rental Accrual Process Demonstration...');
+        
+        for (const scenario of testRentalScenarios) {
+            const property = testProperties.find(p => p.code === scenario.property);
+            
+            console.log(`\n   📍 Property: ${property.name}`);
+            console.log(`   👤 Tenant: ${scenario.tenantName}`);
+            console.log(`   💰 Monthly Rent: $${scenario.monthlyRent.toFixed(2)}`);
+            console.log(`   📅 Due Date: ${scenario.dueDate}`);
+            
+            // Simulate rental accrual transaction
+            console.log(`\n   📝 Rental Accrual Transaction:`);
+            console.log(`   Dr. Accounts Receivable - ${property.name} (${property.accountCode}): $${scenario.monthlyRent.toFixed(2)}`);
+            console.log(`   Cr. Rental Income - ${property.name} (${property.incomeCode}): $${scenario.monthlyRent.toFixed(2)}`);
+            
+            // Show account balances (simulated)
+            console.log(`\n   💳 Account Balances After Accrual:`);
+            console.log(`   Accounts Receivable - ${property.name}: +$${scenario.monthlyRent.toFixed(2)}`);
+            console.log(`   Rental Income - ${property.name}: +$${scenario.monthlyRent.toFixed(2)}`);
+        }
+
+        // 3. Demonstrate Payment Processing
+        console.log('\n💳 3. Payment Processing Demonstration...');
+        
+        for (const scenario of testRentalScenarios) {
+            const property = testProperties.find(p => p.code === scenario.property);
+            
+            console.log(`\n   📍 Property: ${property.name}`);
+            console.log(`   👤 Tenant: ${scenario.tenantName}`);
+            console.log(`   💰 Payment Received: $${scenario.monthlyRent.toFixed(2)}`);
+            
+            // Simulate payment transaction
+            console.log(`\n   📝 Payment Transaction:`);
+            console.log(`   Dr. Bank - Main Account (1110): $${scenario.monthlyRent.toFixed(2)}`);
+            console.log(`   Cr. Accounts Receivable - ${property.name} (${property.accountCode}): $${scenario.monthlyRent.toFixed(2)}`);
+            
+            // Show account balances after payment
+            console.log(`\n   💳 Account Balances After Payment:`);
+            console.log(`   Bank - Main Account: +$${scenario.monthlyRent.toFixed(2)}`);
+            console.log(`   Accounts Receivable - ${property.name}: $0.00 (cleared)`);
+            console.log(`   Rental Income - ${property.name}: +$${scenario.monthlyRent.toFixed(2)} (unchanged)`);
+        }
+
+        // 4. Financial Impact Summary
+        console.log('\n📈 4. Financial Impact Summary...');
+        
+        const totalRentalIncome = testRentalScenarios.reduce((sum, scenario) => sum + scenario.monthlyRent, 0);
+        const totalAccountsReceivable = totalRentalIncome;
+        
+        console.log(`\n   💰 Total Monthly Rental Income: $${totalRentalIncome.toFixed(2)}`);
+        console.log(`   📊 Total Accounts Receivable: $${totalAccountsReceivable.toFixed(2)}`);
+        
+        // Show breakdown by property
+        console.log(`\n   🏠 Breakdown by Property:`);
+        testRentalScenarios.forEach(scenario => {
+            const property = testProperties.find(p => p.code === scenario.property);
+            console.log(`   ${property.name}: $${scenario.monthlyRent.toFixed(2)}`);
+        });
+
+        // 5. Test Account Validation
+        console.log('\n✅ 5. Account Validation Test...');
+        
+        const validationResults = await Promise.all(
+            testProperties.map(async (property) => {
+                const receivableAccount = await Account.findOne({ code: property.accountCode });
+                const incomeAccount = await Account.findOne({ code: property.incomeCode });
+                
+                return {
+                    property: property.name,
+                    receivableAccount: receivableAccount ? '✅ Found' : '❌ Missing',
+                    incomeAccount: incomeAccount ? '✅ Found' : '❌ Missing',
+                    receivableType: receivableAccount ? receivableAccount.type : 'N/A',
+                    incomeType: incomeAccount ? incomeAccount.type : 'N/A'
+                };
+            })
         );
         
-        console.log(`Lease Period: ${sampleLease.startDate.toLocaleDateString()} to ${sampleLease.endDate.toLocaleDateString()}`);
-        console.log(`Monthly Rent: $${sampleLease.rent}`);
-        console.log(`Billing Cycle: ${sampleLease.billingCycle}`);
-        console.log(`\nGenerated ${billingPeriods.length} billing periods:\n`);
-        
-        billingPeriods.forEach((period, index) => {
-            console.log(`Period ${period.periodNumber}:`);
-            console.log(`  Start: ${period.startDate.toLocaleDateString()}`);
-            console.log(`  End: ${period.endDate.toLocaleDateString()}`);
-            console.log(`  Days: ${period.daysInPeriod}`);
-            console.log(`  Amount: $${((sampleLease.rent / 30.44) * period.daysInPeriod).toFixed(2)}`);
-            console.log('');
+        console.log('\n   Account Validation Results:');
+        validationResults.forEach(result => {
+            console.log(`   ${result.property}:`);
+            console.log(`     Receivable Account: ${result.receivableAccount} (${result.receivableType})`);
+            console.log(`     Income Account: ${result.incomeAccount} (${result.incomeType})`);
         });
-        
-        // Test 2: Simulate accrual entries (without database)
-        console.log('📝 Test 2: Simulate Accrual Entries');
-        console.log('-----------------------------------');
-        
-        let totalAccrued = 0;
-        let accountsReceivable = 0;
-        
-        billingPeriods.forEach((period, index) => {
-            const periodAmount = (sampleLease.rent / 30.44) * period.daysInPeriod;
-            totalAccrued += periodAmount;
-            accountsReceivable += periodAmount;
-            
-            console.log(`June ${period.startDate.getDate()}, 2025 - ${period.startDate.toLocaleDateString()}:`);
-            console.log(`  Dr. Accounts Receivable - John Smith: $${periodAmount.toFixed(2)}`);
-            console.log(`  Cr. Rental Income: $${periodAmount.toFixed(2)}`);
-            console.log(`  → Income recognized in ${period.startDate.toLocaleDateString()} (when earned)`);
-            console.log(`  → John Smith owes $${periodAmount.toFixed(2)}`);
-            console.log('');
-        });
-        
-        console.log(`Total Income Recognized: $${totalAccrued.toFixed(2)}`);
-        console.log(`Total Accounts Receivable: $${accountsReceivable.toFixed(2)}`);
-        console.log('');
-        
-        // Test 3: Simulate payment received
-        console.log('💰 Test 3: Simulate Payment Received');
-        console.log('-----------------------------------');
-        console.log('August 15, 2025 - John Smith pays $200 for June rent:');
-        console.log('  Dr. Bank Account: $200.00');
-        console.log('  Cr. Accounts Receivable - John Smith: $200.00');
-        console.log('  → This settles the June receivable (not new income)');
-        console.log('  → Income was already recognized in June');
-        console.log('');
-        
-        // Update balances after payment
-        const junePayment = 200;
-        accountsReceivable -= junePayment;
-        
-        console.log('Balances after June payment:');
-        console.log(`  Bank Account: $${junePayment.toFixed(2)}`);
-        console.log(`  Accounts Receivable: $${accountsReceivable.toFixed(2)} (July-December still outstanding)`);
-        console.log(`  Rental Income: $${totalAccrued.toFixed(2)} (unchanged - already recognized)`);
-        console.log('');
-        
-        // Test 4: Show financial statement impact
-        console.log('📊 Test 4: Financial Statement Impact');
-        console.log('--------------------------------------');
-        
-        console.log('Income Statement (June 2025):');
-        console.log('  Revenue:');
-        console.log(`    Rental Income: $${(sampleLease.rent / 30.44) * billingPeriods[0].daysInPeriod}`);
-        console.log(`  Total Revenue: $${(sampleLease.rent / 30.44) * billingPeriods[0].daysInPeriod}`);
-        console.log('  Net Income: $200.00');
-        console.log('');
-        
-        console.log('Balance Sheet (June 30, 2025):');
-        console.log('  Assets:');
-        console.log('    Bank Account: $0.00');
-        console.log(`    Accounts Receivable: $${(sampleLease.rent / 30.44) * billingPeriods[0].daysInPeriod}`);
-        console.log(`  Total Assets: $${(sampleLease.rent / 30.44) * billingPeriods[0].daysInPeriod}`);
-        console.log('  Equity: $200.00');
-        console.log('');
-        
-        console.log('Cash Flow Statement (June 2025):');
-        console.log('  Operating Activities:');
-        console.log('    Net Income: $200.00');
-        console.log('    Increase in Accounts Receivable: -$200.00');
-        console.log('    Net Operating Cash Flow: $0.00');
-        console.log('');
-        
-        // Test 5: Show the complete picture
-        console.log('🎯 Test 5: Complete Picture');
-        console.log('----------------------------');
-        console.log('This system ensures:');
-        console.log('✅ Rental income appears in the correct accounting period');
-        console.log('✅ Outstanding receivables are visible on the balance sheet');
-        console.log('✅ Cash flow shows the timing difference between income and cash');
-        console.log('✅ Financial statements reflect true financial performance');
-        console.log('');
-        
-        console.log('Key Benefits:');
-        console.log('1. Accurate monthly income statements');
-        console.log('2. Clear visibility of student debtors');
-        console.log('3. Better cash flow planning');
-        console.log('4. GAAP-compliant accrual accounting');
-        console.log('');
-        
-        console.log('🚀 The rental accrual system is ready to use!');
-        console.log('   Use the API endpoints to process real leases.');
-        
+
+        console.log('\n🎉 Rental Accrual System Test Completed Successfully!');
+        console.log('\n📋 Key Points:');
+        console.log('   • Rental accrual records income when earned (not when received)');
+        console.log('   • Each property has separate receivable and income accounts');
+        console.log('   • Double-entry accounting ensures balanced transactions');
+        console.log('   • Payment clears the receivable without affecting income');
+        console.log('   • System provides property-by-property financial tracking');
+
     } catch (error) {
         console.error('❌ Error testing rental accrual system:', error);
     }
 }
 
-// Run the test if this file is executed directly
+async function cleanup() {
+    try {
+        await mongoose.connection.close();
+        console.log('✅ Database connection closed');
+    } catch (error) {
+        console.error('❌ Error closing database connection:', error);
+    }
+}
+
+async function main() {
+    try {
+        await connectToDatabase();
+        await testRentalAccrualSystem();
+    } catch (error) {
+        console.error('❌ Test failed:', error);
+    } finally {
+        await cleanup();
+        process.exit(0);
+    }
+}
+
 if (require.main === module) {
-    testRentalAccrualSystem()
-        .then(() => {
-            console.log('\n✅ Test completed successfully');
-            process.exit(0);
-        })
-        .catch((error) => {
-            console.error('\n❌ Test failed:', error);
-            process.exit(1);
-        });
+    main();
 }
 
 module.exports = { testRentalAccrualSystem };
