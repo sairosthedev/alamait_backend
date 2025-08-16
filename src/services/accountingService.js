@@ -965,6 +965,7 @@ class AccountingService {
 
     /**
      * Generate Monthly Income Statement by Residence (Accrual Basis)
+     * FIXED: Now correctly filters by residence name from metadata
      */
     static async generateMonthlyIncomeStatementByResidence(month, year, residenceId) {
         try {
