@@ -501,7 +501,7 @@ class AccountingService {
                 
                 // Add residence filtering if specified
                 if (residenceId) {
-                    query['metadata.residenceId'] = residenceId;
+                    query['residence'] = residenceId;
                 }
                 
                 const accrualEntries = await TransactionEntry.find(query);
@@ -536,7 +536,7 @@ class AccountingService {
                 };
                 
                 if (residenceId) {
-                    expenseQuery['metadata.residenceId'] = residenceId;
+                    expenseQuery['residence'] = residenceId;
                 }
                 
                 const expenseEntries = await TransactionEntry.find(expenseQuery);
@@ -572,7 +572,14 @@ class AccountingService {
                         breakdown: expenseBreakdown
                     },
                     netIncome,
-                    basis: 'accrual'
+                    basis: 'accrual',
+                    // Add monthly breakdown for annual summary
+                    monthlyBreakdown: {
+                        totalAnnualRevenue: totalRevenue,
+                        totalAnnualExpenses: totalExpenses,
+                        totalAnnualNetIncome: netIncome,
+                        totalAccrualEntries: accrualEntries.length
+                    }
                 };
             }
             
@@ -592,7 +599,7 @@ class AccountingService {
             
             // Add residence filtering if specified
             if (residenceId) {
-                query['metadata.residenceId'] = residenceId;
+                query['residence'] = residenceId;
             }
             
             const accrualEntries = await TransactionEntry.find(query);
@@ -621,16 +628,19 @@ class AccountingService {
             let totalExpenses = 0;
             let expenseBreakdown = {};
             
+            // Fix: Properly filter expenses by month
             const expenseQuery = {
                 'entries.accountType': 'Expense',
                 date: { $gte: monthStart, $lte: monthEnd }
             };
             
             if (residenceId) {
-                expenseQuery['metadata.residenceId'] = residenceId;
+                expenseQuery['residence'] = residenceId;
             }
             
             const expenseEntries = await TransactionEntry.find(expenseQuery);
+            
+            console.log(`📊 Found ${expenseEntries.length} expense entries for ${month}/${year} with date range: ${monthStart.toISOString()} to ${monthEnd.toISOString()}`);
             
             for (const entry of expenseEntries) {
                 if (entry.entries && Array.isArray(entry.entries)) {
@@ -643,6 +653,8 @@ class AccountingService {
                     }
                 }
             }
+            
+            console.log(`📊 Month ${month}/${year} expenses: $${totalExpenses} (${Object.keys(expenseBreakdown).length} categories)`);
             
             const netIncome = totalRevenue - totalExpenses;
             
@@ -663,7 +675,13 @@ class AccountingService {
                     breakdown: expenseBreakdown
                 },
                 netIncome,
-                basis: 'accrual'
+                basis: 'accrual',
+                // Add summary for frontend compatibility
+                summary: {
+                    totalNetIncome: netIncome,
+                    totalRevenue: totalRevenue,
+                    totalExpenses: totalExpenses
+                }
             };
             
         } catch (error) {
