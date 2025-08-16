@@ -525,7 +525,34 @@ class AccountingService {
                 }
                 
                 const totalRevenue = totalRentalIncome + totalAdminIncome;
-                const totalExpenses = 0;
+                
+                // Fetch expenses for the year
+                let totalExpenses = 0;
+                let expenseBreakdown = {};
+                
+                const expenseQuery = {
+                    'entries.accountType': 'Expense',
+                    date: { $gte: yearStart, $lte: yearEnd }
+                };
+                
+                if (residenceId) {
+                    expenseQuery['metadata.residenceId'] = residenceId;
+                }
+                
+                const expenseEntries = await TransactionEntry.find(expenseQuery);
+                
+                for (const entry of expenseEntries) {
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        for (const subEntry of entry.entries) {
+                            if (subEntry.accountType === 'Expense' && subEntry.debit > 0) {
+                                const accountKey = `${subEntry.accountCode} - ${subEntry.accountName}`;
+                                expenseBreakdown[accountKey] = (expenseBreakdown[accountKey] || 0) + subEntry.debit;
+                                totalExpenses += subEntry.debit;
+                            }
+                        }
+                    }
+                }
+                
                 const netIncome = totalRevenue - totalExpenses;
                 
                 console.log(`📊 Annual Calculated: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total $${totalRevenue}`);
@@ -542,7 +569,7 @@ class AccountingService {
                     },
                     expenses: {
                         total: totalExpenses,
-                        breakdown: {}
+                        breakdown: expenseBreakdown
                     },
                     netIncome,
                     basis: 'accrual'
@@ -589,7 +616,34 @@ class AccountingService {
             }
             
             const totalRevenue = totalRentalIncome + totalAdminIncome;
-            const totalExpenses = 0;
+            
+            // Fetch expenses for the month
+            let totalExpenses = 0;
+            let expenseBreakdown = {};
+            
+            const expenseQuery = {
+                'entries.accountType': 'Expense',
+                date: { $gte: monthStart, $lte: monthEnd }
+            };
+            
+            if (residenceId) {
+                expenseQuery['metadata.residenceId'] = residenceId;
+            }
+            
+            const expenseEntries = await TransactionEntry.find(expenseQuery);
+            
+            for (const entry of expenseEntries) {
+                if (entry.entries && Array.isArray(entry.entries)) {
+                    for (const subEntry of entry.entries) {
+                        if (subEntry.accountType === 'Expense' && subEntry.debit > 0) {
+                            const accountKey = `${subEntry.accountCode} - ${subEntry.accountName}`;
+                            expenseBreakdown[accountKey] = (expenseBreakdown[accountKey] || 0) + subEntry.debit;
+                            totalExpenses += subEntry.debit;
+                        }
+                    }
+                }
+            }
+            
             const netIncome = totalRevenue - totalExpenses;
             
             console.log(`📊 Calculated: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total $${totalRevenue}`);
@@ -606,7 +660,7 @@ class AccountingService {
                 },
                 expenses: {
                     total: totalExpenses,
-                    breakdown: {}
+                    breakdown: expenseBreakdown
                 },
                 netIncome,
                 basis: 'accrual'
