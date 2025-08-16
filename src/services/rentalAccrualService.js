@@ -396,10 +396,26 @@ class RentalAccrualService {
                         payment.student && payment.student.toString() === studentId
                     );
                     
-                    // Calculate total paid
-                    const totalPaid = studentPayments.reduce((sum, payment) => {
-                        return sum + (payment.amount || 0);
-                    }, 0);
+                    // Calculate total paid by payment type
+                    let totalRentPaid = 0;
+                    let totalAdminPaid = 0;
+                    let totalDepositPaid = 0;
+                    
+                    studentPayments.forEach(payment => {
+                        if (payment.payments && Array.isArray(payment.payments)) {
+                            payment.payments.forEach(subPayment => {
+                                if (subPayment.type === 'rent') {
+                                    totalRentPaid += subPayment.amount || 0;
+                                } else if (subPayment.type === 'admin') {
+                                    totalAdminPaid += subPayment.amount || 0;
+                                } else if (subPayment.type === 'deposit') {
+                                    totalDepositPaid += subPayment.amount || 0;
+                                }
+                            });
+                        }
+                    });
+                    
+                    const totalPaid = totalRentPaid + totalAdminPaid + totalDepositPaid;
                     
                     // Calculate outstanding balance
                     const outstandingBalance = Math.max(0, totalShouldBeOwed - totalPaid);
@@ -414,6 +430,9 @@ class RentalAccrualService {
                             totalOutstanding: outstandingBalance,
                             totalShouldBeOwed,
                             totalPaid,
+                            totalRentPaid,
+                            totalAdminPaid,
+                            totalDepositPaid,
                             monthsActive,
                             leaseStart: leaseStart.toDateString(),
                             leaseEnd: leaseEnd.toDateString(),
