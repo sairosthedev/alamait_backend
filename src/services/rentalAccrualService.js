@@ -338,13 +338,12 @@ class RentalAccrualService {
                 const leaseEnd = new Date(student.endDate);
                 const now = new Date();
                 
-                // Only calculate if lease is active
-                if (leaseStart <= now && leaseEnd >= now) {
-                    // Calculate months from lease start to now
-                    const monthsActive = Math.max(0, 
-                        (now.getFullYear() - leaseStart.getFullYear()) * 12 + 
-                        (now.getMonth() - leaseStart.getMonth())
-                    );
+                // Calculate for all approved students (including future leases)
+                // Calculate months from lease start to now (or 0 if lease hasn't started)
+                const monthsActive = Math.max(0, 
+                    (now.getFullYear() - leaseStart.getFullYear()) * 12 + 
+                    (now.getMonth() - leaseStart.getMonth())
+                );
                     
                     // Get student's residence and room pricing
                     const residenceId = student.residence?.toString();
@@ -420,34 +419,33 @@ class RentalAccrualService {
                     // Calculate outstanding balance
                     const outstandingBalance = Math.max(0, totalShouldBeOwed - totalPaid);
                     
-                    if (outstandingBalance > 0) {
-                        studentBalances[studentId] = {
-                            studentId,
-                            studentName,
-                            email: student.email || 'N/A',
-                            residence: residence?.name || 'N/A',
-                            room: allocatedRoom || 'N/A',
-                            totalOutstanding: outstandingBalance,
-                            totalShouldBeOwed,
-                            totalPaid,
-                            totalRentPaid,
-                            totalAdminPaid,
-                            totalDepositPaid,
-                            monthsActive,
-                            leaseStart: leaseStart.toDateString(),
-                            leaseEnd: leaseEnd.toDateString(),
-                            monthlyRent,
-                            monthlyAdminFee,
-                            roomType: residence?.rooms?.find(r => 
-                                r.roomNumber === allocatedRoom || 
-                                r.name === allocatedRoom ||
-                                r._id?.toString() === allocatedRoom
-                            )?.type || 'N/A',
-                            payments: studentPayments.length,
-                            oldestPayment: studentPayments.length > 0 ? 
-                                new Date(Math.min(...studentPayments.map(p => new Date(p.paymentDate || p.createdAt)))) : null
-                        };
-                    }
+                    // Include all students regardless of outstanding balance
+                    studentBalances[studentId] = {
+                        studentId,
+                        studentName,
+                        email: student.email || 'N/A',
+                        residence: residence?.name || 'N/A',
+                        room: allocatedRoom || 'N/A',
+                        totalOutstanding: outstandingBalance,
+                        totalShouldBeOwed,
+                        totalPaid,
+                        totalRentPaid,
+                        totalAdminPaid,
+                        totalDepositPaid,
+                        monthsActive,
+                        leaseStart: leaseStart.toDateString(),
+                        leaseEnd: leaseEnd.toDateString(),
+                        monthlyRent,
+                        monthlyAdminFee,
+                        roomType: residence?.rooms?.find(r => 
+                            r.roomNumber === allocatedRoom || 
+                            r.name === allocatedRoom ||
+                            r._id?.toString() === allocatedRoom
+                        )?.type || 'N/A',
+                        payments: studentPayments.length,
+                        oldestPayment: studentPayments.length > 0 ? 
+                            new Date(Math.min(...studentPayments.map(p => new Date(p.paymentDate || p.createdAt)))) : null
+                    };
                 }
             }
             
@@ -544,7 +542,7 @@ class RentalAccrualService {
                         rentAmount = 200;
                         adminFee = 20;
                     }
-                } else {
+            } else {
                     // Fallback pricing if residence not found
                     rentAmount = 200;
                     adminFee = 20;
