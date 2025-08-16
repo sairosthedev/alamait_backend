@@ -13,12 +13,15 @@ class AccountingService {
             console.log(`🔄 Creating monthly accruals for ${month}/${year}...`);
             
             // Get all active students for this month
+            const monthStart = new Date(year, month - 1, 1);
+            const monthEnd = new Date(year, month, 0);
+            
             const activeStudents = await mongoose.connection.db
                 .collection('applications')
                 .find({
                     status: 'approved',
-                    startDate: { $lte: new Date(year, month, 0) },
-                    endDate: { $gte: new Date(year, month - 1, 1) },
+                    startDate: { $lte: monthEnd },
+                    endDate: { $gte: monthStart },
                     paymentStatus: { $ne: 'cancelled' }
                 }).toArray();
             
@@ -65,43 +68,20 @@ class AccountingService {
                     if (roomData?.price) {
                     monthlyRent = roomData.price;
                     
-                    // Billing structure based on residence:
+                        // Billing structure based on residence
                     if (residence.name.includes('St Kilda')) {
-                        // St Kilda: Rent + Admin Fee (one-time) + Deposit (last month's rent)
                         const leaseStartMonth = new Date(student.startDate).getMonth() + 1;
                         const leaseStartYear = new Date(student.startDate).getFullYear();
                         
                         if (month === leaseStartMonth && year === leaseStartYear) {
-                            monthlyAdminFee = 20; // Admin fee only in first month
+                                monthlyAdminFee = 20;
                         } else {
-                            monthlyAdminFee = 0; // No admin fee in subsequent months
-                        }
-                        
-                        // Check if this is the last month of the lease (deposit = last month's rent)
-                        const leaseEndMonth = new Date(student.endDate).getMonth() + 1;
-                        const leaseEndYear = new Date(student.endDate).getFullYear();
-                        
-                        if (month === leaseEndMonth && year === leaseEndYear) {
-                            // Last month is called "deposit" but amount is same as regular rent
-                            // No change to monthlyRent - it stays the same
-                        }
-                        
+                                monthlyAdminFee = 0;
+                            }
                     } else if (residence.name.includes('Belvedere')) {
-                        // Belvedere: Rent only (no admin, no deposit)
                         monthlyAdminFee = 0;
-                        
                     } else {
-                        // All other properties: Rent + Deposit (no admin fee)
                         monthlyAdminFee = 0;
-                        
-                        // Check if this is the last month of the lease (deposit = last month's rent)
-                        const leaseEndMonth = new Date(student.endDate).getMonth() + 1;
-                        const leaseEndYear = new Date(student.endDate).getFullYear();
-                        
-                        if (month === leaseEndMonth && year === leaseEndYear) {
-                            // Last month is called "deposit" but amount is same as regular rent
-                            // No change to monthlyRent - it stays the same
-                        }
                     }
                 }
                 }
@@ -114,8 +94,8 @@ class AccountingService {
                     date: new Date(year, month - 1, 1),
                     description: `Monthly Rent & Admin Accrual - ${student.firstName} ${student.lastName} - ${month}/${year}`,
                     type: 'accrual',
-                    residence: student.residence || new mongoose.Types.ObjectId(), // Required field
-                    createdBy: new mongoose.Types.ObjectId(), // Required field - using dummy ID for now
+                    residence: student.residence || new mongoose.Types.ObjectId(),
+                    createdBy: new mongoose.Types.ObjectId(),
                     amount: totalAccrued,
                     metadata: {
                         type: 'rent_accrual',
@@ -131,20 +111,19 @@ class AccountingService {
                 
                 await transaction.save();
                 
-                // Create a single balanced accrual entry (Accrual Basis)
-                // This creates the double-entry: Dr. A/R, Cr. Rental Income + Admin Income
+                // Create double-entry accrual
                 const accrualEntry = new TransactionEntry({
                     transactionId: transaction._id.toString(),
                     description: `Monthly Rent & Admin Accrual - ${student.firstName} ${student.lastName} - ${month}/${year}`,
                     date: new Date(year, month - 1, 1),
-                    totalDebit: totalAccrued,    // Total debits (A/R)
-                    totalCredit: totalAccrued,   // Total credits (Rental + Admin)
+                    totalDebit: totalAccrued,
+                    totalCredit: totalAccrued,
                     source: 'rental_accrual',
                     sourceModel: 'TransactionEntry',
                     sourceId: transaction._id,
                     createdBy: 'system@alamait.com',
+                    residence: student.residence,
                     entries: [
-                        // 1. Debit Accounts Receivable (Asset increases)
                         {
                             accountCode: '1100',
                             accountName: 'Accounts Receivable - Tenants',
@@ -153,7 +132,6 @@ class AccountingService {
                             credit: 0,
                             description: `Rent & Admin Accrued - ${student.firstName} ${student.lastName}`
                         },
-                        // 2. Credit Rental Income (Revenue increases)
                         {
                             accountCode: '4000',
                             accountName: 'Rental Income',
@@ -162,7 +140,6 @@ class AccountingService {
                             credit: monthlyRent,
                             description: `Monthly Rent Accrued - ${student.firstName} ${student.lastName}`
                         },
-                        // 3. Credit Admin Fee Income (Revenue increases)
                         {
                             accountCode: '4100',
                             accountName: 'Administrative Income',
@@ -180,12 +157,12 @@ class AccountingService {
                         accrualYear: year,
                         monthlyRent,
                         monthlyAdminFee,
-                        residence: residence?.name || 'Unknown'
+                        residence: residence?.name || 'Unknown',
+                        residenceId: student.residence?.toString()
                     }
                 });
                 
                 await accrualEntry.save();
-                
                 accrualsCreated++;
                 console.log(`✅ Created accrual for ${student.firstName} ${student.lastName}: $${totalAccrued}`);
             }
@@ -198,26 +175,402 @@ class AccountingService {
             throw error;
         }
     }
+
+    /**
+     * Process rent payment (Cash Basis)
+     * This reduces Accounts Receivable and increases Cash/Bank
+     */
+    static async processRentPayment(paymentData) {
+        try {
+            console.log(`💰 Processing rent payment for student: ${paymentData.studentName}`);
+            
+            const {
+                studentId,
+                studentName,
+                residenceId,
+                residenceName,
+                paymentAmount,
+                paymentMethod,
+                paymentDate,
+                month,
+                year,
+                description,
+                createdBy
+            } = paymentData;
+            
+            // Create payment transaction
+            const transaction = new Transaction({
+                transactionId: `PAY-${year}${month.toString().padStart(2, '0')}-${studentId.toString().slice(-6)}`,
+                date: paymentDate,
+                description: description || `Rent Payment - ${studentName} - ${month}/${year}`,
+                type: 'payment',
+                residence: residenceId,
+                amount: paymentAmount,
+                metadata: {
+                    type: 'rent_payment',
+                    studentId,
+                    studentName,
+                    paymentMethod,
+                    month,
+                    year,
+                    residence: residenceName
+                }
+            });
+            
+            await transaction.save();
+            
+            // Create double-entry payment transaction
+            const paymentEntry = new TransactionEntry({
+                transactionId: transaction._id.toString(),
+                description: description || `Rent Payment - ${studentName} - ${month}/${year}`,
+                date: paymentDate,
+                totalDebit: paymentAmount,
+                totalCredit: paymentAmount,
+                source: 'payment',
+                sourceModel: 'TransactionEntry',
+                sourceId: transaction._id,
+                createdBy: createdBy || 'system@alamait.com',
+                residence: residenceId,
+                entries: [
+                    {
+                        accountCode: this.getCashAccountCode(paymentMethod),
+                        accountName: this.getCashAccountName(paymentMethod),
+                        accountType: 'Asset',
+                        debit: paymentAmount,
+                        credit: 0,
+                        description: `Rent payment received - ${studentName}`
+                    },
+                    {
+                        accountCode: '1100',
+                        accountName: 'Accounts Receivable - Tenants',
+                        accountType: 'Asset',
+                        debit: 0,
+                        credit: paymentAmount,
+                        description: `Rent payment received - ${studentName}`
+                    }
+                ],
+                metadata: {
+                    type: 'rent_payment',
+                    studentId,
+                    studentName,
+                    paymentMethod,
+                    month,
+                    year,
+                    residence: residenceName,
+                    residenceId: residenceId.toString()
+                }
+            });
+            
+            await paymentEntry.save();
+            
+            console.log(`✅ Processed rent payment: $${paymentAmount} for ${studentName}`);
+            return { success: true, transactionId: transaction._id, paymentEntryId: paymentEntry._id };
+            
+        } catch (error) {
+            console.error('❌ Error processing rent payment:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Calculate student arrears (Outstanding receivables)
+     */
+    static async calculateStudentArrears(studentId, asOfDate = new Date()) {
+        try {
+            console.log(`📊 Calculating arrears for student: ${studentId}`);
+            
+            // Get all accruals for this student
+            const accruals = await TransactionEntry.find({
+                'metadata.type': 'rent_accrual',
+                'metadata.studentId': studentId,
+                date: { $lte: asOfDate },
+                status: 'posted'
+            });
+            
+            // Get all payments for this student
+            const payments = await TransactionEntry.find({
+                'metadata.type': 'rent_payment',
+                'metadata.studentId': studentId,
+                date: { $lte: asOfDate },
+                status: 'posted'
+            });
+            
+            let totalAccrued = 0;
+            let totalPaid = 0;
+            
+            // Calculate total accrued
+            for (const accrual of accruals) {
+                if (accrual.entries && Array.isArray(accrual.entries)) {
+                    for (const entry of accrual.entries) {
+                        if (entry.accountCode === '1100') {
+                            totalAccrued += entry.debit || 0;
+                        }
+                    }
+                }
+            }
+            
+            // Calculate total paid
+            for (const payment of payments) {
+                if (payment.entries && Array.isArray(payment.entries)) {
+                    for (const entry of payment.entries) {
+                        if (entry.accountCode === '1100') {
+                            totalPaid += entry.credit || 0;
+                        }
+                    }
+                }
+            }
+            
+            const outstandingBalance = totalAccrued - totalPaid;
+            
+            return {
+                studentId,
+                totalAccrued,
+                totalPaid,
+                outstandingBalance,
+                asOfDate,
+                isInArrears: outstandingBalance > 0
+            };
+            
+        } catch (error) {
+            console.error('❌ Error calculating student arrears:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Calculate residence arrears (All outstanding receivables for a residence)
+     */
+    static async calculateResidenceArrears(residenceId, asOfDate = new Date()) {
+        try {
+            console.log(`📊 Calculating arrears for residence: ${residenceId}`);
+            
+            // Get all accruals for this residence
+            const accruals = await TransactionEntry.find({
+                'metadata.type': 'rent_accrual',
+                'metadata.residenceId': residenceId,
+                date: { $lte: asOfDate },
+                status: 'posted'
+            });
+            
+            // Get all payments for this residence
+            const payments = await TransactionEntry.find({
+                'metadata.type': 'rent_payment',
+                'metadata.residenceId': residenceId,
+                date: { $lte: asOfDate },
+                status: 'posted'
+            });
+            
+            let totalAccrued = 0;
+            let totalPaid = 0;
+            
+            // Calculate total accrued
+            for (const accrual of accruals) {
+                if (accrual.entries && Array.isArray(accrual.entries)) {
+                    for (const entry of accrual.entries) {
+                        if (entry.accountCode === '1100') {
+                            totalAccrued += entry.debit || 0;
+                        }
+                    }
+                }
+            }
+            
+            // Calculate total paid
+            for (const payment of payments) {
+                if (payment.entries && Array.isArray(payment.entries)) {
+                    for (const entry of payment.entries) {
+                        if (entry.accountCode === '1100') {
+                            totalPaid += entry.credit || 0;
+                        }
+                    }
+                }
+            }
+            
+            const outstandingBalance = totalAccrued - totalPaid;
+            
+            return {
+                residenceId,
+                totalAccrued,
+                totalPaid,
+                outstandingBalance,
+                asOfDate,
+                isInArrears: outstandingBalance > 0
+            };
+            
+        } catch (error) {
+            console.error('❌ Error calculating residence arrears:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate comprehensive arrears report for all residences
+     */
+    static async generateArrearsReport(asOfDate = new Date()) {
+        try {
+            console.log(`📊 Generating comprehensive arrears report as of ${asOfDate.toDateString()}`);
+            
+            // Get all residences
+            const residences = await mongoose.connection.db
+                .collection('residences')
+                .find({}).toArray();
+            
+            const arrearsReport = {
+                asOfDate,
+                residences: {},
+                summary: {
+                    totalResidences: residences.length,
+                    totalOutstanding: 0,
+                    residencesInArrears: 0
+                }
+            };
+            
+            for (const residence of residences) {
+                const residenceId = residence._id.toString();
+                const arrears = await this.calculateResidenceArrears(residenceId, asOfDate);
+                
+                arrearsReport.residences[residenceId] = {
+                    ...arrears,
+                    residenceDetails: {
+                        id: residenceId,
+                        name: residence.name,
+                        address: residence.address || 'N/A',
+                        type: residence.type || 'N/A'
+                    }
+                };
+                
+                if (arrears.isInArrears) {
+                    arrearsReport.summary.residencesInArrears++;
+                }
+                arrearsReport.summary.totalOutstanding += arrears.outstandingBalance;
+            }
+            
+            return arrearsReport;
+            
+        } catch (error) {
+            console.error('❌ Error generating arrears report:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get cash account code based on payment method
+     */
+    static getCashAccountCode(paymentMethod) {
+        const cashAccounts = {
+            'ecocash': '1002',
+            'innbucks': '1003', 
+            'petty_cash': '1004',
+            'bank_transfer': '1001',
+            'cash': '1005'
+        };
+        return cashAccounts[paymentMethod] || '1001';
+    }
+
+    /**
+     * Get cash account name based on payment method
+     */
+    static getCashAccountName(paymentMethod) {
+        const cashAccountNames = {
+            'ecocash': 'Ecocash',
+            'innbucks': 'Innbucks',
+            'petty_cash': 'Petty Cash',
+            'bank_transfer': 'Bank Account',
+            'cash': 'Cash on Hand'
+        };
+        return cashAccountNames[paymentMethod] || 'Bank Account';
+    }
     
     /**
      * Generate Monthly Income Statement (Accrual Basis)
      */
-    static async generateMonthlyIncomeStatement(month, year) {
+    static async generateMonthlyIncomeStatement(month, year, residenceId = null) {
         try {
-            console.log(`📊 Generating Income Statement for ${month}/${year}...`);
+            // Handle annual summary (when month is null)
+            if (month === null) {
+                console.log(`📊 Generating Annual Income Statement for ${year}${residenceId ? ` - Residence: ${residenceId}` : ''}...`);
+                
+                const yearStart = new Date(year, 0, 1);
+                const yearEnd = new Date(year, 11, 31);
+                
+                // Build query for all accrual entries in the year
+                let query = {
+                    'metadata.type': 'rent_accrual',
+                    'metadata.accrualYear': year,
+                    date: { $gte: yearStart, $lte: yearEnd }
+                };
+                
+                // Add residence filtering if specified
+                if (residenceId) {
+                    query['metadata.residenceId'] = residenceId;
+                }
+                
+                const accrualEntries = await TransactionEntry.find(query);
+                
+                console.log(`📊 Found ${accrualEntries.length} accrual entries for ${year}${residenceId ? ` - Residence: ${residenceId}` : ''}`);
+                
+                // Calculate totals from all accrual entries in the year
+                let totalRentalIncome = 0;
+                let totalAdminIncome = 0;
+                
+                for (const entry of accrualEntries) {
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        for (const subEntry of entry.entries) {
+                            if (subEntry.accountCode === '4000') {
+                                totalRentalIncome += subEntry.credit || 0;
+                            } else if (subEntry.accountCode === '4100') {
+                                totalAdminIncome += subEntry.credit || 0;
+                            }
+                        }
+                    }
+                }
+                
+                const totalRevenue = totalRentalIncome + totalAdminIncome;
+                const totalExpenses = 0;
+                const netIncome = totalRevenue - totalExpenses;
+                
+                console.log(`📊 Annual Calculated: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total $${totalRevenue}`);
+                
+                return {
+                    month: null,
+                    year,
+                    period: `${year}`,
+                    residence: residenceId,
+                    revenue: {
+                        rentalIncome: totalRentalIncome,
+                        adminIncome: totalAdminIncome,
+                        total: totalRevenue
+                    },
+                    expenses: {
+                        total: totalExpenses,
+                        breakdown: {}
+                    },
+                    netIncome,
+                    basis: 'accrual'
+                };
+            }
+            
+            // Handle monthly summary (existing logic)
+            console.log(`📊 Generating Income Statement for ${month}/${year}${residenceId ? ` - Residence: ${residenceId}` : ''}...`);
             
             const monthStart = new Date(year, month - 1, 1);
             const monthEnd = new Date(year, month, 0);
             
-            // Get all accrual entries for this month (accrual basis)
-            const accrualEntries = await TransactionEntry.find({
+            // Build query for accrual entries
+            let query = {
                 'metadata.type': 'rent_accrual',
                 'metadata.accrualMonth': month,
                 'metadata.accrualYear': year,
                 date: { $gte: monthStart, $lte: monthEnd }
-            });
+            };
             
-            console.log(`📊 Found ${accrualEntries.length} accrual entries for ${month}/${year}`);
+            // Add residence filtering if specified
+            if (residenceId) {
+                query['metadata.residenceId'] = residenceId;
+            }
+            
+            const accrualEntries = await TransactionEntry.find(query);
+            
+            console.log(`📊 Found ${accrualEntries.length} accrual entries for ${month}/${year}${residenceId ? ` - Residence: ${residenceId}` : ''}`);
             
             // Calculate totals from accrual entries
             let totalRentalIncome = 0;
@@ -226,9 +579,9 @@ class AccountingService {
             for (const entry of accrualEntries) {
                 if (entry.entries && Array.isArray(entry.entries)) {
                     for (const subEntry of entry.entries) {
-                        if (subEntry.accountCode === '4000') { // Rental Income - Residential
+                        if (subEntry.accountCode === '4000') {
                             totalRentalIncome += subEntry.credit || 0;
-                        } else if (subEntry.accountCode === '4100') { // Administrative Income
+                        } else if (subEntry.accountCode === '4100') {
                             totalAdminIncome += subEntry.credit || 0;
                         }
                     }
@@ -236,8 +589,6 @@ class AccountingService {
             }
             
             const totalRevenue = totalRentalIncome + totalAdminIncome;
-            
-            // For now, no expenses in accrual system
             const totalExpenses = 0;
             const netIncome = totalRevenue - totalExpenses;
             
@@ -247,6 +598,7 @@ class AccountingService {
                 month,
                 year,
                 period: `${month}/${year}`,
+                residence: residenceId,
                 revenue: {
                     rentalIncome: totalRentalIncome,
                     adminIncome: totalAdminIncome,
@@ -257,7 +609,7 @@ class AccountingService {
                     breakdown: {}
                 },
                 netIncome,
-                basis: 'accrual' // Shows income when earned, not when received
+                basis: 'accrual'
             };
             
         } catch (error) {
@@ -276,13 +628,19 @@ class AccountingService {
             const monthEnd = new Date(year, month, 0);
             
             // Assets with account codes
-            const bankBalance = await this.getAccountBalance('1001', monthEnd); // Bank
-            const accountsReceivable = await this.getAccountBalance('1100', monthEnd, residenceId); // A/R (Tenants)
-            const totalAssets = bankBalance + accountsReceivable;
+            const bankBalance = await this.getAccountBalance('1001', monthEnd, residenceId);
+            const ecocashBalance = await this.getAccountBalance('1002', monthEnd, residenceId);
+            const innbucksBalance = await this.getAccountBalance('1003', monthEnd, residenceId);
+            const pettyCashBalance = await this.getAccountBalance('1004', monthEnd, residenceId);
+            const cashBalance = await this.getAccountBalance('1005', monthEnd, residenceId);
+            const accountsReceivable = await this.getAccountBalance('1100', monthEnd, residenceId);
+            
+            const totalCashAndBank = bankBalance + ecocashBalance + innbucksBalance + pettyCashBalance + cashBalance;
+            const totalAssets = totalCashAndBank + accountsReceivable;
             
             // Liabilities with account codes
-            const accountsPayable = await this.getAccountBalance('2000', monthEnd); // A/P
-            const tenantDeposits = await this.getAccountBalance('2020', monthEnd, residenceId); // Tenant Deposits
+            const accountsPayable = await this.getAccountBalance('2000', monthEnd, residenceId);
+            const tenantDeposits = await this.getAccountBalance('2020', monthEnd, residenceId);
             const totalLiabilities = accountsPayable + tenantDeposits;
             
             // Equity with account codes
@@ -299,7 +657,14 @@ class AccountingService {
                 residence: residenceId,
                 assets: {
                     current: {
+                        cashAndBank: {
                         bank: { amount: bankBalance, accountCode: '1001', accountName: 'Bank Account' },
+                            ecocash: { amount: ecocashBalance, accountCode: '1002', accountName: 'Ecocash' },
+                            innbucks: { amount: innbucksBalance, accountCode: '1003', accountName: 'Innbucks' },
+                            pettyCash: { amount: pettyCashBalance, accountCode: '1004', accountName: 'Petty Cash' },
+                            cash: { amount: cashBalance, accountCode: '1005', accountName: 'Cash on Hand' },
+                            total: totalCashAndBank
+                        },
                         accountsReceivable: { amount: accountsReceivable, accountCode: '1100', accountName: 'Accounts Receivable - Tenants' }
                     },
                     total: totalAssets
@@ -326,102 +691,38 @@ class AccountingService {
     }
 
     /**
-     * Generate Monthly Breakdown Balance Sheet (for frontend display)
+     * Generate Monthly Cash Flow Statement (Cash Basis)
      */
-    static async generateMonthlyBreakdownBalanceSheet(year) {
+    static async generateMonthlyCashFlowStatement(month, year, residenceId = null) {
         try {
-            console.log(`📋 Generating Monthly Breakdown Balance Sheet for ${year}...`);
-            
-            const monthlyData = {};
-            
-            // Calculate for each month
-            for (let month = 1; month <= 12; month++) {
-                const monthEnd = new Date(year, month, 0);
-                
-                // Assets with account codes
-                const bankBalance = await this.getAccountBalance('1001', monthEnd);
-                const accountsReceivable = await this.getAccountBalance('1100', monthEnd);
-                const totalAssets = bankBalance + accountsReceivable;
-                
-                // Liabilities with account codes
-                const accountsPayable = await this.getAccountBalance('2000', monthEnd);
-                const tenantDeposits = await this.getAccountBalance('2020', monthEnd);
-                const totalLiabilities = accountsPayable + tenantDeposits;
-                
-                // Equity with account codes
-                const retainedEarnings = await this.getRetainedEarnings(monthEnd);
-                const totalEquity = retainedEarnings;
-                
-                monthlyData[month] = {
-                    month,
-                    year,
-                    monthName: new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' }),
-                    assets: {
-                        bank: { amount: bankBalance, accountCode: '1001', accountName: 'Bank Account' },
-                        accountsReceivable: { amount: accountsReceivable, accountCode: '1100', accountName: 'Accounts Receivable - Tenants' },
-                        total: totalAssets
-                    },
-                    liabilities: {
-                        accountsPayable: { amount: accountsPayable, accountCode: '2000', accountName: 'Accounts Payable' },
-                        tenantDeposits: { amount: tenantDeposits, accountCode: '2020', accountName: 'Tenant Deposits Held' },
-                        total: totalLiabilities
-                    },
-                    equity: {
-                        retainedEarnings: { amount: retainedEarnings, accountCode: '3000', accountName: 'Retained Earnings' },
-                        total: totalEquity
-                    },
-                    balanceCheck: totalAssets - (totalLiabilities + totalEquity)
-                };
-            }
-            
-            return {
-                year,
-                monthlyData,
-                summary: {
-                    totalAssets: monthlyData[12]?.assets.total || 0,
-                    totalLiabilities: monthlyData[12]?.liabilities.total || 0,
-                    totalEquity: monthlyData[12]?.equity.total || 0
-                }
-            };
-            
-        } catch (error) {
-            console.error('❌ Error generating monthly breakdown balance sheet:', error);
-            throw error;
-        }
-    }
-    
-    /**
-     * Generate Monthly Cash Flow Statement
-     */
-    static async generateMonthlyCashFlowStatement(month, year) {
-        try {
-            console.log(`💸 Generating Cash Flow Statement for ${month}/${year}...`);
+            console.log(`💸 Generating Cash Flow Statement for ${month}/${year}${residenceId ? ` - Residence: ${residenceId}` : ''}...`);
             
             const monthStart = new Date(year, month - 1, 1);
             const monthEnd = new Date(year, month, 0);
             
-            // Operating Activities
-            const cashCollections = await this.getCashCollections(monthStart, monthEnd);
-            const cashPayments = await this.getCashPayments(monthStart, monthEnd);
+            // Operating Activities - Cash collections and payments
+            const cashCollections = await this.getCashCollections(monthStart, monthEnd, residenceId);
+            const cashPayments = await this.getCashPayments(monthStart, monthEnd, residenceId);
             const netOperatingCash = cashCollections - cashPayments;
             
             // Investing Activities
-            const investingCash = await this.getInvestingCashFlow(monthStart, monthEnd);
+            const investingCash = await this.getInvestingCashFlow(monthStart, monthEnd, residenceId);
             
             // Financing Activities
-            const financingCash = await this.getFinancingCashFlow(monthStart, monthEnd);
+            const financingCash = await this.getFinancingCashFlow(monthStart, monthEnd, residenceId);
             
             // Net Change in Cash
             const netChangeInCash = netOperatingCash + investingCash + financingCash;
             
             // Beginning and Ending Cash
-            const beginningCash = await this.getAccountBalance('1001', monthStart);
+            const beginningCash = await this.getTotalCashBalance(monthStart, residenceId);
             const endingCash = beginningCash + netChangeInCash;
             
             return {
                 month,
                 year,
                 period: `${month}/${year}`,
+                residence: residenceId,
                 operatingActivities: {
                     cashCollections,
                     cashPayments,
@@ -437,7 +738,8 @@ class AccountingService {
                 cashPositions: {
                     beginning: beginningCash,
                     ending: endingCash
-                }
+                },
+                basis: 'cash'
             };
             
         } catch (error) {
@@ -449,14 +751,14 @@ class AccountingService {
     // Helper methods
     static async getAccountBalance(accountCode, asOfDate, residenceId = null) {
         let query = {
-            'entries.accountCode': accountCode,  // Look inside nested entries array
+            'entries.accountCode': accountCode,
             date: { $lte: asOfDate },
             status: 'posted'
         };
         
         // Add residence filtering if specified
         if (residenceId) {
-            query.residence = residenceId;
+            query['metadata.residenceId'] = residenceId;
         }
         
         const entries = await TransactionEntry.find(query);
@@ -468,10 +770,8 @@ class AccountingService {
                     if (subEntry.accountCode === accountCode) {
                         // Special handling for tenant deposits (liability account)
                         if (accountCode === '2020') {
-                            // For tenant deposits: credits increase liability, debits decrease liability
                             balance += (subEntry.credit || 0) - (subEntry.debit || 0);
                         } else {
-                            // For other accounts: debits increase, credits decrease
                             balance += (subEntry.debit || 0) - (subEntry.credit || 0);
                         }
                     }
@@ -481,25 +781,38 @@ class AccountingService {
         
         return balance;
     }
+
+    /**
+     * Get total cash balance across all cash accounts
+     */
+    static async getTotalCashBalance(asOfDate, residenceId = null) {
+        const cashAccounts = ['1001', '1002', '1003', '1004', '1005'];
+        let totalCash = 0;
+        
+        for (const accountCode of cashAccounts) {
+            totalCash += await this.getAccountBalance(accountCode, asOfDate, residenceId);
+        }
+        
+        return totalCash;
+    }
     
     static async getRetainedEarnings(asOfDate, residenceId = null) {
-        // Simplified: Net income from start of business to date
         let revenueQuery = {
-            'entries.accountCode': { $in: ['4000', '4100'] },  // Look inside nested entries array
+            'entries.accountCode': { $in: ['4000', '4100'] },
             date: { $lte: asOfDate },
             status: 'posted'
         };
         
         let expenseQuery = {
-            'entries.accountCode': { $regex: /^5/ },  // Look inside nested entries array
+            'entries.accountCode': { $regex: /^5/ },
             date: { $lte: asOfDate },
             status: 'posted'
         };
         
         // Add residence filtering if specified
         if (residenceId) {
-            revenueQuery.residence = residenceId;
-            expenseQuery.residence = residenceId;
+            revenueQuery['metadata.residenceId'] = residenceId;
+            expenseQuery['metadata.residenceId'] = residenceId;
         }
         
         const revenueEntries = await TransactionEntry.find(revenueQuery);
@@ -533,18 +846,24 @@ class AccountingService {
         return totalRevenue - totalExpenses;
     }
     
-    static async getCashCollections(startDate, endDate) {
-        const entries = await TransactionEntry.find({
-            'entries.accountCode': '1001', // Bank - look inside nested entries array
+    static async getCashCollections(startDate, endDate, residenceId = null) {
+        let query = {
+            'entries.accountCode': { $in: ['1001', '1002', '1003', '1004', '1005'] },
             date: { $gte: startDate, $lte: endDate },
             status: 'posted'
-        });
+        };
+        
+        if (residenceId) {
+            query['metadata.residenceId'] = residenceId;
+        }
+        
+        const entries = await TransactionEntry.find(query);
         
         let totalCollections = 0;
         for (const entry of entries) {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
-                    if (subEntry.accountCode === '1001' && subEntry.debit > 0) {
+                    if (['1001', '1002', '1003', '1004', '1005'].includes(subEntry.accountCode) && subEntry.debit > 0) {
                         totalCollections += subEntry.debit;
                     }
                 }
@@ -554,18 +873,24 @@ class AccountingService {
         return totalCollections;
     }
     
-    static async getCashPayments(startDate, endDate) {
-        const entries = await TransactionEntry.find({
-            'entries.accountCode': '1001', // Bank - look inside nested entries array
+    static async getCashPayments(startDate, endDate, residenceId = null) {
+        let query = {
+            'entries.accountCode': { $in: ['1001', '1002', '1003', '1004', '1005'] },
             date: { $gte: startDate, $lte: endDate },
             status: 'posted'
-        });
+        };
+        
+        if (residenceId) {
+            query['metadata.residenceId'] = residenceId;
+        }
+        
+        const entries = await TransactionEntry.find(query);
         
         let totalPayments = 0;
         for (const entry of entries) {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
-                    if (subEntry.accountCode === '1001' && subEntry.credit > 0) {
+                    if (['1001', '1002', '1003', '1004', '1005'].includes(subEntry.accountCode) && subEntry.credit > 0) {
                         totalPayments += subEntry.credit;
                     }
                 }
@@ -575,595 +900,11 @@ class AccountingService {
         return totalPayments;
     }
     
-    static async getInvestingCashFlow(startDate, endDate) {
-        // For now, return 0 (no major investments)
+    static async getInvestingCashFlow(startDate, endDate, residenceId = null) {
         return 0;
     }
     
-    static async getFinancingCashFlow(startDate, endDate) {
-        // For now, return 0 (no financing activities)
-        return 0;
-    }
-    
-    static async getExpenseBreakdown(expenseEntries) {
-        const breakdown = {};
-        
-        for (const entry of expenseEntries) {
-            const account = await Account.findOne({ code: entry.accountCode });
-            const accountName = account ? account.name : `Account ${entry.accountCode}`;
-            
-            if (!breakdown[accountName]) {
-                breakdown[accountName] = 0;
-            }
-            breakdown[accountName] += entry.debit;
-        }
-        
-        return breakdown;
-    }
-
-    /**
-     * Generate Balance Sheet by Residence (Accrual Basis)
-     */
-    static async generateBalanceSheetByResidence(month, year, residenceId) {
-        try {
-            console.log(`📋 Generating Balance Sheet for ${month}/${year} - Residence: ${residenceId}...`);
-            
-            // Get residence details
-            const residence = await mongoose.connection.db
-                .collection('residences')
-                .findOne({ _id: new mongoose.Types.ObjectId(residenceId) });
-            
-            if (!residence) {
-                throw new Error(`Residence not found: ${residenceId}`);
-            }
-            
-            // Generate balance sheet for specific residence
-            const balanceSheet = await this.generateMonthlyBalanceSheet(month, year, residenceId);
-            
-            // Add residence details
-            balanceSheet.residenceDetails = {
-                id: residenceId,
-                name: residence.name,
-                address: residence.address || 'N/A',
-                type: residence.type || 'N/A'
-            };
-            
-            return balanceSheet;
-            
-        } catch (error) {
-            console.error('❌ Error generating balance sheet by residence:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Generate Balance Sheet for All Residences (Accrual Basis)
-     */
-    static async generateBalanceSheetAllResidences(month, year) {
-        try {
-            console.log(`📋 Generating Balance Sheet for ${month}/${year} - All Residences...`);
-            
-            // Get all residences
-            const residences = await mongoose.connection.db
-                .collection('residences')
-                .find({}).toArray();
-            
-            const residenceBalanceSheets = {};
-            let totalAssets = 0;
-            let totalLiabilities = 0;
-            let totalEquity = 0;
-            
-            // Generate balance sheet for each residence
-            for (const residence of residences) {
-                const residenceId = residence._id.toString();
-                const balanceSheet = await this.generateMonthlyBalanceSheet(month, year, residenceId);
-                
-                residenceBalanceSheets[residenceId] = {
-                    ...balanceSheet,
-                    residenceDetails: {
-                        id: residenceId,
-                        name: residence.name,
-                        address: residence.address || 'N/A',
-                        type: residence.type || 'N/A'
-                    }
-                };
-                
-                totalAssets += balanceSheet.assets.total;
-                totalLiabilities += balanceSheet.liabilities.total;
-                totalEquity += balanceSheet.equity.total;
-            }
-            
-            // Generate overall balance sheet (all residences combined)
-            const overallBalanceSheet = await this.generateMonthlyBalanceSheet(month, year);
-            
-            return {
-                month,
-                year,
-                asOf: new Date(year, month, 0),
-                residences: residenceBalanceSheets,
-                overall: {
-                    ...overallBalanceSheet,
-                    residenceDetails: { name: 'All Residences Combined' }
-                },
-                summary: {
-                    totalResidences: residences.length,
-                    totalAssets,
-                    totalLiabilities,
-                    totalEquity,
-                    balanceCheck: totalAssets - (totalLiabilities + totalEquity)
-                }
-            };
-            
-        } catch (error) {
-            console.error('❌ Error generating balance sheet for all residences:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Generate Monthly Progression for All Residences (Accrual Basis)
-     * Shows every month from January to December for each residence
-     */
-    static async generateMonthlyProgressionAllResidences(year) {
-        try {
-            console.log(`📋 Generating Monthly Progression for ${year} - All Residences...`);
-            
-            // Get all residences
-            const residences = await mongoose.connection.db
-                .collection('residences')
-                .find({}).toArray();
-            
-            const monthlyProgression = {};
-            
-            // Generate monthly progression for each month (Jan-Dec)
-            for (let month = 1; month <= 12; month++) {
-                const monthData = {
-                    month,
-                    year,
-                    monthName: new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' }),
-                    residences: {},
-                    overall: null,
-                    summary: {
-                        totalResidences: residences.length,
-                        totalAssets: 0,
-                        totalLiabilities: 0,
-                        totalEquity: 0,
-                        balanceCheck: 0
-                    }
-                };
-                
-                let monthTotalAssets = 0;
-                let monthTotalLiabilities = 0;
-                let monthTotalEquity = 0;
-                
-                // Generate balance sheet for each residence for this month
-                for (const residence of residences) {
-                    const residenceId = residence._id.toString();
-                    const balanceSheet = await this.generateMonthlyBalanceSheet(month, year, residenceId);
-                    
-                    monthData.residences[residenceId] = {
-                        ...balanceSheet,
-                        residenceDetails: {
-                            id: residenceId,
-                            name: residence.name,
-                            address: residence.address || 'N/A',
-                            type: residence.type || 'N/A'
-                        }
-                    };
-                    
-                    monthTotalAssets += balanceSheet.assets.total;
-                    monthTotalLiabilities += balanceSheet.liabilities.total;
-                    monthTotalEquity += balanceSheet.equity.total;
-                }
-                
-                // Generate overall balance sheet for this month
-                const overallBalanceSheet = await this.generateMonthlyBalanceSheet(month, year);
-                monthData.overall = {
-                    ...overallBalanceSheet,
-                    residenceDetails: { name: 'All Residences Combined' }
-                };
-                
-                // Update month summary
-                monthData.summary.totalAssets = monthTotalAssets;
-                monthData.summary.totalLiabilities = monthTotalLiabilities;
-                monthData.summary.totalEquity = monthTotalEquity;
-                monthData.summary.balanceCheck = monthTotalAssets - (monthTotalLiabilities + monthTotalEquity);
-                
-                monthlyProgression[month] = monthData;
-            }
-            
-            return {
-                year,
-                monthlyProgression,
-                summary: {
-                    totalResidences: residences.length,
-                    totalAssets: monthlyProgression[12]?.summary.totalAssets || 0,
-                    totalLiabilities: monthlyProgression[12]?.summary.totalLiabilities || 0,
-                    totalEquity: monthlyProgression[12]?.summary.totalEquity || 0
-                }
-            };
-            
-        } catch (error) {
-            console.error('❌ Error generating monthly progression for all residences:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Generate Monthly Progression for Income Statement - All Residences
-     * Shows every month from January to December for each residence
-     */
-    static async generateMonthlyProgressionIncomeStatement(year) {
-        try {
-            console.log(`📊 Generating Monthly Progression Income Statement for ${year} - All Residences...`);
-            
-            // Get all residences
-            const residences = await mongoose.connection.db
-                .collection('residences')
-                .find({}).toArray();
-            
-            const monthlyProgression = {};
-            
-            // Generate monthly progression for each month (Jan-Dec)
-            for (let month = 1; month <= 12; month++) {
-                const monthData = {
-                    month,
-                    year,
-                    monthName: new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' }),
-                    residences: {},
-                    overall: null,
-                    summary: {
-                        totalResidences: residences.length,
-                        totalRevenue: 0,
-                        totalExpenses: 0,
-                        totalNetIncome: 0
-                    }
-                };
-                
-                let monthTotalRevenue = 0;
-                let monthTotalExpenses = 0;
-                let monthTotalNetIncome = 0;
-                
-                // Generate income statement for each residence for this month
-                for (const residence of residences) {
-                    const residenceId = residence._id.toString();
-                    const incomeStatement = await this.generateMonthlyIncomeStatementByResidence(month, year, residenceId);
-                    
-                    monthData.residences[residenceId] = {
-                        ...incomeStatement,
-                        residenceDetails: {
-                            id: residenceId,
-                            name: residence.name,
-                            address: residence.address || 'N/A',
-                            type: residence.type || 'N/A'
-                        }
-                    };
-                    
-                    monthTotalRevenue += incomeStatement.revenue.total;
-                    monthTotalExpenses += incomeStatement.expenses.total;
-                    monthTotalNetIncome += incomeStatement.netIncome;
-                }
-                
-                // Generate overall income statement for this month
-                const overallIncomeStatement = await this.generateMonthlyIncomeStatement(month, year);
-                monthData.overall = {
-                    ...overallIncomeStatement,
-                    residenceDetails: { name: 'All Residences Combined' }
-                };
-                
-                // Update month summary
-                monthData.summary.totalRevenue = monthTotalRevenue;
-                monthData.summary.totalExpenses = monthTotalExpenses;
-                monthData.summary.totalNetIncome = monthTotalNetIncome;
-                
-                monthlyProgression[month] = monthData;
-            }
-            
-            // Calculate totals for the whole year
-            let yearTotalRevenue = 0;
-            let yearTotalExpenses = 0;
-            let yearTotalNetIncome = 0;
-            
-            for (let month = 1; month <= 12; month++) {
-                if (monthlyProgression[month] && monthlyProgression[month].summary) {
-                    yearTotalRevenue += monthlyProgression[month].summary.totalRevenue || 0;
-                    yearTotalExpenses += monthlyProgression[month].summary.totalExpenses || 0;
-                    yearTotalNetIncome += monthlyProgression[month].summary.totalNetIncome || 0;
-                }
-            }
-            
-            return {
-                year,
-                monthlyProgression,
-                summary: {
-                    totalResidences: residences.length,
-                    totalRevenue: yearTotalRevenue,
-                    totalExpenses: yearTotalExpenses,
-                    totalNetIncome: yearTotalNetIncome
-                }
-            };
-            
-        } catch (error) {
-            console.error('❌ Error generating monthly progression income statement:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Generate Monthly Progression for Cash Flow - All Residences
-     * Shows every month from January to December for each residence
-     */
-    static async generateMonthlyProgressionCashFlow(year) {
-        try {
-            console.log(`💸 Generating Monthly Progression Cash Flow for ${year} - All Residences...`);
-            
-            // Get all residences
-            const residences = await mongoose.connection.db
-                .collection('residences')
-                .find({}).toArray();
-            
-            const monthlyProgression = {};
-            
-            // Generate monthly progression for each month (Jan-Dec)
-            for (let month = 1; month <= 12; month++) {
-                const monthData = {
-                    month,
-                    year,
-                    monthName: new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' }),
-                    residences: {},
-                    overall: null,
-                    summary: {
-                        totalResidences: residences.length,
-                        totalNetOperatingCash: 0,
-                        totalNetChangeInCash: 0,
-                        totalEndingCash: 0
-                    }
-                };
-                
-                let monthTotalNetOperatingCash = 0;
-                let monthTotalNetChangeInCash = 0;
-                let monthTotalEndingCash = 0;
-                
-                // Generate cash flow for each residence for this month
-                for (const residence of residences) {
-                    const residenceId = residence._id.toString();
-                    const cashFlow = await this.generateMonthlyCashFlowStatementByResidence(month, year, residenceId);
-                    
-                    monthData.residences[residenceId] = {
-                        ...cashFlow,
-                        residenceDetails: {
-                            id: residenceId,
-                            name: residence.name,
-                            address: residence.address || 'N/A',
-                            type: residence.type || 'N/A'
-                        }
-                    };
-                    
-                    monthTotalNetOperatingCash += cashFlow.operatingActivities.netOperatingCash;
-                    monthTotalNetChangeInCash += cashFlow.netChangeInCash;
-                    monthTotalEndingCash += cashFlow.cashPositions.ending;
-                }
-                
-                // Generate overall cash flow for this month
-                const overallCashFlow = await this.generateMonthlyCashFlowStatement(month, year);
-                monthData.overall = {
-                    ...overallCashFlow,
-                    residenceDetails: { name: 'All Residences Combined' }
-                };
-                
-                // Update month summary
-                monthData.summary.totalNetOperatingCash = monthTotalNetOperatingCash;
-                monthData.summary.totalNetChangeInCash = monthTotalNetChangeInCash;
-                monthData.summary.totalEndingCash = monthTotalEndingCash;
-                
-                monthlyProgression[month] = monthData;
-            }
-            
-            return {
-                year,
-                monthlyProgression,
-                summary: {
-                    totalResidences: residences.length,
-                    totalNetOperatingCash: monthlyProgression[12]?.summary.totalNetOperatingCash || 0,
-                    totalNetChangeInCash: monthlyProgression[12]?.summary.totalNetChangeInCash || 0,
-                    totalEndingCash: monthlyProgression[12]?.summary.totalEndingCash || 0
-                }
-            };
-            
-        } catch (error) {
-            console.error('❌ Error generating monthly progression cash flow:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Generate Monthly Income Statement by Residence (Accrual Basis)
-     * FIXED: Now correctly filters by residence name from metadata
-     */
-    static async generateMonthlyIncomeStatementByResidence(month, year, residenceId) {
-        try {
-            console.log(`📊 Generating Income Statement for ${month}/${year} - Residence: ${residenceId}...`);
-            
-            const monthStart = new Date(year, month - 1, 1);
-            const monthEnd = new Date(year, month, 0);
-            
-            // Get all accrual entries for this month and residence (accrual basis)
-            const accrualEntries = await TransactionEntry.find({
-                'metadata.type': 'rent_accrual',
-                'metadata.accrualMonth': month,
-                'metadata.accrualYear': year,
-                date: { $gte: monthStart, $lte: monthEnd }
-            });
-            
-            console.log(`📊 Found ${accrualEntries.length} accrual entries for ${month}/${year} - Residence: ${residenceId}`);
-            
-            // Calculate totals from accrual entries for this specific residence
-            let totalRentalIncome = 0;
-            let totalAdminIncome = 0;
-            
-            for (const entry of accrualEntries) {
-                // Filter by residence name from metadata
-                if (entry.metadata && entry.metadata.residence) {
-                    const entryResidenceName = entry.metadata.residence;
-                    const targetResidence = await mongoose.connection.db
-                        .collection('residences')
-                        .findOne({ _id: new mongoose.Types.ObjectId(residenceId) });
-                    
-                    if (targetResidence && entryResidenceName === targetResidence.name) {
-                        if (entry.entries && Array.isArray(entry.entries)) {
-                            for (const subEntry of entry.entries) {
-                                if (subEntry.accountCode === '4000') { // Rental Income - Residential
-                                    totalRentalIncome += subEntry.credit || 0;
-                                } else if (subEntry.accountCode === '4100') { // Administrative Income
-                                    totalAdminIncome += subEntry.credit || 0;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            const totalRevenue = totalRentalIncome + totalAdminIncome;
-            
-            // For now, no expenses in accrual system
-            const totalExpenses = 0;
-            const netIncome = totalRevenue - totalExpenses;
-            
-            console.log(`📊 Calculated for Residence ${residenceId}: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total $${totalRevenue}`);
-            
-            return {
-                month,
-                year,
-                period: `${month}/${year}`,
-                residence: residenceId,
-                revenue: {
-                    rentalIncome: totalRentalIncome,
-                    adminIncome: totalAdminIncome,
-                    total: totalRevenue
-                },
-                expenses: {
-                    total: totalExpenses,
-                    breakdown: {}
-                },
-                netIncome,
-                basis: 'accrual' // Shows income when earned, not when received
-            };
-            
-        } catch (error) {
-            console.error('❌ Error generating income statement by residence:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Generate Monthly Cash Flow Statement by Residence
-     */
-    static async generateMonthlyCashFlowStatementByResidence(month, year, residenceId) {
-        try {
-            console.log(`💸 Generating Cash Flow Statement for ${month}/${year} - Residence: ${residenceId}...`);
-            
-            const monthStart = new Date(year, month - 1, 1);
-            const monthEnd = new Date(year, month, 0);
-            
-            // Operating Activities
-            const cashCollections = await this.getCashCollectionsByResidence(monthStart, monthEnd, residenceId);
-            const cashPayments = await this.getCashPaymentsByResidence(monthStart, monthEnd, residenceId);
-            const netOperatingCash = cashCollections - cashPayments;
-            
-            // Investing Activities
-            const investingCash = await this.getInvestingCashFlowByResidence(monthStart, monthEnd, residenceId);
-            
-            // Financing Activities
-            const financingCash = await this.getFinancingCashFlowByResidence(monthStart, monthEnd, residenceId);
-            
-            // Net Change in Cash
-            const netChangeInCash = netOperatingCash + investingCash + financingCash;
-            
-            // Beginning and Ending Cash
-            const beginningCash = await this.getAccountBalance('1001', monthStart, residenceId);
-            const endingCash = beginningCash + netChangeInCash;
-            
-            return {
-                month,
-                year,
-                period: `${month}/${year}`,
-                residence: residenceId,
-                operatingActivities: {
-                    cashCollections,
-                    cashPayments,
-                    netOperatingCash
-                },
-                investingActivities: {
-                    netCash: investingCash
-                },
-                financingActivities: {
-                    netCash: financingCash
-                },
-                netChangeInCash,
-                cashPositions: {
-                    beginning: beginningCash,
-                    ending: endingCash
-                }
-            };
-            
-        } catch (error) {
-            console.error('❌ Error generating cash flow statement by residence:', error);
-            throw error;
-        }
-    }
-
-    // Helper methods for residence-specific cash flow
-    static async getCashCollectionsByResidence(startDate, endDate, residenceId) {
-        const entries = await TransactionEntry.find({
-            'entries.accountCode': '1001', // Bank - look inside nested entries array
-            date: { $gte: startDate, $lte: endDate },
-            status: 'posted',
-            residence: residenceId
-        });
-        
-        let totalCollections = 0;
-        for (const entry of entries) {
-            if (entry.entries && Array.isArray(entry.entries)) {
-                for (const subEntry of entry.entries) {
-                    if (subEntry.accountCode === '1001' && subEntry.debit > 0) {
-                        totalCollections += subEntry.debit;
-                    }
-                }
-            }
-        }
-        
-        return totalCollections;
-    }
-    
-    static async getCashPaymentsByResidence(startDate, endDate, residenceId) {
-        const entries = await TransactionEntry.find({
-            'entries.accountCode': '1001', // Bank - look inside nested entries array
-            date: { $gte: startDate, $lte: endDate },
-            status: 'posted',
-            residence: residenceId
-        });
-        
-        let totalPayments = 0;
-        for (const entry of entries) {
-            if (entry.entries && Array.isArray(entry.entries)) {
-                for (const subEntry of entry.entries) {
-                    if (subEntry.accountCode === '1001' && subEntry.credit > 0) {
-                        totalPayments += subEntry.credit;
-                    }
-                }
-            }
-        }
-        
-        return totalPayments;
-    }
-    
-    static async getInvestingCashFlowByResidence(startDate, endDate, residenceId) {
-        // For now, return 0 (no major investments)
-        return 0;
-    }
-    
-    static async getFinancingCashFlowByResidence(startDate, endDate, residenceId) {
-        // For now, return 0 (no financing activities)
+    static async getFinancingCashFlow(startDate, endDate, residenceId = null) {
         return 0;
     }
 }
