@@ -317,6 +317,10 @@ app.use('/api/financial-reports', financialReportsRoutes);
 const rentalAccrualRoutes = require('./routes/rentalAccrualRoutes');
 app.use('/api/rental-accrual', rentalAccrualRoutes);
 
+// Accounting routes (Accrual vs Cash Basis)
+const accountingRoutes = require('./routes/accountingRoutes');
+app.use('/api/accounting', accountingRoutes);
+
 // Transaction creation routes
 const transactionCreationRoutes = require('./routes/finance/transactionRoutes');
 app.use('/api/finance/transactions', transactionCreationRoutes);
