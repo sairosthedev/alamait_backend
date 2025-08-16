@@ -100,6 +100,37 @@ class AccountingController {
             });
         }
     }
+
+    /**
+     * Get Monthly Breakdown Balance Sheet
+     */
+    static async getMonthlyBreakdownBalanceSheet(req, res) {
+        try {
+            const { year } = req.query;
+            
+            if (!year) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Year is required'
+                });
+            }
+            
+            const breakdownBalanceSheet = await AccountingService.generateMonthlyBreakdownBalanceSheet(parseInt(year));
+            
+            res.json({
+                success: true,
+                data: breakdownBalanceSheet
+            });
+            
+        } catch (error) {
+            console.error('❌ Error getting monthly breakdown balance sheet:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error getting monthly breakdown balance sheet',
+                error: error.message
+            });
+        }
+    }
     
     /**
      * Generate monthly cash flow statement

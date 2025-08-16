@@ -323,6 +323,70 @@ class AccountingService {
             throw error;
         }
     }
+
+    /**
+     * Generate Monthly Breakdown Balance Sheet (for frontend display)
+     */
+    static async generateMonthlyBreakdownBalanceSheet(year) {
+        try {
+            console.log(`📋 Generating Monthly Breakdown Balance Sheet for ${year}...`);
+            
+            const monthlyData = {};
+            
+            // Calculate for each month
+            for (let month = 1; month <= 12; month++) {
+                const monthEnd = new Date(year, month, 0);
+                
+                // Assets
+                const bankBalance = await this.getAccountBalance('1001', monthEnd);
+                const accountsReceivable = await this.getAccountBalance('1100', monthEnd);
+                const totalAssets = bankBalance + accountsReceivable;
+                
+                // Liabilities
+                const accountsPayable = await this.getAccountBalance('2000', monthEnd);
+                const tenantDeposits = await this.getAccountBalance('2020', monthEnd);
+                const totalLiabilities = accountsPayable + tenantDeposits;
+                
+                // Equity
+                const retainedEarnings = await this.getRetainedEarnings(monthEnd);
+                const totalEquity = retainedEarnings;
+                
+                monthlyData[month] = {
+                    month,
+                    year,
+                    assets: {
+                        bank: bankBalance,
+                        accountsReceivable: accountsReceivable,
+                        total: totalAssets
+                    },
+                    liabilities: {
+                        accountsPayable: accountsPayable,
+                        tenantDeposits: tenantDeposits,
+                        total: totalLiabilities
+                    },
+                    equity: {
+                        retainedEarnings: retainedEarnings,
+                        total: totalEquity
+                    },
+                    balanceCheck: totalAssets - (totalLiabilities + totalEquity)
+                };
+            }
+            
+            return {
+                year,
+                monthlyData,
+                summary: {
+                    totalAssets: monthlyData[12]?.assets.total || 0,
+                    totalLiabilities: monthlyData[12]?.liabilities.total || 0,
+                    totalEquity: monthlyData[12]?.equity.total || 0
+                }
+            };
+            
+        } catch (error) {
+            console.error('❌ Error generating monthly breakdown balance sheet:', error);
+            throw error;
+        }
+    }
     
     /**
      * Generate Monthly Cash Flow Statement
@@ -393,7 +457,14 @@ class AccountingService {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
                     if (subEntry.accountCode === accountCode) {
-                        balance += (subEntry.debit || 0) - (subEntry.credit || 0);
+                        // Special handling for tenant deposits (liability account)
+                        if (accountCode === '2020') {
+                            // For tenant deposits: credits increase liability, debits decrease liability
+                            balance += (subEntry.credit || 0) - (subEntry.debit || 0);
+                        } else {
+                            // For other accounts: debits increase, credits decrease
+                            balance += (subEntry.debit || 0) - (subEntry.credit || 0);
+                        }
                     }
                 }
             }
