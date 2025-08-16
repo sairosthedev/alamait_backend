@@ -363,29 +363,52 @@ class RentalAccrualService {
                     
                     if (roomData && roomData.price) {
                         monthlyRent = roomData.price;
-                        // Add admin fee based on residence type
+                        
+                        // Billing structure based on residence:
                         if (residence.name.includes('St Kilda')) {
-                            monthlyAdminFee = 20; // $20/month for St Kilda
+                            // St Kilda: Rent + Admin Fee (one-time) + Deposit (last month's rent)
+                            const leaseStartMonth = new Date(student.startDate).getMonth() + 1;
+                            const leaseStartYear = new Date(student.startDate).getFullYear();
+                            
+                            if (month === leaseStartMonth && year === leaseStartYear) {
+                                monthlyAdminFee = 20; // Admin fee only in first month
+                            } else {
+                                monthlyAdminFee = 0; // No admin fee in subsequent months
+                            }
+                            
+                            // Check if this is the last month of the lease (deposit = last month's rent)
+                            const leaseEndMonth = new Date(student.endDate).getMonth() + 1;
+                            const leaseEndYear = new Date(student.endDate).getFullYear();
+                            
+                            if (month === leaseEndMonth && year === leaseEndYear) {
+                                monthlyRent = monthlyRent * 2; // Double rent for last month (includes deposit)
+                            }
+                            
                         } else if (residence.name.includes('Belvedere')) {
-                            monthlyAdminFee = 25; // $25/month for Belvedere
-                        } else if (residence.name.includes('Newlands')) {
-                            monthlyAdminFee = 15; // $15/month for Newlands
-                        } else if (residence.name.includes('1ACP')) {
-                            monthlyAdminFee = 15; // $15/month for 1ACP
-                        } else if (residence.name.includes('Fife Avenue')) {
-                            monthlyAdminFee = 30; // $30/month for Fife Avenue
+                            // Belvedere: Rent only (no admin, no deposit)
+                            monthlyAdminFee = 0;
+                            
                         } else {
-                            monthlyAdminFee = 20; // Default admin fee
+                            // All other properties: Rent + Deposit (no admin fee)
+                            monthlyAdminFee = 0;
+                            
+                            // Check if this is the last month of the lease (deposit = last month's rent)
+                            const leaseEndMonth = new Date(student.endDate).getMonth() + 1;
+                            const leaseEndYear = new Date(student.endDate).getFullYear();
+                            
+                            if (month === leaseEndMonth && year === leaseEndYear) {
+                                monthlyRent = monthlyRent * 2; // Double rent for last month (includes deposit)
+                            }
                         }
                     } else {
                         // Fallback pricing if room not found
                         monthlyRent = 200;
-                        monthlyAdminFee = 20;
+                        monthlyAdminFee = 0; // No admin fee in fallback
                     }
                 } else {
                     // Fallback pricing if residence not found
                     monthlyRent = 200;
-                    monthlyAdminFee = 20;
+                    monthlyAdminFee = 0; // No admin fee in fallback
                 }
                 
                 const totalShouldBeOwed = monthsActive * (monthlyRent + monthlyAdminFee);
