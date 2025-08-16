@@ -173,7 +173,7 @@ async function testRentalAccrualSystem() {
         console.log('   • Double-entry accounting ensures balanced transactions');
         console.log('   • Payment clears the receivable without affecting income');
         console.log('   • System provides property-by-property financial tracking');
-
+        
     } catch (error) {
         console.error('❌ Error testing rental accrual system:', error);
     }

@@ -573,7 +573,7 @@ class RentalAccrualService {
                         rentAmount = 200;
                         adminFee = 20;
                     }
-                } else {
+            } else {
                     // Fallback pricing if residence not found
                     rentAmount = 200;
                     adminFee = 20;
