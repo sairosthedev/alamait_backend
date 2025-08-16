@@ -30,8 +30,8 @@ class RentalAccrualService {
                 .collection('applications')
                 .find({
                     status: 'approved',
-                    leaseStartDate: { $lte: endDate },
-                    leaseEndDate: { $gte: startDate },
+                    startDate: { $lte: endDate },      // Changed from leaseStartDate
+                    endDate: { $gte: startDate },      // Changed from leaseEndDate
                     paymentStatus: { $ne: 'cancelled' }
                 }).toArray();
             
@@ -302,51 +302,94 @@ class RentalAccrualService {
      */
     static async getOutstandingRentBalances() {
         try {
-            // Get all unpaid invoices
-            const unpaidInvoices = await Invoice.find({
-                paymentStatus: 'unpaid',
-                status: { $ne: 'cancelled' }
-            }).populate('student', 'firstName lastName email');
+            // Get all active students from applications
+            const activeStudents = await mongoose.connection.db
+                .collection('applications')
+                .find({
+                    status: 'approved',
+                    paymentStatus: { $ne: 'cancelled' }
+                }).toArray();
+            
+            // Get all payments from payments collection
+            const payments = await mongoose.connection.db
+                .collection('payments')
+                .find({}).toArray();
             
             // Calculate outstanding balances by student
             const studentBalances = {};
             
-            for (const invoice of unpaidInvoices) {
-                const studentId = invoice.student._id.toString();
-                const studentName = `${invoice.student.firstName} ${invoice.student.lastName}`;
+            for (const student of activeStudents) {
+                const studentId = student._id.toString();
+                const studentName = `${student.firstName || 'Unknown'} ${student.lastName || 'Student'}`;
                 
-                if (!studentBalances[studentId]) {
-                    studentBalances[studentId] = {
-                        studentId,
-                        studentName,
-                        email: invoice.student.email,
-                        residence: invoice.residence,
-                        room: invoice.room,
-                        totalOutstanding: 0,
-                        invoices: [],
-                        oldestInvoice: null,
-                        daysOverdue: 0
-                    };
-                }
+                // Calculate what should be owed (based on lease period)
+                const leaseStart = new Date(student.startDate);
+                const leaseEnd = new Date(student.endDate);
+                const now = new Date();
                 
-                studentBalances[studentId].totalOutstanding += invoice.balanceDue;
-                studentBalances[studentId].invoices.push({
-                    invoiceNumber: invoice.invoiceNumber,
-                    billingPeriod: invoice.billingPeriod,
-                    amount: invoice.balanceDue,
-                    dueDate: invoice.dueDate,
-                    daysOverdue: Math.max(0, Math.floor((new Date() - invoice.dueDate) / (1000 * 60 * 60 * 24)))
-                });
-                
-                // Track oldest invoice
-                if (!studentBalances[studentId].oldestInvoice || 
-                    invoice.dueDate < studentBalances[studentId].oldestInvoice) {
-                    studentBalances[studentId].oldestInvoice = invoice.dueDate;
-                    studentBalances[studentId].daysOverdue = Math.max(0, Math.floor((new Date() - invoice.dueDate) / (1000 * 60 * 60 * 24)));
+                // Only calculate if lease is active
+                if (leaseStart <= now && leaseEnd >= now) {
+                    // Calculate months from lease start to now
+                    const monthsActive = Math.max(0, 
+                        (now.getFullYear() - leaseStart.getFullYear()) * 12 + 
+                        (now.getMonth() - leaseStart.getMonth())
+                    );
+                    
+                    // Calculate what should be owed
+                    const monthlyRent = 200; // $200/month
+                    const monthlyAdminFee = 20; // $20/month
+                    const totalShouldBeOwed = monthsActive * (monthlyRent + monthlyAdminFee);
+                    
+                    // Find payments for this student
+                    const studentPayments = payments.filter(payment => 
+                        payment.student && payment.student.toString() === studentId
+                    );
+                    
+                    // Calculate total paid
+                    const totalPaid = studentPayments.reduce((sum, payment) => {
+                        return sum + (payment.amount || 0);
+                    }, 0);
+                    
+                    // Calculate outstanding balance
+                    const outstandingBalance = Math.max(0, totalShouldBeOwed - totalPaid);
+                    
+                    if (outstandingBalance > 0) {
+                        studentBalances[studentId] = {
+                            studentId,
+                            studentName,
+                            email: student.email || 'N/A',
+                            residence: student.residence || 'N/A',
+                            room: student.room || student.allocatedRoom || 'N/A',
+                            totalOutstanding: outstandingBalance,
+                            totalShouldBeOwed,
+                            totalPaid,
+                            monthsActive,
+                            leaseStart: leaseStart.toDateString(),
+                            leaseEnd: leaseEnd.toDateString(),
+                            monthlyRent,
+                            monthlyAdminFee,
+                            payments: studentPayments.length,
+                            oldestPayment: studentPayments.length > 0 ? 
+                                new Date(Math.min(...studentPayments.map(p => new Date(p.paymentDate || p.createdAt)))) : null
+                        };
+                    }
                 }
             }
             
-            return Object.values(studentBalances);
+            // Calculate summary
+            const totalOutstanding = Object.values(studentBalances).reduce((sum, student) => sum + student.totalOutstanding, 0);
+            const totalStudents = Object.keys(studentBalances).length;
+            const overdueStudents = Object.values(studentBalances).filter(student => student.totalOutstanding > 0).length;
+            
+            return {
+                students: Object.values(studentBalances),
+                summary: {
+                    totalOutstanding,
+                    totalStudents,
+                    overdueStudents,
+                    averageOutstanding: totalStudents > 0 ? totalOutstanding / totalStudents : 0
+                }
+            };
             
         } catch (error) {
             console.error('❌ Error getting outstanding rent balances:', error);
@@ -362,23 +405,37 @@ class RentalAccrualService {
             const monthStart = new Date(year, month - 1, 1);
             const monthEnd = new Date(year, month, 0);
             
-            // Get all rent accruals for the month
-            const accruals = await TransactionEntry.find({
+            // Get active students for this month from applications collection
+            const activeStudents = await mongoose.connection.db
+                .collection('applications')
+                .find({
+                    status: 'approved',
+                    startDate: { $lte: monthEnd },
+                    endDate: { $gte: monthStart },
+                    paymentStatus: { $ne: 'cancelled' }
+                }).toArray();
+            
+            let totalRentAccrued = 0;
+            let totalAdminFeesAccrued = 0;
+            let totalStudents = activeStudents.length;
+            
+            // Calculate what should be accrued for each student
+            for (const student of activeStudents) {
+                // Default rent amount (you can make this dynamic based on room/residence)
+                const rentAmount = 200; // $200/month
+                const adminFee = 20;    // $20/month admin fee
+                
+                totalRentAccrued += rentAmount;
+                totalAdminFeesAccrued += adminFee;
+            }
+            
+            // Check if accruals were actually created in TransactionEntry
+            const existingAccruals = await TransactionEntry.find({
                 'metadata.type': 'rent_accrual',
                 'metadata.accrualMonth': month,
                 'metadata.accrualYear': year,
                 status: 'posted'
             });
-            
-            let totalRentAccrued = 0;
-            let totalAdminFeesAccrued = 0;
-            let totalStudents = 0;
-            
-            for (const accrual of accruals) {
-                totalRentAccrued += accrual.metadata.rentAmount || 0;
-                totalAdminFeesAccrued += accrual.metadata.adminFee || 0;
-                totalStudents++;
-            }
             
             return {
                 month,
@@ -387,11 +444,77 @@ class RentalAccrualService {
                 totalRentAccrued,
                 totalAdminFeesAccrued,
                 totalAmountAccrued: totalRentAccrued + totalAdminFeesAccrued,
-                accruals: accruals.length
+                accruals: existingAccruals.length,
+                accrualsCreated: existingAccruals.length > 0,
+                pendingAccruals: totalStudents - existingAccruals.length
             };
             
         } catch (error) {
             console.error('❌ Error getting rent accrual summary:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Get yearly summary of rent accruals
+     */
+    static async getYearlySummary(year) {
+        try {
+            // Get all active students for the year from applications
+            const yearStart = new Date(year, 0, 1);
+            const yearEnd = new Date(year, 11, 31);
+            
+            const activeStudents = await mongoose.connection.db
+                .collection('applications')
+                .find({
+                    status: 'approved',
+                    startDate: { $lte: yearEnd },
+                    endDate: { $gte: yearStart },
+                    paymentStatus: { $ne: 'cancelled' }
+                }).toArray();
+            
+            let totalAmountAccrued = 0;
+            let totalStudents = activeStudents.length;
+            let monthlyBreakdown = [];
+            
+            // Calculate monthly breakdown
+            for (let month = 1; month <= 12; month++) {
+                const monthStart = new Date(year, month - 1, 1);
+                const monthEnd = new Date(year, month - 1, 31);
+                
+                // Count students active in this month
+                const studentsThisMonth = activeStudents.filter(student => {
+                    const studentStart = new Date(student.startDate);
+                    const studentEnd = new Date(student.endDate);
+                    return studentStart <= monthEnd && studentEnd >= monthStart;
+                });
+                
+                const monthlyRent = studentsThisMonth.length * 200; // $200 per student
+                const monthlyAdminFees = studentsThisMonth.length * 20; // $20 per student
+                const monthlyTotal = monthlyRent + monthlyAdminFees;
+                
+                totalAmountAccrued += monthlyTotal;
+                
+                monthlyBreakdown.push({
+                    month,
+                    monthName: new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' }),
+                    students: studentsThisMonth.length,
+                    rentAmount: monthlyRent,
+                    adminFees: monthlyAdminFees,
+                    total: monthlyTotal
+                });
+            }
+            
+            return {
+                year,
+                totalAmountAccrued,
+                totalStudents,
+                monthlyBreakdown,
+                averageMonthlyAccrual: totalAmountAccrued / 12
+            };
+            
+        } catch (error) {
+            console.error('❌ Error getting yearly summary:', error);
             throw error;
         }
     }
