@@ -978,23 +978,32 @@ class AccountingService {
                 'metadata.type': 'rent_accrual',
                 'metadata.accrualMonth': month,
                 'metadata.accrualYear': year,
-                date: { $gte: monthStart, $lte: monthEnd },
-                residence: residenceId
+                date: { $gte: monthStart, $lte: monthEnd }
             });
             
             console.log(`📊 Found ${accrualEntries.length} accrual entries for ${month}/${year} - Residence: ${residenceId}`);
             
-            // Calculate totals from accrual entries
+            // Calculate totals from accrual entries for this specific residence
             let totalRentalIncome = 0;
             let totalAdminIncome = 0;
             
             for (const entry of accrualEntries) {
-                if (entry.entries && Array.isArray(entry.entries)) {
-                    for (const subEntry of entry.entries) {
-                        if (subEntry.accountCode === '4000') { // Rental Income - Residential
-                            totalRentalIncome += subEntry.credit || 0;
-                        } else if (subEntry.accountCode === '4100') { // Administrative Income
-                            totalAdminIncome += subEntry.credit || 0;
+                // Filter by residence name from metadata
+                if (entry.metadata && entry.metadata.residence) {
+                    const entryResidenceName = entry.metadata.residence;
+                    const targetResidence = await mongoose.connection.db
+                        .collection('residences')
+                        .findOne({ _id: new mongoose.Types.ObjectId(residenceId) });
+                    
+                    if (targetResidence && entryResidenceName === targetResidence.name) {
+                        if (entry.entries && Array.isArray(entry.entries)) {
+                            for (const subEntry of entry.entries) {
+                                if (subEntry.accountCode === '4000') { // Rental Income - Residential
+                                    totalRentalIncome += subEntry.credit || 0;
+                                } else if (subEntry.accountCode === '4100') { // Administrative Income
+                                    totalAdminIncome += subEntry.credit || 0;
+                                }
+                            }
                         }
                     }
                 }
