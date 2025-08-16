@@ -26,6 +26,12 @@ router.get('/income-statement', FinancialReportsController.generateIncomeStateme
 router.get('/monthly-income-statement', FinancialReportsController.generateMonthlyIncomeStatement);
 
 /**
+ * Monthly Breakdown (All months for a year)
+ * GET /api/financial-reports/monthly-breakdown?period=2025&basis=accrual
+ */
+router.get('/monthly-breakdown', FinancialReportsController.generateMonthlyBreakdown);
+
+/**
  * Comprehensive Monthly Income Statement (Detailed monthly breakdown)
  * GET /api/financial-reports/comprehensive-monthly-income?period=2025&basis=cash
  */

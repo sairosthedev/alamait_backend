@@ -1,4 +1,5 @@
 const FinancialReportingService = require('../services/financialReportingService');
+const AccountingService = require('../services/accountingService');
 const { validateToken } = require('../middleware/auth');
 
 /**
@@ -40,10 +41,10 @@ class FinancialReportsController {
             let incomeStatement;
             if (residence) {
                 // Use residence-filtered method
-                incomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
+                incomeStatement = await AccountingService.generateMonthlyIncomeStatement(null, parseInt(period), residence);
             } else {
-                // Use regular method
-                incomeStatement = await FinancialReportingService.generateIncomeStatement(period, basis);
+                // Use regular method - call your working AccountingService
+                incomeStatement = await AccountingService.generateMonthlyIncomeStatement(null, parseInt(period));
             }
             
             res.json({
@@ -68,7 +69,7 @@ class FinancialReportsController {
      */
     static async generateMonthlyIncomeStatement(req, res) {
         try {
-            const { period, basis = 'cash', residence } = req.query;
+            const { period, basis = 'cash', residence, month } = req.query;
             
             if (!period) {
                 return res.status(400).json({
@@ -85,12 +86,15 @@ class FinancialReportsController {
             }
             
             let monthlyIncomeStatement;
-            if (residence) {
+            if (month) {
+                // Specific month requested
+                monthlyIncomeStatement = await AccountingService.generateMonthlyIncomeStatement(parseInt(month), parseInt(period), residence);
+            } else if (residence) {
                 // Use residence-filtered method
-                monthlyIncomeStatement = await FinancialReportingService.generateResidenceFilteredMonthlyIncomeStatement(period, residence, basis);
+                monthlyIncomeStatement = await AccountingService.generateMonthlyIncomeStatement(parseInt(period), parseInt(period), residence);
             } else {
-                // Use regular method
-                monthlyIncomeStatement = await FinancialReportingService.generateMonthlyIncomeStatement(period, basis);
+                // Use regular method - call your working AccountingService
+                monthlyIncomeStatement = await AccountingService.generateMonthlyIncomeStatement(parseInt(period), parseInt(period));
             }
             
             res.json({
@@ -104,6 +108,92 @@ class FinancialReportsController {
             res.status(500).json({
                 success: false,
                 message: 'Error generating monthly income statement',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Generate Monthly Breakdown (All months for a year)
+     * GET /api/finance/reports/monthly-breakdown?period=2025&basis=accrual
+     */
+    static async generateMonthlyBreakdown(req, res) {
+        try {
+            const { period, basis = 'accrual', residence } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2025)'
+                });
+            }
+            
+            const year = parseInt(period);
+            const monthlyData = {};
+            let totalAnnualRevenue = 0;
+            let totalAnnualExpenses = 0;
+            let totalAnnualNetIncome = 0;
+            
+            // Fetch data for each month (1-12)
+            for (let month = 1; month <= 12; month++) {
+                try {
+                    const monthData = await AccountingService.generateMonthlyIncomeStatement(month, year, residence);
+                    
+                    if (monthData) {
+                        const monthRevenue = monthData.revenue?.total || 0;
+                        const monthExpenses = monthData.expenses?.total || 0;
+                        const monthNetIncome = monthData.netIncome || 0;
+                        
+                        monthlyData[month] = {
+                            month: month,
+                            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+                            revenue: monthData.revenue || {},
+                            expenses: monthData.expenses || {},
+                            netIncome: monthNetIncome,
+                            summary: {
+                                totalRevenue: monthRevenue,
+                                totalExpenses: monthExpenses,
+                                totalNetIncome: monthNetIncome
+                            }
+                        };
+                        
+                        totalAnnualRevenue += monthRevenue;
+                        totalAnnualExpenses += monthExpenses;
+                        totalAnnualNetIncome += monthNetIncome;
+                    }
+                } catch (monthError) {
+                    console.log(`⚠️ Failed to fetch month ${month}:`, monthError.message);
+                    monthlyData[month] = {
+                        month: month,
+                        monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+                        revenue: {},
+                        expenses: {},
+                        netIncome: 0,
+                        summary: { totalRevenue: 0, totalExpenses: 0, totalNetIncome: 0 }
+                    };
+                }
+            }
+            
+            const result = {
+                monthly: monthlyData,
+                annualSummary: {
+                    totalAnnualRevenue,
+                    totalAnnualExpenses,
+                    totalAnnualNetIncome
+                }
+            };
+            
+            res.json({
+                success: true,
+                data: result,
+                message: `Monthly breakdown generated for ${period} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating monthly breakdown:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating monthly breakdown',
                 error: error.message
             });
         }
