@@ -859,14 +859,27 @@ class AccountingService {
                 monthlyProgression[month] = monthData;
             }
             
+            // Calculate totals for the whole year
+            let yearTotalRevenue = 0;
+            let yearTotalExpenses = 0;
+            let yearTotalNetIncome = 0;
+            
+            for (let month = 1; month <= 12; month++) {
+                if (monthlyProgression[month] && monthlyProgression[month].summary) {
+                    yearTotalRevenue += monthlyProgression[month].summary.totalRevenue || 0;
+                    yearTotalExpenses += monthlyProgression[month].summary.totalExpenses || 0;
+                    yearTotalNetIncome += monthlyProgression[month].summary.totalNetIncome || 0;
+                }
+            }
+            
             return {
                 year,
                 monthlyProgression,
                 summary: {
                     totalResidences: residences.length,
-                    totalRevenue: monthlyProgression[12]?.summary.totalRevenue || 0,
-                    totalExpenses: monthlyProgression[12]?.summary.totalExpenses || 0,
-                    totalNetIncome: monthlyProgression[12]?.summary.totalNetIncome || 0
+                    totalRevenue: yearTotalRevenue,
+                    totalExpenses: yearTotalExpenses,
+                    totalNetIncome: yearTotalNetIncome
                 }
             };
             
