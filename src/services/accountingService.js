@@ -82,7 +82,8 @@ class AccountingService {
                         const leaseEndYear = new Date(student.endDate).getFullYear();
                         
                         if (month === leaseEndMonth && year === leaseEndYear) {
-                            monthlyRent = monthlyRent * 2; // Double rent for last month (includes deposit)
+                            // Last month is called "deposit" but amount is same as regular rent
+                            // No change to monthlyRent - it stays the same
                         }
                         
                     } else if (residence.name.includes('Belvedere')) {
@@ -98,7 +99,8 @@ class AccountingService {
                         const leaseEndYear = new Date(student.endDate).getFullYear();
                         
                         if (month === leaseEndMonth && year === leaseEndYear) {
-                            monthlyRent = monthlyRent * 2; // Double rent for last month (includes deposit)
+                            // Last month is called "deposit" but amount is same as regular rent
+                            // No change to monthlyRent - it stays the same
                         }
                     }
                 }
