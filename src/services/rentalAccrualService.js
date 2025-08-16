@@ -300,7 +300,7 @@ class RentalAccrualService {
     /**
      * Get outstanding rent balances for all students
      */
-    static async getOutstandingRentBalances() {
+    static async getOutstandingRentBalances(month = null, year = null) {
         try {
             // Get all active students from applications
             const activeStudents = await mongoose.connection.db
@@ -328,6 +328,13 @@ class RentalAccrualService {
             
             // Calculate outstanding balances by student
             const studentBalances = {};
+            
+            // Use current date if month/year not provided
+            if (!month || !year) {
+                const now = new Date();
+                month = now.getMonth() + 1;
+                year = now.getFullYear();
+            }
             
             for (const student of activeStudents) {
                 const studentId = student._id.toString();
