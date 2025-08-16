@@ -310,6 +310,17 @@ class RentalAccrualService {
                     paymentStatus: { $ne: 'cancelled' }
                 }).toArray();
             
+            // Get all residences with room pricing
+            const residences = await mongoose.connection.db
+                .collection('residences')
+                .find({}).toArray();
+            
+            // Create residence map for quick lookup
+            const residenceMap = {};
+            residences.forEach(residence => {
+                residenceMap[residence._id.toString()] = residence;
+            });
+            
             // Get all payments from payments collection
             const payments = await mongoose.connection.db
                 .collection('payments')
@@ -335,9 +346,49 @@ class RentalAccrualService {
                         (now.getMonth() - leaseStart.getMonth())
                     );
                     
-                    // Calculate what should be owed
-                    const monthlyRent = 200; // $200/month
-                    const monthlyAdminFee = 20; // $20/month
+                    // Get student's residence and room pricing
+                    const residenceId = student.residence?.toString();
+                    const residence = residenceMap[residenceId];
+                    const allocatedRoom = student.allocatedRoom || student.preferredRoom;
+                    
+                    let monthlyRent = 0;
+                    let monthlyAdminFee = 0;
+                    
+                    if (residence && allocatedRoom && residence.rooms) {
+                        // Find the specific room in the residence
+                        const roomData = residence.rooms.find(room => 
+                            room.roomNumber === allocatedRoom || 
+                            room.name === allocatedRoom ||
+                            room._id?.toString() === allocatedRoom
+                        );
+                        
+                        if (roomData && roomData.price) {
+                            monthlyRent = roomData.price;
+                            // Add admin fee based on residence type
+                            if (residence.name.includes('St Kilda')) {
+                                monthlyAdminFee = 20; // $20/month for St Kilda
+                            } else if (residence.name.includes('Belvedere')) {
+                                monthlyAdminFee = 25; // $25/month for Belvedere
+                            } else if (residence.name.includes('Newlands')) {
+                                monthlyAdminFee = 15; // $15/month for Newlands
+                            } else if (residence.name.includes('1ACP')) {
+                                monthlyAdminFee = 15; // $15/month for 1ACP
+                            } else if (residence.name.includes('Fife Avenue')) {
+                                monthlyAdminFee = 30; // $30/month for Fife Avenue
+                            } else {
+                                monthlyAdminFee = 20; // Default admin fee
+                            }
+                        } else {
+                            // Fallback pricing if room not found
+                            monthlyRent = 200;
+                            monthlyAdminFee = 20;
+                        }
+                    } else {
+                        // Fallback pricing if residence not found
+                        monthlyRent = 200;
+                        monthlyAdminFee = 20;
+                    }
+                    
                     const totalShouldBeOwed = monthsActive * (monthlyRent + monthlyAdminFee);
                     
                     // Find payments for this student
@@ -358,8 +409,8 @@ class RentalAccrualService {
                             studentId,
                             studentName,
                             email: student.email || 'N/A',
-                            residence: student.residence || 'N/A',
-                            room: student.room || student.allocatedRoom || 'N/A',
+                            residence: residence?.name || 'N/A',
+                            room: allocatedRoom || 'N/A',
                             totalOutstanding: outstandingBalance,
                             totalShouldBeOwed,
                             totalPaid,
@@ -368,6 +419,11 @@ class RentalAccrualService {
                             leaseEnd: leaseEnd.toDateString(),
                             monthlyRent,
                             monthlyAdminFee,
+                            roomType: residence?.rooms?.find(r => 
+                                r.roomNumber === allocatedRoom || 
+                                r.name === allocatedRoom ||
+                                r._id?.toString() === allocatedRoom
+                            )?.type || 'N/A',
                             payments: studentPayments.length,
                             oldestPayment: studentPayments.length > 0 ? 
                                 new Date(Math.min(...studentPayments.map(p => new Date(p.paymentDate || p.createdAt)))) : null
@@ -415,15 +471,65 @@ class RentalAccrualService {
                     paymentStatus: { $ne: 'cancelled' }
                 }).toArray();
             
+            // Get all residences with room pricing
+            const residences = await mongoose.connection.db
+                .collection('residences')
+                .find({}).toArray();
+            
+            // Create residence map for quick lookup
+            const residenceMap = {};
+            residences.forEach(residence => {
+                residenceMap[residence._id.toString()] = residence;
+            });
+            
             let totalRentAccrued = 0;
             let totalAdminFeesAccrued = 0;
             let totalStudents = activeStudents.length;
             
             // Calculate what should be accrued for each student
             for (const student of activeStudents) {
-                // Default rent amount (you can make this dynamic based on room/residence)
-                const rentAmount = 200; // $200/month
-                const adminFee = 20;    // $20/month admin fee
+                // Get student's residence and room pricing
+                const residenceId = student.residence?.toString();
+                const residence = residenceMap[residenceId];
+                const allocatedRoom = student.allocatedRoom || student.preferredRoom;
+                
+                let rentAmount = 0;
+                let adminFee = 0;
+                
+                if (residence && allocatedRoom && residence.rooms) {
+                    // Find the specific room in the residence
+                    const roomData = residence.rooms.find(room => 
+                        room.roomNumber === allocatedRoom || 
+                        room.name === allocatedRoom ||
+                        room._id?.toString() === allocatedRoom
+                    );
+                    
+                    if (roomData && roomData.price) {
+                        rentAmount = roomData.price;
+                        // Add admin fee based on residence type
+                        if (residence.name.includes('St Kilda')) {
+                            adminFee = 20; // $20/month for St Kilda
+                        } else if (residence.name.includes('Belvedere')) {
+                            adminFee = 25; // $25/month for Belvedere
+                        } else if (residence.name.includes('Newlands')) {
+                            adminFee = 15; // $15/month for Newlands
+                        } else if (residence.name.includes('1ACP')) {
+                            adminFee = 15; // $15/month for 1ACP
+                        } else if (residence.name.includes('Fife Avenue')) {
+                            adminFee = 30; // $30/month for Fife Avenue
+                        } else {
+                            adminFee = 20; // Default admin fee
+                        }
+                    } else {
+                        // Fallback pricing if room not found
+                        rentAmount = 200;
+                        adminFee = 20;
+                    }
+                } else {
+                    // Fallback pricing if residence not found
+                    rentAmount = 200;
+                    adminFee = 20;
+                }
                 
                 totalRentAccrued += rentAmount;
                 totalAdminFeesAccrued += adminFee;
