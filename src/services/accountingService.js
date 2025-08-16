@@ -62,7 +62,7 @@ class AccountingService {
                         room._id?.toString() === allocatedRoom
                     );
                     
-                                    if (roomData?.price) {
+                    if (roomData?.price) {
                     monthlyRent = roomData.price;
                     
                     // Billing structure based on residence:
