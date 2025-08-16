@@ -133,6 +133,44 @@ class AccountingController {
     }
     
     /**
+     * Get monthly balance sheet with account codes for entire year
+     * GET /api/accounting/balance-sheet-monthly
+     */
+    static async getMonthlyBalanceSheetWithCodes(req, res) {
+        try {
+            const { year } = req.query;
+            if (!year) {
+                return res.status(400).json({ success: false, message: 'Year is required' });
+            }
+            
+            const monthlyBalanceSheets = {};
+            
+            // Generate balance sheet for each month with account codes
+            for (let month = 1; month <= 12; month++) {
+                const balanceSheet = await AccountingService.generateMonthlyBalanceSheet(month, parseInt(year));
+                monthlyBalanceSheets[month] = balanceSheet;
+            }
+            
+            res.json({ 
+                success: true, 
+                data: {
+                    year: parseInt(year),
+                    monthlyData: monthlyBalanceSheets,
+                    summary: {
+                        totalAssets: monthlyBalanceSheets[12]?.assets.total || 0,
+                        totalLiabilities: monthlyBalanceSheets[12]?.liabilities.total || 0,
+                        totalEquity: monthlyBalanceSheets[12]?.equity.total || 0
+                    }
+                }
+            });
+            
+        } catch (error) {
+            console.error('❌ Error getting monthly balance sheet with codes:', error);
+            res.status(500).json({ success: false, message: 'Error getting monthly balance sheet with codes', error: error.message });
+        }
+    }
+    
+    /**
      * Generate monthly cash flow statement
      */
     static async getMonthlyCashFlow(req, res) {

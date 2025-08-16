@@ -275,17 +275,17 @@ class AccountingService {
             
             const monthEnd = new Date(year, month, 0);
             
-            // Assets
+            // Assets with account codes
             const bankBalance = await this.getAccountBalance('1001', monthEnd); // Bank
             const accountsReceivable = await this.getAccountBalance('1100', monthEnd); // A/R (Tenants)
             const totalAssets = bankBalance + accountsReceivable;
             
-            // Liabilities
+            // Liabilities with account codes
             const accountsPayable = await this.getAccountBalance('2000', monthEnd); // A/P
             const tenantDeposits = await this.getAccountBalance('2020', monthEnd); // Tenant Deposits
             const totalLiabilities = accountsPayable + tenantDeposits;
             
-            // Equity
+            // Equity with account codes
             const retainedEarnings = await this.getRetainedEarnings(monthEnd);
             const totalEquity = retainedEarnings;
             
@@ -298,20 +298,20 @@ class AccountingService {
                 asOf: monthEnd,
                 assets: {
                     current: {
-                        bank: bankBalance,
-                        accountsReceivable: accountsReceivable
+                        bank: { amount: bankBalance, accountCode: '1001', accountName: 'Bank Account' },
+                        accountsReceivable: { amount: accountsReceivable, accountCode: '1100', accountName: 'Accounts Receivable - Tenants' }
                     },
                     total: totalAssets
                 },
                 liabilities: {
                     current: {
-                        accountsPayable: accountsPayable,
-                        tenantDeposits: tenantDeposits
+                        accountsPayable: { amount: accountsPayable, accountCode: '2000', accountName: 'Accounts Payable' },
+                        tenantDeposits: { amount: tenantDeposits, accountCode: '2020', accountName: 'Tenant Deposits Held' }
                     },
                     total: totalLiabilities
                 },
                 equity: {
-                    retainedEarnings: retainedEarnings,
+                    retainedEarnings: { amount: retainedEarnings, accountCode: '3000', accountName: 'Retained Earnings' },
                     total: totalEquity
                 },
                 balanceCheck: balanceCheck < 0.01 ? 'Balanced' : `Off by $${balanceCheck.toFixed(2)}`,
@@ -337,35 +337,36 @@ class AccountingService {
             for (let month = 1; month <= 12; month++) {
                 const monthEnd = new Date(year, month, 0);
                 
-                // Assets
+                // Assets with account codes
                 const bankBalance = await this.getAccountBalance('1001', monthEnd);
                 const accountsReceivable = await this.getAccountBalance('1100', monthEnd);
                 const totalAssets = bankBalance + accountsReceivable;
                 
-                // Liabilities
+                // Liabilities with account codes
                 const accountsPayable = await this.getAccountBalance('2000', monthEnd);
                 const tenantDeposits = await this.getAccountBalance('2020', monthEnd);
                 const totalLiabilities = accountsPayable + tenantDeposits;
                 
-                // Equity
+                // Equity with account codes
                 const retainedEarnings = await this.getRetainedEarnings(monthEnd);
                 const totalEquity = retainedEarnings;
                 
                 monthlyData[month] = {
                     month,
                     year,
+                    monthName: new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' }),
                     assets: {
-                        bank: bankBalance,
-                        accountsReceivable: accountsReceivable,
+                        bank: { amount: bankBalance, accountCode: '1001', accountName: 'Bank Account' },
+                        accountsReceivable: { amount: accountsReceivable, accountCode: '1100', accountName: 'Accounts Receivable - Tenants' },
                         total: totalAssets
                     },
                     liabilities: {
-                        accountsPayable: accountsPayable,
-                        tenantDeposits: tenantDeposits,
+                        accountsPayable: { amount: accountsPayable, accountCode: '2000', accountName: 'Accounts Payable' },
+                        tenantDeposits: { amount: tenantDeposits, accountCode: '2020', accountName: 'Tenant Deposits Held' },
                         total: totalLiabilities
                     },
                     equity: {
-                        retainedEarnings: retainedEarnings,
+                        retainedEarnings: { amount: retainedEarnings, accountCode: '3000', accountName: 'Retained Earnings' },
                         total: totalEquity
                     },
                     balanceCheck: totalAssets - (totalLiabilities + totalEquity)
