@@ -146,8 +146,8 @@ class AccountingService {
                     entries: [
                         // 1. Debit Accounts Receivable (Asset increases)
                         {
-                            accountCode: '1200',
-                            accountName: 'Accounts Receivable',
+                            accountCode: '1100',
+                            accountName: 'Accounts Receivable - Tenants',
                             accountType: 'Asset',
                             debit: totalAccrued,
                             credit: 0,
@@ -164,8 +164,8 @@ class AccountingService {
                         },
                         // 3. Credit Admin Fee Income (Revenue increases)
                         {
-                            accountCode: '4020',
-                            accountName: 'Admin Fee Income',
+                            accountCode: '4100',
+                            accountName: 'Administrative Income',
                             accountType: 'Income',
                             debit: 0,
                             credit: monthlyAdminFee,
@@ -226,9 +226,9 @@ class AccountingService {
             for (const entry of accrualEntries) {
                 if (entry.entries && Array.isArray(entry.entries)) {
                     for (const subEntry of entry.entries) {
-                        if (subEntry.accountCode === '4000') { // Rental Income
+                        if (subEntry.accountCode === '4000') { // Rental Income - Residential
                             totalRentalIncome += subEntry.credit || 0;
-                        } else if (subEntry.accountCode === '4020') { // Admin Fee Income
+                        } else if (subEntry.accountCode === '4100') { // Administrative Income
                             totalAdminIncome += subEntry.credit || 0;
                         }
                     }
@@ -277,7 +277,7 @@ class AccountingService {
             
             // Assets
             const bankBalance = await this.getAccountBalance('1001', monthEnd); // Bank
-            const accountsReceivable = await this.getAccountBalance('1200', monthEnd); // A/R
+            const accountsReceivable = await this.getAccountBalance('1100', monthEnd); // A/R (Tenants)
             const totalAssets = bankBalance + accountsReceivable;
             
             // Liabilities
@@ -383,56 +383,107 @@ class AccountingService {
     // Helper methods
     static async getAccountBalance(accountCode, asOfDate) {
         const entries = await TransactionEntry.find({
-            accountCode,
+            'entries.accountCode': accountCode,  // Look inside nested entries array
             date: { $lte: asOfDate },
             status: 'posted'
         });
         
-        return entries.reduce((balance, entry) => {
-            return balance + entry.debit - entry.credit;
-        }, 0);
+        let balance = 0;
+        for (const entry of entries) {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                for (const subEntry of entry.entries) {
+                    if (subEntry.accountCode === accountCode) {
+                        balance += (subEntry.debit || 0) - (subEntry.credit || 0);
+                    }
+                }
+            }
+        }
+        
+        return balance;
     }
     
     static async getRetainedEarnings(asOfDate) {
         // Simplified: Net income from start of business to date
         const revenueEntries = await TransactionEntry.find({
-            accountCode: { $in: ['4000', '4020'] },
+            'entries.accountCode': { $in: ['4000', '4100'] },  // Look inside nested entries array
             date: { $lte: asOfDate },
             status: 'posted'
         });
         
         const expenseEntries = await TransactionEntry.find({
-            accountCode: { $regex: /^5/ },
+            'entries.accountCode': { $regex: /^5/ },  // Look inside nested entries array
             date: { $lte: asOfDate },
             status: 'posted'
         });
         
-        const totalRevenue = revenueEntries.reduce((sum, entry) => sum + entry.credit, 0);
-        const totalExpenses = expenseEntries.reduce((sum, entry) => sum + entry.debit, 0);
+        let totalRevenue = 0;
+        let totalExpenses = 0;
+        
+        // Calculate revenue from nested entries
+        for (const entry of revenueEntries) {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                for (const subEntry of entry.entries) {
+                    if (['4000', '4020'].includes(subEntry.accountCode)) {
+                        totalRevenue += subEntry.credit || 0;
+                    }
+                }
+            }
+        }
+        
+        // Calculate expenses from nested entries
+        for (const entry of expenseEntries) {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                for (const subEntry of entry.entries) {
+                    if (subEntry.accountCode && subEntry.accountCode.startsWith('5')) {
+                        totalExpenses += subEntry.debit || 0;
+                    }
+                }
+            }
+        }
         
         return totalRevenue - totalExpenses;
     }
     
     static async getCashCollections(startDate, endDate) {
         const entries = await TransactionEntry.find({
-            accountCode: '1001', // Bank
+            'entries.accountCode': '1001', // Bank - look inside nested entries array
             date: { $gte: startDate, $lte: endDate },
-            status: 'posted',
-            debit: { $gt: 0 } // Cash coming in
+            status: 'posted'
         });
         
-        return entries.reduce((sum, entry) => sum + entry.debit, 0);
+        let totalCollections = 0;
+        for (const entry of entries) {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                for (const subEntry of entry.entries) {
+                    if (subEntry.accountCode === '1001' && subEntry.debit > 0) {
+                        totalCollections += subEntry.debit;
+                    }
+                }
+            }
+        }
+        
+        return totalCollections;
     }
     
     static async getCashPayments(startDate, endDate) {
         const entries = await TransactionEntry.find({
-            accountCode: '1001', // Bank
+            'entries.accountCode': '1001', // Bank - look inside nested entries array
             date: { $gte: startDate, $lte: endDate },
-            status: 'posted',
-            credit: { $gt: 0 } // Cash going out
+            status: 'posted'
         });
         
-        return entries.reduce((sum, entry) => sum + entry.credit, 0);
+        let totalPayments = 0;
+        for (const entry of entries) {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                for (const subEntry of entry.entries) {
+                    if (subEntry.accountCode === '1001' && subEntry.credit > 0) {
+                        totalPayments += subEntry.credit;
+                    }
+                }
+            }
+        }
+        
+        return totalPayments;
     }
     
     static async getInvestingCashFlow(startDate, endDate) {
