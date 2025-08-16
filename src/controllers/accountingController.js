@@ -235,6 +235,37 @@ class AccountingController {
             });
         }
     }
+
+    /**
+     * Get monthly progression for all residences (January through December)
+     * GET /api/accounting/balance-sheet/residences/monthly
+     */
+    static async getMonthlyProgressionAllResidences(req, res) {
+        try {
+            const { year } = req.query;
+            
+            if (!year) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Year is required' 
+                });
+            }
+            
+            const monthlyProgression = await AccountingService.generateMonthlyProgressionAllResidences(
+                parseInt(year)
+            );
+            
+            res.json({ success: true, data: monthlyProgression });
+            
+        } catch (error) {
+            console.error('❌ Error getting monthly progression for all residences:', error);
+            res.status(500).json({ 
+                success: false, 
+                message: 'Error getting monthly progression for all residences', 
+                error: error.message 
+            });
+        }
+    }
     
     /**
      * Generate monthly cash flow statement

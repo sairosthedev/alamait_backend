@@ -699,6 +699,95 @@ class AccountingService {
             throw error;
         }
     }
+
+    /**
+     * Generate Monthly Progression for All Residences (Accrual Basis)
+     * Shows every month from January to December for each residence
+     */
+    static async generateMonthlyProgressionAllResidences(year) {
+        try {
+            console.log(`📋 Generating Monthly Progression for ${year} - All Residences...`);
+            
+            // Get all residences
+            const residences = await mongoose.connection.db
+                .collection('residences')
+                .find({}).toArray();
+            
+            const monthlyProgression = {};
+            
+            // Generate monthly progression for each month (Jan-Dec)
+            for (let month = 1; month <= 12; month++) {
+                const monthData = {
+                    month,
+                    year,
+                    monthName: new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' }),
+                    residences: {},
+                    overall: null,
+                    summary: {
+                        totalResidences: residences.length,
+                        totalAssets: 0,
+                        totalLiabilities: 0,
+                        totalEquity: 0,
+                        balanceCheck: 0
+                    }
+                };
+                
+                let monthTotalAssets = 0;
+                let monthTotalLiabilities = 0;
+                let monthTotalEquity = 0;
+                
+                // Generate balance sheet for each residence for this month
+                for (const residence of residences) {
+                    const residenceId = residence._id.toString();
+                    const balanceSheet = await this.generateMonthlyBalanceSheet(month, year, residenceId);
+                    
+                    monthData.residences[residenceId] = {
+                        ...balanceSheet,
+                        residenceDetails: {
+                            id: residenceId,
+                            name: residence.name,
+                            address: residence.address || 'N/A',
+                            type: residence.type || 'N/A'
+                        }
+                    };
+                    
+                    monthTotalAssets += balanceSheet.assets.total;
+                    monthTotalLiabilities += balanceSheet.liabilities.total;
+                    monthTotalEquity += balanceSheet.equity.total;
+                }
+                
+                // Generate overall balance sheet for this month
+                const overallBalanceSheet = await this.generateMonthlyBalanceSheet(month, year);
+                monthData.overall = {
+                    ...overallBalanceSheet,
+                    residenceDetails: { name: 'All Residences Combined' }
+                };
+                
+                // Update month summary
+                monthData.summary.totalAssets = monthTotalAssets;
+                monthData.summary.totalLiabilities = monthTotalLiabilities;
+                monthData.summary.totalEquity = monthTotalEquity;
+                monthData.summary.balanceCheck = monthTotalAssets - (monthTotalLiabilities + monthTotalEquity);
+                
+                monthlyProgression[month] = monthData;
+            }
+            
+            return {
+                year,
+                monthlyProgression,
+                summary: {
+                    totalResidences: residences.length,
+                    totalAssets: monthlyProgression[12]?.summary.totalAssets || 0,
+                    totalLiabilities: monthlyProgression[12]?.summary.totalLiabilities || 0,
+                    totalEquity: monthlyProgression[12]?.summary.totalEquity || 0
+                }
+            };
+            
+        } catch (error) {
+            console.error('❌ Error generating monthly progression for all residences:', error);
+            throw error;
+        }
+    }
 }
 
 module.exports = AccountingService;
