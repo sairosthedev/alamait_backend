@@ -169,6 +169,72 @@ class AccountingController {
             res.status(500).json({ success: false, message: 'Error getting monthly balance sheet with codes', error: error.message });
         }
     }
+
+    /**
+     * Get balance sheet by specific residence
+     * GET /api/accounting/balance-sheet/residence/:residenceId
+     */
+    static async getBalanceSheetByResidence(req, res) {
+        try {
+            const { month, year } = req.query;
+            const { residenceId } = req.params;
+            
+            if (!month || !year || !residenceId) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Month, year, and residence ID are required' 
+                });
+            }
+            
+            const balanceSheet = await AccountingService.generateBalanceSheetByResidence(
+                parseInt(month), 
+                parseInt(year), 
+                residenceId
+            );
+            
+            res.json({ success: true, data: balanceSheet });
+            
+        } catch (error) {
+            console.error('❌ Error getting balance sheet by residence:', error);
+            res.status(500).json({ 
+                success: false, 
+                message: 'Error getting balance sheet by residence', 
+                error: error.message 
+            });
+        }
+    }
+
+    /**
+     * Get balance sheet breakdown for all residences
+     * GET /api/accounting/balance-sheet/residences
+     */
+    static async getBalanceSheetAllResidences(req, res) {
+        try {
+            const { month, year } = req.query;
+            
+            if (!month || !year) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Month and year are required' 
+                });
+            }
+            
+            const balanceSheets = await AccountingService.generateBalanceSheetAllResidences(
+                parseInt(month), 
+                parseInt(year)
+            );
+            
+            res.json({ success: true, data: balanceSheets });
+            
+        } catch (error) {
+            console.error('❌ Error getting balance sheet for all residences:', error);
+            res.status(500).json({ 
+                success: false, 
+                message: 'Error getting balance sheet for all residences', 
+                error: error.message 
+            });
+        }
+    }
     
     /**
      * Generate monthly cash flow statement

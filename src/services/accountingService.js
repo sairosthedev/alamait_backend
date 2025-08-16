@@ -269,24 +269,24 @@ class AccountingService {
     /**
      * Generate Monthly Balance Sheet (Accrual Basis)
      */
-    static async generateMonthlyBalanceSheet(month, year) {
+    static async generateMonthlyBalanceSheet(month, year, residenceId = null) {
         try {
-            console.log(`📋 Generating Balance Sheet for ${month}/${year}...`);
+            console.log(`📋 Generating Balance Sheet for ${month}/${year}${residenceId ? ` - Residence: ${residenceId}` : ''}...`);
             
             const monthEnd = new Date(year, month, 0);
             
             // Assets with account codes
             const bankBalance = await this.getAccountBalance('1001', monthEnd); // Bank
-            const accountsReceivable = await this.getAccountBalance('1100', monthEnd); // A/R (Tenants)
+            const accountsReceivable = await this.getAccountBalance('1100', monthEnd, residenceId); // A/R (Tenants)
             const totalAssets = bankBalance + accountsReceivable;
             
             // Liabilities with account codes
             const accountsPayable = await this.getAccountBalance('2000', monthEnd); // A/P
-            const tenantDeposits = await this.getAccountBalance('2020', monthEnd); // Tenant Deposits
+            const tenantDeposits = await this.getAccountBalance('2020', monthEnd, residenceId); // Tenant Deposits
             const totalLiabilities = accountsPayable + tenantDeposits;
             
             // Equity with account codes
-            const retainedEarnings = await this.getRetainedEarnings(monthEnd);
+            const retainedEarnings = await this.getRetainedEarnings(monthEnd, residenceId);
             const totalEquity = retainedEarnings;
             
             // Verify: Assets = Liabilities + Equity
@@ -296,6 +296,7 @@ class AccountingService {
                 month,
                 year,
                 asOf: monthEnd,
+                residence: residenceId,
                 assets: {
                     current: {
                         bank: { amount: bankBalance, accountCode: '1001', accountName: 'Bank Account' },
@@ -446,12 +447,19 @@ class AccountingService {
     }
     
     // Helper methods
-    static async getAccountBalance(accountCode, asOfDate) {
-        const entries = await TransactionEntry.find({
+    static async getAccountBalance(accountCode, asOfDate, residenceId = null) {
+        let query = {
             'entries.accountCode': accountCode,  // Look inside nested entries array
             date: { $lte: asOfDate },
             status: 'posted'
-        });
+        };
+        
+        // Add residence filtering if specified
+        if (residenceId) {
+            query.residence = residenceId;
+        }
+        
+        const entries = await TransactionEntry.find(query);
         
         let balance = 0;
         for (const entry of entries) {
@@ -474,19 +482,28 @@ class AccountingService {
         return balance;
     }
     
-    static async getRetainedEarnings(asOfDate) {
+    static async getRetainedEarnings(asOfDate, residenceId = null) {
         // Simplified: Net income from start of business to date
-        const revenueEntries = await TransactionEntry.find({
+        let revenueQuery = {
             'entries.accountCode': { $in: ['4000', '4100'] },  // Look inside nested entries array
             date: { $lte: asOfDate },
             status: 'posted'
-        });
+        };
         
-        const expenseEntries = await TransactionEntry.find({
+        let expenseQuery = {
             'entries.accountCode': { $regex: /^5/ },  // Look inside nested entries array
             date: { $lte: asOfDate },
             status: 'posted'
-        });
+        };
+        
+        // Add residence filtering if specified
+        if (residenceId) {
+            revenueQuery.residence = residenceId;
+            expenseQuery.residence = residenceId;
+        }
+        
+        const revenueEntries = await TransactionEntry.find(revenueQuery);
+        const expenseEntries = await TransactionEntry.find(expenseQuery);
         
         let totalRevenue = 0;
         let totalExpenses = 0;
@@ -582,6 +599,105 @@ class AccountingService {
         }
         
         return breakdown;
+    }
+
+    /**
+     * Generate Balance Sheet by Residence (Accrual Basis)
+     */
+    static async generateBalanceSheetByResidence(month, year, residenceId) {
+        try {
+            console.log(`📋 Generating Balance Sheet for ${month}/${year} - Residence: ${residenceId}...`);
+            
+            // Get residence details
+            const residence = await mongoose.connection.db
+                .collection('residences')
+                .findOne({ _id: new mongoose.Types.ObjectId(residenceId) });
+            
+            if (!residence) {
+                throw new Error(`Residence not found: ${residenceId}`);
+            }
+            
+            // Generate balance sheet for specific residence
+            const balanceSheet = await this.generateMonthlyBalanceSheet(month, year, residenceId);
+            
+            // Add residence details
+            balanceSheet.residenceDetails = {
+                id: residenceId,
+                name: residence.name,
+                address: residence.address || 'N/A',
+                type: residence.type || 'N/A'
+            };
+            
+            return balanceSheet;
+            
+        } catch (error) {
+            console.error('❌ Error generating balance sheet by residence:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Balance Sheet for All Residences (Accrual Basis)
+     */
+    static async generateBalanceSheetAllResidences(month, year) {
+        try {
+            console.log(`📋 Generating Balance Sheet for ${month}/${year} - All Residences...`);
+            
+            // Get all residences
+            const residences = await mongoose.connection.db
+                .collection('residences')
+                .find({}).toArray();
+            
+            const residenceBalanceSheets = {};
+            let totalAssets = 0;
+            let totalLiabilities = 0;
+            let totalEquity = 0;
+            
+            // Generate balance sheet for each residence
+            for (const residence of residences) {
+                const residenceId = residence._id.toString();
+                const balanceSheet = await this.generateMonthlyBalanceSheet(month, year, residenceId);
+                
+                residenceBalanceSheets[residenceId] = {
+                    ...balanceSheet,
+                    residenceDetails: {
+                        id: residenceId,
+                        name: residence.name,
+                        address: residence.address || 'N/A',
+                        type: residence.type || 'N/A'
+                    }
+                };
+                
+                totalAssets += balanceSheet.assets.total;
+                totalLiabilities += balanceSheet.liabilities.total;
+                totalEquity += balanceSheet.equity.total;
+            }
+            
+            // Generate overall balance sheet (all residences combined)
+            const overallBalanceSheet = await this.generateMonthlyBalanceSheet(month, year);
+            
+            return {
+                month,
+                year,
+                asOf: new Date(year, month, 0),
+                residences: residenceBalanceSheets,
+                overall: {
+                    ...overallBalanceSheet,
+                    residenceDetails: { name: 'All Residences Combined' }
+                },
+                summary: {
+                    totalResidences: residences.length,
+                    totalAssets,
+                    totalLiabilities,
+                    totalEquity,
+                    balanceCheck: totalAssets - (totalLiabilities + totalEquity)
+                }
+            };
+            
+        } catch (error) {
+            console.error('❌ Error generating balance sheet for all residences:', error);
+            throw error;
+        }
     }
 }
 
