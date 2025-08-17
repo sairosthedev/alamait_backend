@@ -706,7 +706,8 @@ class AccountingService {
             const innbucksBalance = await this.getAccountBalance('1003', monthEnd, residenceId);
             const pettyCashBalance = await this.getAccountBalance('1004', monthEnd, residenceId);
             const cashBalance = await this.getAccountBalance('1005', monthEnd, residenceId);
-            const accountsReceivable = await this.getAccountBalance('1100', monthEnd, residenceId);
+            // Fix: Calculate Accounts Receivable correctly (Accruals - Payments)
+            const accountsReceivable = await this.getAccountsReceivableBalance(monthEnd, residenceId);
             
             const totalCashAndBank = bankBalance + ecocashBalance + innbucksBalance + pettyCashBalance + cashBalance;
             const totalAssets = totalCashAndBank + accountsReceivable;
@@ -831,7 +832,7 @@ class AccountingService {
         
         // Add residence filtering if specified
         if (residenceId) {
-            query['metadata.residenceId'] = residenceId;
+            query['residence'] = residenceId;
         }
         
         const entries = await TransactionEntry.find(query);
@@ -853,6 +854,72 @@ class AccountingService {
         }
         
         return balance;
+    }
+
+    /**
+     * Get Accounts Receivable balance (Accruals - Payments)
+     */
+    static async getAccountsReceivableBalance(asOfDate, residenceId = null) {
+        try {
+            // Get total rent accruals up to the date
+            let accrualQuery = {
+                'metadata.type': 'rent_accrual',
+                date: { $lte: asOfDate },
+                status: 'posted'
+            };
+            
+            if (residenceId) {
+                accrualQuery['residence'] = residenceId;
+            }
+            
+            const accrualEntries = await TransactionEntry.find(accrualQuery);
+            let totalAccruals = 0;
+            
+            for (const entry of accrualEntries) {
+                if (entry.entries && Array.isArray(entry.entries)) {
+                    for (const subEntry of entry.entries) {
+                        if (subEntry.accountCode === '4000' && subEntry.credit > 0) {
+                            totalAccruals += subEntry.credit;
+                        }
+                    }
+                }
+            }
+            
+            // Get total payments received up to the date
+            let paymentQuery = {
+                'metadata.type': 'rent_payment',
+                date: { $lte: asOfDate },
+                status: 'posted'
+            };
+            
+            if (residenceId) {
+                paymentQuery['residence'] = residenceId;
+            }
+            
+            const paymentEntries = await TransactionEntry.find(paymentQuery);
+            let totalPayments = 0;
+            
+            for (const entry of paymentEntries) {
+                if (entry.entries && Array.isArray(entry.entries)) {
+                    for (const subEntry of entry.entries) {
+                        if (subEntry.accountCode === '1100' && subEntry.credit > 0) {
+                            totalPayments += subEntry.credit;
+                        }
+                    }
+                }
+            }
+            
+            // Accounts Receivable = Accruals - Payments
+            const accountsReceivable = totalAccruals - totalPayments;
+            
+            console.log(`📊 Accounts Receivable calculation: Accruals $${totalAccruals} - Payments $${totalPayments} = $${accountsReceivable}`);
+            
+            return Math.max(0, accountsReceivable); // Can't be negative
+            
+        } catch (error) {
+            console.error('❌ Error calculating Accounts Receivable:', error);
+            return 0;
+        }
     }
 
     /**
@@ -884,8 +951,8 @@ class AccountingService {
         
         // Add residence filtering if specified
         if (residenceId) {
-            revenueQuery['metadata.residenceId'] = residenceId;
-            expenseQuery['metadata.residenceId'] = residenceId;
+            revenueQuery['residence'] = residenceId;
+            expenseQuery['residence'] = residenceId;
         }
         
         const revenueEntries = await TransactionEntry.find(revenueQuery);
