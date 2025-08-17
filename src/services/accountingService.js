@@ -590,11 +590,12 @@ class AccountingService {
             const monthEnd = new Date(year, month, 0);
             
             // Build query for accrual entries
+            // Fix: Use metadata filters instead of date range for accruals
             let query = {
                 'metadata.type': 'rent_accrual',
                 'metadata.accrualMonth': month,
-                'metadata.accrualYear': year,
-                date: { $gte: monthStart, $lte: monthEnd }
+                'metadata.accrualYear': year
+                // Removed date filter - accruals are identified by metadata, not date
             };
             
             // Add residence filtering if specified

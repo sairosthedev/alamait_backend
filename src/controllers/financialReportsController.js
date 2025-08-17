@@ -140,6 +140,7 @@ class FinancialReportsController {
                     const monthData = await AccountingService.generateMonthlyIncomeStatement(month, year, residence);
                     
                     if (monthData) {
+                        // Fix: Use the correct revenue structure from AccountingService
                         const monthRevenue = monthData.revenue?.total || 0;
                         const monthExpenses = monthData.expenses?.total || 0;
                         const monthNetIncome = monthData.netIncome || 0;
