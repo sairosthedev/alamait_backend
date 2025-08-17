@@ -2,6 +2,7 @@ const Maintenance = require('../../models/Maintenance');
 const { validationResult } = require('express-validator');
 const User = require('../../models/User');
 const Residence = require('../../models/Residence');
+const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Helper function to map status for students
 function mapStatusForStudent(originalStatus) {
@@ -240,6 +241,14 @@ exports.createMaintenanceRequest = async (req, res) => {
 
         await newRequest.save();
         console.log('Maintenance request saved successfully');
+
+        // Send email notification to student (non-blocking)
+        try {
+            await EmailNotificationService.sendMaintenanceRequestSubmitted(newRequest);
+        } catch (emailError) {
+            console.error('Failed to send maintenance request submitted email notification:', emailError);
+            // Don't fail the request if email fails
+        }
 
         // Populate the response with student and residence info
         const populatedRequest = await Maintenance.findById(newRequest._id)

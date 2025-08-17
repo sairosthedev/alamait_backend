@@ -9,6 +9,7 @@ const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateService');
 const ExpiredStudent = require('../../models/ExpiredStudent');
+const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Get all applications with room status
 exports.getApplications = async (req, res) => {
@@ -290,6 +291,16 @@ exports.updateApplicationStatus = async (req, res) => {
                         attachments: attachments.length > 0 ? attachments : undefined
                     });
 
+                    // Send room change approval notification if this is a room change request (non-blocking)
+                    if (application.requestType === 'upgrade' || application.requestType === 'downgrade') {
+                        try {
+                            await EmailNotificationService.sendRoomChangeApprovalNotification(application, req.user);
+                        } catch (emailError) {
+                            console.error('Failed to send room change approval email notification:', emailError);
+                            // Don't fail the request if email fails
+                        }
+                    }
+
                     // Prepare room information to return to the frontend
                     const roomInfo = {
                         name: roomNumber,
@@ -331,6 +342,16 @@ exports.updateApplicationStatus = async (req, res) => {
                         Alamait Student Accommodation Team
                     `
                 });
+
+                // Send room change rejection notification if this is a room change request (non-blocking)
+                if (application.requestType === 'upgrade' || application.requestType === 'downgrade') {
+                    try {
+                        await EmailNotificationService.sendRoomChangeRejectionNotification(application, req.user, 'Application could not be approved at this time');
+                    } catch (emailError) {
+                        console.error('Failed to send room change rejection email notification:', emailError);
+                        // Don't fail the request if email fails
+                    }
+                }
                 
                 await application.save();
                 res.json({ 

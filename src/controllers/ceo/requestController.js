@@ -1,6 +1,7 @@
 const Request = require('../../models/Request');
 const { validationResult } = require('express-validator');
 const AuditLog = require('../../models/AuditLog');
+const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Get all requests (for CEO to view)
 exports.getAllRequests = async (req, res) => {
@@ -179,6 +180,19 @@ exports.approveRequest = async (req, res) => {
 
         await request.save();
 
+        // Send email notification to request submitter (non-blocking)
+        try {
+            await EmailNotificationService.sendCEOApprovalNotification(
+                request, 
+                true, 
+                notes || '', 
+                req.user
+            );
+        } catch (emailError) {
+            console.error('Failed to send CEO approval email notification:', emailError);
+            // Don't fail the request if email fails
+        }
+
         // Audit log
         await AuditLog.create({
             user: req.user._id,
@@ -251,6 +265,19 @@ exports.rejectRequest = async (req, res) => {
         });
 
         await request.save();
+
+        // Send email notification to request submitter (non-blocking)
+        try {
+            await EmailNotificationService.sendCEOApprovalNotification(
+                request, 
+                false, 
+                notes, 
+                req.user
+            );
+        } catch (emailError) {
+            console.error('Failed to send CEO rejection email notification:', emailError);
+            // Don't fail the request if email fails
+        }
 
         // Audit log
         await AuditLog.create({
