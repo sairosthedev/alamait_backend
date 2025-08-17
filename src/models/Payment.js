@@ -7,6 +7,13 @@ const paymentSchema = new mongoose.Schema({
         required: true,
         unique: true
     },
+    // 🆕 NEW FIELD: User ID for direct debtor mapping
+    user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,                    // ← REQUIRED for proper mapping
+        index: true                        // ← Indexed for performance
+    },
     student: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -135,25 +142,85 @@ const paymentSchema = new mongoose.Schema({
 // Add indexes for common queries
 paymentSchema.index({ paymentId: 1 });
 paymentSchema.index({ student: 1 });
+paymentSchema.index({ user: 1 });         // ← NEW: Index for user field
 paymentSchema.index({ residence: 1 });
-paymentSchema.index({ room: 1 });
-paymentSchema.index({ status: 1 });
 paymentSchema.index({ date: -1 });
 
 // 🚨 DUPLICATE PREVENTION INDEX
 // Compound index to prevent duplicate payments within a time window
-paymentSchema.index({ 
+paymentSchema.index({
     student: 1, 
     totalAmount: 1, 
     paymentMonth: 1, 
-    method: 1, 
-    createdAt: 1 
+    method: 1,
+    createdAt: 1
 }, { 
-    name: 'duplicate_prevention_index',
-    expireAfterSeconds: 300 // Expire after 5 minutes
+    expireAfterSeconds: 300 // 5 minutes
+});
+
+// 🆕 NEW: Compound index for user-based queries
+paymentSchema.index({
+    user: 1,
+    date: -1
+});
+
+// 🆕 NEW: Compound index for user + residence queries
+paymentSchema.index({
+    user: 1,
+    residence: 1,
+    date: -1
 });
 
 // Add pagination plugin
 paymentSchema.plugin(mongoosePaginate);
 
-module.exports = mongoose.model('Payment', paymentSchema); 
+// 🆕 NEW: Pre-save middleware to ensure user field is always set
+paymentSchema.pre('save', function(next) {
+    // If user field is not set, try to set it from student field
+    if (!this.user && this.student) {
+        this.user = this.student;
+    }
+    
+    // Ensure user field is always present
+    if (!this.user) {
+        return next(new Error('User field is required for proper debtor mapping'));
+    }
+    
+    next();
+});
+
+// 🆕 NEW: Virtual for easy debtor lookup
+paymentSchema.virtual('debtor', {
+    ref: 'Debtor',
+    localField: 'user',
+    foreignField: 'user',
+    justOne: true
+});
+
+// 🆕 NEW: Method to get debtor information
+paymentSchema.methods.getDebtor = async function() {
+    const Debtor = require('./Debtor');
+    return await Debtor.findOne({ user: this.user });
+};
+
+// 🆕 NEW: Method to validate payment mapping
+paymentSchema.methods.validateMapping = async function() {
+    const Debtor = require('./Debtor');
+    const debtor = await Debtor.findOne({ user: this.user });
+    
+    if (!debtor) {
+        throw new Error(`No debtor found for user ID: ${this.user}`);
+    }
+    
+    return {
+        isValid: true,
+        debtor: debtor,
+        debtorCode: debtor.debtorCode,
+        roomNumber: debtor.roomNumber,
+        residence: debtor.residence
+    };
+};
+
+const Payment = mongoose.model('Payment', paymentSchema);
+
+module.exports = Payment; 

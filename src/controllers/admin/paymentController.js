@@ -530,10 +530,29 @@ const createPayment = async (req, res) => {
         if (!studentExists) {
             return res.status(404).json({ message: 'Student not found' });
         }
+        
         // Check if residence exists
         const residenceExists = await Residence.findById(residence);
         if (!residenceExists) {
             return res.status(404).json({ message: 'Residence not found' });
+        }
+
+        // 🆕 NEW: Automatically fetch user ID for proper debtor mapping
+        let userId = student; // Default to student ID
+        let debtor = null;
+        
+        // Try to find existing debtor first
+        debtor = await Debtor.findOne({ user: student });
+        
+        if (debtor) {
+            console.log(`✅ Found existing debtor for student: ${studentExists.firstName} ${studentExists.lastName}`);
+            console.log(`   Debtor ID: ${debtor._id}`);
+            console.log(`   Debtor Code: ${debtor.debtorCode}`);
+            console.log(`   User ID: ${debtor.user}`);
+            userId = debtor.user; // Use the debtor's user ID
+        } else {
+            console.log(`🏗️  No existing debtor found, will create one during payment creation`);
+            // userId remains as student ID for now
         }
 
         // Calculate top-level breakdown from payments array if present
@@ -548,9 +567,10 @@ const createPayment = async (req, res) => {
             deposit = parsedPayments.find(p => p.type === 'deposit')?.amount || 0;
         }
 
-        // Create new payment
+        // 🆕 NEW: Create payment with user ID for proper mapping
         const payment = new Payment({
             paymentId,
+            user: userId,                    // ← ALWAYS include user ID for proper mapping
             student,
             residence,
             room,
@@ -569,9 +589,9 @@ const createPayment = async (req, res) => {
         });
 
         await payment.save();
+        console.log(`✅ Payment created successfully with user ID: ${userId}`);
 
         // Update debtor account if exists, create if not
-        let debtor = await Debtor.findOne({ user: student });
         if (!debtor) {
             try {
                 console.log('🏗️  Creating new debtor account for student...');
@@ -589,6 +609,15 @@ const createPayment = async (req, res) => {
                 console.log(`✅ Created enhanced debtor account for student: ${studentExists.firstName} ${studentExists.lastName}`);
                 console.log(`   Debtor ID: ${debtor._id}`);
                 console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                
+                // 🆕 NEW: Update payment with the correct user ID from the new debtor
+                if (debtor.user && debtor.user.toString() !== userId.toString()) {
+                    payment.user = debtor.user;
+                    await payment.save();
+                    console.log(`🔄 Updated payment user ID from ${userId} to ${debtor.user}`);
+                    userId = debtor.user;
+                }
+                
             } catch (debtorCreationError) {
                 console.error('❌ Error creating debtor account:', debtorCreationError);
                 console.error('   Error details:', debtorCreationError.message);
@@ -637,6 +666,18 @@ const createPayment = async (req, res) => {
             console.log('⚠️  No debtor account available for payment update');
         }
 
+        // 🆕 NEW: Validate payment mapping
+        try {
+            const mappingValidation = await payment.validateMapping();
+            console.log(`✅ Payment mapping validated successfully`);
+            console.log(`   Debtor Code: ${mappingValidation.debtorCode}`);
+            console.log(`   Room Number: ${mappingValidation.roomNumber}`);
+            console.log(`   Residence: ${mappingValidation.residence}`);
+        } catch (mappingError) {
+            console.warn(`⚠️  Payment mapping validation failed: ${mappingError.message}`);
+            // This is a warning, not an error - payment was created successfully
+        }
+
         // Record double-entry accounting transaction
         try {
             const DoubleEntryAccountingService = require('../../services/doubleEntryAccountingService');
@@ -644,6 +685,7 @@ const createPayment = async (req, res) => {
             console.log('💰 Creating double-entry accounting transaction...');
             console.log(`   Payment ID: ${payment.paymentId}`);
             console.log(`   Student: ${payment.student}`);
+            console.log(`   User ID: ${payment.user}`);  // ← NEW: Log user ID
             console.log(`   Residence: ${payment.residence}`);
             console.log(`   Amount: $${payment.totalAmount}`);
             console.log(`   Method: ${payment.method}`);

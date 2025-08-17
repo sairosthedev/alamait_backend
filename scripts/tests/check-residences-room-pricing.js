@@ -123,7 +123,7 @@ async function checkResidencesRoomPricing() {
                 
                 if (appResidence.rooms && Array.isArray(appResidence.rooms)) {
                     const allocatedRoom = sampleApp.allocatedRoom || sampleApp.preferredRoom;
-                    const roomData = appResidence.rooms.find(r => r.name === allocatedRoom);
+                    const roomData = appResidence.rooms.find(r => r.roomNumber === allocatedRoom);
                     
                     if (roomData) {
                         console.log(`   🏠 Room data found:`, JSON.stringify(roomData, null, 2));

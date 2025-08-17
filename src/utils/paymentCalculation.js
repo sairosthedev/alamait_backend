@@ -40,12 +40,12 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
 
   // 3. Get room from residences collection
   const residence = await Residence.findOne({
-    'rooms.name': rental.room || student.room
+    'rooms.roomNumber': rental.room || student.room
   }).lean();
   
   if (!residence) throw new Error('Residence not found');
   
-  const room = residence.rooms.find(r => r.name === (rental.room || student.room));
+  const room = residence.rooms.find(r => r.roomNumber === (rental.room || student.room));
   if (!room) throw new Error('Room not found');
 
   // Determine residence type for payment requirements

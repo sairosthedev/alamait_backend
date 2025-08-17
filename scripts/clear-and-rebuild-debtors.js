@@ -47,8 +47,30 @@ async function clearAndRebuildDebtors() {
                 const endDate = new Date(application.endDate);
                 const billingPeriod = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24 * 30.44)); // months
                 
-                // Get room price from residence or application
-                const roomPrice = residence?.roomPrice || application.roomPrice || 0;
+                // Get room price from residence
+                let roomPrice = 0;
+                if (residence && residence.rooms && Array.isArray(residence.rooms)) {
+                    const allocatedRoom = application.allocatedRoom || application.preferredRoom;
+                    if (allocatedRoom) {
+                        const room = residence.rooms.find(r => r.roomNumber === allocatedRoom);
+                        if (room && room.price) {
+                            roomPrice = room.price;
+                        }
+                    }
+                    
+                    // If no specific room price found, use first available room's price
+                    if (!roomPrice) {
+                        const firstRoom = residence.rooms.find(r => r.price && r.price > 0);
+                        if (firstRoom) {
+                            roomPrice = firstRoom.price;
+                        }
+                    }
+                }
+                
+                // Set default if still no price
+                if (!roomPrice) {
+                    roomPrice = 1200; // Default room price
+                }
                 
                 // Calculate expected total
                 const expectedTotal = roomPrice * billingPeriod;
@@ -109,7 +131,7 @@ async function clearAndRebuildDebtors() {
                     
                     // Residence Information
                     residence: residence?._id,
-                    roomNumber: application.roomNumber || application.room || 'N/A',
+                    roomNumber: application.allocatedRoom || application.preferredRoom || 'N/A',
                     roomPrice,
                     
                     // Contact Information
@@ -125,7 +147,7 @@ async function clearAndRebuildDebtors() {
                     lastPaymentAmount: payments.length > 0 ? payments[payments.length - 1].amount || 0 : 0,
                     
                     // Notes
-                    notes: `Auto-generated from application ${application._id}. Room: ${application.roomNumber || 'N/A'}, Residence: ${residence?.name || 'N/A'}`,
+                    notes: `Auto-generated from application ${application._id}. Room: ${application.allocatedRoom || 'N/A'}, Residence: ${residence?.name || 'N/A'}`,
                     
                     // Audit
                     createdBy: application.createdBy || student._id

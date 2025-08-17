@@ -26,10 +26,35 @@ async function fixDebtorRoomPrices() {
                 let currentBalance = 0;
 
                 // Get room price from residence
-                if (debtor.residence && debtor.residence.roomPrice) {
-                    roomPrice = debtor.residence.roomPrice;
-                } else {
-                    // Set default room prices based on residence name
+                if (debtor.residence && debtor.residence.rooms && Array.isArray(debtor.residence.rooms)) {
+                    // Try to find the specific room from application
+                    const applicationRoomNumber = debtor.application?.roomNumber || debtor.roomNumber;
+                    
+                    if (applicationRoomNumber) {
+                        const room = debtor.residence.rooms.find(r => 
+                            r.roomNumber === applicationRoomNumber
+                        );
+                        
+                        if (room && room.price) {
+                            roomPrice = room.price;
+                        } else {
+                            // If specific room not found, use the first available room's price
+                            const firstRoom = debtor.residence.rooms.find(r => r.price && r.price > 0);
+                            if (firstRoom && firstRoom.price) {
+                                roomPrice = firstRoom.price;
+                            }
+                        }
+                    } else {
+                        // No room number specified, use first available room
+                        const firstRoom = debtor.residence.rooms.find(r => r.price && r.price > 0);
+                        if (firstRoom && firstRoom.price) {
+                            roomPrice = firstRoom.price;
+                        }
+                    }
+                }
+                
+                // If still no room price, set default room prices based on residence name
+                if (!roomPrice) {
                     const residenceName = debtor.residence?.name || '';
                     if (residenceName.includes('St Kilda')) {
                         roomPrice = 1200;
@@ -38,7 +63,7 @@ async function fixDebtorRoomPrices() {
                     } else if (residenceName.includes('Ocean')) {
                         roomPrice = 1800;
                     } else {
-                        roomPrice = 1000; // Default
+                        roomPrice = 1200; // More realistic default
                     }
                 }
 

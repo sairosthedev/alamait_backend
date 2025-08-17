@@ -31,21 +31,44 @@ exports.getDashboardData = async (req, res) => {
             application: application
         });
 
-        // Get payment status and details
-        let paymentInfo = {
-            amount: 0,
-            status: 'none',
-            dueDate: null
-        };
+        // Get room price from residence for payment calculations
+        let roomPrice = 0;
+        if (application && application.residence) {
+            const residence = await Residence.findById(application.residence).select('rooms');
+            if (residence && residence.rooms && Array.isArray(residence.rooms)) {
+                const allocatedRoom = application.allocatedRoom || application.preferredRoom;
+                if (allocatedRoom) {
+                    const room = residence.rooms.find(r => r.roomNumber === allocatedRoom);
+                    if (room && room.price) {
+                        roomPrice = room.price;
+                    }
+                }
+                
+                // If no specific room price found, use first available room's price
+                if (!roomPrice) {
+                    const firstRoom = residence.rooms.find(r => r.price && r.price > 0);
+                    if (firstRoom) {
+                        roomPrice = firstRoom.price;
+                    }
+                }
+            }
+        }
+        
+        // Set default if still no price
+        if (!roomPrice) {
+            roomPrice = 1200; // Default room price
+        }
 
+        // Check if payment is due for the current month
+        let paymentInfo = null;
         if (application) {
             const currentDate = new Date();
             const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
             
             if (application.paymentStatus === 'paid') {
-                // If payment is already paid, show as paid
+                // Payment is already paid
                 paymentInfo = {
-                    amount: 0,
+                    amount: roomPrice,
                     status: 'paid',
                     dueDate: null,
                     paidDate: application.updatedAt,
@@ -56,7 +79,7 @@ exports.getDashboardData = async (req, res) => {
                 if (currentDate > firstDayOfMonth) {
                     // Payment is due
                     paymentInfo = {
-                        amount: application.roomPrice || 0,
+                        amount: roomPrice,
                         status: 'due',
                         dueDate: firstDayOfMonth,
                         lastPaymentDate: null
@@ -64,7 +87,7 @@ exports.getDashboardData = async (req, res) => {
                 } else {
                     // Payment is not due yet
                     paymentInfo = {
-                        amount: application.roomPrice || 0,
+                        amount: roomPrice,
                         status: 'pending',
                         dueDate: firstDayOfMonth,
                         lastPaymentDate: null

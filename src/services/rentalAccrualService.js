@@ -364,7 +364,6 @@ class RentalAccrualService {
                     // Find the specific room in the residence
                     const roomData = residence.rooms.find(room => 
                         room.roomNumber === allocatedRoom || 
-                        room.name === allocatedRoom ||
                         room._id?.toString() === allocatedRoom
                     );
                     
@@ -471,7 +470,6 @@ class RentalAccrualService {
                     monthlyAdminFee,
                     roomType: residence?.rooms?.find(r => 
                         r.roomNumber === allocatedRoom || 
-                        r.name === allocatedRoom ||
                         r._id?.toString() === allocatedRoom
                     )?.type || 'N/A',
                     payments: studentPayments.length,
@@ -548,7 +546,6 @@ class RentalAccrualService {
                     // Find the specific room in the residence
                     const roomData = residence.rooms.find(room => 
                         room.roomNumber === allocatedRoom || 
-                        room.name === allocatedRoom ||
                         room._id?.toString() === allocatedRoom
                     );
                     
