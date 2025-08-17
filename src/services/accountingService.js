@@ -938,7 +938,7 @@ class AccountingService {
     
     static async getRetainedEarnings(asOfDate, residenceId = null) {
         let revenueQuery = {
-            'entries.accountCode': { $in: ['4000', '4100'] },
+            'entries.accountCode': { $in: ['4000', '4001', '4020', '4100'] },
             date: { $lte: asOfDate },
             status: 'posted'
         };
@@ -965,7 +965,7 @@ class AccountingService {
         for (const entry of revenueEntries) {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
-                    if (['4000', '4100'].includes(subEntry.accountCode)) {
+                    if (['4000', '4001', '4020', '4100'].includes(subEntry.accountCode)) {
                         totalRevenue += subEntry.credit || 0;
                     }
                 }

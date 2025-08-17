@@ -261,6 +261,136 @@ class FinancialReportsController {
     }
 
     /**
+     * Generate Monthly Income & Expenses with Residence Filter (Dashboard)
+     * GET /api/financial-reports/monthly-income-expenses
+     * 
+     * Purpose: Dashboard display showing actual cash received/spent per month
+     * Default: Cash basis (shows real money flow, not accruals)
+     * Filter: Optional residence ID for property-specific dashboards
+     */
+    static async generateMonthlyIncomeExpenses(req, res) {
+        try {
+            const { period, basis = 'cash', residence } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2024)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+
+            console.log(`📊 Generating monthly income & expenses for DASHBOARD - ${period} (${basis} basis)${residence ? `, residence: ${residence}` : ''}`);
+            console.log(`💡 Note: This endpoint defaults to CASH BASIS for dashboard display (actual money received/spent)`);
+
+            // Generate monthly breakdown for all 12 months
+            const monthlyBreakdown = {};
+            let totalAnnualRevenue = 0;
+            let totalAnnualExpenses = 0;
+            let totalAnnualNetIncome = 0;
+
+            // Process each month
+            for (let month = 1; month <= 12; month++) {
+                try {
+                    const monthData = await AccountingService.generateMonthlyIncomeStatement(month, parseInt(period), residence);
+                    
+                    if (monthData && monthData.success) {
+                        const monthName = new Date(2025, month - 1, 1).toLocaleString('en-US', { month: 'long' });
+                        
+                        monthlyBreakdown[month] = {
+                            month,
+                            monthName,
+                            revenue: monthData.revenue || { total: 0 },
+                            expenses: monthData.expenses || { total: 0 },
+                            netIncome: monthData.netIncome || 0,
+                            summary: {
+                                totalRevenue: monthData.revenue?.total || 0,
+                                totalExpenses: monthData.expenses?.total || 0,
+                                totalNetIncome: monthData.netIncome || 0
+                            }
+                        };
+
+                        // Accumulate annual totals
+                        totalAnnualRevenue += monthData.revenue?.total || 0;
+                        totalAnnualExpenses += monthData.expenses?.total || 0;
+                        totalAnnualNetIncome += monthData.netIncome || 0;
+
+                        console.log(`  ✅ Month ${month} (${monthName}): Revenue $${monthData.revenue?.total || 0}, Expenses $${monthData.expenses?.total || 0}, Net $${monthData.netIncome || 0}`);
+                    } else {
+                        monthlyBreakdown[month] = {
+                            month,
+                            monthName: new Date(2025, month - 1, 1).toLocaleString('en-US', { month: 'long' }),
+                            revenue: { total: 0 },
+                            expenses: { total: 0 },
+                            netIncome: 0,
+                            summary: {
+                                totalRevenue: 0,
+                                totalExpenses: 0,
+                                totalNetIncome: 0
+                            }
+                        };
+                        console.log(`  ⚠️ Month ${month}: No data available`);
+                    }
+                } catch (monthError) {
+                    console.error(`  ❌ Error processing month ${month}:`, monthError.message);
+                    monthlyBreakdown[month] = {
+                        month,
+                        monthName: new Date(2025, month - 1, 1).toLocaleString('en-US', { month: 'long' }),
+                        revenue: { total: 0 },
+                        expenses: { total: 0 },
+                        netIncome: 0,
+                        summary: {
+                            totalRevenue: 0,
+                            totalExpenses: 0,
+                            totalNetIncome: 0
+                        }
+                    };
+                }
+            }
+
+            // Create annual summary
+            const annualSummary = {
+                totalAnnualRevenue,
+                totalAnnualExpenses,
+                totalAnnualNetIncome,
+                averageMonthlyRevenue: totalAnnualRevenue / 12,
+                averageMonthlyExpenses: totalAnnualExpenses / 12,
+                averageMonthlyNetIncome: totalAnnualNetIncome / 12
+            };
+
+            const response = {
+                success: true,
+                data: {
+                    period,
+                    basis,
+                    residence: residence || null,
+                    monthlyBreakdown,
+                    annualSummary,
+                    message: `Monthly income & expenses generated for ${period} (${basis} basis)${residence ? `, residence: ${residence}` : ''}`
+                }
+            };
+
+            console.log(`🎉 Generated monthly breakdown: $${totalAnnualRevenue} revenue, $${totalAnnualExpenses} expenses, $${totalAnnualNetIncome} net income`);
+            
+            res.json(response);
+            
+        } catch (error) {
+            console.error('❌ Error generating monthly income & expenses:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating monthly income & expenses',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Generate Monthly Cash Flow
      * GET /api/finance/reports/monthly-cash-flow
      */

@@ -44,6 +44,13 @@ router.get('/comprehensive-monthly-income', FinancialReportsController.generateC
 router.get('/monthly-expenses', FinancialReportsController.generateMonthlyExpenses);
 
 /**
+ * Monthly Income & Expenses with Residence Filter (Dashboard)
+ * GET /api/financial-reports/monthly-income-expenses?period=2025&basis=cash&residence=67d723cf20f89c4ae69804f3
+ * Defaults to cash basis for dashboard display
+ */
+router.get('/monthly-income-expenses', FinancialReportsController.generateMonthlyIncomeExpenses);
+
+/**
  * Monthly Balance Sheet (January to December breakdown)
  * GET /api/financial-reports/monthly-balance-sheet?period=2025&basis=cash
  */
