@@ -965,7 +965,7 @@ class AccountingService {
         for (const entry of revenueEntries) {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
-                    if (['4000', '4020'].includes(subEntry.accountCode)) {
+                    if (['4000', '4100'].includes(subEntry.accountCode)) {
                         totalRevenue += subEntry.credit || 0;
                     }
                 }
@@ -994,7 +994,7 @@ class AccountingService {
         };
         
         if (residenceId) {
-            query['metadata.residenceId'] = residenceId;
+            query['residence'] = residenceId;
         }
         
         const entries = await TransactionEntry.find(query);
@@ -1021,7 +1021,7 @@ class AccountingService {
         };
         
         if (residenceId) {
-            query['metadata.residenceId'] = residenceId;
+            query['residence'] = residenceId;
         }
         
         const entries = await TransactionEntry.find(query);

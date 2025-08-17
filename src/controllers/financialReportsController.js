@@ -330,12 +330,12 @@ class FinancialReportsController {
      */
     static async generateMonthlyBalanceSheet(req, res) {
         try {
-            const { period, basis = 'cash' } = req.query;
+            const { period, basis = 'accrual', residence } = req.query;
             
             if (!period) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Period parameter is required (e.g., 2024)'
+                    message: 'Period parameter is required (e.g., 2025)'
                 });
             }
             
@@ -346,19 +346,70 @@ class FinancialReportsController {
                 });
             }
             
-            const monthlyBalanceSheet = await FinancialReportingService.generateMonthlyBalanceSheet(period, basis);
+            const year = parseInt(period);
+            const monthlyData = {};
+            let totalAnnualAssets = 0;
+            let totalAnnualLiabilities = 0;
+            let totalAnnualEquity = 0;
+            
+            // Fetch balance sheet for each month (1-12)
+            for (let month = 1; month <= 12; month++) {
+                try {
+                    const monthData = await AccountingService.generateMonthlyBalanceSheet(month, year, residence);
+                    
+                    if (monthData) {
+                        monthlyData[month] = {
+                            month: month,
+                            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+                            assets: monthData.assets,
+                            liabilities: monthData.liabilities,
+                            equity: monthData.equity,
+                            balanceCheck: monthData.balanceCheck,
+                            summary: {
+                                totalAssets: monthData.assets.total,
+                                totalLiabilities: monthData.liabilities.total,
+                                totalEquity: monthData.equity.total
+                            }
+                        };
+                        
+                        totalAnnualAssets += monthData.assets.total;
+                        totalAnnualLiabilities += monthData.liabilities.total;
+                        totalAnnualEquity += monthData.equity.total;
+                    }
+                } catch (monthError) {
+                    console.log(`⚠️ Failed to fetch month ${month}:`, monthError.message);
+                    monthlyData[month] = {
+                        month: month,
+                        monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+                        assets: { total: 0, current: { cashAndBank: { total: 0 }, accountsReceivable: { amount: 0 } } },
+                        liabilities: { total: 0, current: { accountsPayable: { amount: 0 }, tenantDeposits: { amount: 0 } } },
+                        equity: { total: 0, retainedEarnings: { amount: 0 } },
+                        balanceCheck: 'No data',
+                        summary: { totalAssets: 0, totalLiabilities: 0, totalEquity: 0 }
+                    };
+                }
+            }
+            
+            const result = {
+                monthly: monthlyData,
+                annualSummary: {
+                    totalAnnualAssets: totalAnnualAssets / 12, // Average monthly
+                    totalAnnualLiabilities: totalAnnualLiabilities / 12, // Average monthly
+                    totalAnnualEquity: totalAnnualEquity / 12 // Average monthly
+                }
+            };
             
             res.json({
                 success: true,
-                data: monthlyBalanceSheet,
-                message: `Monthly balance sheet generated for ${period} (${basis} basis)`
+                data: result,
+                message: `Monthly balance sheet breakdown generated for ${period} (${basis} basis)`
             });
             
         } catch (error) {
-            console.error('Error generating monthly balance sheet:', error);
+            console.error('Error generating monthly balance sheet breakdown:', error);
             res.status(500).json({
                 success: false,
-                message: 'Error generating monthly balance sheet',
+                message: 'Error generating monthly balance sheet breakdown',
                 error: error.message
             });
         }
