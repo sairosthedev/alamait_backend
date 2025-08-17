@@ -6,6 +6,7 @@ const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
 const { validateMongoId } = require('../../utils/validators');
 const { generateUniqueId } = require('../../utils/idGenerator');
+const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Get all maintenance requests with financial details
 exports.getAllMaintenanceRequests = async (req, res) => {
@@ -388,6 +389,16 @@ exports.approveMaintenance = async (req, res) => {
             author: req.user?._id || null
         });
         await updatedMaintenance.save();
+
+        // Send email notification to requester about approval (non-blocking)
+        if (updatedMaintenance.requestedBy?.email) {
+            EmailNotificationService.sendMaintenanceRequestApproved(
+                updatedMaintenance,
+                req.user
+            ).catch(emailError => {
+                console.error('Failed to send maintenance approval email notification:', emailError);
+            });
+        }
 
         res.status(200).json({
             message: 'Maintenance request approved successfully',

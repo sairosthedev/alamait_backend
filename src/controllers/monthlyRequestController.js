@@ -1584,6 +1584,20 @@ exports.approveMonthlyRequest = async (req, res) => {
             });
         }
 
+        // Send email notification to submitter about approval/rejection (non-blocking)
+        if (updatedRequest.submittedBy?.email) {
+            EmailNotificationService.sendMonthlyRequestApprovalNotification(
+                updatedRequest,
+                approved,
+                notes,
+                month || updatedRequest.month,
+                year || updatedRequest.year,
+                user
+            ).catch(emailError => {
+                console.error('Failed to send monthly request approval email notification:', emailError);
+            });
+        }
+
         const response = {
             success: true,
             message: monthlyRequest.isTemplate 
@@ -1666,6 +1680,20 @@ exports.rejectMonthlyRequest = async (req, res) => {
             .populate('residence', 'name')
             .populate('submittedBy', 'firstName lastName email')
             .populate('approvedBy', 'firstName lastName email');
+
+        // Send email notification to submitter about rejection (non-blocking)
+        if (updatedRequest.submittedBy?.email) {
+            EmailNotificationService.sendMonthlyRequestApprovalNotification(
+                updatedRequest,
+                false, // rejected
+                rejectionReason,
+                updatedRequest.month,
+                updatedRequest.year,
+                user
+            ).catch(emailError => {
+                console.error('Failed to send monthly request rejection email notification:', emailError);
+            });
+        }
 
         res.status(200).json({
             success: true,
