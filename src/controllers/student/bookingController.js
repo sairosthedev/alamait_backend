@@ -1,6 +1,7 @@
 const Booking = require('../../models/Booking');
 const Residence = require('../../models/Residence');
 const { validationResult } = require('express-validator');
+const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Get all bookings for a student
 exports.getBookings = async (req, res) => {
@@ -110,6 +111,14 @@ exports.createBooking = async (req, res) => {
 
         const populatedBooking = await Booking.findById(booking._id)
             .populate('residence', 'name address');
+
+        // Send booking confirmation email (non-blocking)
+        try {
+            await EmailNotificationService.sendBookingConfirmationNotification(populatedBooking, req.user);
+        } catch (emailError) {
+            console.error('Failed to send booking confirmation email notification:', emailError);
+            // Don't fail the request if email fails
+        }
 
         res.status(201).json(populatedBooking);
     } catch (error) {

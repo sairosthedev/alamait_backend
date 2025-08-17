@@ -324,6 +324,14 @@ class EmailNotificationService {
 	 */
 	static async sendCEOApprovalNotification(request, approved, approvalReason, approvedBy) {
 		try {
+			// Get recipient email with fallback
+			const recipientEmail = request.submittedBy?.email || process.env.TEST_EMAIL || 'macdonaldsairos24@gmail.com';
+			
+			if (!recipientEmail) {
+				console.log('⚠️  No recipient email found for CEO approval notification, skipping...');
+				return false;
+			}
+
 			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
@@ -349,15 +357,65 @@ class EmailNotificationService {
 			`;
 
 			await sendEmail({
-				to: request.submittedBy?.email,
+				to: recipientEmail,
 				subject: `Request ${approved ? 'Approved' : 'Rejected'} by CEO`,
 				html: emailContent
 			});
 
-			console.log('✅ CEO approval notification sent');
+			console.log(`✅ CEO approval notification sent to ${recipientEmail}`);
 			return true;
 		} catch (error) {
 			console.error('❌ Error sending CEO approval notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send notification when request is sent to CEO for approval
+	 */
+	static async sendRequestSentToCEONotification(request, sentBy) {
+		try {
+			// Get recipient email with fallback
+			const recipientEmail = request.submittedBy?.email || process.env.TEST_EMAIL || 'macdonaldsairos24@gmail.com';
+			
+			if (!recipientEmail) {
+				console.log('⚠️  No recipient email found for CEO notification, skipping...');
+				return false;
+			}
+
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Request Sent to CEO for Approval</h2>
+						<p>Dear ${request.submittedBy?.firstName || 'User'},</p>
+						<p>Your request has been sent to the CEO for final approval:</p>
+						<ul>
+							<li><strong>Request Title:</strong> ${request.title || request.issue}</li>
+							<li><strong>Request Type:</strong> ${request.type || 'Maintenance'}</li>
+							<li><strong>Current Status:</strong> Pending CEO Approval</li>
+							<li><strong>Sent By:</strong> ${sentBy.firstName} ${sentBy.lastName}</li>
+							<li><strong>Date:</strong> ${new Date().toLocaleDateString()}</li>
+						</ul>
+						<p>You will be notified once the CEO makes a decision.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: recipientEmail,
+				subject: 'Request Sent to CEO for Approval',
+				html: emailContent
+			});
+
+			console.log(`✅ Request sent to CEO notification sent to ${recipientEmail}`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending request sent to CEO notification:', error);
 			throw error;
 		}
 	}
@@ -458,6 +516,453 @@ class EmailNotificationService {
 			return true;
 		} catch (error) {
 			console.error('❌ Error sending event reminder:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send event update notification
+	 */
+	static async sendEventUpdateNotification(event, previousEvent, updatedBy) {
+		try {
+			// Get all students
+			const User = require('../models/User');
+			const students = await User.find({ role: 'student' });
+
+			// Determine what changed
+			const changes = [];
+			if (previousEvent.title !== event.title) changes.push(`Title: "${previousEvent.title}" → "${event.title}"`);
+			if (previousEvent.date.getTime() !== event.date.getTime()) changes.push(`Date: ${previousEvent.date.toLocaleDateString()} → ${event.date.toLocaleDateString()}`);
+			if (previousEvent.startTime !== event.startTime) changes.push(`Time: ${previousEvent.startTime} → ${event.startTime}`);
+			if (previousEvent.location !== event.location) changes.push(`Location: ${previousEvent.location} → ${event.location}`);
+			if (previousEvent.description !== event.description) changes.push('Description updated');
+
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Event Update</h2>
+						<p>Dear Students,</p>
+						<p>The following event has been updated:</p>
+						<ul>
+							<li><strong>Event:</strong> ${event.title}</li>
+							<li><strong>Date:</strong> ${new Date(event.date).toLocaleDateString()}</li>
+							<li><strong>Time:</strong> ${event.startTime}</li>
+							<li><strong>Location:</strong> ${event.location}</li>
+							${event.description ? `<li><strong>Description:</strong> ${event.description}</li>` : ''}
+						</ul>
+						${changes.length > 0 ? `
+						<p><strong>Changes made:</strong></p>
+						<ul>
+							${changes.map(change => `<li>${change}</li>`).join('')}
+						</ul>
+						` : ''}
+						<p>Please update your calendars accordingly.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			// Send to all students
+			for (const student of students) {
+				await sendEmail({
+					to: student.email,
+					subject: `Event Updated: ${event.title}`,
+					html: emailContent
+				});
+			}
+
+			console.log(`✅ Event update notification sent to ${students.length} students`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending event update notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send event cancellation notification
+	 */
+	static async sendEventCancellationNotification(event, cancelledBy) {
+		try {
+			// Get all students
+			const User = require('../models/User');
+			const students = await User.find({ role: 'student' });
+
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Event Cancelled</h2>
+						<p>Dear Students,</p>
+						<p>The following event has been cancelled:</p>
+						<ul>
+							<li><strong>Event:</strong> ${event.title}</li>
+							<li><strong>Date:</strong> ${new Date(event.date).toLocaleDateString()}</li>
+							<li><strong>Time:</strong> ${event.startTime}</li>
+							<li><strong>Location:</strong> ${event.location}</li>
+						</ul>
+						<p>We apologize for any inconvenience. Please check for future events.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			// Send to all students
+			for (const student of students) {
+				await sendEmail({
+					to: student.email,
+					subject: `Event Cancelled: ${event.title}`,
+					html: emailContent
+				});
+			}
+
+			console.log(`✅ Event cancellation notification sent to ${students.length} students`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending event cancellation notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * 6. MAINTENANCE REQUEST NOTIFICATIONS
+	 */
+	
+	/**
+	 * Send maintenance status update notification
+	 */
+	static async sendMaintenanceStatusUpdate(maintenance, previousStatus, updatedBy) {
+		try {
+			const statusMessages = {
+				'assigned': 'Your maintenance request has been assigned to a technician',
+				'in-progress': 'Work on your maintenance request has started',
+				'completed': 'Your maintenance request has been completed',
+				'cancelled': 'Your maintenance request has been cancelled'
+			};
+
+			const statusMessage = statusMessages[maintenance.status] || `Your maintenance request status has been updated to: ${maintenance.status}`;
+
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Maintenance Request Update</h2>
+						<p>Dear ${maintenance.student?.firstName || 'Student'},</p>
+						<p>${statusMessage}:</p>
+						<ul>
+							<li><strong>Issue:</strong> ${maintenance.issue}</li>
+							<li><strong>Location:</strong> ${maintenance.residence?.name || 'N/A'}</li>
+							<li><strong>Room:</strong> ${maintenance.room}</li>
+							<li><strong>Previous Status:</strong> ${previousStatus}</li>
+							<li><strong>New Status:</strong> ${maintenance.status}</li>
+							${maintenance.assignedTo ? `<li><strong>Assigned To:</strong> ${maintenance.assignedTo.name} ${maintenance.assignedTo.surname}</li>` : ''}
+							${maintenance.estimatedCompletion ? `<li><strong>Estimated Completion:</strong> ${new Date(maintenance.estimatedCompletion).toLocaleDateString()}</li>` : ''}
+							${maintenance.amount ? `<li><strong>Cost:</strong> $${maintenance.amount}</li>` : ''}
+						</ul>
+						${maintenance.status === 'completed' ? '<p>Please let us know if you have any concerns about the work completed.</p>' : ''}
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: maintenance.student?.email,
+				subject: `Maintenance Request ${maintenance.status.charAt(0).toUpperCase() + maintenance.status.slice(1)}`,
+				html: emailContent
+			});
+
+			console.log(`✅ Maintenance status update notification sent to ${maintenance.student?.email}`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending maintenance status update notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send maintenance request submitted confirmation
+	 */
+	static async sendMaintenanceRequestSubmitted(maintenance) {
+		try {
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Maintenance Request Received</h2>
+						<p>Dear ${maintenance.student?.firstName || 'Student'},</p>
+						<p>We have received your maintenance request:</p>
+						<ul>
+							<li><strong>Issue:</strong> ${maintenance.issue}</li>
+							<li><strong>Description:</strong> ${maintenance.description}</li>
+							<li><strong>Location:</strong> ${maintenance.residence?.name || 'N/A'}</li>
+							<li><strong>Room:</strong> ${maintenance.room}</li>
+							<li><strong>Priority:</strong> ${maintenance.priority}</li>
+							<li><strong>Category:</strong> ${maintenance.category}</li>
+							<li><strong>Request Date:</strong> ${new Date(maintenance.createdAt).toLocaleDateString()}</li>
+						</ul>
+						<p>We will review your request and assign a technician as soon as possible. You will be notified of any updates.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: maintenance.student?.email,
+				subject: 'Maintenance Request Received',
+				html: emailContent
+			});
+
+			console.log(`✅ Maintenance request submitted notification sent to ${maintenance.student?.email}`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending maintenance request submitted notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * 7. ROOM CHANGE & BOOKING NOTIFICATIONS
+	 */
+	
+	/**
+	 * Send room change request notification
+	 */
+	static async sendRoomChangeRequestNotification(application, requestedRoom, currentRoom, student) {
+		try {
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Room Change Request Received</h2>
+						<p>Dear ${student.firstName},</p>
+						<p>We have received your request to ${application.requestType} your room:</p>
+						<ul>
+							<li><strong>Current Room:</strong> ${currentRoom}</li>
+							<li><strong>Requested Room:</strong> ${requestedRoom.roomNumber}</li>
+							<li><strong>Room Type:</strong> ${requestedRoom.type}</li>
+							<li><strong>Request Type:</strong> ${application.requestType}</li>
+							<li><strong>Request Date:</strong> ${new Date(application.applicationDate).toLocaleDateString()}</li>
+							<li><strong>Reason:</strong> ${application.reason}</li>
+						</ul>
+						<p>We will review your request and notify you of the decision within 3-5 business days.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: student.email,
+				subject: 'Room Change Request Received',
+				html: emailContent
+			});
+
+			console.log(`✅ Room change request notification sent to ${student.email}`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending room change request notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send room change approval notification
+	 */
+	static async sendRoomChangeApprovalNotification(application, approvedBy) {
+		try {
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Room Change Request Approved</h2>
+						<p>Dear ${application.firstName},</p>
+						<p>Great news! Your room change request has been approved:</p>
+						<ul>
+							<li><strong>Current Room:</strong> ${application.currentRoom}</li>
+							<li><strong>New Room:</strong> ${application.preferredRoom}</li>
+							<li><strong>Request Type:</strong> ${application.requestType}</li>
+							<li><strong>Approval Date:</strong> ${new Date().toLocaleDateString()}</li>
+							<li><strong>Approved By:</strong> ${approvedBy.firstName} ${approvedBy.lastName}</li>
+							<li><strong>Application Code:</strong> ${application.applicationCode}</li>
+						</ul>
+						<p>Next Steps:</p>
+						<ol>
+							<li>Complete any required payments for the new room</li>
+							<li>Schedule your move-in date</li>
+							<li>Return keys for your current room</li>
+							<li>Collect keys for your new room</li>
+						</ol>
+						<p>Please contact administration to arrange the details of your move.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: application.email,
+				subject: 'Room Change Request Approved',
+				html: emailContent
+			});
+
+			console.log(`✅ Room change approval notification sent to ${application.email}`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending room change approval notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send room change rejection notification
+	 */
+	static async sendRoomChangeRejectionNotification(application, rejectedBy, reason) {
+		try {
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Room Change Request Update</h2>
+						<p>Dear ${application.firstName},</p>
+						<p>We regret to inform you that your room change request could not be approved:</p>
+						<ul>
+							<li><strong>Current Room:</strong> ${application.currentRoom}</li>
+							<li><strong>Requested Room:</strong> ${application.preferredRoom}</li>
+							<li><strong>Request Type:</strong> ${application.requestType}</li>
+							<li><strong>Decision Date:</strong> ${new Date().toLocaleDateString()}</li>
+							<li><strong>Reviewed By:</strong> ${rejectedBy.firstName} ${rejectedBy.lastName}</li>
+							${reason ? `<li><strong>Reason:</strong> ${reason}</li>` : ''}
+						</ul>
+						<p>You may submit a new request in the future if circumstances change.</p>
+						<p>If you have any questions, please contact administration.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: application.email,
+				subject: 'Room Change Request Update',
+				html: emailContent
+			});
+
+			console.log(`✅ Room change rejection notification sent to ${application.email}`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending room change rejection notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send booking confirmation notification
+	 */
+	static async sendBookingConfirmationNotification(booking, student) {
+		try {
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Booking Confirmation</h2>
+						<p>Dear ${student.firstName},</p>
+						<p>Your booking has been confirmed!</p>
+						<ul>
+							<li><strong>Residence:</strong> ${booking.residence?.name || 'N/A'}</li>
+							<li><strong>Room:</strong> ${booking.room?.roomNumber || 'N/A'}</li>
+							<li><strong>Room Type:</strong> ${booking.room?.type || 'N/A'}</li>
+							<li><strong>Check-in:</strong> ${new Date(booking.startDate).toLocaleDateString()}</li>
+							<li><strong>Check-out:</strong> ${new Date(booking.endDate).toLocaleDateString()}</li>
+							<li><strong>Monthly Rent:</strong> $${booking.room?.price || booking.totalAmount}</li>
+							<li><strong>Status:</strong> ${booking.status}</li>
+						</ul>
+						<p>Next Steps:</p>
+						<ol>
+							<li>Complete your payment to secure your booking</li>
+							<li>Submit any required documents</li>
+							<li>Schedule your move-in date</li>
+						</ol>
+						<p>If you have any questions, please don't hesitate to contact us.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: student.email,
+				subject: 'Booking Confirmation - Alamait Student Accommodation',
+				html: emailContent
+			});
+
+			console.log(`✅ Booking confirmation notification sent to ${student.email}`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending booking confirmation notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send booking cancellation notification
+	 */
+	static async sendBookingCancellationNotification(booking, student, reason) {
+		try {
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Booking Cancellation</h2>
+						<p>Dear ${student.firstName},</p>
+						<p>Your booking has been cancelled:</p>
+						<ul>
+							<li><strong>Residence:</strong> ${booking.residence?.name || 'N/A'}</li>
+							<li><strong>Room:</strong> ${booking.room?.roomNumber || 'N/A'}</li>
+							<li><strong>Check-in:</strong> ${new Date(booking.startDate).toLocaleDateString()}</li>
+							<li><strong>Check-out:</strong> ${new Date(booking.endDate).toLocaleDateString()}</li>
+							<li><strong>Cancellation Date:</strong> ${new Date().toLocaleDateString()}</li>
+							${reason ? `<li><strong>Reason:</strong> ${reason}</li>` : ''}
+						</ul>
+						<p>If you have any questions about this cancellation, please contact administration.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: student.email,
+				subject: 'Booking Cancellation - Alamait Student Accommodation',
+				html: emailContent
+			});
+
+			console.log(`✅ Booking cancellation notification sent to ${student.email}`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending booking cancellation notification:', error);
 			throw error;
 		}
 	}

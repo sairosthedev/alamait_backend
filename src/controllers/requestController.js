@@ -7,6 +7,7 @@ const { generateUniqueId } = require('../utils/idGenerator');
 const { uploadToS3 } = require('../utils/fileStorage');
 const { s3, s3Configs } = require('../config/s3');
 const { findSimilarRequests, generateSimilarityQuery } = require('../utils/requestSimilarity');
+const EmailNotificationService = require('../services/emailNotificationService');
 
 // Helper function to map status for students
 function mapStatusForStudent(originalStatus) {
@@ -1063,6 +1064,16 @@ exports.updateRequest = async (req, res) => {
         console.log('💾 Saving request with assignedTo:', request.assignedTo);
         await request.save();
         console.log('✅ Request saved successfully');
+
+        // Send email notification when request is sent to CEO for approval
+        if (updateData.status === 'pending_ceo_approval') {
+            try {
+                await EmailNotificationService.sendRequestSentToCEONotification(request, user);
+            } catch (emailError) {
+                console.error('Failed to send request sent to CEO email notification:', emailError);
+                // Don't fail the request if email fails
+            }
+        }
 
         // Create expenses if financeStatus is being set to 'approved'
         if (updateData.financeStatus === 'approved' && !request.convertedToExpense) {

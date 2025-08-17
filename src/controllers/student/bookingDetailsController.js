@@ -5,6 +5,7 @@ const { sendEmail } = require('../../utils/email');
 const { validationResult } = require('express-validator');
 const User = require('../../models/User');
 const Lease = require('../../models/Lease');
+const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Get current booking
 exports.getCurrentBooking = async (req, res) => {
@@ -663,32 +664,17 @@ exports.requestRoomChange = async (req, res) => {
 
         await application.save();
 
-        // Send confirmation email
+        // Send room change request notification (non-blocking)
         try {
-            await sendEmail({
-                to: req.user.email,
-                subject: 'Room Change Request Received - Alamait Student Accommodation',
-                text: `
-                    Dear ${req.user.firstName} ${req.user.lastName},
-
-                    We have received your request to ${requestedRoom.price > currentRoomPrice ? 'upgrade' : 'downgrade'} your room.
-
-                    Request Details:
-                    - Current Room: ${currentRoomNumber}
-                    - Requested Room: ${requestedRoom.roomNumber}
-                    - Request Date: ${new Date().toLocaleDateString()}
-                    - Start Date: ${new Date(startDate).toLocaleDateString()}
-                    - End Date: ${new Date(endDate).toLocaleDateString()}
-
-                    We will review your request and get back to you shortly.
-
-                    Best regards,
-                    Alamait Student Accommodation Team
-                `
-            });
+            await EmailNotificationService.sendRoomChangeRequestNotification(
+                application, 
+                requestedRoom, 
+                currentRoomNumber, 
+                req.user
+            );
         } catch (emailError) {
-            console.error('Error sending confirmation email:', emailError);
-            // Continue with the response even if email fails
+            console.error('Failed to send room change request email notification:', emailError);
+            // Don't fail the request if email fails
         }
 
         res.json({

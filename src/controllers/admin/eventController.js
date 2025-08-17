@@ -1,4 +1,5 @@
 const Event = require('../../models/Event');
+const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Create a new event
 const createEvent = async (req, res) => {
@@ -41,6 +42,15 @@ const createEvent = async (req, res) => {
         });
 
         await event.save();
+        
+        // Send email notification to all students (non-blocking)
+        try {
+            await EmailNotificationService.sendNewEventNotification(event, req.user);
+        } catch (emailError) {
+            console.error('Failed to send event notification email:', emailError);
+            // Don't fail the request if email fails
+        }
+        
         res.status(201).json(event);
     } catch (error) {
         console.error('Error creating event:', error);
@@ -125,6 +135,12 @@ const updateEvent = async (req, res) => {
         const { id } = req.params;
         const { title, date, time, location, category, description, status } = req.body;
         
+        // Get the original event before updating
+        const originalEvent = await Event.findById(id);
+        if (!originalEvent) {
+            return res.status(404).json({ error: 'Event not found' });
+        }
+        
         // Split time into startTime and endTime if provided
         let startTime, endTime;
         if (time) {
@@ -148,6 +164,14 @@ const updateEvent = async (req, res) => {
             return res.status(404).json({ error: 'Event not found' });
         }
 
+        // Send email notification about event update (non-blocking)
+        try {
+            await EmailNotificationService.sendEventUpdateNotification(event, originalEvent, req.user);
+        } catch (emailError) {
+            console.error('Failed to send event update notification email:', emailError);
+            // Don't fail the request if email fails
+        }
+
         res.json(event);
     } catch (error) {
         console.error('Error updating event:', error);
@@ -158,10 +182,22 @@ const updateEvent = async (req, res) => {
 const deleteEvent = async (req, res) => {
     try {
         const { id } = req.params;
-        const event = await Event.findByIdAndDelete(id);
         
+        // Get the event before deleting it
+        const event = await Event.findById(id);
         if (!event) {
             return res.status(404).json({ error: 'Event not found' });
+        }
+        
+        // Delete the event
+        await Event.findByIdAndDelete(id);
+
+        // Send email notification about event cancellation (non-blocking)
+        try {
+            await EmailNotificationService.sendEventCancellationNotification(event, req.user);
+        } catch (emailError) {
+            console.error('Failed to send event cancellation notification email:', emailError);
+            // Don't fail the request if email fails
         }
 
         res.json({ message: 'Event deleted successfully' });

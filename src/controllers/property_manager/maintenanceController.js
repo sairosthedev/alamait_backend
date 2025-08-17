@@ -5,6 +5,7 @@ const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
 const AuditLog = require('../../models/AuditLog');
 const Residence = require('../../models/Residence');
+const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Helper function to generate unique transaction ID
 const generateUniqueId = async (prefix) => {
@@ -112,6 +113,20 @@ exports.updateMaintenanceRequest = async (req, res) => {
         }
 
         await maintenance.save();
+
+        // Send email notification for status changes (non-blocking)
+        if (previousStatus !== maintenance.status) {
+            try {
+                await EmailNotificationService.sendMaintenanceStatusUpdate(
+                    maintenance, 
+                    previousStatus, 
+                    req.user
+                );
+            } catch (emailError) {
+                console.error('Failed to send maintenance status update email notification:', emailError);
+                // Don't fail the request if email fails
+            }
+        }
 
         // Create transaction when maintenance is completed
         if (isBeingCompleted && maintenance.amount > 0) {
