@@ -51,7 +51,7 @@ const transactionEntrySchema = new mongoose.Schema({
   // Source
   source: {
     type: String,
-    enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment', 'expense_payment', 'rental_accrual', 'rental_accrual_reversal'],
+    enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment', 'expense_payment', 'rental_accrual', 'rental_accrual_reversal', 'expense_accrual', 'expense_accrual_reversal'],
     required: true
   },
   sourceId: {

@@ -40,11 +40,12 @@ class FinancialReportsController {
             
             let incomeStatement;
             if (residence) {
-                // Use residence-filtered method
-                incomeStatement = await AccountingService.generateMonthlyIncomeStatement(null, parseInt(period), residence);
+                // Use residence-filtered method with basis
+                incomeStatement = await FinancialReportingService.generateIncomeStatement(period, basis);
+                // Note: You may need to add residence filtering to FinancialReportingService
             } else {
-                // Use regular method - call your working AccountingService
-                incomeStatement = await AccountingService.generateMonthlyIncomeStatement(null, parseInt(period));
+                // Use FinancialReportingService with basis parameter
+                incomeStatement = await FinancialReportingService.generateIncomeStatement(period, basis);
             }
             
             res.json({
@@ -87,14 +88,16 @@ class FinancialReportsController {
             
             let monthlyIncomeStatement;
             if (month) {
-                // Specific month requested
-                monthlyIncomeStatement = await AccountingService.generateMonthlyIncomeStatement(parseInt(month), parseInt(period), residence);
+                // Specific month requested with basis
+                monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
+                // Note: You may need to add month filtering to FinancialReportingService
             } else if (residence) {
-                // Use residence-filtered method
-                monthlyIncomeStatement = await AccountingService.generateMonthlyIncomeStatement(parseInt(period), parseInt(period), residence);
+                // Use residence-filtered method with basis
+                monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
+                // Note: You may need to add residence filtering to FinancialReportingService
             } else {
-                // Use regular method - call your working AccountingService
-                monthlyIncomeStatement = await AccountingService.generateMonthlyIncomeStatement(parseInt(period), parseInt(period));
+                // Use FinancialReportingService with basis parameter
+                monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
             }
             
             res.json({

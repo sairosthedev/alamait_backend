@@ -43,10 +43,10 @@ class FinancialReportingService {
                     status: 'posted'
                 });
                 
-                // For accrual basis, also look at expenses when they are incurred (manual entries)
+                // For accrual basis, look at expenses when they are incurred (expense accruals)
                 const expenseEntries = await TransactionEntry.find({
                     date: { $gte: startDate, $lte: endDate },
-                    source: 'manual',
+                    source: 'expense_accrual',
                     status: 'posted'
                 });
                 
