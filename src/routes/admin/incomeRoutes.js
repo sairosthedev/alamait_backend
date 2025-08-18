@@ -5,11 +5,11 @@ const {
     getResidenceIncome, 
     getIncomeByDateRange 
 } = require('../../controllers/admin/incomeController');
-const { authenticateToken, authorizeRole } = require('../../middleware/auth');
+const { auth, checkRole } = require('../../middleware/auth');
 
 // Apply authentication middleware to all routes
-router.use(authenticateToken);
-router.use(authorizeRole(['admin', 'manager']));
+router.use(auth);
+router.use(checkRole('admin', 'manager'));
 
 /**
  * @route   GET /api/admin/income/summary
