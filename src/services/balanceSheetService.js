@@ -294,14 +294,14 @@ class BalanceSheetService {
                 accruedExpenses: this.formatAccruedExpenses(monthBalanceSheet.liabilities.current),
                 tenantDeposits: this.formatTenantDeposits(monthBalanceSheet.liabilities.current),
                 taxesPayable: this.formatTaxesPayable(monthBalanceSheet.liabilities.current),
-                total: monthBalanceSheet.liabilities.totalCurrent
+                total: Math.abs(monthBalanceSheet.liabilities.totalCurrent)
               },
               nonCurrent: {
                 longTermLoans: this.formatLongTermLoans(monthBalanceSheet.liabilities.nonCurrent),
                 otherLongTermLiabilities: this.formatOtherLongTermLiabilities(monthBalanceSheet.liabilities.nonCurrent),
-                total: monthBalanceSheet.liabilities.totalNonCurrent
+                total: Math.abs(monthBalanceSheet.liabilities.totalNonCurrent)
               },
-              total: monthBalanceSheet.liabilities.totalLiabilities
+              total: Math.abs(monthBalanceSheet.liabilities.totalLiabilities)
             },
             equity: {
               capital: {
@@ -319,7 +319,7 @@ class BalanceSheetService {
                 accountName: 'Other Equity',
                 amount: Math.abs(monthBalanceSheet.equity.otherEquity) // FIX: Ensure positive values for equity
               },
-              total: monthBalanceSheet.equity.totalEquity
+              total: Math.abs(monthBalanceSheet.equity.totalEquity)
             },
             summary: {
               totalAssets: monthBalanceSheet.assets.totalAssets,

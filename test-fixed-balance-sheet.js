@@ -5,85 +5,146 @@ const MONGODB_URI = 'mongodb+srv://macdonaldsairos24:macdonald24@cluster0.ulvve.
 
 async function testFixedBalanceSheet() {
   try {
-    console.log('🧪 Testing FIXED Balance Sheet Service...\n');
+    console.log('🔍 Testing Fixed Balance Sheet Service...');
     
-    await mongoose.connect(MONGODB_URI, { 
-      useNewUrlParser: true, 
-      useUnifiedTopology: true 
+    await mongoose.connect(MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
     });
+
     console.log('✅ Connected to MongoDB Atlas');
-    
+
     // Test the monthly balance sheet generation
-    console.log('📊 Generating Monthly Balance Sheet for 2025...');
-    const monthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet('2025');
+    console.log('\n🔍 Testing generateMonthlyBalanceSheet for 2025...');
     
-    console.log('\n🎯 FIXED BALANCE SHEET DATA:');
-    console.log('='.repeat(60));
+    const monthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet(2025);
     
-    // Show August data (the month we fixed)
-    const august = monthlyBalanceSheet.monthly[8];
-    if (august) {
-      console.log('\n📅 AUGUST 2025 BALANCE SHEET:');
-      console.log(`  Assets Total: $${august.assets.total.toLocaleString()}`);
-      console.log(`  Liabilities Total: $${august.liabilities.total.toLocaleString()}`);
-      console.log(`  Equity Total: $${august.equity.total.toLocaleString()}`);
+    if (monthlyBalanceSheet.success) {
+      console.log('✅ Monthly balance sheet generated successfully');
       
-      console.log('\n💰 ASSETS BREAKDOWN:');
-      console.log(`  Cash & Bank: $${august.assets.current.cashAndBank.total.toLocaleString()}`);
-      console.log(`  Accounts Receivable: $${august.assets.current.accountsReceivable.amount.toLocaleString()}`);
+      // Check January data specifically
+      const januaryData = monthlyBalanceSheet.data.monthly[1];
       
-      console.log('\n💳 LIABILITIES BREAKDOWN:');
-      if (august.liabilities.current.accountsPayable) {
-        Object.entries(august.liabilities.current.accountsPayable).forEach(([code, liability]) => {
-          console.log(`  ${code} - ${liability.accountName}: $${liability.amount.toLocaleString()}`);
-        });
+      if (januaryData) {
+        console.log('\n📊 January 2025 Balance Sheet Data:');
+        console.log('=====================================');
+        
+        // Check Assets
+        console.log('\n💰 Assets:');
+        console.log(`  Total Assets: $${januaryData.assets.total}`);
+        console.log(`  Current Assets: $${januaryData.assets.current.total}`);
+        
+        // Check Liabilities
+        console.log('\n💸 Liabilities:');
+        console.log(`  Total Liabilities: $${januaryData.liabilities.total}`);
+        console.log(`  Current Liabilities: $${januaryData.liabilities.current.total}`);
+        
+        // Check individual liability accounts
+        if (januaryData.liabilities.current.accountsPayable) {
+          Object.entries(januaryData.liabilities.current.accountsPayable).forEach(([code, account]) => {
+            if (code !== 'total') {
+              console.log(`    Accounts Payable (${code}): $${account.amount}`);
+            }
+          });
+        }
+        
+        if (januaryData.liabilities.current.tenantDeposits) {
+          Object.entries(januaryData.liabilities.current.tenantDeposits).forEach(([code, account]) => {
+            if (code !== 'total') {
+              console.log(`    Tenant Deposits (${code}): $${account.amount}`);
+            }
+          });
+        }
+        
+        // Check Equity
+        console.log('\n🏛️ Equity:');
+        console.log(`  Total Equity: $${januaryData.equity.total}`);
+        console.log(`  Capital: $${januaryData.equity.capital.amount}`);
+        console.log(`  Retained Earnings: $${januaryData.equity.retainedEarnings.amount}`);
+        
+        // Check Summary
+        console.log('\n📋 Summary:');
+        console.log(`  Total Assets: $${januaryData.summary.totalAssets}`);
+        console.log(`  Total Liabilities: $${januaryData.summary.totalLiabilities}`);
+        console.log(`  Total Equity: $${januaryData.summary.totalEquity}`);
+        
+        // Check if values are positive
+        console.log('\n🔍 Checking for Negative Values:');
+        console.log('=====================================');
+        
+        let hasNegativeValues = false;
+        
+        if (januaryData.liabilities.total < 0) {
+          console.log(`❌ Total Liabilities is negative: $${januaryData.liabilities.total}`);
+          hasNegativeValues = true;
+        } else {
+          console.log(`✅ Total Liabilities is positive: $${januaryData.liabilities.total}`);
+        }
+        
+        if (januaryData.equity.total < 0) {
+          console.log(`❌ Total Equity is negative: $${januaryData.equity.total}`);
+          hasNegativeValues = true;
+        } else {
+          console.log(`✅ Total Equity is positive: $${januaryData.equity.total}`);
+        }
+        
+        // Check individual accounts
+        if (januaryData.liabilities.current.accountsPayable) {
+          Object.entries(januaryData.liabilities.current.accountsPayable).forEach(([code, account]) => {
+            if (code !== 'total' && account.amount < 0) {
+              console.log(`❌ Accounts Payable (${code}) is negative: $${account.amount}`);
+              hasNegativeValues = true;
+            }
+          });
+        }
+        
+        if (januaryData.equity.retainedEarnings.amount < 0) {
+          console.log(`❌ Retained Earnings is negative: $${januaryData.equity.retainedEarnings.amount}`);
+          hasNegativeValues = true;
+        } else {
+          console.log(`✅ Retained Earnings is positive: $${januaryData.equity.retainedEarnings.amount}`);
+        }
+        
+        if (!hasNegativeValues) {
+          console.log('\n🎉 SUCCESS: All liability and equity values are now positive!');
+        } else {
+          console.log('\n⚠️  WARNING: Some values are still negative and need fixing.');
+        }
+        
+        // Check balance sheet equation
+        console.log('\n🔍 Balance Sheet Equation Check:');
+        console.log('=====================================');
+        
+        const assets = januaryData.summary.totalAssets;
+        const liabilities = januaryData.summary.totalLiabilities;
+        const equity = januaryData.summary.totalEquity;
+        
+        console.log(`Assets: $${assets}`);
+        console.log(`Liabilities: $${liabilities}`);
+        console.log(`Equity: $${equity}`);
+        console.log(`Liabilities + Equity: $${liabilities + equity}`);
+        
+        const difference = Math.abs(assets - (liabilities + equity));
+        
+        if (difference < 0.01) {
+          console.log(`✅ SUCCESS: Assets = Liabilities + Equity (Difference: $${difference.toFixed(2)})`);
+        } else {
+          console.log(`❌ FAILED: Assets ≠ Liabilities + Equity (Difference: $${difference.toFixed(2)})`);
+        }
+        
+      } else {
+        console.log('❌ No January data found');
       }
-      if (august.liabilities.current.tenantDeposits) {
-        Object.entries(august.liabilities.current.tenantDeposits).forEach(([code, liability]) => {
-          console.log(`  ${code} - ${liability.accountName}: $${liability.amount.toLocaleString()}`);
-        });
-      }
-      
-      console.log('\n🏛️ EQUITY BREAKDOWN:');
-      console.log(`  Capital: $${august.equity.capital.amount.toLocaleString()}`);
-      console.log(`  Retained Earnings: $${august.equity.retainedEarnings.amount.toLocaleString()}`);
-      console.log(`  Other Equity: $${august.equity.otherEquity.amount.toLocaleString()}`);
-      
-      console.log('\n⚖️ ACCOUNTING EQUATION CHECK:');
-      const assets = august.assets.total;
-      const liabilities = august.liabilities.total;
-      const equity = august.equity.total;
-      const equation = assets - liabilities - equity;
-      console.log(`  Assets: $${assets.toLocaleString()}`);
-      console.log(`  Liabilities: $${liabilities.toLocaleString()}`);
-      console.log(`  Equity: $${equity.toLocaleString()}`);
-      console.log(`  Assets - Liabilities - Equity = ${equation.toLocaleString()}`);
-      console.log(`  ✅ ${equation === 0 ? 'BALANCED!' : 'NOT BALANCED!'}`);
-      
-      // Check if values are positive
-      console.log('\n🔍 POSITIVITY CHECK:');
-      console.log(`  Assets: ${assets >= 0 ? '✅ POSITIVE' : '❌ NEGATIVE'}`);
-      console.log(`  Liabilities: ${liabilities >= 0 ? '✅ POSITIVE' : '❌ NEGATIVE'}`);
-      console.log(`  Equity: ${equity >= 0 ? '✅ POSITIVE' : '❌ NEGATIVE'}`);
       
     } else {
-      console.log('❌ August data not found');
+      console.log('❌ Failed to generate monthly balance sheet:', monthlyBalanceSheet.message);
     }
-    
-    // Show annual summary
-    console.log('\n📊 ANNUAL SUMMARY:');
-    console.log('='.repeat(60));
-    console.log(`  Total Annual Assets: $${monthlyBalanceSheet.annualSummary.totalAnnualAssets.toLocaleString()}`);
-    console.log(`  Total Annual Liabilities: $${monthlyBalanceSheet.annualSummary.totalAnnualLiabilities.toLocaleString()}`);
-    console.log(`  Total Annual Equity: $${monthlyBalanceSheet.annualSummary.totalAnnualEquity.toLocaleString()}`);
-    
-    console.log('\n✅ Fixed Balance Sheet test completed!');
-    
+
   } catch (error) {
     console.error('❌ Error testing fixed balance sheet:', error);
   } finally {
     await mongoose.disconnect();
-    console.log('\n🔌 Disconnected from MongoDB');
+    console.log('🔌 Disconnected from MongoDB');
   }
 }
 
