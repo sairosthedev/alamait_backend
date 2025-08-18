@@ -198,24 +198,30 @@ class BalanceSheetService {
       if (accountingEquation > 0.01) {
         console.warn(`⚠️ Accounting equation imbalance: ${accountingEquation}`);
         
-        // Auto-correct the retained earnings to balance the equation
+        // Calculate what equity should be based on Assets - Liabilities
         const calculatedEquity = balanceSheet.assets.totalAssets - balanceSheet.liabilities.totalLiabilities;
         const equityDifference = calculatedEquity - balanceSheet.equity.totalEquity;
         
-        console.log(`🔧 Auto-correcting equity: Current: $${balanceSheet.equity.totalEquity.toLocaleString()}, Should be: $${calculatedEquity.toLocaleString()}, Difference: $${equityDifference.toLocaleString()}`);
+        console.log(`🔍 Accounting Equation Analysis:`);
+        console.log(`  - Assets: $${balanceSheet.assets.totalAssets.toLocaleString()}`);
+        console.log(`  - Liabilities: $${balanceSheet.liabilities.totalLiabilities.toLocaleString()}`);
+        console.log(`  - Calculated Equity (Assets - Liabilities): $${calculatedEquity.toLocaleString()}`);
+        console.log(`  - Actual Equity from Transactions: $${balanceSheet.equity.totalEquity.toLocaleString()}`);
+        console.log(`  - Difference: $${equityDifference.toLocaleString()}`);
         
-        // Adjust retained earnings to balance the equation
-        balanceSheet.equity.retainedEarnings += equityDifference;
-        balanceSheet.equity.totalEquity = balanceSheet.equity.capital + balanceSheet.equity.retainedEarnings + balanceSheet.equity.otherEquity;
-        
-        console.log(`✅ Equity corrected: Retained Earnings: $${balanceSheet.equity.retainedEarnings.toLocaleString()}, Total Equity: $${balanceSheet.equity.totalEquity.toLocaleString()}`);
+        // DO NOT auto-correct retained earnings - let it show the actual transaction-based value
+        // This difference indicates either:
+        // 1. Missing transactions
+        // 2. Data entry errors
+        // 3. Or legitimate accounting differences that need investigation
         
         balanceSheet.accountingEquation = {
           balanced: false,
           difference: accountingEquation,
-          message: `Assets ≠ Liabilities + Equity - Auto-corrected by $${equityDifference.toLocaleString()}`,
-          autoCorrected: true,
-          correctionAmount: equityDifference
+          message: `Assets ≠ Liabilities + Equity - Difference: $${equityDifference.toLocaleString()}. Retained Earnings show actual transaction values.`,
+          autoCorrected: false,
+          correctionAmount: 0,
+          investigationRequired: true
         };
       } else {
         balanceSheet.accountingEquation = {
