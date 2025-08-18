@@ -183,7 +183,7 @@ class BalanceSheetService {
       // Ensure liability totals are always positive
       balanceSheet.liabilities.totalLiabilities = Math.abs(balanceSheet.liabilities.totalCurrent + balanceSheet.liabilities.totalNonCurrent);
       // Ensure equity totals are always positive
-      balanceSheet.equity.totalEquity = Math.abs(balanceSheet.equity.capital + balanceSheet.equity.retainedEarnings + balanceSheet.equity.otherEquity);
+      balanceSheet.equity.totalEquity = balanceSheet.equity.capital + balanceSheet.equity.retainedEarnings + balanceSheet.equity.otherEquity;
       
       // Calculate key ratios
       balanceSheet.workingCapital = balanceSheet.assets.totalCurrent - balanceSheet.liabilities.totalCurrent;
@@ -307,24 +307,24 @@ class BalanceSheetService {
               capital: {
                 accountCode: '3000',
                 accountName: 'Owner\'s Capital',
-                amount: Math.abs(monthBalanceSheet.equity.capital) // FIX: Ensure positive values for equity
+                amount: monthBalanceSheet.equity.capital // Allow negative values for equity
               },
               retainedEarnings: {
                 accountCode: '3100',
                 accountName: 'Retained Earnings',
-                amount: Math.abs(monthBalanceSheet.equity.retainedEarnings) // FIX: Ensure positive values for equity
+                amount: monthBalanceSheet.equity.retainedEarnings // Allow negative values for equity
               },
               otherEquity: {
                 accountCode: '3200',
                 accountName: 'Other Equity',
-                amount: Math.abs(monthBalanceSheet.equity.otherEquity) // FIX: Ensure positive values for equity
+                amount: monthBalanceSheet.equity.otherEquity // Allow negative values for equity
               },
-              total: Math.abs(monthBalanceSheet.equity.totalEquity)
+              total: monthBalanceSheet.equity.totalEquity
             },
             summary: {
               totalAssets: monthBalanceSheet.assets.totalAssets,
-              totalLiabilities: Math.abs(monthBalanceSheet.liabilities.totalLiabilities), // FIX: Ensure positive values for liabilities
-              totalEquity: Math.abs(monthBalanceSheet.equity.totalEquity), // FIX: Ensure positive values for equity
+              totalLiabilities: Math.abs(monthBalanceSheet.liabilities.totalLiabilities), // Ensure positive values for liabilities
+              totalEquity: monthBalanceSheet.equity.totalEquity, // Allow negative values for equity
               workingCapital: monthBalanceSheet.workingCapital,
               currentRatio: monthBalanceSheet.currentRatio,
               debtToEquity: monthBalanceSheet.debtToEquity
@@ -333,12 +333,12 @@ class BalanceSheetService {
           
           // Accumulate annual totals
           annualSummary.totalAnnualAssets += monthBalanceSheet.assets.totalAssets;
-          annualSummary.totalAnnualLiabilities += Math.abs(monthBalanceSheet.liabilities.totalLiabilities); // FIX: Ensure positive values
-          annualSummary.totalAnnualEquity += Math.abs(monthBalanceSheet.equity.totalEquity); // FIX: Ensure positive values
+          annualSummary.totalAnnualLiabilities += Math.abs(monthBalanceSheet.liabilities.totalLiabilities); // Ensure positive values for liabilities
+          annualSummary.totalAnnualEquity += monthBalanceSheet.equity.totalEquity; // Allow negative values for equity
           annualSummary.totalAnnualCurrentAssets += monthBalanceSheet.assets.totalCurrent;
           annualSummary.totalAnnualNonCurrentAssets += monthBalanceSheet.assets.totalNonCurrent;
-          annualSummary.totalAnnualCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalCurrent); // FIX: Ensure positive values
-          annualSummary.totalAnnualNonCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalNonCurrent); // FIX: Ensure positive values
+          annualSummary.totalAnnualCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalCurrent); // Ensure positive values for liabilities
+          annualSummary.totalAnnualNonCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalNonCurrent); // Ensure positive values for liabilities
           
         } catch (monthError) {
           console.error(`❌ Error generating balance sheet for month ${month}:`, monthError);
@@ -384,10 +384,13 @@ class BalanceSheetService {
       annualSummary.totalAnnualNonCurrentLiabilities = Math.round(annualSummary.totalAnnualNonCurrentLiabilities / 12);
       
       const result = {
-        year: year,
-        residence: residence || 'all',
-        monthly: monthlyData,
-        annualSummary: annualSummary,
+        success: true,
+        data: {
+          year: year,
+          residence: residence || 'all',
+          monthly: monthlyData,
+          annualSummary: annualSummary
+        },
         message: `Monthly balance sheet generated for ${year}${residence ? ` for residence: ${residence}` : ' (all residences)'}`
       };
       
