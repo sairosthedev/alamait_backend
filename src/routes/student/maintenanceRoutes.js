@@ -56,8 +56,12 @@ router.use((req, res, next) => {
 const validateMaintenanceRequest = [
     check('title').trim().notEmpty().withMessage('Title is required'),
     check('description').trim().notEmpty().withMessage('Description is required'),
-    check('category').isIn(['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other'])
-        .withMessage('Invalid category'),
+    check('category').isIn([
+        'plumbing', 'electrical', 'hvac', 'appliance', 'structural', 
+        'cleaning', 'pest_control', 'security', 'furniture', 'fire_safety',
+        'emergency', 'landscaping', 'internet_it', 'accessibility', 'parking',
+        'exterior', 'communication', 'general_maintenance', 'other'
+    ]).withMessage('Invalid category'),
     // Only validate priority from the body, not headers
     (req, res, next) => {
         if (req.body.priority !== undefined) {

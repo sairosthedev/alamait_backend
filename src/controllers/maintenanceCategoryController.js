@@ -40,8 +40,99 @@ const seedDefaultCategories = async () => {
                 amount: 500
             },
             {
-                name: 'General',
+                name: 'Cleaning',
+                description: 'Cleaning and sanitation services',
+                priority: 'Low',
+                estimatedTime: 1,
+                amount: 50
+            },
+            {
+                name: 'Pest Control',
+                description: 'Pest control and extermination services',
+                priority: 'Medium',
+                estimatedTime: 3,
+                amount: 200
+            },
+            {
+                name: 'Security',
+                description: 'Security system maintenance and repairs',
+                priority: 'High',
+                estimatedTime: 2,
+                amount: 150
+            },
+            {
+                name: 'Furniture',
+                description: 'Furniture repairs and maintenance',
+                priority: 'Low',
+                estimatedTime: 1,
+                amount: 75
+            },
+            {
+                name: 'Fire Safety',
+                description: 'Fire safety equipment and systems',
+                priority: 'High',
+                estimatedTime: 2,
+                amount: 200
+            },
+            {
+                name: 'Emergency',
+                description: 'Urgent safety and emergency issues',
+                priority: 'High',
+                estimatedTime: 1,
+                amount: 300
+            },
+            {
+                name: 'Landscaping',
+                description: 'Garden and outdoor maintenance',
+                priority: 'Low',
+                estimatedTime: 4,
+                amount: 150
+            },
+            {
+                name: 'Internet/IT',
+                description: 'Internet, WiFi, and technology issues',
+                priority: 'Medium',
+                estimatedTime: 2,
+                amount: 100
+            },
+            {
+                name: 'Accessibility',
+                description: 'ADA compliance and accessibility',
+                priority: 'Medium',
+                estimatedTime: 3,
+                amount: 250
+            },
+            {
+                name: 'Parking',
+                description: 'Parking lot and garage maintenance',
+                priority: 'Medium',
+                estimatedTime: 2,
+                amount: 120
+            },
+            {
+                name: 'Exterior',
+                description: 'Building exterior and facade',
+                priority: 'Medium',
+                estimatedTime: 4,
+                amount: 300
+            },
+            {
+                name: 'Communication',
+                description: 'Intercom and communication systems',
+                priority: 'Low',
+                estimatedTime: 1,
+                amount: 80
+            },
+            {
+                name: 'General Maintenance',
                 description: 'General maintenance and repairs',
+                priority: 'Low',
+                estimatedTime: 1,
+                amount: 50
+            },
+            {
+                name: 'Other',
+                description: 'Other maintenance issues',
                 priority: 'Low',
                 estimatedTime: 1,
                 amount: 50

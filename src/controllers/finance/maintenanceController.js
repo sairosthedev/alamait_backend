@@ -365,7 +365,48 @@ exports.approveMaintenance = async (req, res) => {
                 details: apError.message
             });
         }
-        // --- End AP Creation ---
+        // --- Create Expense Record for Approved Maintenance ---
+        let createdExpense = null;
+        try {
+            const Expense = require('../../models/finance/Expense');
+            const { generateUniqueId } = require('../../utils/idGenerator');
+            
+            // Generate unique expense ID
+            const expenseId = await generateUniqueId('EXP');
+            
+            // Create expense record
+            createdExpense = new Expense({
+                expenseId,
+                requestId: updatedMaintenance._id, // Link to maintenance request
+                residence: updatedMaintenance.residence,
+                category: 'Maintenance',
+                amount: approvalAmount,
+                description: `Maintenance: ${updatedMaintenance.issue} - ${updatedMaintenance.description}`,
+                expenseDate: new Date(),
+                paymentStatus: 'Pending',
+                period: 'monthly',
+                createdBy: req.user?._id || null,
+                approvedBy: req.user?._id || null,
+                approvedAt: new Date(),
+                approvedByEmail: req.user?.email || 'finance@alamait.com',
+                maintenanceRequestId: updatedMaintenance._id, // Legacy field for backward compatibility
+                transactionId: txn._id, // Link to the transaction we just created
+                notes: `Converted from maintenance request approval - ${notes || 'No notes provided'}`
+            });
+            
+            await createdExpense.save();
+            
+            console.log('[EXPENSE] Expense record created for maintenance:', updatedMaintenance._id, 'expense:', createdExpense.expenseId);
+            
+            // Update maintenance record with expense reference
+            updatedMaintenance.expenseId = createdExpense.expenseId;
+            await updatedMaintenance.save();
+            
+        } catch (expenseError) {
+            console.error('[EXPENSE] Failed to create expense record for maintenance:', updatedMaintenance._id, expenseError);
+            // Don't fail the approval if expense creation fails
+        }
+        // --- End Expense Creation ---
 
         // Audit log for maintenance approval
         await AuditLog.create({
@@ -402,7 +443,17 @@ exports.approveMaintenance = async (req, res) => {
 
         res.status(200).json({
             message: 'Maintenance request approved successfully',
-            maintenance: updatedMaintenance
+            maintenance: updatedMaintenance,
+            expense: createdExpense ? {
+                expenseId: createdExpense.expenseId,
+                amount: approvalAmount,
+                category: 'Maintenance',
+                description: `Maintenance: ${updatedMaintenance.issue}`
+            } : null,
+            transaction: {
+                transactionId: txn?.transactionId,
+                entries: transactionEntry?.entries?.length || 0
+            }
         });
     } catch (error) {
         console.error('Error approving maintenance request:', error);

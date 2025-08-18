@@ -265,7 +265,12 @@ const requestSchema = new mongoose.Schema({
     },
     category: {
         type: String,
-        enum: ['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other'],
+        enum: [
+            'plumbing', 'electrical', 'hvac', 'appliance', 'structural', 
+            'cleaning', 'pest_control', 'security', 'furniture', 'fire_safety',
+            'emergency', 'landscaping', 'internet_it', 'accessibility', 'parking',
+            'exterior', 'communication', 'general_maintenance', 'other'
+        ],
         required: false // Will be validated in custom validation
     },
     
