@@ -96,10 +96,12 @@ class BalanceSheetService {
             account.balance = account.creditTotal - account.debitTotal;
             break;
           case 'Income':
-            account.balance = account.creditTotal - account.debitTotal;
+            // Income should be positive (credit > debit means income earned)
+            account.balance = Math.max(0, account.creditTotal - account.debitTotal);
             break;
           case 'Expense':
-            account.balance = account.debitTotal - account.creditTotal;
+            // Expense should be positive (debit > credit means expense incurred)
+            account.balance = Math.max(0, account.debitTotal - account.creditTotal);
             break;
         }
       });
@@ -175,8 +177,10 @@ class BalanceSheetService {
       
       // Calculate totals and ratios
       balanceSheet.assets.totalAssets = balanceSheet.assets.totalCurrent + balanceSheet.assets.totalNonCurrent;
-      balanceSheet.liabilities.totalLiabilities = balanceSheet.liabilities.totalCurrent + balanceSheet.liabilities.totalNonCurrent;
-      balanceSheet.equity.totalEquity = balanceSheet.equity.capital + balanceSheet.equity.retainedEarnings + balanceSheet.equity.otherEquity;
+      // Ensure liability totals are always positive
+      balanceSheet.liabilities.totalLiabilities = Math.abs(balanceSheet.liabilities.totalCurrent + balanceSheet.liabilities.totalNonCurrent);
+      // Ensure equity totals are always positive
+      balanceSheet.equity.totalEquity = Math.abs(balanceSheet.equity.capital + balanceSheet.equity.retainedEarnings + balanceSheet.equity.otherEquity);
       
       // Calculate key ratios
       balanceSheet.workingCapital = balanceSheet.assets.totalCurrent - balanceSheet.liabilities.totalCurrent;
