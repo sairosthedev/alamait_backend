@@ -334,6 +334,38 @@ const debtorSchema = new mongoose.Schema({
       }
     },
     
+    // 🆕 NEW: Payment Month Details - Shows when payments were actually made for this month
+    paymentMonths: [{
+      paymentMonth: {
+        type: String,
+        required: true,
+        validate: {
+          validator: function(v) {
+            return /^\d{4}-\d{2}$/.test(v);
+          },
+          message: 'paymentMonth must be in YYYY-MM format'
+        }
+      },
+      paymentDate: {
+        type: Date,
+        required: true
+      },
+      amount: {
+        type: Number,
+        required: true,
+        min: 0
+      },
+      paymentId: {
+        type: String,
+        required: true
+      },
+      status: {
+        type: String,
+        enum: ['Pending', 'Confirmed', 'Failed', 'Verified', 'Rejected'],
+        default: 'Confirmed'
+      }
+    }],
+    
     // Expected Amount
     expectedAmount: {
       type: Number,
@@ -470,6 +502,21 @@ const debtorSchema = new mongoose.Schema({
     paymentIds: [{
       type: String
     }],
+    
+    // 🆕 NEW: Payment Month Summary
+    paymentMonthSummary: {
+      totalPaymentMonths: {
+        type: Number,
+        default: 0
+      },
+      firstPaymentMonth: String, // YYYY-MM format
+      lastPaymentMonth: String,  // YYYY-MM format
+      paymentMonthBreakdown: [{
+        month: String,           // YYYY-MM format
+        amount: Number,
+        paymentCount: Number
+      }]
+    },
     
     // Notes
     notes: String,
@@ -862,6 +909,7 @@ debtorSchema.methods.addPayment = async function(paymentData) {
     
     monthlyPayment = {
       month: allocatedMonth,
+      paymentMonths: [], // 🆕 NEW: Initialize payment months array
       expectedAmount: expectedRent + expectedAdmin + expectedDeposit,
       expectedComponents: {
         rent: expectedRent,
@@ -890,10 +938,56 @@ debtorSchema.methods.addPayment = async function(paymentData) {
       paymentCount: 0,
       paymentIds: [],
       lastPaymentDate: null,
+      paymentMonthSummary: { // 🆕 NEW: Initialize payment month summary
+        totalPaymentMonths: 0,
+        firstPaymentMonth: null,
+        lastPaymentMonth: null,
+        paymentMonthBreakdown: []
+      },
       updatedAt: new Date()
     };
     this.monthlyPayments.push(monthlyPayment);
   }
+  
+  // 🆕 NEW: Add payment month details
+  const currentPaymentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+  const paymentMonthEntry = {
+    paymentMonth: currentPaymentMonth,
+    paymentDate: paymentDate,
+    amount: amount,
+    paymentId: paymentId,
+    status: status
+  };
+  
+  monthlyPayment.paymentMonths.push(paymentMonthEntry);
+  
+  // 🆕 NEW: Update payment month summary
+  monthlyPayment.paymentMonthSummary.totalPaymentMonths = monthlyPayment.paymentMonths.length;
+  
+  // Update first and last payment months
+  if (!monthlyPayment.paymentMonthSummary.firstPaymentMonth || 
+      currentPaymentMonth < monthlyPayment.paymentMonthSummary.firstPaymentMonth) {
+    monthlyPayment.paymentMonthSummary.firstPaymentMonth = currentPaymentMonth;
+  }
+  if (!monthlyPayment.paymentMonthSummary.lastPaymentMonth || 
+      currentPaymentMonth > monthlyPayment.paymentMonthSummary.lastPaymentMonth) {
+    monthlyPayment.paymentMonthSummary.lastPaymentMonth = currentPaymentMonth;
+  }
+  
+  // Update payment month breakdown
+  let monthBreakdown = monthlyPayment.paymentMonthSummary.paymentMonthBreakdown.find(
+    mb => mb.month === currentPaymentMonth
+  );
+  if (!monthBreakdown) {
+    monthBreakdown = {
+      month: currentPaymentMonth,
+      amount: 0,
+      paymentCount: 0
+    };
+    monthlyPayment.paymentMonthSummary.paymentMonthBreakdown.push(monthBreakdown);
+  }
+  monthBreakdown.amount += amount;
+  monthBreakdown.paymentCount += 1;
   
   // Update monthly payment summary with component breakdown
   monthlyPayment.paidAmount += amount;
@@ -949,7 +1043,10 @@ debtorSchema.methods.addPayment = async function(paymentData) {
       paidComponents: monthlyPayment.paidComponents,
       outstandingAmount: monthlyPayment.outstandingAmount,
       outstandingComponents: monthlyPayment.outstandingComponents,
-      status: monthlyPayment.status
+      status: monthlyPayment.status,
+      // 🆕 NEW: Include payment month information in current period
+      paymentMonths: monthlyPayment.paymentMonths,
+      paymentMonthSummary: monthlyPayment.paymentMonthSummary
     };
   }
   
@@ -1051,5 +1148,142 @@ debtorSchema.virtual('isOverdue').get(function() {
 debtorSchema.virtual('creditAvailable').get(function() {
   return Math.max(0, this.creditLimit - this.currentBalance);
 });
+
+// 🆕 NEW: Virtual for easy debtor lookup
+debtorSchema.virtual('debtor', {
+  ref: 'Debtor',
+  localField: 'user',
+  foreignField: 'user',
+  justOne: true
+});
+
+// 🆕 NEW: Virtual for comprehensive month and payment month display
+debtorSchema.virtual('monthAndPaymentMonthSummary').get(function() {
+  return this.monthlyPayments.map(mp => ({
+    month: mp.month,
+    monthDisplay: this.formatMonthDisplay(mp.month),
+    expectedAmount: mp.expectedAmount,
+    paidAmount: mp.paidAmount,
+    outstandingAmount: mp.outstandingAmount,
+    status: mp.status,
+    paymentMonths: mp.paymentMonths.map(pm => ({
+      paymentMonth: pm.paymentMonth,
+      paymentMonthDisplay: this.formatMonthDisplay(pm.paymentMonth),
+      paymentDate: pm.paymentDate,
+      amount: pm.amount,
+      paymentId: pm.paymentId,
+      status: pm.status
+    })),
+    paymentMonthSummary: {
+      totalPaymentMonths: mp.paymentMonthSummary.totalPaymentMonths,
+      firstPaymentMonth: mp.paymentMonthSummary.firstPaymentMonth,
+      firstPaymentMonthDisplay: mp.paymentMonthSummary.firstPaymentMonth ? this.formatMonthDisplay(mp.paymentMonthSummary.firstPaymentMonth) : 'N/A',
+      lastPaymentMonth: mp.paymentMonthSummary.lastPaymentMonth,
+      lastPaymentMonthDisplay: mp.paymentMonthSummary.lastPaymentMonth ? this.formatMonthDisplay(mp.paymentMonthSummary.lastPaymentMonth) : 'N/A',
+      paymentMonthBreakdown: mp.paymentMonthSummary.paymentMonthBreakdown.map(mb => ({
+        month: mb.month,
+        monthDisplay: this.formatMonthDisplay(mb.month),
+        amount: mb.amount,
+        paymentCount: mb.paymentCount
+      }))
+    }
+  }));
+});
+
+// 🆕 NEW: Virtual for payment history with month and payment month
+debtorSchema.virtual('paymentHistoryWithMonths').get(function() {
+  return this.paymentHistory.map(ph => ({
+    paymentId: ph.paymentId,
+    amount: ph.amount,
+    allocatedMonth: ph.allocatedMonth,
+    allocatedMonthDisplay: this.formatMonthDisplay(ph.allocatedMonth),
+    paymentMonth: this.getPaymentMonthFromDate(ph.paymentDate),
+    paymentMonthDisplay: this.formatMonthDisplay(this.getPaymentMonthFromDate(ph.paymentDate)),
+    components: ph.components,
+    paymentMethod: ph.paymentMethod,
+    paymentDate: ph.paymentDate,
+    status: ph.status,
+    notes: ph.notes
+  }));
+});
+
+// 🆕 NEW: Helper method to format month display
+debtorSchema.methods.formatMonthDisplay = function(monthString) {
+  if (!monthString || !/^\d{4}-\d{2}$/.test(monthString)) {
+    return 'Invalid Month';
+  }
+  
+  const [year, month] = monthString.split('-');
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  
+  return `${monthNames[parseInt(month) - 1]} ${year}`;
+};
+
+// 🆕 NEW: Helper method to get payment month from date
+debtorSchema.methods.getPaymentMonthFromDate = function(date) {
+  if (!date) return null;
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+};
+
+// 🆕 NEW: Method to get comprehensive month and payment month summary
+debtorSchema.methods.getMonthAndPaymentMonthSummary = function() {
+  return {
+    debtorCode: this.debtorCode,
+    user: this.user,
+    totalMonths: this.monthlyPayments.length,
+    totalPayments: this.paymentHistory.length,
+    monthlySummary: this.monthAndPaymentMonthSummary,
+    paymentHistory: this.paymentHistoryWithMonths,
+    financialSummary: {
+      totalOwed: this.totalOwed,
+      totalPaid: this.totalPaid,
+      currentBalance: this.currentBalance,
+      creditLimit: this.creditLimit,
+      overdueAmount: this.overdueAmount
+    }
+  };
+};
+
+// 🆕 NEW: Method to get summary for a specific month
+debtorSchema.methods.getMonthSummary = function(month) {
+  const monthlyPayment = this.monthlyPayments.find(mp => mp.month === month);
+  if (!monthlyPayment) {
+    return {
+      month: month,
+      monthDisplay: this.formatMonthDisplay(month),
+      status: 'no_data',
+      message: 'No payment data for this month'
+    };
+  }
+  
+  return {
+    month: monthlyPayment.month,
+    monthDisplay: this.formatMonthDisplay(monthlyPayment.month),
+    expectedAmount: monthlyPayment.expectedAmount,
+    paidAmount: monthlyPayment.paidAmount,
+    outstandingAmount: monthlyPayment.outstandingAmount,
+    status: monthlyPayment.status,
+    paymentMonths: monthlyPayment.paymentMonths.map(pm => ({
+      paymentMonth: pm.paymentMonth,
+      paymentMonthDisplay: this.formatMonthDisplay(pm.paymentMonth),
+      paymentDate: pm.paymentDate,
+      amount: pm.amount,
+      paymentId: pm.paymentId,
+      status: pm.status
+    })),
+    paymentMonthSummary: monthlyPayment.paymentMonthSummary,
+    components: {
+      expected: monthlyPayment.expectedComponents,
+      paid: monthlyPayment.paidComponents,
+      outstanding: monthlyPayment.outstandingComponents
+    }
+  };
+};
 
 module.exports = mongoose.model('Debtor', debtorSchema); 
