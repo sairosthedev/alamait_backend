@@ -226,8 +226,11 @@ class DoubleEntryAccountingService {
             const entries = [];
 
             // Debit: Expense Account
+            const expenseAccountCode = await this.getExpenseAccountByCategory(expenseCategory);
+            console.log(`🔍 Creating expense entry with category: ${expenseCategory}, account code: ${expenseAccountCode}`);
+            
             entries.push({
-                accountCode: await this.getExpenseAccountByCategory(expenseCategory),
+                accountCode: expenseAccountCode,
                 accountName: `${expenseCategory} Expense`,
                 accountType: 'Expense',
                 debit: amount,
@@ -237,6 +240,8 @@ class DoubleEntryAccountingService {
             });
 
             // Credit: User's Specific Petty Cash Account (Asset)
+            console.log(`🔍 Creating credit entry with petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
+            
             entries.push({
                 accountCode: pettyCashAccount.code,
                 accountName: pettyCashAccount.name,
