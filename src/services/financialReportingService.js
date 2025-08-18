@@ -99,15 +99,59 @@ class FinancialReportingService {
                 
                 const netIncome = totalRevenue - totalExpenses;
                 
+                // Create monthly breakdown for revenue
+                const monthlyRevenue = {};
+                accrualEntries.forEach(entry => {
+                    const entryDate = new Date(entry.date);
+                    const monthKey = entryDate.getMonth() + 1; // 1-12
+                    
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Income') {
+                                const amount = lineItem.credit || 0;
+                                if (!monthlyRevenue[monthKey]) {
+                                    monthlyRevenue[monthKey] = {};
+                                }
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                monthlyRevenue[monthKey][key] = (monthlyRevenue[monthKey][key] || 0) + amount;
+                            }
+                        });
+                    }
+                });
+                
+                // Create monthly breakdown for expenses
+                const monthlyExpenses = {};
+                expenseEntries.forEach(entry => {
+                    const entryDate = new Date(entry.date);
+                    const monthKey = entryDate.getMonth() + 1; // 1-12
+                    
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Expense') {
+                                const amount = lineItem.debit || 0;
+                                if (!monthlyExpenses[monthKey]) {
+                                    monthlyExpenses[monthKey] = {};
+                                }
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                monthlyExpenses[monthKey][key] = (monthlyExpenses[monthKey][key] || 0) + amount;
+                            }
+                        });
+                    }
+                });
+                
                 return {
                     period,
                     basis,
                     revenue: {
                         ...revenueByAccount,
+                        monthly: monthlyRevenue,
                         total_revenue: totalRevenue
                     },
                     expenses: {
                         ...expensesByAccount,
+                        monthly: monthlyExpenses,
                         total_expenses: totalExpenses
                     },
                     net_income: netIncome,
@@ -185,6 +229,48 @@ class FinancialReportingService {
                     }
                 });
                 
+                // Create monthly breakdown for revenue
+                const monthlyRevenue = {};
+                paymentEntries.forEach(entry => {
+                    const entryDate = new Date(entry.date);
+                    const monthKey = entryDate.getMonth() + 1; // 1-12
+                    
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Income') {
+                                const amount = lineItem.credit || 0;
+                                if (!monthlyRevenue[monthKey]) {
+                                    monthlyRevenue[monthKey] = {};
+                                }
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                monthlyRevenue[monthKey][key] = (monthlyRevenue[monthKey][key] || 0) + amount;
+                            }
+                        });
+                    }
+                });
+                
+                // Create monthly breakdown for expenses
+                const monthlyExpenses = {};
+                expenseEntries.forEach(entry => {
+                    const entryDate = new Date(entry.date);
+                    const monthKey = entryDate.getMonth() + 1; // 1-12
+                    
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Expense') {
+                                const amount = lineItem.debit || 0;
+                                if (!monthlyExpenses[monthKey]) {
+                                    monthlyExpenses[monthKey] = {};
+                                }
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                monthlyExpenses[monthKey][key] = (monthlyExpenses[monthKey][key] || 0) + amount;
+                            }
+                        });
+                    }
+                });
+                
                 const netIncome = totalRevenue - totalExpenses;
                 
                 return {
@@ -192,10 +278,12 @@ class FinancialReportingService {
                     basis,
                     revenue: {
                         ...revenueByAccount,
+                        monthly: monthlyRevenue,
                         total_revenue: totalRevenue
                     },
                     expenses: {
                         ...expensesByAccount,
+                        monthly: monthlyExpenses,
                         total_expenses: totalExpenses
                     },
                     net_income: netIncome,
