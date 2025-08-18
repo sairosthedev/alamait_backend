@@ -36,19 +36,27 @@ class FinancialReportingService {
             if (basis === 'accrual') {
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred');
                 
-                // For accrual basis, look at transaction entries with rental_accrual source
+                // For accrual basis, look at transaction entries with rental_accrual source for income
                 const accrualEntries = await TransactionEntry.find({
                     date: { $gte: startDate, $lte: endDate },
                     source: 'rental_accrual',
                     status: 'posted'
                 });
                 
-                console.log(`Found ${accrualEntries.length} rental accrual entries for accrual basis`);
+                // For accrual basis, also look at expenses when they are incurred (manual entries)
+                const expenseEntries = await TransactionEntry.find({
+                    date: { $gte: startDate, $lte: endDate },
+                    source: 'manual',
+                    status: 'posted'
+                });
+                
+                console.log(`Found ${accrualEntries.length} rental accrual entries and ${expenseEntries.length} expense entries for accrual basis`);
                 
                 let totalRevenue = 0;
                 const revenueByAccount = {};
                 const residences = new Set();
                 
+                // Process rental accruals (income when earned)
                 accrualEntries.forEach(entry => {
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
@@ -67,6 +75,30 @@ class FinancialReportingService {
                     }
                 });
                 
+                // Process expenses when incurred (accrual basis)
+                let totalExpenses = 0;
+                const expensesByAccount = {};
+                
+                expenseEntries.forEach(entry => {
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Expense') {
+                                const amount = lineItem.debit || 0;
+                                totalExpenses += amount;
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                expensesByAccount[key] = (expensesByAccount[key] || 0) + amount;
+                            }
+                        });
+                    }
+                    
+                    if (entry.residence) {
+                        residences.add(entry.residence.toString());
+                    }
+                });
+                
+                const netIncome = totalRevenue - totalExpenses;
+                
                 return {
                     period,
                     basis,
@@ -75,20 +107,22 @@ class FinancialReportingService {
                         total_revenue: totalRevenue
                     },
                     expenses: {
-                        total_expenses: 0
+                        ...expensesByAccount,
+                        total_expenses: totalExpenses
                     },
-                    net_income: totalRevenue,
-                    gross_profit: totalRevenue,
-                    operating_income: totalRevenue,
+                    net_income: netIncome,
+                    gross_profit: totalRevenue - totalExpenses,
+                    operating_income: totalRevenue - totalExpenses,
                     residences_included: residences.size > 0,
                     residences_processed: Array.from(residences),
-                    transaction_count: accrualEntries.length,
+                    transaction_count: accrualEntries.length + expenseEntries.length,
                     accounting_notes: {
                         accrual_basis: "Income/expenses shown when earned/incurred",
                         includes_rental_accruals: true,
+                        includes_expenses_incurred: true,
                         includes_cash_payments: false,
-                        source_filter: "Excludes cash receipts (payments)",
-                        note: "Based on rental accrual entries from transactionentries collection"
+                        source_filter: "Includes rental accruals and manual expense entries",
+                        note: "Based on rental accrual entries and manual expense entries from transactionentries collection"
                     }
                 };
                 
