@@ -54,8 +54,8 @@ class FinancialReportingService {
                 
                 let totalRevenue = 0;
                 const revenueByAccount = {};
-                const residences = new Set();
-                
+            const residences = new Set();
+            
                 // Process rental accruals (income when earned)
                 accrualEntries.forEach(entry => {
                     if (entry.entries && Array.isArray(entry.entries)) {
@@ -88,17 +88,17 @@ class FinancialReportingService {
                                 
                                 const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
                                 expensesByAccount[key] = (expensesByAccount[key] || 0) + amount;
-                            }
-                        });
-                    }
+                        }
+                    });
+                }
                     
                     if (entry.residence) {
                         residences.add(entry.residence.toString());
                     }
-                });
-                
-                const netIncome = totalRevenue - totalExpenses;
-                
+            });
+            
+            const netIncome = totalRevenue - totalExpenses;
+            
                 // Create monthly breakdown for revenue
                 const monthlyRevenue = {};
                 accrualEntries.forEach(entry => {
@@ -140,16 +140,16 @@ class FinancialReportingService {
                         });
                     }
                 });
-                
-                return {
-                    period,
-                    basis,
-                    revenue: {
+            
+            return {
+                period,
+                basis,
+                revenue: {
                         ...revenueByAccount,
                         monthly: monthlyRevenue,
-                        total_revenue: totalRevenue
-                    },
-                    expenses: {
+                    total_revenue: totalRevenue
+                },
+                expenses: {
                         ...expensesByAccount,
                         monthly: monthlyExpenses,
                         total_expenses: totalExpenses
@@ -284,13 +284,13 @@ class FinancialReportingService {
                     expenses: {
                         ...expensesByAccount,
                         monthly: monthlyExpenses,
-                        total_expenses: totalExpenses
-                    },
-                    net_income: netIncome,
-                    gross_profit: totalRevenue,
-                    operating_income: netIncome,
+                    total_expenses: totalExpenses
+                },
+                net_income: netIncome,
+                gross_profit: totalRevenue,
+                operating_income: netIncome,
                     residences_included: residences.size > 0,
-                    residences_processed: Array.from(residences),
+                residences_processed: Array.from(residences),
                     transaction_count: paymentEntries.length + expenseEntries.length,
                     accounting_notes: {
                         accrual_basis: "Income/expenses shown when cash received/paid",
@@ -366,14 +366,14 @@ class FinancialReportingService {
                     monthlyBreakdown[index] = {
                         month,
                         monthNumber: index + 1,
-                        revenue: {},
-                        expenses: {},
-                        total_revenue: 0,
-                        total_expenses: 0,
-                        net_income: 0,
+                    revenue: {},
+                    expenses: {},
+                    total_revenue: 0,
+                    total_expenses: 0,
+                    net_income: 0,
                         residences: [],
-                        transaction_count: 0
-                    };
+                    transaction_count: 0
+                };
                 });
                 
                 // Process accrual entries by month
@@ -415,24 +415,24 @@ class FinancialReportingService {
                                 const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
                                 monthlyBreakdown[monthIndex].expenses[key] = 
                                     (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
-                            }
-                        });
-                    }
+                        }
+                    });
+                }
                     
                     if (entry.residence) {
                         monthlyBreakdown[monthIndex].residences.push(entry.residence.toString());
                     }
                     
                     monthlyBreakdown[monthIndex].transaction_count++;
-                });
-                
-                // Calculate net income for each month
+            });
+            
+            // Calculate net income for each month
                 monthNames.forEach((month, index) => {
                     monthlyBreakdown[index].net_income = monthlyBreakdown[index].total_revenue - monthlyBreakdown[index].total_expenses;
-                });
-                
-                // Calculate year totals
-                const yearTotals = {
+            });
+            
+            // Calculate year totals
+            const yearTotals = {
                     total_revenue: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0),
                     total_expenses: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_expenses, 0),
                     net_income: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].net_income, 0),
@@ -495,9 +495,9 @@ class FinancialReportingService {
                         monthNumber: index + 1,
                         revenue: {},
                         expenses: {},
-                        total_revenue: 0,
-                        total_expenses: 0,
-                        net_income: 0,
+                total_revenue: 0,
+                total_expenses: 0,
+                net_income: 0,
                         residences: [],
                         transaction_count: 0
                     };
@@ -562,14 +562,14 @@ class FinancialReportingService {
                     net_income: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].net_income, 0),
                     total_transactions: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].transaction_count, 0)
                 };
-                
-                return {
-                    period,
-                    basis,
+            
+            return {
+                period,
+                basis,
                     monthly_breakdown: monthlyBreakdown,
-                    year_totals: yearTotals,
-                    month_names: monthNames,
-                    residences_included: true,
+                year_totals: yearTotals,
+                month_names: monthNames,
+                residences_included: true,
                     data_sources: ['TransactionEntry'],
                     accounting_notes: {
                         accrual_basis: "Income/expenses shown when cash received/paid by month",

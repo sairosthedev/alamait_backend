@@ -1,5 +1,6 @@
 const FinancialReportingService = require('../services/financialReportingService');
 const AccountingService = require('../services/accountingService');
+const BalanceSheetService = require('../services/balanceSheetService');
 const { validateToken } = require('../middleware/auth');
 
 /**
@@ -223,6 +224,88 @@ class FinancialReportsController {
             res.status(500).json({
                 success: false,
                 message: 'Error generating monthly breakdown',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Generate Balance Sheet
+     * GET /api/finance/reports/balance-sheet
+     */
+    static async generateBalanceSheet(req, res) {
+        try {
+            const { asOfDate, residence } = req.query;
+            
+            if (!asOfDate) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'asOfDate parameter is required (e.g., 2025-12-31)'
+                });
+            }
+            
+            // Validate date format
+            const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+            if (!dateRegex.test(asOfDate)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'asOfDate must be in YYYY-MM-DD format'
+                });
+            }
+            
+            const balanceSheet = await BalanceSheetService.generateBalanceSheet(asOfDate, residence);
+            
+            res.json({
+                success: true,
+                data: balanceSheet,
+                message: `Balance sheet generated as of ${asOfDate}${residence ? ` for residence: ${residence}` : ' (all residences)'}`
+            });
+            
+        } catch (error) {
+            console.error('Error generating balance sheet:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating balance sheet',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Generate Monthly Balance Sheet
+     * GET /api/finance/reports/monthly-balance-sheet
+     */
+    static async generateMonthlyBalanceSheet(req, res) {
+        try {
+            const { period, basis = 'accrual', residence } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2025)'
+                });
+            }
+            
+            if (!['accrual', 'cash'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "accrual" or "cash"'
+                });
+            }
+            
+            const monthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet(period, residence);
+            
+            res.json({
+                success: true,
+                data: monthlyBalanceSheet,
+                message: `Monthly balance sheet generated for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
+            });
+            
+        } catch (error) {
+            console.error('Error generating monthly balance sheet:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating monthly balance sheet',
                 error: error.message
             });
         }
