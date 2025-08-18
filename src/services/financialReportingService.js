@@ -1,5 +1,7 @@
 const TransactionEntry = require('../models/TransactionEntry');
+const Transaction = require('../models/Transaction');
 const Account = require('../models/Account');
+const Maintenance = require('../models/Maintenance');
 const Residence = require('../models/Residence');
 const mongoose = require('mongoose');
 
@@ -31,112 +33,152 @@ class FinancialReportingService {
             
             console.log(`Generating income statement for ${period} using ${basis.toUpperCase()} basis`);
             
-            // Build query based on accounting basis
-            let query = {
-                date: { $gte: startDate, $lte: endDate }
-            };
-            
             if (basis === 'accrual') {
-                // ACCRUAL BASIS: Include all financial events (when earned/incurred)
-                // Include: rental_accrual, expense_payment, vendor_payment, etc.
-                // Exclude: payment (cash receipts - these are just AR settlements)
-                query.source = { $ne: 'payment' };
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred');
-            } else if (basis === 'cash') {
-                // CASH BASIS: Only include actual cash movements
-                // Include: payment (cash received), vendor_payment (cash paid)
-                // Exclude: rental_accrual (no cash movement), expense_payment (no cash movement)
-                query.source = { $in: ['payment', 'vendor_payment'] };
+                
+                // For accrual basis, look at transaction entries with rental_accrual source
+                const accrualEntries = await TransactionEntry.find({
+                    date: { $gte: startDate, $lte: endDate },
+                    source: 'rental_accrual',
+                    status: 'posted'
+                });
+                
+                console.log(`Found ${accrualEntries.length} rental accrual entries for accrual basis`);
+                
+                let totalRevenue = 0;
+                const revenueByAccount = {};
+                const residences = new Set();
+                
+                accrualEntries.forEach(entry => {
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Income') {
+                                const amount = lineItem.credit || 0;
+                                totalRevenue += amount;
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                revenueByAccount[key] = (revenueByAccount[key] || 0) + amount;
+                            }
+                        });
+                    }
+                    
+                    if (entry.residence) {
+                        residences.add(entry.residence.toString());
+                    }
+                });
+                
+                return {
+                    period,
+                    basis,
+                    revenue: {
+                        ...revenueByAccount,
+                        total_revenue: totalRevenue
+                    },
+                    expenses: {
+                        total_expenses: 0
+                    },
+                    net_income: totalRevenue,
+                    gross_profit: totalRevenue,
+                    operating_income: totalRevenue,
+                    residences_included: residences.size > 0,
+                    residences_processed: Array.from(residences),
+                    transaction_count: accrualEntries.length,
+                    accounting_notes: {
+                        accrual_basis: "Income/expenses shown when earned/incurred",
+                        includes_rental_accruals: true,
+                        includes_cash_payments: false,
+                        source_filter: "Excludes cash receipts (payments)",
+                        note: "Based on rental accrual entries from transactionentries collection"
+                    }
+                };
+                
+            } else {
                 console.log('🟢 CASH BASIS: Including only actual cash receipts and payments');
+                
+                // For cash basis, use the transaction entries with payment source
+                const paymentEntries = await TransactionEntry.find({
+                    date: { $gte: startDate, $lte: endDate },
+                    source: 'payment',
+                    status: 'posted'
+                });
+                
+                const expenseEntries = await TransactionEntry.find({
+                    date: { $gte: startDate, $lte: endDate },
+                    source: 'expense_payment',
+                    status: 'posted'
+                });
+                
+                console.log(`Found ${paymentEntries.length} payment entries and ${expenseEntries.length} expense entries for cash basis`);
+                
+                // Process payment entries
+                let totalRevenue = 0;
+                const revenueByAccount = {};
+                const residences = new Set();
+                
+                paymentEntries.forEach(entry => {
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Income') {
+                                const amount = lineItem.credit || 0; // For cash basis, income increases with credit
+                                totalRevenue += amount;
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                revenueByAccount[key] = (revenueByAccount[key] || 0) + amount;
+                            }
+                        });
+                    }
+                    
+                    if (entry.residence) {
+                        residences.add(entry.residence.toString());
+                    }
+                });
+                
+                // Process expense entries
+                let totalExpenses = 0;
+                const expensesByAccount = {};
+                
+                expenseEntries.forEach(entry => {
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Expense') {
+                                const amount = lineItem.debit || 0;
+                                totalExpenses += amount;
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                expensesByAccount[key] = (expensesByAccount[key] || 0) + amount;
+                            }
+                        });
+                    }
+                });
+                
+                const netIncome = totalRevenue - totalExpenses;
+                
+                return {
+                    period,
+                    basis,
+                    revenue: {
+                        ...revenueByAccount,
+                        total_revenue: totalRevenue
+                    },
+                    expenses: {
+                        ...expensesByAccount,
+                        total_expenses: totalExpenses
+                    },
+                    net_income: netIncome,
+                    gross_profit: totalRevenue,
+                    operating_income: netIncome,
+                    residences_included: residences.size > 0,
+                    residences_processed: Array.from(residences),
+                    transaction_count: paymentEntries.length + expenseEntries.length,
+                    accounting_notes: {
+                        accrual_basis: "Income/expenses shown when cash received/paid",
+                        includes_rental_accruals: false,
+                        includes_cash_payments: true,
+                        source_filter: "Only cash movements",
+                        note: "Based on payment and expense entries from transactionentries collection"
+                    }
+                };
             }
-            
-            // Get filtered transaction entries for the period with residence info
-            const entries = await TransactionEntry.find(query).populate('residence');
-            
-            console.log(`Found ${entries.length} transaction entries for ${basis} basis`);
-            
-            // Calculate revenue and expenses from transaction entries
-            const revenue = {};
-            const expenses = {};
-            const residences = new Set();
-            
-            entries.forEach(entry => {
-                const residence = entry.residence;
-                const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
-                residences.add(residenceName);
-                
-                console.log(`Processing ${entry.source}: ${entry.description} - $${entry.totalDebit} at ${residenceName}`);
-                
-                if (entry.entries && entry.entries.length > 0) {
-                    entry.entries.forEach(line => {
-                        const accountCode = line.accountCode;
-                        const accountName = line.accountName;
-                        const accountType = line.accountType;
-                        const debit = line.debit || 0;
-                        const credit = line.credit || 0;
-                        
-                        console.log(`  Entry: ${accountCode} - ${accountName} (${accountType}): Dr. $${debit} Cr. $${credit}`);
-                        
-                        if (accountType === 'Income' || accountType === 'income') {
-                            const key = `${accountCode} - ${accountName}`;
-                            if (!revenue[key]) revenue[key] = 0;
-                            
-                            if (basis === 'accrual') {
-                                // ACCRUAL: Income increases with credit (when earned)
-                                revenue[key] += credit;
-                            } else {
-                                // CASH: Income increases with debit (when cash received)
-                                revenue[key] += debit;
-                            }
-                        } else if (accountType === 'Expense' || accountType === 'expense') {
-                            const key = `${accountCode} - ${accountName}`;
-                            if (!expenses[key]) expenses[key] = 0;
-                            
-                            if (basis === 'accrual') {
-                                // ACCRUAL: Expenses increase with debit (when incurred)
-                                expenses[key] += debit;
-                            } else {
-                                // CASH: Expenses increase with debit (when cash paid)
-                                expenses[key] += debit;
-                            }
-                        }
-                    });
-                }
-            });
-            
-            // Calculate totals
-            const totalRevenue = Object.values(revenue).reduce((sum, amount) => sum + amount, 0);
-            const totalExpenses = Object.values(expenses).reduce((sum, amount) => sum + amount, 0);
-            const netIncome = totalRevenue - totalExpenses;
-            
-            console.log(`📊 ${basis.toUpperCase()} BASIS RESULTS:`);
-            console.log(`Revenue: $${totalRevenue}, Expenses: $${totalExpenses}, Net Income: $${netIncome}`);
-            console.log(`Residences included: ${Array.from(residences).join(', ')}`);
-            
-            return {
-                period,
-                basis,
-                revenue: {
-                    ...revenue,
-                    total_revenue: totalRevenue
-                },
-                expenses: {
-                    ...expenses,
-                    total_expenses: totalExpenses
-                },
-                net_income: netIncome,
-                gross_profit: totalRevenue,
-                operating_income: netIncome,
-                residences_included: true,
-                residences_processed: Array.from(residences),
-                transaction_count: entries.length,
-                accounting_notes: {
-                    accrual_basis: basis === 'accrual' ? 'Income/expenses shown when earned/incurred' : 'Income/expenses shown when cash received/paid',
-                    includes_rental_accruals: basis === 'accrual',
-                    includes_cash_payments: basis === 'cash',
-                    source_filter: basis === 'accrual' ? 'Excludes cash receipts (payments)' : 'Only cash movements'
-                }
-            };
             
         } catch (error) {
             console.error('Error generating income statement:', error);
@@ -157,137 +199,206 @@ class FinancialReportingService {
             
             console.log(`Generating comprehensive monthly income statement for ${period} using ${basis.toUpperCase()} basis`);
             
-            // Build query based on accounting basis
-            let query = {
-                date: { $gte: startDate, $lte: endDate }
-            };
-            
             if (basis === 'accrual') {
-                // ACCRUAL BASIS: Include all financial events (when earned/incurred)
-                // Include: rental_accrual, expense_payment, vendor_payment, etc.
-                // Exclude: payment (cash receipts - these are just AR settlements)
-                query.source = { $ne: 'payment' };
-                console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred');
-            } else if (basis === 'cash') {
-                // CASH BASIS: Only include actual cash movements
-                // Include: payment (cash received), vendor_payment (cash paid)
-                // Exclude: rental_accrual (no cash movement), expense_payment (no cash movement)
-                query.source = { $in: ['payment', 'vendor_payment'] };
-                console.log('🟢 CASH BASIS: Including only actual cash receipts and payments');
-            }
-            
-            // Get filtered transaction entries for the period with residence info
-            const entries = await TransactionEntry.find(query).populate('residence');
-            
-            console.log(`Found ${entries.length} transaction entries for ${basis} basis`);
-            
-            // Initialize monthly data structure
-            const monthlyData = {};
-            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
-                               'July', 'August', 'September', 'October', 'November', 'December'];
-            
-            // Initialize all months
-            for (let i = 0; i < 12; i++) {
-                monthlyData[i] = {
-                    month: monthNames[i],
-                    monthNumber: i + 1,
-                    revenue: {},
-                    expenses: {},
-                    total_revenue: 0,
+                console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred by month');
+                
+                // For accrual basis, group rental accruals by month
+                const accrualEntries = await TransactionEntry.find({
+                    date: { $gte: startDate, $lte: endDate },
+                    source: 'rental_accrual',
+                    status: 'posted'
+                });
+                
+                // Initialize monthly breakdown
+                const monthlyBreakdown = {};
+                const monthNames = [
+                    'January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'
+                ];
+                
+                monthNames.forEach((month, index) => {
+                    monthlyBreakdown[index] = {
+                        month,
+                        monthNumber: index + 1,
+                        revenue: {},
+                        expenses: {},
+                        total_revenue: 0,
+                        total_expenses: 0,
+                        net_income: 0,
+                        residences: [],
+                        transaction_count: 0
+                    };
+                });
+                
+                // Process accrual entries by month
+                accrualEntries.forEach(entry => {
+                    const entryDate = new Date(entry.date);
+                    const monthIndex = entryDate.getMonth();
+                    
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Income') {
+                                const amount = lineItem.credit || 0;
+                                monthlyBreakdown[monthIndex].total_revenue += amount;
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                monthlyBreakdown[monthIndex].revenue[key] = 
+                                    (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
+                            }
+                        });
+                    }
+                    
+                    if (entry.residence) {
+                        monthlyBreakdown[monthIndex].residences.push(entry.residence.toString());
+                    }
+                    
+                    monthlyBreakdown[monthIndex].transaction_count++;
+                });
+                
+                // Calculate net income for each month
+                monthNames.forEach((month, index) => {
+                    monthlyBreakdown[index].net_income = monthlyBreakdown[index].total_revenue;
+                });
+                
+                // Calculate year totals
+                const yearTotals = {
+                    total_revenue: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0),
                     total_expenses: 0,
-                    net_income: 0,
-                    residences: new Set(),
-                    transaction_count: 0
+                    net_income: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0),
+                    total_transactions: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].transaction_count, 0)
+                };
+                
+                return {
+                    period,
+                    basis,
+                    monthly_breakdown: monthlyBreakdown,
+                    year_totals: yearTotals,
+                    month_names: monthNames,
+                    residences_included: true,
+                    data_sources: ['TransactionEntry'],
+                    accounting_notes: {
+                        accrual_basis: "Income/expenses shown when earned/incurred by month",
+                        includes_rental_accruals: true,
+                        includes_cash_payments: false,
+                        source_filter: "Excludes cash receipts (payments)",
+                        note: "Based on rental accrual entries from transactionentries collection"
+                    }
+                };
+                
+            } else {
+                console.log('🟢 CASH BASIS: Including income/expenses when cash received/paid by month');
+                
+                // For cash basis, group payments and expenses by month
+                const paymentEntries = await TransactionEntry.find({
+                    date: { $gte: startDate, $lte: endDate },
+                    source: 'payment',
+                    status: 'posted'
+                });
+                
+                const expenseEntries = await TransactionEntry.find({
+                    date: { $gte: startDate, $lte: endDate },
+                    source: 'expense_payment',
+                    status: 'posted'
+                });
+                
+                // Initialize monthly breakdown
+                const monthlyBreakdown = {};
+                const monthNames = [
+                    'January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'
+                ];
+                
+                monthNames.forEach((month, index) => {
+                    monthlyBreakdown[index] = {
+                        month,
+                        monthNumber: index + 1,
+                        revenue: {},
+                        expenses: {},
+                        total_revenue: 0,
+                        total_expenses: 0,
+                        net_income: 0,
+                        residences: [],
+                        transaction_count: 0
+                    };
+                });
+                
+                // Process payment entries by month
+                paymentEntries.forEach(entry => {
+                    const entryDate = new Date(entry.date);
+                    const monthIndex = entryDate.getMonth();
+                    
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Income') {
+                                const amount = lineItem.credit || 0;
+                                monthlyBreakdown[monthIndex].total_revenue += amount;
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                monthlyBreakdown[monthIndex].revenue[key] = 
+                                    (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
+                            }
+                        });
+                    }
+                    
+                    if (entry.residence) {
+                        monthlyBreakdown[monthIndex].residences.push(entry.residence.toString());
+                    }
+                    
+                    monthlyBreakdown[monthIndex].transaction_count++;
+                });
+                
+                // Process expense entries by month
+                expenseEntries.forEach(entry => {
+                    const entryDate = new Date(entry.date);
+                    const monthIndex = entryDate.getMonth();
+                    
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Expense') {
+                                const amount = lineItem.debit || 0;
+                                monthlyBreakdown[monthIndex].total_expenses += amount;
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                monthlyBreakdown[monthIndex].expenses[key] = 
+                                    (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
+                            }
+                        });
+                    }
+                    
+                    monthlyBreakdown[monthIndex].transaction_count++;
+                });
+                
+                // Calculate net income for each month
+                monthNames.forEach((month, index) => {
+                    monthlyBreakdown[index].net_income = 
+                        monthlyBreakdown[index].total_revenue - monthlyBreakdown[index].total_expenses;
+                });
+                
+                // Calculate year totals
+                const yearTotals = {
+                    total_revenue: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0),
+                    total_expenses: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_expenses, 0),
+                    net_income: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].net_income, 0),
+                    total_transactions: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].transaction_count, 0)
+                };
+                
+                return {
+                    period,
+                    basis,
+                    monthly_breakdown: monthlyBreakdown,
+                    year_totals: yearTotals,
+                    month_names: monthNames,
+                    residences_included: true,
+                    data_sources: ['TransactionEntry'],
+                    accounting_notes: {
+                        accrual_basis: "Income/expenses shown when cash received/paid by month",
+                        includes_rental_accruals: false,
+                        includes_cash_payments: true,
+                        source_filter: "Only cash movements",
+                        note: "Based on payment and expense entries from transactionentries collection"
+                    }
                 };
             }
-            
-            // Process each transaction entry
-            entries.forEach(entry => {
-                const month = entry.date.getMonth(); // 0-11
-                const residence = entry.residence;
-                const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
-                
-                monthlyData[month].residences.add(residenceName);
-                monthlyData[month].transaction_count++;
-                
-                if (entry.entries && entry.entries.length > 0) {
-                    entry.entries.forEach(line => {
-                        const accountCode = line.accountCode;
-                        const accountName = line.accountName;
-                        const accountType = line.accountType;
-                        const debit = line.debit || 0;
-                        const credit = line.credit || 0;
-                        
-                        if (accountType === 'Income' || accountType === 'income') {
-                            const key = `${accountCode} - ${accountName}`;
-                            if (!monthlyData[month].revenue[key]) monthlyData[month].revenue[key] = 0;
-                            
-                            if (basis === 'accrual') {
-                                // ACCRUAL: Income increases with credit (when earned)
-                                monthlyData[month].revenue[key] += credit;
-                                monthlyData[month].total_revenue += credit;
-                            } else {
-                                // CASH: Income increases with debit (when cash received)
-                                monthlyData[month].revenue[key] += debit;
-                                monthlyData[month].total_revenue += debit;
-                            }
-                        } else if (accountType === 'Expense' || accountType === 'expense') {
-                            const key = `${accountCode} - ${accountName}`;
-                            if (!monthlyData[month].expenses[key]) monthlyData[month].expenses[key] = 0;
-                            
-                            if (basis === 'accrual') {
-                                // ACCRUAL: Expenses increase with debit (when incurred)
-                                monthlyData[month].expenses[key] += debit;
-                                monthlyData[month].total_expenses += debit;
-                            } else {
-                                // CASH: Expenses increase with debit (when cash paid)
-                                monthlyData[month].expenses[key] += debit;
-                                monthlyData[month].total_expenses += debit;
-                            }
-                        }
-                    });
-                }
-            });
-            
-            // Calculate net income for each month
-            Object.values(monthlyData).forEach(month => {
-                month.net_income = month.total_revenue - month.total_expenses;
-                month.residences = Array.from(month.residences);
-            });
-            
-            // Calculate year totals
-            const yearTotals = {
-                total_revenue: 0,
-                total_expenses: 0,
-                net_income: 0,
-                total_transactions: 0
-            };
-            
-            Object.values(monthlyData).forEach(month => {
-                yearTotals.total_revenue += month.total_revenue;
-                yearTotals.total_expenses += month.total_expenses;
-                yearTotals.net_income += month.net_income;
-                yearTotals.total_transactions += month.transaction_count;
-            });
-            
-            console.log(`📊 ${basis.toUpperCase()} BASIS MONTHLY RESULTS:`);
-            console.log(`Year Total Revenue: $${yearTotals.total_revenue}, Expenses: $${yearTotals.total_expenses}, Net Income: $${yearTotals.net_income}`);
-            
-            return {
-                period,
-                basis,
-                monthly_breakdown: monthlyData,
-                year_totals: yearTotals,
-                month_names: monthNames,
-                residences_included: true,
-                data_sources: ['TransactionEntry'],
-                accounting_notes: {
-                    accrual_basis: basis === 'accrual' ? 'Income/expenses shown when earned/incurred by month' : 'Income/expenses shown when cash received/paid by month',
-                    includes_rental_accruals: basis === 'accrual',
-                    includes_cash_payments: basis === 'cash',
-                    source_filter: basis === 'accrual' ? 'Excludes cash receipts (payments)' : 'Only cash movements'
-                }
-            };
             
         } catch (error) {
             console.error('Error generating comprehensive monthly income statement:', error);
