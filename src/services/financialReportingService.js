@@ -314,7 +314,7 @@ class FinancialReportingService {
      * ACCRUAL BASIS: Shows income/expenses when earned/incurred by month
      * CASH BASIS: Shows income/expenses when cash is received/paid by month
      */
-    static async generateComprehensiveMonthlyIncomeStatement(period, basis = 'accrual') {
+    static async generateComprehensiveMonthlyIncomeStatement(period, basis = 'accrual', residence = null) {
         try {
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
@@ -325,11 +325,35 @@ class FinancialReportingService {
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred by month');
                 
                 // For accrual basis, group rental accruals by month
-                const accrualEntries = await TransactionEntry.find({
+                const accrualQuery = {
                     date: { $gte: startDate, $lte: endDate },
                     source: 'rental_accrual',
                     status: 'posted'
-                });
+                };
+                
+                // Add residence filter if specified
+                if (residence) {
+                    accrualQuery.residence = residence;
+                    console.log(`🔍 Filtering accrual entries by residence: ${residence}`);
+                }
+                
+                const accrualEntries = await TransactionEntry.find(accrualQuery);
+                
+                // For accrual basis, also get expense entries
+                const expenseQuery = {
+                    date: { $gte: startDate, $lte: endDate },
+                    source: 'expense_accrual',
+                    status: 'posted'
+                };
+                
+                // Add residence filter if specified
+                if (residence) {
+                    expenseQuery.residence = residence;
+                }
+                
+                const expenseEntries = await TransactionEntry.find(expenseQuery);
+                
+                console.log(`Found ${accrualEntries.length} accrual entries and ${expenseEntries.length} expense entries for accrual basis`);
                 
                 // Initialize monthly breakdown
                 const monthlyBreakdown = {};
@@ -377,16 +401,41 @@ class FinancialReportingService {
                     monthlyBreakdown[monthIndex].transaction_count++;
                 });
                 
+                // Process expense entries by month
+                expenseEntries.forEach(entry => {
+                    const entryDate = new Date(entry.date);
+                    const monthIndex = entryDate.getMonth();
+                    
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Expense') {
+                                const amount = lineItem.debit || 0;
+                                monthlyBreakdown[monthIndex].total_expenses += amount;
+                                
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                monthlyBreakdown[monthIndex].expenses[key] = 
+                                    (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
+                            }
+                        });
+                    }
+                    
+                    if (entry.residence) {
+                        monthlyBreakdown[monthIndex].residences.push(entry.residence.toString());
+                    }
+                    
+                    monthlyBreakdown[monthIndex].transaction_count++;
+                });
+                
                 // Calculate net income for each month
                 monthNames.forEach((month, index) => {
-                    monthlyBreakdown[index].net_income = monthlyBreakdown[index].total_revenue;
+                    monthlyBreakdown[index].net_income = monthlyBreakdown[index].total_revenue - monthlyBreakdown[index].total_expenses;
                 });
                 
                 // Calculate year totals
                 const yearTotals = {
                     total_revenue: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0),
-                    total_expenses: 0,
-                    net_income: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0),
+                    total_expenses: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_expenses, 0),
+                    net_income: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].net_income, 0),
                     total_transactions: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].transaction_count, 0)
                 };
                 
@@ -411,17 +460,27 @@ class FinancialReportingService {
                 console.log('🟢 CASH BASIS: Including income/expenses when cash received/paid by month');
                 
                 // For cash basis, group payments and expenses by month
-                const paymentEntries = await TransactionEntry.find({
+                const paymentQuery = {
                     date: { $gte: startDate, $lte: endDate },
                     source: 'payment',
                     status: 'posted'
-                });
+                };
                 
-                const expenseEntries = await TransactionEntry.find({
+                const expenseQuery = {
                     date: { $gte: startDate, $lte: endDate },
                     source: { $in: ['expense_payment', 'manual'] },
                     status: 'posted'
-                });
+                };
+                
+                // Add residence filter if specified
+                if (residence) {
+                    paymentQuery.residence = residence;
+                    expenseQuery.residence = residence;
+                    console.log(`🔍 Filtering cash basis entries by residence: ${residence}`);
+                }
+                
+                const paymentEntries = await TransactionEntry.find(paymentQuery);
+                const expenseEntries = await TransactionEntry.find(expenseQuery);
                 
                 // Initialize monthly breakdown
                 const monthlyBreakdown = {};

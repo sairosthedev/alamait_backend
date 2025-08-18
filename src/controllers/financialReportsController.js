@@ -137,22 +137,32 @@ class FinancialReportsController {
             let totalAnnualExpenses = 0;
             let totalAnnualNetIncome = 0;
             
-            // Fetch data for each month (1-12)
-            for (let month = 1; month <= 12; month++) {
-                try {
-                    const monthData = await AccountingService.generateMonthlyIncomeStatement(month, year, residence);
-                    
-                    if (monthData) {
-                        // Fix: Use the correct revenue structure from AccountingService
-                        const monthRevenue = monthData.revenue?.total || 0;
-                        const monthExpenses = monthData.expenses?.total || 0;
-                        const monthNetIncome = monthData.netIncome || 0;
+            // Use FinancialReportingService for monthly breakdown with residence filtering
+            try {
+                const monthlyBreakdown = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis, residence);
+                
+                if (monthlyBreakdown && monthlyBreakdown.monthly_breakdown) {
+                    // Process the monthly breakdown data
+                    Object.entries(monthlyBreakdown.monthly_breakdown).forEach(([monthIndex, monthData]) => {
+                        const month = parseInt(monthIndex) + 1; // Convert 0-based index to 1-based month
+                        
+                        // Calculate monthly totals
+                        const monthRevenue = monthData.total_revenue || 0;
+                        const monthExpenses = monthData.total_expenses || 0;
+                        const monthNetIncome = monthRevenue - monthExpenses;
                         
                         monthlyData[month] = {
                             month: month,
-                            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
-                            revenue: monthData.revenue || {},
-                            expenses: monthData.expenses || {},
+                            monthName: monthData.month || new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+                            revenue: {
+                                rentalIncome: monthRevenue, // You can break this down further if needed
+                                adminIncome: 0, // You can calculate this from the monthly breakdown
+                                total: monthRevenue
+                            },
+                            expenses: {
+                                total: monthExpenses,
+                                breakdown: monthData.expenses || {}
+                            },
                             netIncome: monthNetIncome,
                             summary: {
                                 totalRevenue: monthRevenue,
@@ -164,14 +174,29 @@ class FinancialReportsController {
                         totalAnnualRevenue += monthRevenue;
                         totalAnnualExpenses += monthExpenses;
                         totalAnnualNetIncome += monthNetIncome;
+                    });
+                } else {
+                    // Fallback: create empty monthly structure
+                    for (let month = 1; month <= 12; month++) {
+                        monthlyData[month] = {
+                            month: month,
+                            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+                            revenue: { rentalIncome: 0, adminIncome: 0, total: 0 },
+                            expenses: { total: 0, breakdown: {} },
+                            netIncome: 0,
+                            summary: { totalRevenue: 0, totalExpenses: 0, totalNetIncome: 0 }
+                        };
                     }
-                } catch (monthError) {
-                    console.log(`⚠️ Failed to fetch month ${month}:`, monthError.message);
+                }
+            } catch (serviceError) {
+                console.log('⚠️ FinancialReportingService failed, using fallback:', serviceError.message);
+                // Fallback: create empty monthly structure
+                for (let month = 1; month <= 12; month++) {
                     monthlyData[month] = {
                         month: month,
                         monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
-                        revenue: {},
-                        expenses: {},
+                        revenue: { rentalIncome: 0, adminIncome: 0, total: 0 },
+                        expenses: { total: 0, breakdown: {} },
                         netIncome: 0,
                         summary: { totalRevenue: 0, totalExpenses: 0, totalNetIncome: 0 }
                     };
