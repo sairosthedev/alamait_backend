@@ -294,24 +294,24 @@ class BalanceSheetService {
               capital: {
                 accountCode: '3000',
                 accountName: 'Owner\'s Capital',
-                amount: monthBalanceSheet.equity.capital
+                amount: Math.abs(monthBalanceSheet.equity.capital) // FIX: Ensure positive values for equity
               },
               retainedEarnings: {
                 accountCode: '3100',
                 accountName: 'Retained Earnings',
-                amount: monthBalanceSheet.equity.retainedEarnings
+                amount: Math.abs(monthBalanceSheet.equity.retainedEarnings) // FIX: Ensure positive values for equity
               },
               otherEquity: {
                 accountCode: '3200',
                 accountName: 'Other Equity',
-                amount: monthBalanceSheet.equity.otherEquity
+                amount: Math.abs(monthBalanceSheet.equity.otherEquity) // FIX: Ensure positive values for equity
               },
               total: monthBalanceSheet.equity.totalEquity
             },
             summary: {
               totalAssets: monthBalanceSheet.assets.totalAssets,
-              totalLiabilities: monthBalanceSheet.liabilities.totalLiabilities,
-              totalEquity: monthBalanceSheet.equity.totalEquity,
+              totalLiabilities: Math.abs(monthBalanceSheet.liabilities.totalLiabilities), // FIX: Ensure positive values for liabilities
+              totalEquity: Math.abs(monthBalanceSheet.equity.totalEquity), // FIX: Ensure positive values for equity
               workingCapital: monthBalanceSheet.workingCapital,
               currentRatio: monthBalanceSheet.currentRatio,
               debtToEquity: monthBalanceSheet.debtToEquity
@@ -320,12 +320,12 @@ class BalanceSheetService {
           
           // Accumulate annual totals
           annualSummary.totalAnnualAssets += monthBalanceSheet.assets.totalAssets;
-          annualSummary.totalAnnualLiabilities += monthBalanceSheet.liabilities.totalLiabilities;
-          annualSummary.totalAnnualEquity += monthBalanceSheet.equity.totalEquity;
+          annualSummary.totalAnnualLiabilities += Math.abs(monthBalanceSheet.liabilities.totalLiabilities); // FIX: Ensure positive values
+          annualSummary.totalAnnualEquity += Math.abs(monthBalanceSheet.equity.totalEquity); // FIX: Ensure positive values
           annualSummary.totalAnnualCurrentAssets += monthBalanceSheet.assets.totalCurrent;
           annualSummary.totalAnnualNonCurrentAssets += monthBalanceSheet.assets.totalNonCurrent;
-          annualSummary.totalAnnualCurrentLiabilities += monthBalanceSheet.liabilities.totalCurrent;
-          annualSummary.totalAnnualNonCurrentLiabilities += monthBalanceSheet.liabilities.totalNonCurrent;
+          annualSummary.totalAnnualCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalCurrent); // FIX: Ensure positive values
+          annualSummary.totalAnnualNonCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalNonCurrent); // FIX: Ensure positive values
           
         } catch (monthError) {
           console.error(`❌ Error generating balance sheet for month ${month}:`, monthError);
@@ -503,7 +503,7 @@ class BalanceSheetService {
         accountsPayable[code] = {
           accountCode: code,
           accountName: liability.name,
-          amount: liability.balance,
+          amount: Math.abs(liability.balance), // FIX: Ensure positive values for liabilities
           description: liability.description,
           category: liability.category
         };
@@ -521,7 +521,7 @@ class BalanceSheetService {
         accrued[code] = {
           accountCode: code,
           accountName: liability.name,
-          amount: liability.balance,
+          amount: Math.abs(liability.balance), // FIX: Ensure positive values for liabilities
           description: liability.description,
           category: liability.category
         };
@@ -539,7 +539,7 @@ class BalanceSheetService {
         deposits[code] = {
           accountCode: code,
           accountName: liability.name,
-          amount: liability.balance,
+          amount: Math.abs(liability.balance), // FIX: Ensure positive values for liabilities
           description: liability.description,
           category: liability.category
         };
@@ -557,7 +557,7 @@ class BalanceSheetService {
         taxes[code] = {
           accountCode: code,
           accountName: liability.name,
-          amount: liability.balance,
+          amount: Math.abs(liability.balance), // FIX: Ensure positive values for liabilities
           description: liability.description,
           category: liability.category
         };
@@ -575,7 +575,7 @@ class BalanceSheetService {
         loans[code] = {
           accountCode: code,
           accountName: liability.name,
-          amount: liability.balance,
+          amount: Math.abs(liability.balance), // FIX: Ensure positive values for liabilities
           description: liability.description,
           category: liability.category
         };
@@ -593,8 +593,7 @@ class BalanceSheetService {
         other[code] = {
           accountCode: code,
           accountName: liability.name,
-          amount: liability.balance,
-          description: liability.description,
+          amount: Math.abs(liability.balance), // FIX: Ensure positive values for liabilities
           category: liability.category
         };
       }
