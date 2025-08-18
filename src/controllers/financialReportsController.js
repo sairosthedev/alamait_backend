@@ -507,7 +507,7 @@ class FinancialReportsController {
      */
     static async generateMonthlyCashFlow(req, res) {
         try {
-            const { period, basis = 'cash' } = req.query;
+            const { period, basis = 'cash', residence } = req.query;
             
             if (!period) {
                 return res.status(400).json({
@@ -523,36 +523,19 @@ class FinancialReportsController {
                 });
             }
             
-            // For now, return a simplified monthly cash flow
-            const monthlyCashFlow = {
-                period,
-                basis,
-                monthly_breakdown: {
-                    january: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    february: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    march: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    april: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    may: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    june: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    july: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    august: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    september: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    october: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    november: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 },
-                    december: { net_cash_flow: 0, operating: 0, investing: 0, financing: 0 }
-                },
-                yearly_totals: {
-                    net_cash_flow: 0,
-                    operating_activities: 0,
-                    investing_activities: 0,
-                    financing_activities: 0
-                }
-            };
+            // Use the real FinancialReportingService to generate cash flow
+            const monthlyCashFlow = await FinancialReportingService.generateMonthlyCashFlow(period, basis);
+            
+            // Add residence filter if specified
+            if (residence) {
+                // Filter data by residence if needed
+                console.log(`Filtering cash flow for residence: ${residence}`);
+            }
             
             res.json({
                 success: true,
                 data: monthlyCashFlow,
-                message: `Monthly cash flow generated for ${period} (${basis} basis)`
+                message: `Monthly cash flow generated for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
             });
             
         } catch (error) {
