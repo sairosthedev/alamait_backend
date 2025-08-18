@@ -133,29 +133,29 @@ class BalanceSheetService {
             if (this.isCurrentLiability(account.code, account.name)) {
               balanceSheet.liabilities.current[account.code] = {
                 name: account.name,
-                balance: Math.max(0, balance),
+                balance: Math.abs(balance), // Use absolute value for liabilities
                 description: this.getLiabilityDescription(account.code, account.name),
                 category: 'Current Liability'
               };
-              balanceSheet.liabilities.totalCurrent += Math.max(0, balance);
+              balanceSheet.liabilities.totalCurrent += Math.abs(balance);
             } else {
               balanceSheet.liabilities.nonCurrent[account.code] = {
                 name: account.name,
-                balance: Math.max(0, balance),
+                balance: Math.abs(balance), // Use absolute value for liabilities
                 description: this.getLiabilityDescription(account.code, account.name),
                 category: 'Non-Current Liability'
               };
-              balanceSheet.liabilities.totalNonCurrent += Math.max(0, balance);
+              balanceSheet.liabilities.totalNonCurrent += Math.abs(balance);
             }
             break;
             
           case 'Equity':
             if (account.code === '3000' || account.name.toLowerCase().includes('capital')) {
-              balanceSheet.equity.capital = Math.max(0, balance);
+              balanceSheet.equity.capital = Math.abs(balance); // Use absolute value for capital
             } else if (account.name.toLowerCase().includes('retained') || account.name.toLowerCase().includes('earnings')) {
-              balanceSheet.equity.retainedEarnings += balance;
+              balanceSheet.equity.retainedEarnings += Math.abs(balance); // Use absolute value for retained earnings
             } else {
-              balanceSheet.equity.otherEquity += balance;
+              balanceSheet.equity.otherEquity += Math.abs(balance); // Use absolute value for other equity
             }
             break;
             
