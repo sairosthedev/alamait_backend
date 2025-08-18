@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { 
+    getExpenses,
     getExpenseSummary, 
     getResidenceExpenses, 
     getExpensesByDateRange 
@@ -10,6 +11,13 @@ const { auth, checkRole } = require('../../middleware/auth');
 // Apply authentication middleware to all routes
 router.use(auth);
 router.use(checkRole('admin', 'manager'));
+
+/**
+ * @route   GET /api/admin/expenses
+ * @desc    Get all expenses with filtering
+ * @access  Admin/Manager
+ */
+router.get('/', getExpenses);
 
 /**
  * @route   GET /api/admin/expenses/summary
