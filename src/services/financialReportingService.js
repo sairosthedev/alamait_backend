@@ -20,20 +20,40 @@ class FinancialReportingService {
     
     /**
      * Generate Income Statement (Profit & Loss)
+     * 
+     * ACCRUAL BASIS: Shows income/expenses when earned/incurred
+     * CASH BASIS: Shows income/expenses when cash is received/paid
      */
-    static async generateIncomeStatement(period, basis = 'cash') {
+    static async generateIncomeStatement(period, basis = 'accrual') {
         try {
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
             
-            console.log(`Generating income statement for ${period} from ${startDate} to ${endDate}`);
+            console.log(`Generating income statement for ${period} using ${basis.toUpperCase()} basis`);
             
-            // Get all transaction entries for the period with residence info
-            const entries = await TransactionEntry.find({
+            // Build query based on accounting basis
+            let query = {
                 date: { $gte: startDate, $lte: endDate }
-            }).populate('residence');
+            };
             
-            console.log(`Found ${entries.length} transaction entries for the period`);
+            if (basis === 'accrual') {
+                // ACCRUAL BASIS: Include all financial events (when earned/incurred)
+                // Include: rental_accrual, expense_payment, vendor_payment, etc.
+                // Exclude: payment (cash receipts - these are just AR settlements)
+                query.source = { $ne: 'payment' };
+                console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred');
+            } else if (basis === 'cash') {
+                // CASH BASIS: Only include actual cash movements
+                // Include: payment (cash received), vendor_payment (cash paid)
+                // Exclude: rental_accrual (no cash movement), expense_payment (no cash movement)
+                query.source = { $in: ['payment', 'vendor_payment'] };
+                console.log('🟢 CASH BASIS: Including only actual cash receipts and payments');
+            }
+            
+            // Get filtered transaction entries for the period with residence info
+            const entries = await TransactionEntry.find(query).populate('residence');
+            
+            console.log(`Found ${entries.length} transaction entries for ${basis} basis`);
             
             // Calculate revenue and expenses from transaction entries
             const revenue = {};
@@ -45,7 +65,7 @@ class FinancialReportingService {
                 const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
                 residences.add(residenceName);
                 
-                console.log(`Processing transaction: ${entry.source} - $${entry.totalDebit} at ${residenceName}`);
+                console.log(`Processing ${entry.source}: ${entry.description} - $${entry.totalDebit} at ${residenceName}`);
                 
                 if (entry.entries && entry.entries.length > 0) {
                     entry.entries.forEach(line => {
@@ -60,11 +80,25 @@ class FinancialReportingService {
                         if (accountType === 'Income' || accountType === 'income') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!revenue[key]) revenue[key] = 0;
-                            revenue[key] += debit; // Income increases with debit in this system
+                            
+                            if (basis === 'accrual') {
+                                // ACCRUAL: Income increases with credit (when earned)
+                                revenue[key] += credit;
+                            } else {
+                                // CASH: Income increases with debit (when cash received)
+                                revenue[key] += debit;
+                            }
                         } else if (accountType === 'Expense' || accountType === 'expense') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!expenses[key]) expenses[key] = 0;
-                            expenses[key] += debit - credit; // Expenses increase with debit
+                            
+                            if (basis === 'accrual') {
+                                // ACCRUAL: Expenses increase with debit (when incurred)
+                                expenses[key] += debit;
+                            } else {
+                                // CASH: Expenses increase with debit (when cash paid)
+                                expenses[key] += debit;
+                            }
                         }
                     });
                 }
@@ -75,6 +109,7 @@ class FinancialReportingService {
             const totalExpenses = Object.values(expenses).reduce((sum, amount) => sum + amount, 0);
             const netIncome = totalRevenue - totalExpenses;
             
+            console.log(`📊 ${basis.toUpperCase()} BASIS RESULTS:`);
             console.log(`Revenue: $${totalRevenue}, Expenses: $${totalExpenses}, Net Income: $${netIncome}`);
             console.log(`Residences included: ${Array.from(residences).join(', ')}`);
             
@@ -94,7 +129,13 @@ class FinancialReportingService {
                 operating_income: netIncome,
                 residences_included: true,
                 residences_processed: Array.from(residences),
-                transaction_count: entries.length
+                transaction_count: entries.length,
+                accounting_notes: {
+                    accrual_basis: basis === 'accrual' ? 'Income/expenses shown when earned/incurred' : 'Income/expenses shown when cash received/paid',
+                    includes_rental_accruals: basis === 'accrual',
+                    includes_cash_payments: basis === 'cash',
+                    source_filter: basis === 'accrual' ? 'Excludes cash receipts (payments)' : 'Only cash movements'
+                }
             };
             
         } catch (error) {
@@ -105,20 +146,40 @@ class FinancialReportingService {
 
     /**
      * Generate Comprehensive Monthly Income Statement (Profit & Loss by Month)
+     * 
+     * ACCRUAL BASIS: Shows income/expenses when earned/incurred by month
+     * CASH BASIS: Shows income/expenses when cash is received/paid by month
      */
-    static async generateComprehensiveMonthlyIncomeStatement(period, basis = 'cash') {
+    static async generateComprehensiveMonthlyIncomeStatement(period, basis = 'accrual') {
         try {
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
             
-            console.log(`Generating comprehensive monthly income statement for ${period}`);
+            console.log(`Generating comprehensive monthly income statement for ${period} using ${basis.toUpperCase()} basis`);
             
-            // Get all transaction entries for the period with residence info
-            const entries = await TransactionEntry.find({
+            // Build query based on accounting basis
+            let query = {
                 date: { $gte: startDate, $lte: endDate }
-            }).populate('residence');
+            };
             
-            console.log(`Found ${entries.length} transaction entries for the period`);
+            if (basis === 'accrual') {
+                // ACCRUAL BASIS: Include all financial events (when earned/incurred)
+                // Include: rental_accrual, expense_payment, vendor_payment, etc.
+                // Exclude: payment (cash receipts - these are just AR settlements)
+                query.source = { $ne: 'payment' };
+                console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred');
+            } else if (basis === 'cash') {
+                // CASH BASIS: Only include actual cash movements
+                // Include: payment (cash received), vendor_payment (cash paid)
+                // Exclude: rental_accrual (no cash movement), expense_payment (no cash movement)
+                query.source = { $in: ['payment', 'vendor_payment'] };
+                console.log('🟢 CASH BASIS: Including only actual cash receipts and payments');
+            }
+            
+            // Get filtered transaction entries for the period with residence info
+            const entries = await TransactionEntry.find(query).populate('residence');
+            
+            console.log(`Found ${entries.length} transaction entries for ${basis} basis`);
             
             // Initialize monthly data structure
             const monthlyData = {};
@@ -160,13 +221,29 @@ class FinancialReportingService {
                         if (accountType === 'Income' || accountType === 'income') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!monthlyData[month].revenue[key]) monthlyData[month].revenue[key] = 0;
-                            monthlyData[month].revenue[key] += debit; // Income increases with debit in this system
-                            monthlyData[month].total_revenue += debit; // Income increases with debit in this system
+                            
+                            if (basis === 'accrual') {
+                                // ACCRUAL: Income increases with credit (when earned)
+                                monthlyData[month].revenue[key] += credit;
+                                monthlyData[month].total_revenue += credit;
+                            } else {
+                                // CASH: Income increases with debit (when cash received)
+                                monthlyData[month].revenue[key] += debit;
+                                monthlyData[month].total_revenue += debit;
+                            }
                         } else if (accountType === 'Expense' || accountType === 'expense') {
                             const key = `${accountCode} - ${accountName}`;
                             if (!monthlyData[month].expenses[key]) monthlyData[month].expenses[key] = 0;
-                            monthlyData[month].expenses[key] += debit - credit;
-                            monthlyData[month].total_expenses += debit - credit;
+                            
+                            if (basis === 'accrual') {
+                                // ACCRUAL: Expenses increase with debit (when incurred)
+                                monthlyData[month].expenses[key] += debit;
+                                monthlyData[month].total_expenses += debit;
+                            } else {
+                                // CASH: Expenses increase with debit (when cash paid)
+                                monthlyData[month].expenses[key] += debit;
+                                monthlyData[month].total_expenses += debit;
+                            }
                         }
                     });
                 }
@@ -193,6 +270,9 @@ class FinancialReportingService {
                 yearTotals.total_transactions += month.transaction_count;
             });
             
+            console.log(`📊 ${basis.toUpperCase()} BASIS MONTHLY RESULTS:`);
+            console.log(`Year Total Revenue: $${yearTotals.total_revenue}, Expenses: $${yearTotals.total_expenses}, Net Income: $${yearTotals.net_income}`);
+            
             return {
                 period,
                 basis,
@@ -200,7 +280,13 @@ class FinancialReportingService {
                 year_totals: yearTotals,
                 month_names: monthNames,
                 residences_included: true,
-                data_sources: ['TransactionEntry']
+                data_sources: ['TransactionEntry'],
+                accounting_notes: {
+                    accrual_basis: basis === 'accrual' ? 'Income/expenses shown when earned/incurred by month' : 'Income/expenses shown when cash received/paid by month',
+                    includes_rental_accruals: basis === 'accrual',
+                    includes_cash_payments: basis === 'cash',
+                    source_filter: basis === 'accrual' ? 'Excludes cash receipts (payments)' : 'Only cash movements'
+                }
             };
             
         } catch (error) {
