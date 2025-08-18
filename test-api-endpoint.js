@@ -1,77 +1,147 @@
-const axios = require('axios');
+const mongoose = require('mongoose');
+const BalanceSheetService = require('./src/services/balanceSheetService');
 
-// Test the actual API endpoint
+const MONGODB_URI = 'mongodb+srv://macdonaldsairos24:macdonald24@cluster0.ulvve.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+
 async function testAPIEndpoint() {
-    try {
-        console.log('🧪 Testing API Endpoint with Fixed Controller...\n');
+  try {
+    console.log('🔍 Testing API Endpoint Data Structure...');
+    
+    await mongoose.connect(MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+
+    console.log('✅ Connected to MongoDB Atlas');
+
+    // Test the monthly balance sheet generation (this is what the API endpoint calls)
+    console.log('\n🔍 Testing Monthly Balance Sheet API Endpoint...');
+    
+    const monthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet(2025);
+    
+    if (monthlyBalanceSheet.success) {
+      console.log('\n📊 API RESPONSE STRUCTURE:');
+      console.log('=====================================');
+      
+      // Check the structure that gets sent to the frontend
+      console.log('\n📋 RESPONSE STRUCTURE:');
+      console.log('Success:', monthlyBalanceSheet.success);
+      console.log('Message:', monthlyBalanceSheet.message);
+      console.log('Data keys:', Object.keys(monthlyBalanceSheet.data));
+      
+      // Check January data specifically
+      const januaryData = monthlyBalanceSheet.data.monthly[1];
+      
+      if (januaryData) {
+        console.log('\n📊 JANUARY DATA STRUCTURE:');
+        console.log('=====================================');
         
-        const baseURL = 'http://localhost:3000'; // Adjust if your server runs on different port
+        console.log('\n💰 ASSETS:');
+        console.log('Total Assets:', januaryData.assets?.total);
+        console.log('Current Assets:', januaryData.assets?.current?.total);
         
-        // Test 1: Accrual Basis
-        console.log('🧪 TEST 1: ACCRUAL BASIS via API');
-        console.log('='.repeat(50));
-        try {
-            const accrualResponse = await axios.get(`${baseURL}/api/financial-reports/income-statement`, {
-                params: {
-                    period: '2025',
-                    basis: 'accrual'
-                },
-                timeout: 10000
-            });
-            
-            console.log('✅ Accrual Basis API Response:');
-            console.log(`  - Status: ${accrualResponse.status}`);
-            console.log(`  - Basis: ${accrualResponse.data?.data?.basis || 'Not found'}`);
-            console.log(`  - Revenue: $${accrualResponse.data?.data?.revenue?.total_revenue || 0}`);
-            console.log(`  - Expenses: $${accrualResponse.data?.data?.expenses?.total_expenses || 0}`);
-            console.log(`  - Net Income: $${accrualResponse.data?.data?.net_income || 0}`);
-            console.log(`  - Message: ${accrualResponse.data?.message || 'No message'}`);
-            
-        } catch (error) {
-            console.log('❌ Accrual Basis API Error:', error.message);
-            if (error.response) {
-                console.log(`  - Status: ${error.response.status}`);
-                console.log(`  - Data:`, error.response.data);
+        console.log('\n💸 LIABILITIES:');
+        console.log('Total Liabilities:', januaryData.liabilities?.total);
+        console.log('Current Liabilities:', januaryData.liabilities?.current?.total);
+        
+        // Check individual liability accounts
+        if (januaryData.liabilities?.current?.accountsPayable) {
+          console.log('\n📝 ACCOUNTS PAYABLE DETAILS:');
+          Object.entries(januaryData.liabilities.current.accountsPayable).forEach(([code, account]) => {
+            if (code !== 'total') {
+              console.log(`  ${code}: $${account.amount} (${typeof account.amount})`);
             }
+          });
         }
         
-        // Test 2: Cash Basis
-        console.log('\n🧪 TEST 2: CASH BASIS via API');
-        console.log('='.repeat(50));
-        try {
-            const cashResponse = await axios.get(`${baseURL}/api/financial-reports/income-statement`, {
-                params: {
-                    period: '2025',
-                    basis: 'cash'
-                },
-                timeout: 10000
-            });
-            
-            console.log('✅ Cash Basis API Response:');
-            console.log(`  - Status: ${cashResponse.status}`);
-            console.log(`  - Basis: ${cashResponse.data?.data?.basis || 'Not found'}`);
-            console.log(`  - Revenue: $${cashResponse.data?.data?.revenue?.total_revenue || 0}`);
-            console.log(`  - Expenses: $${cashResponse.data?.data?.expenses?.total_expenses || 0}`);
-            console.log(`  - Net Income: $${cashResponse.data?.data?.net_income || 0}`);
-            console.log(`  - Message: ${cashResponse.data?.message || 'No message'}`);
-            
-        } catch (error) {
-            console.log('❌ Cash Basis API Error:', error.message);
-            if (error.response) {
-                console.log(`  - Status: ${error.response.status}`);
-                console.log(`  - Data:`, error.response.data);
+        if (januaryData.liabilities?.current?.tenantDeposits) {
+          console.log('\n🏠 TENANT DEPOSITS DETAILS:');
+          Object.entries(januaryData.liabilities.current.tenantDeposits).forEach(([code, account]) => {
+            if (code !== 'total') {
+              console.log(`  ${code}: $${account.amount} (${typeof account.amount})`);
             }
+          });
         }
         
-        console.log('\n🎯 Expected Results:');
-        console.log('  - Accrual: Revenue $3,295, Expenses $5,340, Net Income -$2,045');
-        console.log('  - Cash: Revenue $1,640, Expenses $500, Net Income $1,140');
-        console.log('  - Both should show different data and correct basis field');
+        console.log('\n🏛️ EQUITY:');
+        console.log('Total Equity:', januaryData.equity?.total);
+        console.log('Retained Earnings:', januaryData.equity?.retainedEarnings?.amount);
         
-    } catch (error) {
-        console.error('❌ General error:', error.message);
+        console.log('\n📋 SUMMARY:');
+        console.log('Total Assets:', januaryData.summary?.totalAssets);
+        console.log('Total Liabilities:', januaryData.summary?.totalLiabilities);
+        console.log('Total Equity:', januaryData.summary?.totalEquity);
+        
+        // Check balance sheet equation
+        const assets = januaryData.summary?.totalAssets || 0;
+        const liabilities = januaryData.summary?.totalLiabilities || 0;
+        const equity = januaryData.summary?.totalEquity || 0;
+        
+        console.log('\n🔍 BALANCE SHEET EQUATION:');
+        console.log(`Assets: $${assets}`);
+        console.log(`Liabilities: $${liabilities}`);
+        console.log(`Equity: $${equity}`);
+        console.log(`Liabilities + Equity: $${liabilities + equity}`);
+        
+        const difference = Math.abs(assets - (liabilities + equity));
+        console.log(`Difference: $${difference.toFixed(2)}`);
+        
+        if (difference < 0.01) {
+          console.log('✅ SUCCESS: Balance sheet is balanced!');
+        } else {
+          console.log('❌ FAILED: Balance sheet is not balanced');
+        }
+        
+        // Check for negative values
+        console.log('\n⚠️ NEGATIVE VALUE CHECK:');
+        let hasNegativeLiabilities = false;
+        let hasNegativeEquity = false;
+        
+        if (januaryData.liabilities?.total < 0) {
+          console.log(`❌ Total Liabilities is negative: $${januaryData.liabilities.total}`);
+          hasNegativeLiabilities = true;
+        }
+        
+        if (januaryData.equity?.total < 0) {
+          console.log(`⚠️ Total Equity is negative: $${januaryData.equity.total} (This is OK for losses)`);
+          hasNegativeEquity = true;
+        }
+        
+        if (!hasNegativeLiabilities && !hasNegativeEquity) {
+          console.log('✅ All values are properly formatted');
+        }
+        
+        // Check the raw data structure
+        console.log('\n🔍 RAW DATA STRUCTURE ANALYSIS:');
+        console.log('Liabilities object keys:', Object.keys(januaryData.liabilities || {}));
+        console.log('Current liabilities keys:', Object.keys(januaryData.liabilities?.current || {}));
+        
+        // Check if the data structure matches what the frontend expects
+        console.log('\n🔍 FRONTEND COMPATIBILITY CHECK:');
+        const expectedStructure = {
+          hasAssets: !!januaryData.assets,
+          hasLiabilities: !!januaryData.liabilities,
+          hasEquity: !!januaryData.equity,
+          hasSummary: !!januaryData.summary,
+          liabilitiesTotal: januaryData.liabilities?.total,
+          equityTotal: januaryData.equity?.total
+        };
+        
+        Object.entries(expectedStructure).forEach(([key, value]) => {
+          console.log(`${key}: ${value}`);
+        });
+      }
+    } else {
+      console.log('❌ Monthly balance sheet generation failed');
+      console.log('Response:', monthlyBalanceSheet);
     }
+
+  } catch (error) {
+    console.error('❌ Error testing API endpoint:', error);
+  } finally {
+    await mongoose.disconnect();
+    console.log('🔌 Disconnected from MongoDB');
+  }
 }
 
-// Run the test
 testAPIEndpoint();
