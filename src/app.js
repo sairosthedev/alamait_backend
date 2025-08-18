@@ -303,6 +303,10 @@ app.use('/api/finance/other-income', financeOtherIncomeRoutes);
 app.use('/api/finance/other-expenses', financeOtherExpenseRoutes);
 app.use('/api/finance/users', financeUsersRoutes);
 
+// NEW: Proper Accounting Routes (GAAP-compliant financial statements)
+const properAccountingRoutes = require('./routes/finance/properAccountingRoutes');
+app.use('/api/finance/proper-accounting', properAccountingRoutes);
+
 // NEW: Separate financial reporting routes
 const financeCashFlowRoutes = require('./routes/finance/cashFlowRoutes');
 const financeTrialBalanceRoutes = require('./routes/finance/trialBalanceRoutes');
