@@ -846,12 +846,23 @@ const updateExpense = async (req, res) => {
 const getExpenseSummary = async (req, res) => {
     try {
         console.log('💸 Fetching expense summary...');
-
-        // Get all transactions and residences
+        
+        // Get the database connection to access transactionentries collection
+        const db = req.app.locals.db || mongoose.connection.db;
+        const transactionEntriesCollection = db.collection('transactionentries');
+        
+        // Get transactions and transaction entries
         const transactions = await Transaction.find({});
         const residences = await Residence.find({});
+        
+        // Get transaction entries for real expense amounts
+        let transactionEntries = [];
+        try {
+            transactionEntries = await transactionEntriesCollection.find({}).toArray();
+        } catch (error) {
+            console.log('⚠️ Could not access transactionentries collection:', error.message);
+        }
 
-        // Calculate expenses by residence
         let expenseByResidence = {};
         let totalExpenses = 0;
         let totalTransactions = 0;
@@ -875,15 +886,83 @@ const getExpenseSummary = async (req, res) => {
                 roomCount: residence.rooms ? residence.rooms.length : 0,
                 averageRoomPrice: 0
             };
-
-            // Calculate average room price
             if (residence.rooms && residence.rooms.length > 0) {
                 const totalRoomPrice = residence.rooms.reduce((sum, room) => sum + (room.price || 0), 0);
                 expenseByResidence[residence._id.toString()].averageRoomPrice = totalRoomPrice / residence.rooms.length;
             }
         });
 
-        // Process transactions (focus on expense types)
+        // Process transaction entries for real expense amounts
+        transactionEntries.forEach(entry => {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                entry.entries.forEach(accountEntry => {
+                    // Only process debit entries (expenses)
+                    if (accountEntry.debit > 0) {
+                        const amount = accountEntry.debit;
+                        const description = accountEntry.description || '';
+                        const accountName = accountEntry.accountName || '';
+                        const accountType = accountEntry.accountType || '';
+                        const residenceId = entry.residence?.toString();
+                        const date = entry.date ? new Date(entry.date) : new Date();
+                        const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+                        if (residenceId && expenseByResidence[residenceId]) {
+                            const residence = expenseByResidence[residenceId];
+                            
+                            // Only count actual expenses (exclude income transactions)
+                            if (isActualExpenseFromEntry(amount, accountType, description, accountName)) {
+                                residence.totalExpenses += amount;
+                                residence.transactionCount++;
+
+                                // Categorize expenses based on account name and description
+                                if (isUtilityExpense(description, accountName)) {
+                                    residence.utilityExpenses += amount;
+                                    residence.utilityCount++;
+                                } else if (isMaintenanceExpense(description, accountName)) {
+                                    residence.maintenanceExpenses += amount;
+                                    residence.maintenanceCount++;
+                                } else if (isStaffExpense(description, accountName)) {
+                                    residence.staffExpenses += amount;
+                                    residence.staffCount++;
+                                } else {
+                                    residence.otherExpenses += amount;
+                                    residence.otherCount++;
+                                }
+
+                                // Track by month
+                                if (!residence.monthlyBreakdown[month]) {
+                                    residence.monthlyBreakdown[month] = {
+                                        total: 0,
+                                        utilities: 0,
+                                        maintenance: 0,
+                                        staff: 0,
+                                        other: 0,
+                                        count: 0
+                                    };
+                                }
+                                residence.monthlyBreakdown[month].total += amount;
+                                residence.monthlyBreakdown[month].count++;
+                                
+                                if (isUtilityExpense(description, accountName)) {
+                                    residence.monthlyBreakdown[month].utilities += amount;
+                                } else if (isMaintenanceExpense(description, accountName)) {
+                                    residence.monthlyBreakdown[month].maintenance += amount;
+                                } else if (isStaffExpense(description, accountName)) {
+                                    residence.monthlyBreakdown[month].staff += amount;
+                                } else {
+                                    residence.monthlyBreakdown[month].other += amount;
+                                }
+
+                                totalExpenses += amount;
+                                totalTransactions++;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        // Also process regular transactions for any additional expense data
         transactions.forEach(transaction => {
             const amount = transaction.amount || 0;
             const type = transaction.type || 'unknown';
@@ -896,7 +975,6 @@ const getExpenseSummary = async (req, res) => {
                 const residence = expenseByResidence[residenceId];
                 
                 // Only count transactions that represent ACTUAL expenses
-                // Exclude income transactions (positive amounts from payments)
                 if (isActualExpense(amount, type, description)) {
                     const expenseAmount = Math.abs(amount);
                     residence.totalExpenses += expenseAmount;
@@ -930,7 +1008,7 @@ const getExpenseSummary = async (req, res) => {
                     }
                     residence.monthlyBreakdown[month].total += expenseAmount;
                     residence.monthlyBreakdown[month].count++;
-
+                    
                     if (isUtilityExpense(description)) {
                         residence.monthlyBreakdown[month].utilities += expenseAmount;
                     } else if (isMaintenanceExpense(description)) {
@@ -947,20 +1025,14 @@ const getExpenseSummary = async (req, res) => {
             }
         });
 
-        // Convert monthly breakdown to array and sort
         Object.keys(expenseByResidence).forEach(residenceId => {
             const residence = expenseByResidence[residenceId];
             residence.monthlyBreakdown = Object.entries(residence.monthlyBreakdown)
-                .map(([month, data]) => ({
-                    month,
-                    ...data
-                }))
+                .map(([month, data]) => ({ month, ...data }))
                 .sort((a, b) => a.month.localeCompare(b.month));
         });
 
-        // Convert to array and sort by total expenses
-        const expenseArray = Object.values(expenseByResidence)
-            .sort((a, b) => b.totalExpenses - a.totalExpenses);
+        const expenseArray = Object.values(expenseByResidence).sort((a, b) => b.totalExpenses - a.totalExpenses);
 
         const response = {
             success: true,
@@ -974,17 +1046,11 @@ const getExpenseSummary = async (req, res) => {
                 residences: expenseArray
             }
         };
-
         console.log(`✅ Expense summary fetched: $${totalExpenses.toLocaleString()} from ${totalTransactions} transactions`);
         res.json(response);
-
     } catch (error) {
         console.error('❌ Error fetching expense summary:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch expense summary',
-            error: error.message
-        });
+        res.status(500).json({ success: false, message: 'Failed to fetch expense summary', error: error.message });
     }
 };
 
@@ -996,63 +1062,126 @@ const getResidenceExpenses = async (req, res) => {
         const { residenceId } = req.params;
         console.log(`💸 Fetching expenses for residence: ${residenceId}`);
 
-        // Validate residence exists
+        // Get the database connection to access transactionentries collection
+        const db = req.app.locals.db || mongoose.connection.db;
+        const transactionEntriesCollection = db.collection('transactionentries');
+        
         const residence = await Residence.findById(residenceId);
         if (!residence) {
-            return res.status(404).json({
-                success: false,
-                message: 'Residence not found'
-            });
+            return res.status(404).json({ success: false, message: 'Residence not found' });
         }
 
-        // Get transactions for this residence
-        const transactions = await Transaction.find({ residence: residenceId })
-            .sort({ date: -1 });
+        // Get transaction entries for this residence
+        let transactionEntries = [];
+        try {
+            transactionEntries = await transactionEntriesCollection.find({ 
+                residence: residenceId 
+            }).toArray();
+        } catch (error) {
+            console.log('⚠️ Could not access transactionentries collection:', error.message);
+        }
 
-        // Calculate expense breakdown
+        // Get regular transactions for this residence
+        const transactions = await Transaction.find({ residence: residenceId });
+
         let totalExpenses = 0;
         let utilityExpenses = 0;
         let maintenanceExpenses = 0;
         let staffExpenses = 0;
         let otherExpenses = 0;
         let monthlyBreakdown = {};
-        let expenseCategories = {};
+        let recentTransactions = [];
 
+        // Process transaction entries for real expense amounts
+        transactionEntries.forEach(entry => {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                entry.entries.forEach(accountEntry => {
+                    // Only process debit entries (expenses)
+                    if (accountEntry.debit > 0) {
+                        const amount = accountEntry.debit;
+                        const description = accountEntry.description || '';
+                        const accountName = accountEntry.accountName || '';
+                        const accountType = accountEntry.accountType || '';
+                        const date = entry.date ? new Date(entry.date) : new Date();
+                        const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+                        // Only count actual expenses
+                        if (isActualExpenseFromEntry(amount, accountType, description, accountName)) {
+                            totalExpenses += amount;
+
+                            // Categorize expenses
+                            if (isUtilityExpense(description, accountName)) {
+                                utilityExpenses += amount;
+                            } else if (isMaintenanceExpense(description, accountName)) {
+                                maintenanceExpenses += amount;
+                            } else if (isStaffExpense(description, accountName)) {
+                                staffExpenses += amount;
+                            } else {
+                                otherExpenses += amount;
+                            }
+
+                            // Track by month
+                            if (!monthlyBreakdown[month]) {
+                                monthlyBreakdown[month] = {
+                                    total: 0,
+                                    utilities: 0,
+                                    maintenance: 0,
+                                    staff: 0,
+                                    other: 0,
+                                    count: 0
+                                };
+                            }
+                            monthlyBreakdown[month].total += amount;
+                            monthlyBreakdown[month].count++;
+                            
+                            if (isUtilityExpense(description, accountName)) {
+                                monthlyBreakdown[month].utilities += amount;
+                            } else if (isMaintenanceExpense(description, accountName)) {
+                                monthlyBreakdown[month].maintenance += amount;
+                            } else if (isStaffExpense(description, accountName)) {
+                                monthlyBreakdown[month].staff += amount;
+                            } else {
+                                monthlyBreakdown[month].other += amount;
+                            }
+
+                            // Add to recent transactions
+                            recentTransactions.push({
+                                id: entry._id,
+                                date: date,
+                                description: description,
+                                amount: amount,
+                                account: accountName,
+                                type: 'transaction_entry',
+                                reference: entry.reference
+                            });
+                        }
+                    }
+                });
+            }
+        });
+
+        // Also process regular transactions
         transactions.forEach(transaction => {
             const amount = transaction.amount || 0;
             const type = transaction.type || 'unknown';
+            const description = transaction.description || '';
             const date = transaction.date || transaction.createdAt;
             const month = date ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` : 'unknown';
-            const description = transaction.description || '';
 
-            // Only count transactions that represent ACTUAL expenses
             if (isActualExpense(amount, type, description)) {
                 const expenseAmount = Math.abs(amount);
                 totalExpenses += expenseAmount;
 
-                // Categorize expenses
-                let category = 'other';
                 if (isUtilityExpense(description)) {
                     utilityExpenses += expenseAmount;
-                    category = 'utility';
                 } else if (isMaintenanceExpense(description)) {
                     maintenanceExpenses += expenseAmount;
-                    category = 'maintenance';
                 } else if (isStaffExpense(description)) {
                     staffExpenses += expenseAmount;
-                    category = 'staff';
                 } else {
                     otherExpenses += expenseAmount;
                 }
 
-                // Track by category
-                if (!expenseCategories[category]) {
-                    expenseCategories[category] = { total: 0, count: 0 };
-                }
-                expenseCategories[category].total += expenseAmount;
-                expenseCategories[category].count++;
-
-                // Track by month
                 if (!monthlyBreakdown[month]) {
                     monthlyBreakdown[month] = {
                         total: 0,
@@ -1060,43 +1189,39 @@ const getResidenceExpenses = async (req, res) => {
                         maintenance: 0,
                         staff: 0,
                         other: 0,
-                        count: 0,
-                        transactions: []
+                        count: 0
                     };
                 }
                 monthlyBreakdown[month].total += expenseAmount;
                 monthlyBreakdown[month].count++;
-
-                if (category === 'utility') {
+                
+                if (isUtilityExpense(description)) {
                     monthlyBreakdown[month].utilities += expenseAmount;
-                } else if (category === 'maintenance') {
+                } else if (isMaintenanceExpense(description)) {
                     monthlyBreakdown[month].maintenance += expenseAmount;
-                } else if (category === 'staff') {
+                } else if (isStaffExpense(description)) {
                     monthlyBreakdown[month].staff += expenseAmount;
                 } else {
                     monthlyBreakdown[month].other += expenseAmount;
                 }
 
-                // Add transaction to monthly breakdown
-                monthlyBreakdown[month].transactions.push({
+                recentTransactions.push({
                     id: transaction._id,
-                    transactionId: transaction.transactionId,
-                    type: transaction.type,
-                    amount: transaction.amount,
-                    date: transaction.date,
-                    description: transaction.description,
-                    reference: transaction.reference,
-                    category: category
+                    date: date,
+                    description: description,
+                    amount: expenseAmount,
+                    type: 'transaction',
+                    reference: transaction.reference
                 });
             }
         });
 
-        // Convert monthly breakdown to array and sort
-        const monthlyArray = Object.entries(monthlyBreakdown)
-            .map(([month, data]) => ({
-                month,
-                ...data
-            }))
+        // Sort recent transactions by date
+        recentTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        // Convert monthly breakdown to array
+        const monthlyBreakdownArray = Object.entries(monthlyBreakdown)
+            .map(([month, data]) => ({ month, ...data }))
             .sort((a, b) => a.month.localeCompare(b.month));
 
         const response = {
@@ -1105,40 +1230,25 @@ const getResidenceExpenses = async (req, res) => {
                 residence: {
                     id: residence._id,
                     name: residence.name,
-                    address: residence.address,
-                    roomCount: residence.rooms ? residence.rooms.length : 0,
-                    averageRoomPrice: residence.rooms && residence.rooms.length > 0 
-                        ? residence.rooms.reduce((sum, room) => sum + (room.price || 0), 0) / residence.rooms.length 
-                        : 0
+                    address: residence.address
                 },
-                expenses: {
-                    total: totalExpenses,
-                    utilities: utilityExpenses,
-                    maintenance: maintenanceExpenses,
-                    staff: staffExpenses,
-                    other: otherExpenses,
-                    transactionCount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.count, 0)
+                summary: {
+                    totalExpenses,
+                    utilityExpenses,
+                    maintenanceExpenses,
+                    staffExpenses,
+                    otherExpenses
                 },
-                breakdown: {
-                    byCategory: expenseCategories,
-                    byMonth: monthlyArray
-                },
-                transactions: Object.values(monthlyBreakdown)
-                    .flatMap(month => month.transactions)
-                    .slice(0, 50) // Limit to last 50 transactions
+                monthlyBreakdown: monthlyBreakdownArray,
+                recentTransactions: recentTransactions.slice(0, 10) // Show last 10
             }
         };
 
-        console.log(`✅ Residence expenses fetched: $${totalExpenses.toLocaleString()} from ${Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.count, 0)} transactions`);
+        console.log(`✅ Residence expenses fetched: $${totalExpenses.toLocaleString()}`);
         res.json(response);
-
     } catch (error) {
         console.error('❌ Error fetching residence expenses:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch residence expenses',
-            error: error.message
-        });
+        res.status(500).json({ success: false, message: 'Failed to fetch residence expenses', error: error.message });
     }
 };
 
@@ -1148,78 +1258,187 @@ const getResidenceExpenses = async (req, res) => {
 const getExpensesByDateRange = async (req, res) => {
     try {
         const { startDate, endDate, residenceId } = req.query;
-        console.log(`💸 Fetching expenses from ${startDate} to ${endDate}${residenceId ? ` for residence ${residenceId}` : ''}`);
+        console.log(`💸 Fetching expenses from ${startDate} to ${endDate}${residenceId ? ` for residence: ${residenceId}` : ''}`);
 
-        // Build query
-        let query = {};
-        
-        if (startDate && endDate) {
-            query.date = {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
-            };
+        if (!startDate || !endDate) {
+            return res.status(400).json({ success: false, message: 'Start date and end date are required' });
         }
 
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+
+        // Get the database connection to access transactionentries collection
+        const db = req.app.locals.db || mongoose.connection.db;
+        const transactionEntriesCollection = db.collection('transactionentries');
+        
+        let residences = [];
+        if (residenceId) {
+            const residence = await Residence.findById(residenceId);
+            if (!residence) {
+                return res.status(404).json({ success: false, message: 'Residence not found' });
+            }
+            residences = [residence];
+        } else {
+            residences = await Residence.find({});
+        }
+
+        let expenseByResidence = {};
+        let totalExpenses = 0;
+
+        residences.forEach(residence => {
+            expenseByResidence[residence._id.toString()] = {
+                id: residence._id,
+                name: residence.name,
+                address: residence.address,
+                totalExpenses: 0,
+                utilityExpenses: 0,
+                maintenanceExpenses: 0,
+                staffExpenses: 0,
+                otherExpenses: 0,
+                monthlyBreakdown: {}
+            };
+        });
+
+        // Process transaction entries for real expense amounts
+        let transactionEntries = [];
+        try {
+            const query = { 
+                date: { $gte: start, $lte: end }
+            };
+            if (residenceId) {
+                query.residence = residenceId;
+            }
+            transactionEntries = await transactionEntriesCollection.find(query).toArray();
+        } catch (error) {
+            console.log('⚠️ Could not access transactionentries collection:', error.message);
+        }
+
+        transactionEntries.forEach(entry => {
+            if (entry.entries && Array.isArray(entry.entries)) {
+                entry.entries.forEach(accountEntry => {
+                    // Only process debit entries (expenses)
+                    if (accountEntry.debit > 0) {
+                        const amount = accountEntry.debit;
+                        const description = accountEntry.description || '';
+                        const accountName = accountEntry.accountName || '';
+                        const accountType = accountEntry.accountType || '';
+                        const residenceId = entry.residence?.toString();
+                        const date = entry.date ? new Date(entry.date) : new Date();
+                        const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+                        if (residenceId && expenseByResidence[residenceId]) {
+                            const residence = expenseByResidence[residenceId];
+                            
+                            // Only count actual expenses
+                            if (isActualExpenseFromEntry(amount, accountType, description, accountName)) {
+                                residence.totalExpenses += amount;
+                                totalExpenses += amount;
+
+                                if (isUtilityExpense(description, accountName)) {
+                                    residence.utilityExpenses += amount;
+                                } else if (isMaintenanceExpense(description, accountName)) {
+                                    residence.maintenanceExpenses += amount;
+                                } else if (isStaffExpense(description, accountName)) {
+                                    residence.staffExpenses += amount;
+                                } else {
+                                    residence.otherExpenses += amount;
+                                }
+
+                                if (!residence.monthlyBreakdown[month]) {
+                                    residence.monthlyBreakdown[month] = {
+                                        total: 0,
+                                        utilities: 0,
+                                        maintenance: 0,
+                                        staff: 0,
+                                        other: 0
+                                    };
+                                }
+                                residence.monthlyBreakdown[month].total += amount;
+                                
+                                if (isUtilityExpense(description, accountName)) {
+                                    residence.monthlyBreakdown[month].utilities += amount;
+                                } else if (isMaintenanceExpense(description, accountName)) {
+                                    residence.monthlyBreakdown[month].maintenance += amount;
+                                } else if (isStaffExpense(description, accountName)) {
+                                    residence.monthlyBreakdown[month].staff += amount;
+                                } else {
+                                    residence.monthlyBreakdown[month].other += amount;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        // Also process regular transactions
+        const query = { 
+            date: { $gte: start, $lte: end }
+        };
         if (residenceId) {
             query.residence = residenceId;
         }
-
-        // Get transactions
-        const transactions = await Transaction.find(query)
-            .sort({ date: -1 });
-
-        // Calculate expenses
-        let totalExpenses = 0;
-        let expenseByResidence = {};
-        let expenseByMonth = {};
-        let expenseByCategory = {};
+        const transactions = await Transaction.find(query);
 
         transactions.forEach(transaction => {
             const amount = transaction.amount || 0;
             const type = transaction.type || 'unknown';
+            const description = transaction.description || '';
             const residenceId = transaction.residence?.toString();
             const date = transaction.date || transaction.createdAt;
             const month = date ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` : 'unknown';
-            const description = transaction.description || '';
 
-            // Only count transactions that represent ACTUAL expenses
-            if (isActualExpense(amount, type, description)) {
-                const expenseAmount = Math.abs(amount);
-                totalExpenses += expenseAmount;
+            if (residenceId && expenseByResidence[residenceId]) {
+                const residence = expenseByResidence[residenceId];
+                
+                if (isActualExpense(amount, type, description)) {
+                    const expenseAmount = Math.abs(amount);
+                    residence.totalExpenses += expenseAmount;
+                    totalExpenses += expenseAmount;
 
-                // Track by residence
-                if (residenceId) {
-                    if (!expenseByResidence[residenceId]) {
-                        expenseByResidence[residenceId] = { total: 0, count: 0 };
+                    if (isUtilityExpense(description)) {
+                        residence.utilityExpenses += expenseAmount;
+                    } else if (isMaintenanceExpense(description)) {
+                        residence.maintenanceExpenses += expenseAmount;
+                    } else if (isStaffExpense(description)) {
+                        residence.staffExpenses += expenseAmount;
+                    } else {
+                        residence.otherExpenses += expenseAmount;
                     }
-                    expenseByResidence[residenceId].total += expenseAmount;
-                    expenseByResidence[residenceId].count++;
-                }
 
-                // Track by month
-                if (!expenseByMonth[month]) {
-                    expenseByMonth[month] = { total: 0, count: 0 };
+                    if (!residence.monthlyBreakdown[month]) {
+                        residence.monthlyBreakdown[month] = {
+                            total: 0,
+                            utilities: 0,
+                            maintenance: 0,
+                            staff: 0,
+                            other: 0
+                        };
+                    }
+                    residence.monthlyBreakdown[month].total += expenseAmount;
+                    
+                    if (isUtilityExpense(description)) {
+                        residence.monthlyBreakdown[month].utilities += expenseAmount;
+                    } else if (isMaintenanceExpense(description)) {
+                        residence.monthlyBreakdown[month].maintenance += expenseAmount;
+                    } else if (isStaffExpense(description)) {
+                        residence.monthlyBreakdown[month].staff += expenseAmount;
+                    } else {
+                        residence.monthlyBreakdown[month].other += expenseAmount;
+                    }
                 }
-                expenseByMonth[month].total += expenseAmount;
-                expenseByMonth[month].count++;
-
-                // Track by category
-                let category = 'other';
-                if (isUtilityExpense(description)) {
-                    category = 'utility';
-                } else if (isMaintenanceExpense(description)) {
-                    category = 'maintenance';
-                } else if (isStaffExpense(description)) {
-                    category = 'staff';
-                }
-
-                if (!expenseByCategory[category]) {
-                    expenseByCategory[category] = { total: 0, count: 0 };
-                }
-                expenseByCategory[category].total += expenseAmount;
-                expenseByCategory[category].count++;
             }
         });
+
+        // Convert monthly breakdowns to arrays
+        Object.keys(expenseByResidence).forEach(residenceId => {
+            const residence = expenseByResidence[residenceId];
+            residence.monthlyBreakdown = Object.entries(residence.monthlyBreakdown)
+                .map(([month, data]) => ({ month, ...data }))
+                .sort((a, b) => a.month.localeCompare(b.month));
+        });
+
+        const expenseArray = Object.values(expenseByResidence).sort((a, b) => b.totalExpenses - a.totalExpenses);
 
         const response = {
             success: true,
@@ -1227,28 +1446,17 @@ const getExpensesByDateRange = async (req, res) => {
                 dateRange: { startDate, endDate },
                 summary: {
                     totalExpenses,
-                    totalTransactions: Object.values(expenseByResidence).reduce((sum, res) => sum + res.count, 0),
-                    averageTransactionAmount: Object.values(expenseByResidence).reduce((sum, res) => sum + res.count, 0) > 0 ? totalExpenses / Object.values(expenseByResidence).reduce((sum, res) => sum + res.count, 0) : 0
+                    residenceCount: residences.length
                 },
-                breakdown: {
-                    byResidence: expenseByResidence,
-                    byMonth: expenseByMonth,
-                    byCategory: expenseByCategory
-                },
-                transactions: transactions.filter(t => isActualExpense(t.amount, t.type, t.description)).slice(0, 100)
+                residences: expenseArray
             }
         };
 
-        console.log(`✅ Date range expenses fetched: $${totalExpenses.toLocaleString()} from ${Object.values(expenseByResidence).reduce((sum, res) => sum + res.count, 0)} transactions`);
+        console.log(`✅ Date range expenses fetched: $${totalExpenses.toLocaleString()}`);
         res.json(response);
-
     } catch (error) {
-        console.error('❌ Error fetching expenses by date range:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch expenses by date range',
-            error: error.message
-        });
+        console.error('❌ Error fetching date range expenses:', error.message);
+        res.status(500).json({ success: false, message: 'Failed to fetch date range expenses', error: error.message });
     }
 };
 
@@ -1278,27 +1486,66 @@ function isActualExpense(amount, type, description) {
     return false;
 }
 
-function isExpenseType(type, description) {
-    const expenseTypes = ['expense', 'utility', 'maintenance', 'staff', 'repair', 'service'];
-    const expenseKeywords = ['expense', 'bill', 'fee', 'cost', 'charge', 'repair', 'maintenance', 'utility', 'staff', 'salary', 'wage'];
+function isActualExpenseFromEntry(amount, accountType, description, accountName) {
+    // Only process debit entries (expenses)
+    if (amount <= 0) {
+        return false;
+    }
     
-    return expenseTypes.includes(type.toLowerCase()) || 
-           expenseKeywords.some(keyword => description.toLowerCase().includes(keyword));
+    // Exclude income accounts
+    const incomeAccountTypes = ['income', 'revenue', 'asset'];
+    if (incomeAccountTypes.includes(accountType.toLowerCase())) {
+        return false;
+    }
+    
+    // Include expense accounts
+    const expenseAccountTypes = ['expense', 'liability'];
+    if (expenseAccountTypes.includes(accountType.toLowerCase())) {
+        return true;
+    }
+    
+    // Check account name for expense indicators
+    const expenseKeywords = ['expense', 'cost', 'bill', 'fee', 'charge', 'maintenance', 'utility', 'staff', 'salary', 'wage'];
+    if (expenseKeywords.some(keyword => accountName.toLowerCase().includes(keyword))) {
+        return true;
+    }
+    
+    // Check description for expense indicators
+    if (expenseKeywords.some(keyword => description.toLowerCase().includes(keyword))) {
+        return true;
+    }
+    
+    return false;
 }
 
-function isUtilityExpense(description) {
-    const utilityKeywords = ['electricity', 'water', 'gas', 'internet', 'wifi', 'sewage', 'garbage', 'trash', 'utility', 'utilities'];
-    return utilityKeywords.some(keyword => description.toLowerCase().includes(keyword));
+function isUtilityExpense(description, accountName = '') {
+    const utilityKeywords = ['electricity', 'water', 'internet', 'wifi', 'gas', 'utility', 'bill'];
+    const descriptionLower = description.toLowerCase();
+    const accountNameLower = accountName.toLowerCase();
+    
+    return utilityKeywords.some(keyword => 
+        descriptionLower.includes(keyword) || accountNameLower.includes(keyword)
+    );
 }
 
-function isMaintenanceExpense(description) {
-    const maintenanceKeywords = ['repair', 'maintenance', 'fix', 'install', 'replace', 'upgrade', 'renovation', 'cleaning', 'housekeeping', 'security'];
-    return maintenanceKeywords.some(keyword => description.toLowerCase().includes(keyword));
+function isMaintenanceExpense(description, accountName = '') {
+    const maintenanceKeywords = ['maintenance', 'repair', 'service', 'cleaning', 'pool', 'security'];
+    const descriptionLower = description.toLowerCase();
+    const accountNameLower = accountName.toLowerCase();
+    
+    return maintenanceKeywords.some(keyword => 
+        descriptionLower.includes(keyword) || accountNameLower.includes(keyword)
+    );
 }
 
-function isStaffExpense(description) {
-    const staffKeywords = ['salary', 'wage', 'staff', 'employee', 'worker', 'labor', 'payroll', 'bonus', 'commission', 'overtime'];
-    return staffKeywords.some(keyword => description.toLowerCase().includes(keyword));
+function isStaffExpense(description, accountName = '') {
+    const staffKeywords = ['staff', 'salary', 'wage', 'employee', 'worker', 'labor'];
+    const descriptionLower = description.toLowerCase();
+    const accountNameLower = accountName.toLowerCase();
+    
+    return staffKeywords.some(keyword => 
+        descriptionLower.includes(keyword) || accountNameLower.includes(keyword)
+    );
 }
 
 module.exports = {
