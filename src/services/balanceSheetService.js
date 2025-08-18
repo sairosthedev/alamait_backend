@@ -13,7 +13,10 @@ class BalanceSheetService {
       console.log(`📊 Generating Balance Sheet as of ${asOfDate}`);
       
       const query = {
-        date: { $lte: new Date(asOfDate) },
+        date: { 
+          $gte: new Date('2025-01-01'), 
+          $lte: new Date(asOfDate) 
+        },
         status: 'posted'
       };
       
