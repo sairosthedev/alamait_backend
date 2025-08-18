@@ -40,6 +40,7 @@ const adminProfileRoutes = require('./routes/admin/adminProfileRoutes');
 const adminMessageRoutes = require('./routes/admin/messageRoutes');
 const adminEventRoutes = require('./routes/admin/eventRoutes');
 const adminExpenseRoutes = require('./routes/admin/expenseRoutes');
+const adminIncomeRoutes = require('./routes/admin/incomeRoutes');
 const adminRequestRoutes = require('./routes/admin/requestRoutes');
 const financeResidenceRoutes = require('./routes/finance/residenceRoutes');
 const leaseTemplateRoutes = require('./routes/admin/leaseTemplateRoutes');
@@ -244,6 +245,7 @@ app.use('/api/auth', authRoutes);
 
 // Admin routes - more specific routes first
 app.use('/api/admin/expenses', adminExpenseRoutes);
+app.use('/api/admin/income', adminIncomeRoutes);
 app.use('/api/admin/users', adminUserRoutes);
 app.use('/api/admin/reports', adminReportRoutes);
 app.use('/api/admin/residences', adminResidenceRoutes);
