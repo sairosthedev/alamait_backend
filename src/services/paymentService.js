@@ -31,6 +31,49 @@ class PaymentService {
             await payment.save();
             console.log(`✅ Payment created successfully with user ID: ${userId}`);
 
+            // 🆕 ENHANCED: Automatically sync payment to debtor
+            if (debtor) {
+                try {
+                    console.log('💰 Automatically syncing payment to debtor...');
+                    
+                    // Calculate component amounts
+                    const rent = paymentData.rentAmount || 0;
+                    const adminFee = paymentData.adminFee || 0;
+                    const deposit = paymentData.deposit || 0;
+                    
+                    // Format payment month
+                    const paymentMonth = paymentData.paymentMonth || 
+                        `${new Date(paymentData.date || new Date()).getFullYear()}-${String(new Date(paymentData.date || new Date()).getMonth() + 1).padStart(2, '0')}`;
+                    
+                    // Add payment to debtor
+                    await debtor.addPayment({
+                        paymentId: payment._id.toString(),
+                        amount: paymentData.totalAmount,
+                        allocatedMonth: paymentMonth,
+                        components: {
+                            rent: rent,
+                            adminFee: adminFee,
+                            deposit: deposit
+                        },
+                        paymentMethod: paymentData.method || 'Bank Transfer',
+                        paymentDate: paymentData.date || new Date(),
+                        status: paymentData.status === 'Paid' ? 'Confirmed' : (paymentData.status || 'Confirmed'),
+                        notes: `Auto-synced payment ${payment._id} - ${paymentMonth}`,
+                        createdBy: createdBy
+                    });
+                    
+                    console.log('✅ Payment automatically synced to debtor');
+                    console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                    console.log(`   New Total Paid: $${debtor.totalPaid}`);
+                    console.log(`   Payment History Count: ${debtor.paymentHistory.length}`);
+                    
+                } catch (syncError) {
+                    console.error('❌ Error syncing payment to debtor:', syncError.message);
+                    // Don't fail payment creation, but log the sync error
+                    console.log('⚠️ Payment created but debtor sync failed - manual sync may be required');
+                }
+            }
+
             // 🆕 NEW: Validate payment mapping
             await this.validatePaymentMapping(payment);
 

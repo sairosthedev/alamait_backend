@@ -1,30 +1,38 @@
 const express = require('express');
 const router = express.Router();
-const { getExpenses, addExpense, updateExpenseStatus, approveExpense, updateExpense } = require('../../controllers/admin/expenseController');
-const { auth, checkRole } = require('../../middleware/auth');
+const { 
+    getExpenseSummary, 
+    getResidenceExpenses, 
+    getExpensesByDateRange 
+} = require('../../controllers/admin/expenseController');
+const { authenticateToken, authorizeRole } = require('../../middleware/auth');
 
 // Apply authentication middleware to all routes
-router.use(auth);
+router.use(authenticateToken);
+router.use(authorizeRole(['admin', 'manager']));
 
-// Override the global admin role check for these routes
-router.use((req, res, next) => {
-    // Skip the global admin role check
-    next();
-});
+/**
+ * @route   GET /api/admin/expenses/summary
+ * @desc    Get expense summary for all residences
+ * @access  Admin/Manager
+ */
+router.get('/summary', getExpenseSummary);
 
-// Route to handle GET and POST requests for expenses
-router
-    .route('/')
-    .get(checkRole('admin', 'finance', 'finance_admin', 'finance_user'), getExpenses) // Allow finance roles to view
-    .post(checkRole('admin', 'finance', 'finance_admin', 'finance_user'), addExpense); // Only admins and finance can add expenses
+/**
+ * @route   GET /api/admin/expenses/residence/:residenceId
+ * @desc    Get expenses for a specific residence
+ * @access  Admin/Manager
+ */
+router.get('/residence/:residenceId', getResidenceExpenses);
 
-// Route to handle expense updates
-router.put('/:expenseId', checkRole('admin', 'finance', 'finance_admin', 'finance_user'), updateExpense);
-
-// Route to handle expense status updates
-router.put('/:expenseId/status', checkRole('admin', 'finance', 'finance_admin', 'finance_user'), updateExpenseStatus);
-
-// Route to handle expense approval
-router.patch('/:id/approve', checkRole('admin', 'finance', 'ceo'), approveExpense);
+/**
+ * @route   GET /api/admin/expenses/range
+ * @desc    Get expenses by date range (with optional residence filter)
+ * @access  Admin/Manager
+ * @query   startDate - Start date (YYYY-MM-DD)
+ * @query   endDate - End date (YYYY-MM-DD)
+ * @query   residenceId - Optional residence ID filter
+ */
+router.get('/range', getExpensesByDateRange);
 
 module.exports = router;

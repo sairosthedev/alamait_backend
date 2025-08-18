@@ -635,35 +635,109 @@ const createPayment = async (req, res) => {
                 console.log(`   Total Owed: $${debtor.totalOwed}`);
                 console.log(`   Total Paid: $${debtor.totalPaid}`);
                 
-                // Call addPayment with proper data structure
+                // 🆕 ENHANCED: Ensure payment month is properly formatted
+                const formattedPaymentMonth = paymentMonth.includes('-') ? paymentMonth : 
+                    `${new Date(date).getFullYear()}-${String(new Date(date).getMonth() + 1).padStart(2, '0')}`;
+                
+                // 🆕 ENHANCED: Call addPayment with proper data structure and error handling
                 await debtor.addPayment({
-                    paymentId: payment.paymentId,
+                    paymentId: payment._id.toString(), // Use MongoDB ObjectId, not paymentId string
                     amount: totalAmount,
-                    allocatedMonth: paymentMonth,
+                    allocatedMonth: formattedPaymentMonth,
                     components: {
                         rent: rent,
-                        admin: admin,
+                        adminFee: admin, // Fix: use adminFee to match schema
                         deposit: deposit
                     },
                     paymentMethod: method,
                     paymentDate: payment.date || new Date(),
-                    status: 'Confirmed',
-                    notes: `Payment ${paymentId} - ${paymentMonth}`,
+                    status: status === 'Paid' ? 'Confirmed' : status, // Map status correctly
+                    notes: `Payment ${paymentId} - ${formattedPaymentMonth}`,
                     createdBy: req.user._id
                 });
                 
                 console.log('✅ Debtor account updated successfully');
                 console.log(`   New Balance: $${debtor.currentBalance}`);
                 console.log(`   New Total Paid: $${debtor.totalPaid}`);
+                console.log(`   Payment History Count: ${debtor.paymentHistory.length}`);
+                console.log(`   Monthly Payments Count: ${debtor.monthlyPayments.length}`);
                 
             } catch (debtorError) {
                 console.error('❌ Error updating debtor account:', debtorError);
                 console.error('   Error details:', debtorError.message);
                 console.error('   Stack trace:', debtorError.stack);
-                // Don't fail the payment creation, but log the error
+                
+                // 🆕 ENHANCED: Try to recover from debtor update failure
+                try {
+                    console.log('🔄 Attempting to recover debtor update...');
+                    
+                    // Refresh debtor from database
+                    const refreshedDebtor = await Debtor.findById(debtor._id);
+                    if (refreshedDebtor) {
+                        await refreshedDebtor.addPayment({
+                            paymentId: payment._id.toString(),
+                            amount: totalAmount,
+                            allocatedMonth: paymentMonth,
+                            components: {
+                                rent: rent,
+                                adminFee: admin,
+                                deposit: deposit
+                            },
+                            paymentMethod: method,
+                            paymentDate: payment.date || new Date(),
+                            status: status === 'Paid' ? 'Confirmed' : status,
+                            notes: `Payment ${paymentId} - ${paymentMonth} (Recovery)`,
+                            createdBy: req.user._id
+                        });
+                        console.log('✅ Debtor update recovered successfully');
+                    }
+                } catch (recoveryError) {
+                    console.error('❌ Debtor update recovery failed:', recoveryError.message);
+                    // Log but don't fail the payment creation
+                }
             }
         } else {
             console.log('⚠️  No debtor account available for payment update');
+            
+            // 🆕 ENHANCED: Try to create debtor account as fallback
+            try {
+                console.log('🔄 Attempting to create debtor account as fallback...');
+                const { createDebtorForStudent } = require('../../services/debtorService');
+                
+                const fallbackDebtor = await createDebtorForStudent(studentExists, {
+                    residenceId: residence,
+                    roomNumber: room,
+                    createdBy: req.user._id,
+                    startDate: date,
+                    roomPrice: totalAmount
+                });
+                
+                if (fallbackDebtor) {
+                    console.log('✅ Fallback debtor account created successfully');
+                    
+                    // Now add the payment to the new debtor
+                    await fallbackDebtor.addPayment({
+                        paymentId: payment._id.toString(),
+                        amount: totalAmount,
+                        allocatedMonth: paymentMonth,
+                        components: {
+                            rent: rent,
+                            adminFee: admin,
+                            deposit: deposit
+                        },
+                        paymentMethod: method,
+                        paymentDate: payment.date || new Date(),
+                        status: status === 'Paid' ? 'Confirmed' : status,
+                        notes: `Payment ${paymentId} - ${paymentMonth} (Fallback)`,
+                        createdBy: req.user._id
+                    });
+                    
+                    console.log('✅ Payment added to fallback debtor account');
+                }
+            } catch (fallbackError) {
+                console.error('❌ Fallback debtor creation failed:', fallbackError.message);
+                // Continue with payment creation even if debtor creation fails
+            }
         }
 
         // 🆕 NEW: Validate payment mapping

@@ -44,6 +44,10 @@ const paymentSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    amount: {
+        type: Number,
+        default: 0
+    },
     payments: [{
         type: {
             type: String,
@@ -137,6 +141,19 @@ const paymentSchema = new mongoose.Schema({
     }]
 }, {
     timestamps: true
+});
+
+// Add virtual fields
+paymentSchema.virtual('calculatedAmount').get(function() {
+    return (this.rentAmount || 0) + (this.adminFee || 0) + (this.deposit || 0);
+});
+
+// Pre-save middleware to automatically set amount
+paymentSchema.pre('save', function(next) {
+    if (this.isModified('rentAmount') || this.isModified('adminFee') || this.isModified('deposit')) {
+        this.amount = (this.rentAmount || 0) + (this.adminFee || 0) + (this.deposit || 0);
+    }
+    next();
 });
 
 // Add indexes for common queries

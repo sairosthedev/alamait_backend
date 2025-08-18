@@ -840,6 +840,467 @@ const updateExpense = async (req, res) => {
     }
 };
 
+/**
+ * Get expense summary for all residences
+ */
+const getExpenseSummary = async (req, res) => {
+    try {
+        console.log('💸 Fetching expense summary...');
+
+        // Get all transactions and residences
+        const transactions = await Transaction.find({});
+        const residences = await Residence.find({});
+
+        // Calculate expenses by residence
+        let expenseByResidence = {};
+        let totalExpenses = 0;
+        let totalTransactions = 0;
+
+        residences.forEach(residence => {
+            expenseByResidence[residence._id.toString()] = {
+                id: residence._id,
+                name: residence.name,
+                address: residence.address,
+                totalExpenses: 0,
+                utilityExpenses: 0,
+                maintenanceExpenses: 0,
+                staffExpenses: 0,
+                otherExpenses: 0,
+                transactionCount: 0,
+                utilityCount: 0,
+                maintenanceCount: 0,
+                staffCount: 0,
+                otherCount: 0,
+                monthlyBreakdown: {},
+                roomCount: residence.rooms ? residence.rooms.length : 0,
+                averageRoomPrice: 0
+            };
+
+            // Calculate average room price
+            if (residence.rooms && residence.rooms.length > 0) {
+                const totalRoomPrice = residence.rooms.reduce((sum, room) => sum + (room.price || 0), 0);
+                expenseByResidence[residence._id.toString()].averageRoomPrice = totalRoomPrice / residence.rooms.length;
+            }
+        });
+
+        // Process transactions (focus on expense types)
+        transactions.forEach(transaction => {
+            const amount = transaction.amount || 0;
+            const type = transaction.type || 'unknown';
+            const residenceId = transaction.residence?.toString();
+            const date = transaction.date || transaction.createdAt;
+            const month = date ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` : 'unknown';
+            const description = transaction.description || '';
+
+            if (residenceId && expenseByResidence[residenceId]) {
+                const residence = expenseByResidence[residenceId];
+                
+                // Only count transactions that represent ACTUAL expenses
+                // Exclude income transactions (positive amounts from payments)
+                if (isActualExpense(amount, type, description)) {
+                    const expenseAmount = Math.abs(amount);
+                    residence.totalExpenses += expenseAmount;
+                    residence.transactionCount++;
+
+                    // Categorize expenses
+                    if (isUtilityExpense(description)) {
+                        residence.utilityExpenses += expenseAmount;
+                        residence.utilityCount++;
+                    } else if (isMaintenanceExpense(description)) {
+                        residence.maintenanceExpenses += expenseAmount;
+                        residence.maintenanceCount++;
+                    } else if (isStaffExpense(description)) {
+                        residence.staffExpenses += expenseAmount;
+                        residence.staffCount++;
+                    } else {
+                        residence.otherExpenses += expenseAmount;
+                        residence.otherCount++;
+                    }
+
+                    // Track by month
+                    if (!residence.monthlyBreakdown[month]) {
+                        residence.monthlyBreakdown[month] = {
+                            total: 0,
+                            utilities: 0,
+                            maintenance: 0,
+                            staff: 0,
+                            other: 0,
+                            count: 0
+                        };
+                    }
+                    residence.monthlyBreakdown[month].total += expenseAmount;
+                    residence.monthlyBreakdown[month].count++;
+
+                    if (isUtilityExpense(description)) {
+                        residence.monthlyBreakdown[month].utilities += expenseAmount;
+                    } else if (isMaintenanceExpense(description)) {
+                        residence.monthlyBreakdown[month].maintenance += expenseAmount;
+                    } else if (isStaffExpense(description)) {
+                        residence.monthlyBreakdown[month].staff += expenseAmount;
+                    } else {
+                        residence.monthlyBreakdown[month].other += expenseAmount;
+                    }
+
+                    totalExpenses += expenseAmount;
+                    totalTransactions++;
+                }
+            }
+        });
+
+        // Convert monthly breakdown to array and sort
+        Object.keys(expenseByResidence).forEach(residenceId => {
+            const residence = expenseByResidence[residenceId];
+            residence.monthlyBreakdown = Object.entries(residence.monthlyBreakdown)
+                .map(([month, data]) => ({
+                    month,
+                    ...data
+                }))
+                .sort((a, b) => a.month.localeCompare(b.month));
+        });
+
+        // Convert to array and sort by total expenses
+        const expenseArray = Object.values(expenseByResidence)
+            .sort((a, b) => b.totalExpenses - a.totalExpenses);
+
+        const response = {
+            success: true,
+            data: {
+                summary: {
+                    totalExpenses,
+                    totalTransactions,
+                    residenceCount: residences.length,
+                    averageExpensesPerResidence: residences.length > 0 ? totalExpenses / residences.length : 0
+                },
+                residences: expenseArray
+            }
+        };
+
+        console.log(`✅ Expense summary fetched: $${totalExpenses.toLocaleString()} from ${totalTransactions} transactions`);
+        res.json(response);
+
+    } catch (error) {
+        console.error('❌ Error fetching expense summary:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch expense summary',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get expenses for a specific residence
+ */
+const getResidenceExpenses = async (req, res) => {
+    try {
+        const { residenceId } = req.params;
+        console.log(`💸 Fetching expenses for residence: ${residenceId}`);
+
+        // Validate residence exists
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        // Get transactions for this residence
+        const transactions = await Transaction.find({ residence: residenceId })
+            .sort({ date: -1 });
+
+        // Calculate expense breakdown
+        let totalExpenses = 0;
+        let utilityExpenses = 0;
+        let maintenanceExpenses = 0;
+        let staffExpenses = 0;
+        let otherExpenses = 0;
+        let monthlyBreakdown = {};
+        let expenseCategories = {};
+
+        transactions.forEach(transaction => {
+            const amount = transaction.amount || 0;
+            const type = transaction.type || 'unknown';
+            const date = transaction.date || transaction.createdAt;
+            const month = date ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` : 'unknown';
+            const description = transaction.description || '';
+
+            // Only count transactions that represent ACTUAL expenses
+            if (isActualExpense(amount, type, description)) {
+                const expenseAmount = Math.abs(amount);
+                totalExpenses += expenseAmount;
+
+                // Categorize expenses
+                let category = 'other';
+                if (isUtilityExpense(description)) {
+                    utilityExpenses += expenseAmount;
+                    category = 'utility';
+                } else if (isMaintenanceExpense(description)) {
+                    maintenanceExpenses += expenseAmount;
+                    category = 'maintenance';
+                } else if (isStaffExpense(description)) {
+                    staffExpenses += expenseAmount;
+                    category = 'staff';
+                } else {
+                    otherExpenses += expenseAmount;
+                }
+
+                // Track by category
+                if (!expenseCategories[category]) {
+                    expenseCategories[category] = { total: 0, count: 0 };
+                }
+                expenseCategories[category].total += expenseAmount;
+                expenseCategories[category].count++;
+
+                // Track by month
+                if (!monthlyBreakdown[month]) {
+                    monthlyBreakdown[month] = {
+                        total: 0,
+                        utilities: 0,
+                        maintenance: 0,
+                        staff: 0,
+                        other: 0,
+                        count: 0,
+                        transactions: []
+                    };
+                }
+                monthlyBreakdown[month].total += expenseAmount;
+                monthlyBreakdown[month].count++;
+
+                if (category === 'utility') {
+                    monthlyBreakdown[month].utilities += expenseAmount;
+                } else if (category === 'maintenance') {
+                    monthlyBreakdown[month].maintenance += expenseAmount;
+                } else if (category === 'staff') {
+                    monthlyBreakdown[month].staff += expenseAmount;
+                } else {
+                    monthlyBreakdown[month].other += expenseAmount;
+                }
+
+                // Add transaction to monthly breakdown
+                monthlyBreakdown[month].transactions.push({
+                    id: transaction._id,
+                    transactionId: transaction.transactionId,
+                    type: transaction.type,
+                    amount: transaction.amount,
+                    date: transaction.date,
+                    description: transaction.description,
+                    reference: transaction.reference,
+                    category: category
+                });
+            }
+        });
+
+        // Convert monthly breakdown to array and sort
+        const monthlyArray = Object.entries(monthlyBreakdown)
+            .map(([month, data]) => ({
+                month,
+                ...data
+            }))
+            .sort((a, b) => a.month.localeCompare(b.month));
+
+        const response = {
+            success: true,
+            data: {
+                residence: {
+                    id: residence._id,
+                    name: residence.name,
+                    address: residence.address,
+                    roomCount: residence.rooms ? residence.rooms.length : 0,
+                    averageRoomPrice: residence.rooms && residence.rooms.length > 0 
+                        ? residence.rooms.reduce((sum, room) => sum + (room.price || 0), 0) / residence.rooms.length 
+                        : 0
+                },
+                expenses: {
+                    total: totalExpenses,
+                    utilities: utilityExpenses,
+                    maintenance: maintenanceExpenses,
+                    staff: staffExpenses,
+                    other: otherExpenses,
+                    transactionCount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.count, 0)
+                },
+                breakdown: {
+                    byCategory: expenseCategories,
+                    byMonth: monthlyArray
+                },
+                transactions: Object.values(monthlyBreakdown)
+                    .flatMap(month => month.transactions)
+                    .slice(0, 50) // Limit to last 50 transactions
+            }
+        };
+
+        console.log(`✅ Residence expenses fetched: $${totalExpenses.toLocaleString()} from ${Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.count, 0)} transactions`);
+        res.json(response);
+
+    } catch (error) {
+        console.error('❌ Error fetching residence expenses:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch residence expenses',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get expenses by date range
+ */
+const getExpensesByDateRange = async (req, res) => {
+    try {
+        const { startDate, endDate, residenceId } = req.query;
+        console.log(`💸 Fetching expenses from ${startDate} to ${endDate}${residenceId ? ` for residence ${residenceId}` : ''}`);
+
+        // Build query
+        let query = {};
+        
+        if (startDate && endDate) {
+            query.date = {
+                $gte: new Date(startDate),
+                $lte: new Date(endDate)
+            };
+        }
+
+        if (residenceId) {
+            query.residence = residenceId;
+        }
+
+        // Get transactions
+        const transactions = await Transaction.find(query)
+            .sort({ date: -1 });
+
+        // Calculate expenses
+        let totalExpenses = 0;
+        let expenseByResidence = {};
+        let expenseByMonth = {};
+        let expenseByCategory = {};
+
+        transactions.forEach(transaction => {
+            const amount = transaction.amount || 0;
+            const type = transaction.type || 'unknown';
+            const residenceId = transaction.residence?.toString();
+            const date = transaction.date || transaction.createdAt;
+            const month = date ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` : 'unknown';
+            const description = transaction.description || '';
+
+            // Only count transactions that represent ACTUAL expenses
+            if (isActualExpense(amount, type, description)) {
+                const expenseAmount = Math.abs(amount);
+                totalExpenses += expenseAmount;
+
+                // Track by residence
+                if (residenceId) {
+                    if (!expenseByResidence[residenceId]) {
+                        expenseByResidence[residenceId] = { total: 0, count: 0 };
+                    }
+                    expenseByResidence[residenceId].total += expenseAmount;
+                    expenseByResidence[residenceId].count++;
+                }
+
+                // Track by month
+                if (!expenseByMonth[month]) {
+                    expenseByMonth[month] = { total: 0, count: 0 };
+                }
+                expenseByMonth[month].total += expenseAmount;
+                expenseByMonth[month].count++;
+
+                // Track by category
+                let category = 'other';
+                if (isUtilityExpense(description)) {
+                    category = 'utility';
+                } else if (isMaintenanceExpense(description)) {
+                    category = 'maintenance';
+                } else if (isStaffExpense(description)) {
+                    category = 'staff';
+                }
+
+                if (!expenseByCategory[category]) {
+                    expenseByCategory[category] = { total: 0, count: 0 };
+                }
+                expenseByCategory[category].total += expenseAmount;
+                expenseByCategory[category].count++;
+            }
+        });
+
+        const response = {
+            success: true,
+            data: {
+                dateRange: { startDate, endDate },
+                summary: {
+                    totalExpenses,
+                    totalTransactions: Object.values(expenseByResidence).reduce((sum, res) => sum + res.count, 0),
+                    averageTransactionAmount: Object.values(expenseByResidence).reduce((sum, res) => sum + res.count, 0) > 0 ? totalExpenses / Object.values(expenseByResidence).reduce((sum, res) => sum + res.count, 0) : 0
+                },
+                breakdown: {
+                    byResidence: expenseByResidence,
+                    byMonth: expenseByMonth,
+                    byCategory: expenseByCategory
+                },
+                transactions: transactions.filter(t => isActualExpense(t.amount, t.type, t.description)).slice(0, 100)
+            }
+        };
+
+        console.log(`✅ Date range expenses fetched: $${totalExpenses.toLocaleString()} from ${Object.values(expenseByResidence).reduce((sum, res) => sum + res.count, 0)} transactions`);
+        res.json(response);
+
+    } catch (error) {
+        console.error('❌ Error fetching expenses by date range:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch expenses by date range',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Helper functions to categorize expenses
+ */
+function isActualExpense(amount, type, description) {
+    // Exclude income transactions (positive amounts from payments)
+    if (amount > 0 && type.toLowerCase() === 'payment') {
+        return false;
+    }
+    
+    // Only count actual expenses: negative amounts or specific expense types
+    if (amount < 0) {
+        return true; // Negative amounts are always expenses
+    }
+    
+    // For zero amounts, check if it's a real expense type
+    if (amount === 0) {
+        const realExpenseTypes = ['expense', 'utility', 'maintenance', 'staff', 'repair', 'service'];
+        const realExpenseKeywords = ['expense', 'bill', 'fee', 'cost', 'charge', 'repair', 'maintenance', 'utility', 'staff', 'salary', 'wage'];
+        
+        return realExpenseTypes.includes(type.toLowerCase()) || 
+               realExpenseKeywords.some(keyword => description.toLowerCase().includes(keyword));
+    }
+    
+    return false;
+}
+
+function isExpenseType(type, description) {
+    const expenseTypes = ['expense', 'utility', 'maintenance', 'staff', 'repair', 'service'];
+    const expenseKeywords = ['expense', 'bill', 'fee', 'cost', 'charge', 'repair', 'maintenance', 'utility', 'staff', 'salary', 'wage'];
+    
+    return expenseTypes.includes(type.toLowerCase()) || 
+           expenseKeywords.some(keyword => description.toLowerCase().includes(keyword));
+}
+
+function isUtilityExpense(description) {
+    const utilityKeywords = ['electricity', 'water', 'gas', 'internet', 'wifi', 'sewage', 'garbage', 'trash', 'utility', 'utilities'];
+    return utilityKeywords.some(keyword => description.toLowerCase().includes(keyword));
+}
+
+function isMaintenanceExpense(description) {
+    const maintenanceKeywords = ['repair', 'maintenance', 'fix', 'install', 'replace', 'upgrade', 'renovation', 'cleaning', 'housekeeping', 'security'];
+    return maintenanceKeywords.some(keyword => description.toLowerCase().includes(keyword));
+}
+
+function isStaffExpense(description) {
+    const staffKeywords = ['salary', 'wage', 'staff', 'employee', 'worker', 'labor', 'payroll', 'bonus', 'commission', 'overtime'];
+    return staffKeywords.some(keyword => description.toLowerCase().includes(keyword));
+}
+
 module.exports = {
     getExpenses,
     addExpense,
@@ -847,5 +1308,8 @@ module.exports = {
     updateExpenseStatus,
     getExpenseTotals,
     approveExpense,
-    updateExpense
+    updateExpense,
+    getExpenseSummary,
+    getResidenceExpenses,
+    getExpensesByDateRange
 };
