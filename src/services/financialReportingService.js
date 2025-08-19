@@ -182,7 +182,7 @@ class FinancialReportingService {
                 
                 const expenseEntries = await TransactionEntry.find({
                     date: { $gte: startDate, $lte: endDate },
-                    source: { $in: ['expense_payment', 'manual'] },
+                    source: { $in: ['expense_payment', 'vendor_payment'] },
                     status: 'posted'
                 });
                 
@@ -468,7 +468,7 @@ class FinancialReportingService {
                 
                 const expenseQuery = {
                     date: { $gte: startDate, $lte: endDate },
-                    source: { $in: ['expense_payment', 'manual'] },
+                    source: { $in: ['expense_payment', 'vendor_payment'] },
                     status: 'posted'
                 };
                 

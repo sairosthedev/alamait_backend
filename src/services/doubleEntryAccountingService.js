@@ -958,23 +958,23 @@ class DoubleEntryAccountingService {
                 // Previous month payment = Accounts Receivable Collection
                 console.log('💰 Recording accounts receivable collection for previous month');
                 
-                // Debit: Cash/Bank (Payment Method)
+                // CREDIT: Cash/Bank (Payment Method) - Money coming IN ✅
                 entries.push({
                     accountCode: await this.getPaymentSourceAccount(payment.method),
                     accountName: this.getPaymentAccountName(payment.method),
                     accountType: 'Asset',
-                    debit: payment.totalAmount,
-                    credit: 0,
+                    debit: 0,
+                    credit: payment.totalAmount, // ✅ FIXED: CREDIT when receiving money
                     description: `Collection of accounts receivable via ${payment.method}`
                 });
 
-                // Credit: Accounts Receivable (reduce the receivable)
+                // DEBIT: Accounts Receivable (reduce the receivable) ✅
                 entries.push({
                     accountCode: await this.getAccountsReceivableAccount(),
                     accountName: 'Accounts Receivable',
                     accountType: 'Asset',
-                    debit: 0,
-                    credit: payment.totalAmount,
+                    debit: payment.totalAmount, // ✅ FIXED: DEBIT to reduce receivable
+                    credit: 0,
                     description: `Collection of outstanding receivable from ${studentName} for ${paymentMonth}`
                 });
                 
@@ -982,40 +982,40 @@ class DoubleEntryAccountingService {
                 // Student has outstanding debt - this payment settles the debt
                 console.log('💰 Recording debt settlement payment');
                 
-                // Debit: Cash/Bank (Payment Method)
+                // CREDIT: Cash/Bank (Payment Method) - Money coming IN ✅
                 entries.push({
                     accountCode: await this.getPaymentSourceAccount(payment.method),
                     accountName: this.getPaymentAccountName(payment.method),
                     accountType: 'Asset',
-                    debit: payment.totalAmount,
-                    credit: 0,
+                    debit: 0,
+                    credit: payment.totalAmount, // ✅ FIXED: CREDIT when receiving money
                     description: `Debt settlement payment via ${payment.method}`
                 });
 
-                // Credit: Accounts Receivable (reduce debt)
+                // DEBIT: Accounts Receivable (reduce debt) ✅
                 entries.push({
                     accountCode: await this.getAccountsReceivableAccount(),
                     accountName: 'Accounts Receivable',
                     accountType: 'Asset',
-                    debit: 0,
-                    credit: payment.totalAmount,
+                    debit: payment.totalAmount, // ✅ FIXED: DEBIT to reduce receivable
+                    credit: 0,
                     description: `Settlement of outstanding debt from ${studentName}`
                 });
             } else {
                 // Student has no outstanding debt - this is current period payment
                 console.log('💰 Recording current period payment');
                 
-                // Debit: Cash/Bank (Payment Method)
+                // CREDIT: Cash/Bank (Payment Method) - Money coming IN ✅
                 entries.push({
                     accountCode: await this.getPaymentSourceAccount(payment.method),
                     accountName: this.getPaymentAccountName(payment.method),
                     accountType: 'Asset',
-                    debit: payment.totalAmount,
-                    credit: 0,
+                    debit: 0,
+                    credit: payment.totalAmount, // ✅ FIXED: CREDIT when receiving money
                     description: `Rent payment via ${payment.method}`
                 });
 
-                // Credit: Rent Income
+                // CREDIT: Rent Income ✅
                 entries.push({
                     accountCode: await this.getRentIncomeAccount(),
                     accountName: 'Rent Income',
