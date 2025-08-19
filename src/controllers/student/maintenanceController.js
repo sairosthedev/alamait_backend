@@ -242,11 +242,15 @@ exports.createMaintenanceRequest = async (req, res) => {
         await newRequest.save();
         console.log('Maintenance request saved successfully');
 
-        // Send email notification to student (non-blocking)
+        // Send email notifications (non-blocking)
         try {
-            await EmailNotificationService.sendMaintenanceRequestSubmitted(newRequest);
+            // Send notification to admins about new maintenance request
+            await EmailNotificationService.sendMaintenanceRequestSubmitted(newRequest, req.user);
+            
+            // Send confirmation email to student
+            await EmailNotificationService.sendMaintenanceRequestConfirmation(newRequest, req.user);
         } catch (emailError) {
-            console.error('Failed to send maintenance request submitted email notification:', emailError);
+            console.error('Failed to send maintenance request email notifications:', emailError);
             // Don't fail the request if email fails
         }
 

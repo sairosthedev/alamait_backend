@@ -205,7 +205,7 @@ exports.approveMaintenance = async (req, res) => {
         });
         
         const { id } = req.params;
-        const { notes, amount, maintenanceAccount, apAccount } = req.body;
+        const { notes, amount, maintenanceAccount, apAccount, quotationId } = req.body;
 
         if (!validateMongoId(id)) {
             return res.status(400).json({ error: 'Invalid maintenance request ID format' });
@@ -221,8 +221,24 @@ exports.approveMaintenance = async (req, res) => {
             return res.status(400).json({ error: 'Maintenance request is already approved' });
         }
 
-        // Use provided amount or fall back to maintenance request amount
-        const approvalAmount = amount || maintenance.amount || 0;
+        // Determine approval amount - handle both with and without quotations
+        let approvalAmount = 0;
+        
+        // If quotationId is provided, use that quotation's amount
+        if (quotationId && maintenance.quotations) {
+            const quotation = maintenance.quotations.find(q => q._id.toString() === quotationId);
+            if (quotation) {
+                approvalAmount = quotation.amount || quotation.totalPrice || 0;
+                console.log('[MAINTENANCE] Using quotation amount:', approvalAmount);
+            }
+        }
+        
+        // If no quotation amount, use provided amount or fall back to maintenance request amount
+        if (approvalAmount === 0) {
+            approvalAmount = amount || maintenance.amount || 0;
+            console.log('[MAINTENANCE] Using fallback amount:', approvalAmount);
+        }
+        
         if (approvalAmount < 0) {
             return res.status(400).json({ error: 'Maintenance request amount cannot be negative' });
         }
@@ -235,6 +251,7 @@ exports.approveMaintenance = async (req, res) => {
             {
                 $set: {
                     financeStatus: 'approved',
+                    status: 'pending-ceo-approval', // Set status to pending CEO approval
                     financeNotes: notes || maintenance.financeNotes,
                     amount: approvalAmount, // Update amount if provided
                     convertedToExpense: true, // Mark as converted to expense
@@ -429,7 +446,30 @@ exports.approveMaintenance = async (req, res) => {
             message: `Maintenance request approved by finance - Amount: $${updatedMaintenance.amount}`,
             author: req.user?._id || null
         });
+        
+        // Add specific status change history entry
+        updatedMaintenance.updates.push({
+            date: new Date(),
+            message: `Status changed to pending CEO approval after finance approval`,
+            author: req.user?._id || null
+        });
+        
         await updatedMaintenance.save();
+        
+        // Also add to request history using the dedicated endpoint
+        try {
+            const maintenanceController = require('../maintenanceController');
+            await maintenanceController.addRequestHistory({
+                params: { id: updatedMaintenance._id },
+                body: {
+                    action: 'Status changed to pending CEO approval after finance approval',
+                    user: req.user?._id || 'Finance User'
+                }
+            }, { status: () => ({ json: () => {} }) });
+        } catch (historyError) {
+            console.error('Failed to add request history:', historyError);
+            // Don't fail the approval if history addition fails
+        }
 
         // Send email notification to requester about approval (non-blocking)
         if (updatedMaintenance.requestedBy?.email) {

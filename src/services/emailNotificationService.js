@@ -149,10 +149,13 @@ class EmailNotificationService {
 						<p>A new maintenance request has been submitted:</p>
 						<ul>
 							<li><strong>Issue:</strong> ${maintenance.issue}</li>
-							<li><strong>Location:</strong> ${maintenance.residence?.name || 'N/A'}</li>
-							<li><strong>Room:</strong> ${maintenance.room?.roomNumber || 'N/A'}</li>
+							<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
+							<li><strong>Category:</strong> ${maintenance.category}</li>
 							<li><strong>Priority:</strong> ${maintenance.priority}</li>
-							<li><strong>Submitted By:</strong> ${submittedBy.firstName} ${submittedBy.lastName}</li>
+							<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+							<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
+							<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
+							<li><strong>Submitted By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
 							<li><strong>Submitted Date:</strong> ${new Date().toLocaleDateString()}</li>
 						</ul>
 						<p>Please review and process this request.</p>
@@ -165,18 +168,234 @@ class EmailNotificationService {
 				</div>
 			`;
 
+			// Send to all admins with valid email addresses
+			let sentCount = 0;
 			for (const admin of admins) {
-				await sendEmail({
-					to: admin.email,
-					subject: 'New Maintenance Request',
-					html: emailContent
-				});
+				if (admin.email && admin.email.includes('@')) {
+					try {
+						await sendEmail({
+							to: admin.email,
+							subject: 'New Maintenance Request - Action Required',
+							html: emailContent
+						});
+						sentCount++;
+					} catch (emailError) {
+						console.error(`Failed to send email to ${admin.email}:`, emailError.message);
+					}
+				}
 			}
 
-			console.log(`✅ Maintenance request notification sent to ${admins.length} admins`);
+			console.log(`✅ Maintenance request notification sent to ${sentCount} admins`);
 			return true;
 		} catch (error) {
 			console.error('❌ Error sending maintenance request notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send confirmation email to student when maintenance request is submitted
+	 */
+	static async sendMaintenanceRequestConfirmation(maintenance, submittedBy) {
+		try {
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #e8f5e8; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #2d5a2d;">Maintenance Request Confirmation</h2>
+						<p>Dear ${submittedBy?.firstName || 'Student'},</p>
+						<p>Your maintenance request has been successfully submitted and is now under review.</p>
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #333; margin-top: 0;">Request Details:</h3>
+							<ul>
+								<li><strong>Issue:</strong> ${maintenance.issue}</li>
+								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
+								<li><strong>Category:</strong> ${maintenance.category}</li>
+								<li><strong>Priority:</strong> ${maintenance.priority}</li>
+								<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+								<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
+								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
+								<li><strong>Request ID:</strong> ${maintenance._id}</li>
+								<li><strong>Submitted Date:</strong> ${new Date().toLocaleDateString()}</li>
+							</ul>
+						</div>
+						<p><strong>What happens next?</strong></p>
+						<ol>
+							<li>Your request will be reviewed by our maintenance team</li>
+							<li>You will receive updates on the status of your request</li>
+							<li>Once approved, a technician will be assigned to address the issue</li>
+						</ol>
+						<p>You can track the status of your request through your student portal.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: submittedBy?.email,
+				subject: 'Maintenance Request Confirmation',
+				html: emailContent
+			});
+
+			console.log('✅ Maintenance request confirmation sent to student');
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending maintenance request confirmation:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send notification when maintenance request is assigned
+	 */
+	static async sendMaintenanceRequestAssigned(maintenance, assignedBy, assignedTo) {
+		try {
+			// Notify student that request has been assigned
+			const studentEmailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #fff3cd; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #856404;">Maintenance Request Assigned</h2>
+						<p>Dear ${maintenance.student?.firstName || 'Student'},</p>
+						<p>Your maintenance request has been assigned and is now being processed:</p>
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #333; margin-top: 0;">Request Details:</h3>
+							<ul>
+								<li><strong>Issue:</strong> ${maintenance.issue}</li>
+								<li><strong>Status:</strong> ${maintenance.status}</li>
+								<li><strong>Assigned To:</strong> ${assignedTo?.firstName} ${assignedTo?.lastName}</li>
+								<li><strong>Assigned By:</strong> ${assignedBy?.firstName} ${assignedBy?.lastName}</li>
+								<li><strong>Assignment Date:</strong> ${new Date().toLocaleDateString()}</li>
+							</ul>
+						</div>
+						<p>You will receive further updates as the work progresses.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			// Notify assigned person
+			const assignedEmailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #d1ecf1; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #0c5460;">New Maintenance Assignment</h2>
+						<p>Dear ${assignedTo?.firstName || 'Team Member'},</p>
+						<p>You have been assigned a new maintenance request:</p>
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #333; margin-top: 0;">Request Details:</h3>
+							<ul>
+								<li><strong>Issue:</strong> ${maintenance.issue}</li>
+								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
+								<li><strong>Category:</strong> ${maintenance.category}</li>
+								<li><strong>Priority:</strong> ${maintenance.priority}</li>
+								<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+								<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
+								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
+								<li><strong>Student:</strong> ${maintenance.student?.firstName} ${maintenance.student?.lastName}</li>
+								<li><strong>Student Email:</strong> ${maintenance.student?.email}</li>
+							</ul>
+						</div>
+						<p>Please review and begin work on this request as soon as possible.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			// Send to student
+			if (maintenance.student?.email) {
+				await sendEmail({
+					to: maintenance.student.email,
+					subject: 'Maintenance Request Assigned',
+					html: studentEmailContent
+				});
+			}
+
+			// Send to assigned person
+			if (assignedTo?.email) {
+				await sendEmail({
+					to: assignedTo.email,
+					subject: 'New Maintenance Assignment',
+					html: assignedEmailContent
+				});
+			}
+
+			console.log('✅ Maintenance request assignment notifications sent');
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending maintenance assignment notifications:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send notification when maintenance request status is updated
+	 */
+	static async sendMaintenanceStatusUpdate(maintenance, previousStatus, updatedBy) {
+		try {
+			const statusColors = {
+				'pending': '#ffc107',
+				'in-progress': '#17a2b8',
+				'completed': '#28a745',
+				'rejected': '#dc3545',
+				'cancelled': '#6c757d'
+			};
+
+			const statusDescriptions = {
+				'pending': 'Pending Review',
+				'in-progress': 'In Progress',
+				'completed': 'Completed',
+				'rejected': 'Rejected',
+				'cancelled': 'Cancelled'
+			};
+
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: ${statusColors[maintenance.status] || '#f8f9fa'}; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">Maintenance Request Status Update</h2>
+						<p>Dear ${maintenance.student?.firstName || 'Student'},</p>
+						<p>Your maintenance request status has been updated:</p>
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #333; margin-top: 0;">Status Change:</h3>
+							<ul>
+								<li><strong>Previous Status:</strong> ${statusDescriptions[previousStatus] || previousStatus}</li>
+								<li><strong>New Status:</strong> ${statusDescriptions[maintenance.status] || maintenance.status}</li>
+								<li><strong>Issue:</strong> ${maintenance.issue}</li>
+								<li><strong>Updated By:</strong> ${updatedBy?.firstName} ${updatedBy?.lastName}</li>
+								<li><strong>Update Date:</strong> ${new Date().toLocaleDateString()}</li>
+							</ul>
+						</div>
+						${maintenance.status === 'completed' ? '<p><strong>Your maintenance request has been completed. Please check the work and let us know if you have any concerns.</strong></p>' : ''}
+						${maintenance.status === 'rejected' ? '<p><strong>Your maintenance request has been rejected. Please contact the maintenance team for more information.</strong></p>' : ''}
+						<p>You can track the status of your request through your student portal.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: maintenance.student?.email,
+				subject: `Maintenance Request Status: ${statusDescriptions[maintenance.status] || maintenance.status}`,
+				html: emailContent
+			});
+
+			console.log('✅ Maintenance status update notification sent');
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending maintenance status update notification:', error);
 			throw error;
 		}
 	}
@@ -188,19 +407,33 @@ class EmailNotificationService {
 		try {
 			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Maintenance Request Approved</h2>
-						<p>Dear ${maintenance.requestedBy?.firstName || 'User'},</p>
-						<p>Your maintenance request has been approved:</p>
-						<ul>
-							<li><strong>Issue:</strong> ${maintenance.issue}</li>
-							<li><strong>Location:</strong> ${maintenance.residence?.name || 'N/A'}</li>
-							<li><strong>Room:</strong> ${maintenance.room?.roomNumber || 'N/A'}</li>
-							<li><strong>Approved Amount:</strong> $${maintenance.amount?.toFixed(2) || '0.00'}</li>
-							<li><strong>Approved By:</strong> ${approvedBy.firstName} ${approvedBy.lastName}</li>
-							<li><strong>Approval Date:</strong> ${new Date().toLocaleDateString()}</li>
-						</ul>
-						<p>We will assign a technician shortly to address your maintenance request.</p>
+					<div style="background-color: #d4edda; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #155724;">Maintenance Request Approved</h2>
+						<p>Dear ${maintenance.student?.firstName || 'Student'},</p>
+						<p>Great news! Your maintenance request has been approved by finance:</p>
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #333; margin-top: 0;">Approval Details:</h3>
+							<ul>
+								<li><strong>Issue:</strong> ${maintenance.issue}</li>
+								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
+								<li><strong>Category:</strong> ${maintenance.category}</li>
+								<li><strong>Priority:</strong> ${maintenance.priority}</li>
+								<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+								<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
+								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
+								<li><strong>Approved Amount:</strong> $${maintenance.amount?.toFixed(2) || '0.00'}</li>
+								<li><strong>Approved By:</strong> ${approvedBy?.firstName} ${approvedBy?.lastName}</li>
+								<li><strong>Approval Date:</strong> ${new Date().toLocaleDateString()}</li>
+							</ul>
+						</div>
+						<p><strong>What happens next?</strong></p>
+						<ol>
+							<li>A technician will be assigned to your request</li>
+							<li>You will receive notification when work begins</li>
+							<li>You will be updated on the progress</li>
+							<li>You will be notified when the work is completed</li>
+						</ol>
+						<p>Thank you for your patience. We will address your maintenance request as soon as possible.</p>
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">
 							This is an automated message from Alamait Student Accommodation.<br>
@@ -211,7 +444,7 @@ class EmailNotificationService {
 			`;
 
 			await sendEmail({
-				to: maintenance.requestedBy?.email,
+				to: maintenance.student?.email,
 				subject: 'Maintenance Request Approved',
 				html: emailContent
 			});
@@ -225,24 +458,38 @@ class EmailNotificationService {
 	}
 
 	/**
-	 * Send notification when maintenance is completed
+	 * Send notification when maintenance request is rejected by finance
 	 */
-	static async sendMaintenanceCompleted(maintenance, completedBy) {
+	static async sendMaintenanceRequestRejected(maintenance, rejectedBy, rejectionReason) {
 		try {
 			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Maintenance Request Completed</h2>
-						<p>Dear ${maintenance.requestedBy?.firstName || 'User'},</p>
-						<p>Your maintenance request has been completed:</p>
+					<div style="background-color: #f8d7da; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #721c24;">Maintenance Request Rejected</h2>
+						<p>Dear ${maintenance.student?.firstName || 'Student'},</p>
+						<p>We regret to inform you that your maintenance request has been rejected:</p>
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #333; margin-top: 0;">Request Details:</h3>
+							<ul>
+								<li><strong>Issue:</strong> ${maintenance.issue}</li>
+								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
+								<li><strong>Category:</strong> ${maintenance.category}</li>
+								<li><strong>Priority:</strong> ${maintenance.priority}</li>
+								<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+								<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
+								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
+								<li><strong>Rejected By:</strong> ${rejectedBy?.firstName} ${rejectedBy?.lastName}</li>
+								<li><strong>Rejection Date:</strong> ${new Date().toLocaleDateString()}</li>
+								<li><strong>Rejection Reason:</strong> ${rejectionReason || 'No reason provided'}</li>
+							</ul>
+						</div>
+						<p><strong>Next Steps:</strong></p>
 						<ul>
-							<li><strong>Issue:</strong> ${maintenance.issue}</li>
-							<li><strong>Location:</strong> ${maintenance.residence?.name || 'N/A'}</li>
-							<li><strong>Room:</strong> ${maintenance.room?.roomNumber || 'N/A'}</li>
-							<li><strong>Completed By:</strong> ${completedBy.firstName} ${completedBy.lastName}</li>
-							<li><strong>Completion Date:</strong> ${new Date().toLocaleDateString()}</li>
+							<li>If you believe this rejection was made in error, please contact the maintenance team</li>
+							<li>You may submit a new request with additional details or clarification</li>
+							<li>For urgent issues, please contact the residence manager directly</li>
 						</ul>
-						<p>Please rate our service in the app and let us know if you have any concerns.</p>
+						<p>If you have any questions, please don't hesitate to contact us.</p>
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">
 							This is an automated message from Alamait Student Accommodation.<br>
@@ -253,15 +500,15 @@ class EmailNotificationService {
 			`;
 
 			await sendEmail({
-				to: maintenance.requestedBy?.email,
-				subject: 'Maintenance Request Completed',
+				to: maintenance.student?.email,
+				subject: 'Maintenance Request Rejected',
 				html: emailContent
 			});
 
-			console.log('✅ Maintenance completion notification sent');
+			console.log('✅ Maintenance request rejection notification sent');
 			return true;
 		} catch (error) {
-			console.error('❌ Error sending maintenance completion notification:', error);
+			console.error('❌ Error sending maintenance rejection notification:', error);
 			throw error;
 		}
 	}
@@ -627,108 +874,6 @@ class EmailNotificationService {
 			return true;
 		} catch (error) {
 			console.error('❌ Error sending event cancellation notification:', error);
-			throw error;
-		}
-	}
-
-	/**
-	 * 6. MAINTENANCE REQUEST NOTIFICATIONS
-	 */
-	
-	/**
-	 * Send maintenance status update notification
-	 */
-	static async sendMaintenanceStatusUpdate(maintenance, previousStatus, updatedBy) {
-		try {
-			const statusMessages = {
-				'assigned': 'Your maintenance request has been assigned to a technician',
-				'in-progress': 'Work on your maintenance request has started',
-				'completed': 'Your maintenance request has been completed',
-				'cancelled': 'Your maintenance request has been cancelled'
-			};
-
-			const statusMessage = statusMessages[maintenance.status] || `Your maintenance request status has been updated to: ${maintenance.status}`;
-
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Maintenance Request Update</h2>
-						<p>Dear ${maintenance.student?.firstName || 'Student'},</p>
-						<p>${statusMessage}:</p>
-						<ul>
-							<li><strong>Issue:</strong> ${maintenance.issue}</li>
-							<li><strong>Location:</strong> ${maintenance.residence?.name || 'N/A'}</li>
-							<li><strong>Room:</strong> ${maintenance.room}</li>
-							<li><strong>Previous Status:</strong> ${previousStatus}</li>
-							<li><strong>New Status:</strong> ${maintenance.status}</li>
-							${maintenance.assignedTo ? `<li><strong>Assigned To:</strong> ${maintenance.assignedTo.name} ${maintenance.assignedTo.surname}</li>` : ''}
-							${maintenance.estimatedCompletion ? `<li><strong>Estimated Completion:</strong> ${new Date(maintenance.estimatedCompletion).toLocaleDateString()}</li>` : ''}
-							${maintenance.amount ? `<li><strong>Cost:</strong> $${maintenance.amount}</li>` : ''}
-						</ul>
-						${maintenance.status === 'completed' ? '<p>Please let us know if you have any concerns about the work completed.</p>' : ''}
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
-					</div>
-				</div>
-			`;
-
-			await sendEmail({
-				to: maintenance.student?.email,
-				subject: `Maintenance Request ${maintenance.status.charAt(0).toUpperCase() + maintenance.status.slice(1)}`,
-				html: emailContent
-			});
-
-			console.log(`✅ Maintenance status update notification sent to ${maintenance.student?.email}`);
-			return true;
-		} catch (error) {
-			console.error('❌ Error sending maintenance status update notification:', error);
-			throw error;
-		}
-	}
-
-	/**
-	 * Send maintenance request submitted confirmation
-	 */
-	static async sendMaintenanceRequestSubmitted(maintenance) {
-		try {
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Maintenance Request Received</h2>
-						<p>Dear ${maintenance.student?.firstName || 'Student'},</p>
-						<p>We have received your maintenance request:</p>
-						<ul>
-							<li><strong>Issue:</strong> ${maintenance.issue}</li>
-							<li><strong>Description:</strong> ${maintenance.description}</li>
-							<li><strong>Location:</strong> ${maintenance.residence?.name || 'N/A'}</li>
-							<li><strong>Room:</strong> ${maintenance.room}</li>
-							<li><strong>Priority:</strong> ${maintenance.priority}</li>
-							<li><strong>Category:</strong> ${maintenance.category}</li>
-							<li><strong>Request Date:</strong> ${new Date(maintenance.createdAt).toLocaleDateString()}</li>
-						</ul>
-						<p>We will review your request and assign a technician as soon as possible. You will be notified of any updates.</p>
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
-					</div>
-				</div>
-			`;
-
-			await sendEmail({
-				to: maintenance.student?.email,
-				subject: 'Maintenance Request Received',
-				html: emailContent
-			});
-
-			console.log(`✅ Maintenance request submitted notification sent to ${maintenance.student?.email}`);
-			return true;
-		} catch (error) {
-			console.error('❌ Error sending maintenance request submitted notification:', error);
 			throw error;
 		}
 	}
