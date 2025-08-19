@@ -711,10 +711,10 @@ class FinancialReportsController {
             let cashFlowStatement;
             if (residence) {
                 // Use residence-filtered method
-                cashFlowStatement = await FinancialReportingService.generateResidenceFilteredCashFlow(period, residence, basis);
+                cashFlowStatement = await FinancialReportingService.generateResidenceFilteredCashFlowStatement(period, residence, basis);
             } else {
                 // Use regular method
-                cashFlowStatement = await FinancialReportingService.generateCashFlowStatement(period, basis);
+                cashFlowStatement = await FinancialReportingService.generateMonthlyCashFlow(period, basis);
             }
             
             res.json({
@@ -728,6 +728,53 @@ class FinancialReportsController {
             res.status(500).json({
                 success: false,
                 message: 'Error generating cash flow statement',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Generate Residence-Filtered Cash Flow Statement
+     * GET /api/financial-reports/cash-flow/residences
+     */
+    static async generateResidenceFilteredCashFlowStatement(req, res) {
+        try {
+            const { period, basis = 'cash', residence } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2024)'
+                });
+            }
+            
+            if (!residence) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Residence parameter is required'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            const cashFlowStatement = await FinancialReportingService.generateResidenceFilteredCashFlowStatement(period, residence, basis);
+            
+            res.json({
+                success: true,
+                data: cashFlowStatement,
+                message: `Residence-filtered cash flow statement generated for ${period}, residence: ${residence} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating residence-filtered cash flow statement:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating residence-filtered cash flow statement',
                 error: error.message
             });
         }

@@ -81,6 +81,18 @@ router.get('/balance-sheet', FinancialReportsController.generateBalanceSheet);
 router.get('/cash-flow', FinancialReportsController.generateCashFlowStatement);
 
 /**
+ * Residence-Filtered Cash Flow Statement
+ * GET /api/financial-reports/cash-flow/residences?period=2025&basis=cash&residence=67d723cf20f89c4ae69804f3
+ */
+router.get('/cash-flow/residences', FinancialReportsController.generateResidenceFilteredCashFlowStatement);
+
+/**
+ * Residence-Filtered Cash Flow Statement
+ * GET /api/financial-reports/cash-flow/residences?period=2025&basis=cash&residence=67d723cf20f89c4ae69804f3
+ */
+router.get('/cash-flow/residences', FinancialReportsController.generateResidenceFilteredCashFlowStatement);
+
+/**
  * Trial Balance
  * GET /api/financial-reports/trial-balance?asOf=2025-12-31&basis=cash
  */
