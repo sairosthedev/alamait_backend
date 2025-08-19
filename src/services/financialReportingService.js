@@ -998,13 +998,28 @@ class FinancialReportingService {
                 'july', 'august', 'september', 'october', 'november', 'december'
             ];
             
-            // Initialize monthly cash flow structure
+            // Initialize monthly cash flow structure with account breakdowns
             const monthlyCashFlow = {};
             monthNames.forEach(month => {
                 monthlyCashFlow[month] = {
-                    operating_activities: { inflows: 0, outflows: 0, net: 0 },
-                    investing_activities: { inflows: 0, outflows: 0, net: 0 },
-                    financing_activities: { inflows: 0, outflows: 0, net: 0 },
+                    operating_activities: { 
+                        inflows: 0, 
+                        outflows: 0, 
+                        net: 0,
+                        breakdown: {} // Account-level breakdown
+                    },
+                    investing_activities: { 
+                        inflows: 0, 
+                        outflows: 0, 
+                        net: 0,
+                        breakdown: {} // Account-level breakdown
+                    },
+                    financing_activities: { 
+                        inflows: 0, 
+                        outflows: 0, 
+                        net: 0,
+                        breakdown: {} // Account-level breakdown
+                    },
                     net_cash_flow: 0,
                     opening_balance: 0,
                     closing_balance: 0
@@ -1036,22 +1051,58 @@ class FinancialReportingService {
                     if (activityType === 'operating') {
                         if (cashFlow > 0) {
                             monthlyCashFlow[monthName].operating_activities.inflows += cashFlow;
+                            // Track account breakdown for inflows
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!monthlyCashFlow[monthName].operating_activities.breakdown[key]) {
+                                monthlyCashFlow[monthName].operating_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                            }
+                            monthlyCashFlow[monthName].operating_activities.breakdown[key].inflows += cashFlow;
                         } else {
                             monthlyCashFlow[monthName].operating_activities.outflows += Math.abs(cashFlow);
+                            // Track account breakdown for outflows
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!monthlyCashFlow[monthName].operating_activities.breakdown[key]) {
+                                monthlyCashFlow[monthName].operating_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                            }
+                            monthlyCashFlow[monthName].operating_activities.breakdown[key].outflows += Math.abs(cashFlow);
                         }
                         monthlyCashFlow[monthName].operating_activities.net += cashFlow;
                     } else if (activityType === 'investing') {
                         if (cashFlow > 0) {
                             monthlyCashFlow[monthName].investing_activities.inflows += cashFlow;
+                            // Track account breakdown for inflows
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!monthlyCashFlow[monthName].investing_activities.breakdown[key]) {
+                                monthlyCashFlow[monthName].investing_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                            }
+                            monthlyCashFlow[monthName].investing_activities.breakdown[key].inflows += cashFlow;
                         } else {
                             monthlyCashFlow[monthName].investing_activities.outflows += Math.abs(cashFlow);
+                            // Track account breakdown for outflows
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!monthlyCashFlow[monthName].investing_activities.breakdown[key]) {
+                                monthlyCashFlow[monthName].investing_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                            }
+                            monthlyCashFlow[monthName].investing_activities.breakdown[key].outflows += Math.abs(cashFlow);
                         }
                         monthlyCashFlow[monthName].investing_activities.net += cashFlow;
                     } else if (activityType === 'financing') {
                         if (cashFlow > 0) {
                             monthlyCashFlow[monthName].financing_activities.inflows += cashFlow;
+                            // Track account breakdown for inflows
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!monthlyCashFlow[monthName].financing_activities.breakdown[key]) {
+                                monthlyCashFlow[monthName].financing_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                            }
+                            monthlyCashFlow[monthName].financing_activities.breakdown[key].inflows += cashFlow;
                         } else {
                             monthlyCashFlow[monthName].financing_activities.outflows += Math.abs(cashFlow);
+                            // Track account breakdown for outflows
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!monthlyCashFlow[monthName].financing_activities.breakdown[key]) {
+                                monthlyCashFlow[monthName].financing_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                            }
+                            monthlyCashFlow[monthName].financing_activities.breakdown[key].outflows += Math.abs(cashFlow);
                         }
                         monthlyCashFlow[monthName].financing_activities.net += cashFlow;
                     }
@@ -1073,28 +1124,73 @@ class FinancialReportingService {
                 monthlyCashFlow[monthName].closing_balance = runningBalance;
             });
             
-            // Calculate yearly totals
+            // Calculate yearly totals with account breakdowns
             const yearlyTotals = {
-                operating_activities: { inflows: 0, outflows: 0, net: 0 },
-                investing_activities: { inflows: 0, outflows: 0, net: 0 },
-                financing_activities: { inflows: 0, outflows: 0, net: 0 },
+                operating_activities: { 
+                    inflows: 0, 
+                    outflows: 0, 
+                    net: 0,
+                    breakdown: {} // Account-level breakdown
+                },
+                investing_activities: { 
+                    inflows: 0, 
+                    outflows: 0, 
+                    net: 0,
+                    breakdown: {} // Account-level breakdown
+                },
+                financing_activities: { 
+                    inflows: 0, 
+                    outflows: 0, 
+                    net: 0,
+                    breakdown: {} // Account-level breakdown
+                },
                 net_cash_flow: 0
             };
             
             monthNames.forEach(monthName => {
                 const monthData = monthlyCashFlow[monthName];
                 
+                // Aggregate operating activities
                 yearlyTotals.operating_activities.inflows += monthData.operating_activities.inflows;
                 yearlyTotals.operating_activities.outflows += monthData.operating_activities.outflows;
                 yearlyTotals.operating_activities.net += monthData.operating_activities.net;
                 
+                // Aggregate operating account breakdowns
+                Object.entries(monthData.operating_activities.breakdown).forEach(([account, amounts]) => {
+                    if (!yearlyTotals.operating_activities.breakdown[account]) {
+                        yearlyTotals.operating_activities.breakdown[account] = { inflows: 0, outflows: 0 };
+                    }
+                    yearlyTotals.operating_activities.breakdown[account].inflows += amounts.inflows;
+                    yearlyTotals.operating_activities.breakdown[account].outflows += amounts.outflows;
+                });
+                
+                // Aggregate investing activities
                 yearlyTotals.investing_activities.inflows += monthData.investing_activities.inflows;
                 yearlyTotals.investing_activities.outflows += monthData.investing_activities.outflows;
                 yearlyTotals.investing_activities.net += monthData.investing_activities.net;
                 
+                // Aggregate investing account breakdowns
+                Object.entries(monthData.investing_activities.breakdown).forEach(([account, amounts]) => {
+                    if (!yearlyTotals.investing_activities.breakdown[account]) {
+                        yearlyTotals.investing_activities.breakdown[account] = { inflows: 0, outflows: 0 };
+                    }
+                    yearlyTotals.investing_activities.breakdown[account].inflows += amounts.inflows;
+                    yearlyTotals.investing_activities.breakdown[account].outflows += amounts.outflows;
+                });
+                
+                // Aggregate financing activities
                 yearlyTotals.financing_activities.inflows += monthData.financing_activities.inflows;
                 yearlyTotals.financing_activities.outflows += monthData.financing_activities.outflows;
                 yearlyTotals.financing_activities.net += monthData.financing_activities.net;
+                
+                // Aggregate financing account breakdowns
+                Object.entries(monthData.financing_activities.breakdown).forEach(([account, amounts]) => {
+                    if (!yearlyTotals.financing_activities.breakdown[account]) {
+                        yearlyTotals.financing_activities.breakdown[account] = { inflows: 0, outflows: 0 };
+                    }
+                    yearlyTotals.financing_activities.breakdown[account].inflows += amounts.inflows;
+                    yearlyTotals.financing_activities.breakdown[account].outflows += amounts.outflows;
+                });
                 
                 yearlyTotals.net_cash_flow += monthData.net_cash_flow;
             });
