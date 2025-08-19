@@ -1044,6 +1044,19 @@ class FinancialReportingService {
                     const debit = line.debit || 0;
                     const credit = line.credit || 0;
                     
+                    // For cash basis, only include accounts that represent actual cash movements
+                    if (basis === 'cash') {
+                        // Skip AR/AP accounts unless they represent actual cash collection/payment
+                        if (accountCode.startsWith('110') || accountCode.startsWith('200')) {
+                            // Only include if this represents actual cash collection/payment
+                            // Skip if it's just accrual entries or balance adjustments
+                            if (!['manual', 'expense_payment', 'payment', 'rental_payment'].includes(entry.source)) {
+                                // Skip non-cash AR/AP entries
+                                return;
+                            }
+                        }
+                    }
+                    
                     // Determine activity type and cash flow
                     const activityType = this.getCashFlowActivityType(accountCode, accountType);
                     const cashFlow = this.calculateCashFlow(accountType, debit, credit);
