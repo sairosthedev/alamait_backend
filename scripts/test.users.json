@@ -1,0 +1,720 @@
+[{
+  "_id": {
+    "$oid": "67c023adae5e27657502e887"
+  },
+  "email": "admin@alamait.com",
+  "password": "$2a$10$mJ55PMd7lzDoP5t7z68rmu14jzty6XAmm76cA2kYCZU8VOJrQ/Fam",
+  "role": "admin",
+  "firstName": "Makomborero",
+  "lastName": "Madziwa",
+  "phone": "+263771234567",
+  "isVerified": true,
+  "createdAt": {
+    "$date": "2025-02-27T08:34:53.927Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-19T10:52:26.368Z"
+  },
+  "__v": 2,
+  "lastLogin": {
+    "$date": "2025-08-19T10:52:26.363Z"
+  },
+  "documents": [],
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "preferences": {
+    "language": "en",
+    "notifications": {
+      "email": true,
+      "sms": true
+    }
+  },
+  "status": "active",
+  "leases": []
+},
+{
+  "_id": {
+    "$oid": "67f4ef0fcb87ffa3fb7e2d73"
+  },
+  "email": "finance@alamait.com",
+  "password": "$2a$10$K8ylTlNV.r3arYOKWRZ0pu9Zc7eQVj73C9W.gt57L5AnmA5nFHyrm",
+  "role": "finance_admin",
+  "firstName": "Finance",
+  "lastName": "Manager",
+  "phone": "+1234567890",
+  "isVerified": true,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "createdAt": {
+    "$date": "2025-04-08T09:40:31.652Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-19T11:11:50.570Z"
+  },
+  "__v": 2,
+  "documents": [],
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "preferences": {
+    "language": "en",
+    "notifications": {
+      "email": true,
+      "sms": true
+    }
+  },
+  "status": "active",
+  "lastLogin": {
+    "$date": "2025-08-19T11:11:50.569Z"
+  },
+  "leases": []
+},
+{
+  "_id": {
+    "$oid": "686e7a60913b15e1760d7d58"
+  },
+  "email": "shamisomabota96@gmail.com",
+  "password": "$2a$10$usTww1Fa.PzXpOTwWsLr3.F1hBJvECjRtuvUp2zEY5KeU28eLNdw.",
+  "role": "student",
+  "firstName": "Shamiso M",
+  "lastName": "Mabota",
+  "phone": "0780118827",
+  "applicationCode": "APP1752062166093OJTD2",
+  "isVerified": true,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/leases/686e7a60913b15e1760d7d58_1752070948170_ST%20Kilda%20Boarding%20Agreement1%20-%20Copy.docx",
+  "signedLeaseUploadDate": {
+    "$date": "2025-07-09T14:22:28.853Z"
+  },
+  "createdAt": {
+    "$date": "2025-07-09T14:19:12.270Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-07-09T14:22:28.854Z"
+  },
+  "__v": 0,
+  "lastLogin": {
+    "$date": "2025-07-09T14:19:22.310Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "686fa791991066842501ce5a"
+  },
+  "email": "rbanda@maitalan.com",
+  "password": "$2a$10$10r9bCSahWlZ3DnULIv1kuEdOOx138QH4yAVImfGIT047mhKL7IWe",
+  "role": "student",
+  "firstName": "Renia",
+  "lastName": "Banda",
+  "phone": "0783592981",
+  "applicationCode": "APP1752147601274WKWF1",
+  "isVerified": true,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/leases/686fa791991066842501ce5a_1752148001930_Belvedere.docx",
+  "signedLeaseUploadDate": {
+    "$date": "2025-07-10T11:46:42.647Z"
+  },
+  "createdAt": {
+    "$date": "2025-07-10T11:44:17.722Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-07-10T11:46:42.647Z"
+  },
+  "__v": 0,
+  "lastLogin": {
+    "$date": "2025-07-10T11:44:33.540Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "68891661a1487dda41654a8d"
+  },
+  "email": "ceo@alamait.com",
+  "password": "$2a$10$SZxdshRTx1xjV7xnynu3m.Ew9vDiOEd3AF5OMY99Vxw6QkfU2OEJC",
+  "role": "ceo",
+  "firstName": "CEO",
+  "lastName": "Name",
+  "phone": "1234567890",
+  "isVerified": true,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-07-29T18:43:45.653Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-08-19T11:54:50.071Z"
+  },
+  "__v": 0,
+  "lastLogin": {
+    "$date": "2025-08-19T11:54:50.069Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "688916a5a1487dda41654a90"
+  },
+  "email": "admin.assistant@alamait.com",
+  "password": "$2a$10$DrkabC.kBvKdMCVdVve/tebR.FtSmnPG5GSQnHzOwlF9UYX1jAkx.",
+  "role": "admin",
+  "firstName": "Admin",
+  "lastName": "Assistant",
+  "phone": "1234567890",
+  "isVerified": true,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-07-29T18:44:53.586Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-07-29T18:44:53.586Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "688916eba1487dda41654a93"
+  },
+  "email": "finance.assistant@alamait.com",
+  "password": "$2a$10$KQp.oSkPI.fYwGZxj/Qyi.RD/i6s0aTFH8768T9xxAt2U74xQ0fym",
+  "role": "finance_admin",
+  "firstName": "Finance",
+  "lastName": "Assistant",
+  "phone": "1234567890",
+  "isVerified": true,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-07-29T18:46:03.165Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-07-29T18:46:03.165Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "6889172ba1487dda41654a97"
+  },
+  "email": "ceo.assistant@alamait.com",
+  "password": "$2a$10$xctd6jqAHGO3JZXwkMqfy.9SpBB4hf.pDLuUqQ.KIIsiNKL89y5OS",
+  "role": "ceo",
+  "firstName": "CEO",
+  "lastName": "Assistant",
+  "phone": "1234567890",
+  "isVerified": true,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-07-29T18:47:07.226Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-07-29T18:47:07.226Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68914eaef06e85bc29a0b147"
+  },
+  "email": "test.student.1754353326577@example.com",
+  "password": "$2a$10$YN2wK4npQXYsmPO7AlILzu1gBoLuF9rDBLBFxDSStvaxA6R47/GNi",
+  "role": "student",
+  "firstName": "Test",
+  "lastName": "Student",
+  "phone": "+1234567890",
+  "applicationCode": "TEST123",
+  "isVerified": true,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-08-05T00:22:06.850Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-08-05T00:22:06.850Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "689399b6beb18032feaddfbf"
+  },
+  "email": "kudzaicindyrellapemhiwa@gmail.com",
+  "password": "$2a$10$a/8aEkOso0y1KYEef7Rse.x2WBZ3XzoZ8emB.tEzsLbWuZnOcI9ay",
+  "role": "student",
+  "firstName": "Kudzai Cindyrella",
+  "lastName": "Pemhiwa",
+  "phone": "0786209200",
+  "isVerified": true,
+  "currentRoom": "M5",
+  "roomValidUntil": {
+    "$date": "2025-12-12T00:00:00.000Z"
+  },
+  "roomApprovalDate": {
+    "$date": "2025-08-06T18:06:49.796Z"
+  },
+  "emergencyContact": {
+    "name": "Charity  Pemhiwa",
+    "relationship": "mom",
+    "phone": "0786209200"
+  },
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-08-06T18:06:46.094Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-08-08T06:34:42.236Z"
+  },
+  "__v": 0,
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "currentBooking": {
+    "$oid": "689399babeb18032feaddfcc"
+  },
+  "lastLogin": {
+    "$date": "2025-08-08T06:34:42.235Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "689e0d1f213b061bd87d194b"
+  },
+  "email": "macdonaldsairos24@gmail.com",
+  "password": "$2a$12$fPv1FcHIVEZ3N7p6TgC2DuhUxuH3GLnqbFJxmpt10frAROYKpRsbW",
+  "role": "admin",
+  "firstName": "Macdonald",
+  "lastName": "Admin",
+  "phone": "+263771234567",
+  "isVerified": false,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "emergencyContact": {
+    "name": "Emergency Contact",
+    "phone": "+263771234568",
+    "relationship": "Family"
+  },
+  "createdAt": {
+    "$date": "2025-08-14T16:21:51.365Z"
+  },
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "updatedAt": {
+    "$date": "2025-08-19T12:21:54.266Z"
+  },
+  "leases": [],
+  "__v": 0,
+  "lastLogin": {
+    "$date": "2025-08-19T12:21:54.265Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "689e0d20213b061bd87d194d"
+  },
+  "email": "macdonaldsairos01@gmail.com",
+  "password": "$2a$10$ipIhGk6SgCh7WXnw82lNGOAfn7zBY252am/1FxynHzjp3yZVOBE72",
+  "role": "finance_admin",
+  "firstName": "Macdonald",
+  "lastName": "Finance",
+  "phone": "+263771234569",
+  "isVerified": false,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "emergencyContact": {
+    "name": "Emergency Contact",
+    "phone": "+263771234570",
+    "relationship": "Family"
+  },
+  "createdAt": {
+    "$date": "2025-08-14T16:21:52.644Z"
+  },
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "updatedAt": {
+    "$date": "2025-08-19T12:07:21.569Z"
+  },
+  "leases": [],
+  "__v": 0,
+  "lastLogin": {
+    "$date": "2025-08-19T12:07:21.566Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "68a23dbd39c11307fd971d9c"
+  },
+  "email": "macdonald.sairos@students.uz.ac.zw",
+  "password": "$2a$10$j1qs5SztGJFmLTwnz1nuVeW3BkcEO7aYnyRhH.20jBo8bP/U0ibxS",
+  "role": "student",
+  "firstName": "macdonaldsairos01@gmail.com",
+  "lastName": "macdonaldsairos01@gmail.com",
+  "phone": "0786033933",
+  "applicationCode": "APP17554629556095XQOW",
+  "isVerified": true,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": "https://alamait-uploads.s3.eu-north-1.amazonaws.com/leases/68a23dbd39c11307fd971d9c_1755464170479_Alamait%20Property%20Management%20System%20%C3%A2%C2%80%C2%93%20Final%20Completion%20%26%20Technical%20Documentation.docx",
+  "signedLeaseUploadDate": {
+    "$date": "2025-08-17T20:56:11.692Z"
+  },
+  "createdAt": {
+    "$date": "2025-08-17T20:38:21.086Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-08-19T12:07:57.463Z"
+  },
+  "__v": 0,
+  "lastLogin": {
+    "$date": "2025-08-19T12:07:57.376Z"
+  }
+},
+{
+  "_id": {
+    "$oid": "68a24e7aec2aa188e9d6714d"
+  },
+  "email": "sairosmiccs@gmail.com",
+  "password": "$2a$10$8J90n5ZjCyL8fdHJZBn88eIhbnJ/Y4srZTeD3okMy9aJF6JnLJ34.",
+  "role": "student",
+  "firstName": "Miccs",
+  "lastName": "Sairos",
+  "phone": "0787922127",
+  "isVerified": true,
+  "currentRoom": "Sharing1",
+  "roomValidUntil": {
+    "$date": "2025-12-12T00:00:00.000Z"
+  },
+  "roomApprovalDate": {
+    "$date": "2025-08-17T21:49:50.935Z"
+  },
+  "emergencyContact": {
+    "name": "Macdonald Sairos",
+    "relationship": "Father",
+    "phone": "0786033933"
+  },
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-08-17T21:49:46.905Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-08-17T21:49:52.050Z"
+  },
+  "__v": 0,
+  "residence": {
+    "$oid": "6847f562e536db246e853f91"
+  },
+  "currentBooking": {
+    "$oid": "68a24e7fec2aa188e9d67164"
+  }
+},
+{
+  "_id": {
+    "$oid": "68a38154edec450747559cab"
+  },
+  "email": "test.student@alamait.com",
+  "password": "$2a$10$SmNSnSnuP2SeolcmZxFmx.pbFxbFA4qE20GDLPVBRZxxk/E7/wPFa",
+  "role": "student",
+  "firstName": "Test",
+  "lastName": "Student",
+  "phone": "+263771234567",
+  "isVerified": false,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-08-18T19:39:00.663Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-08-18T19:39:00.663Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68a38155edec450747559cd9"
+  },
+  "email": "test.admin@alamait.com",
+  "password": "$2a$10$gha2MGHJaMXaI1raoO.cHeIAIKbglZ9xuIAhcSrzfx4o.NTC6pY8u",
+  "role": "admin",
+  "firstName": "Test",
+  "lastName": "Admin",
+  "phone": "+263771234568",
+  "isVerified": false,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-08-18T19:39:01.962Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-08-18T19:39:01.962Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68a38156edec450747559ce0"
+  },
+  "email": "test.finance@alamait.com",
+  "password": "$2a$10$PWJC7oZiwy1ax5MAWFlXvugSI24BjbeIf46XhXeEIR8ACkh6OoBYG",
+  "role": "finance_admin",
+  "firstName": "Test",
+  "lastName": "Finance",
+  "phone": "+263771234569",
+  "isVerified": false,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-08-18T19:39:02.373Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-08-18T19:39:02.373Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68a38156edec450747559ce3"
+  },
+  "email": "test.ceo@alamait.com",
+  "password": "$2a$10$lPlfJm1AaE2fi/Sedj4rp.ILqgf5v6unDKRXUw/b4WXzOSErFJyR2",
+  "role": "ceo",
+  "firstName": "Test",
+  "lastName": "CEO",
+  "phone": "+263771234570",
+  "isVerified": false,
+  "currentRoom": null,
+  "roomValidUntil": null,
+  "roomApprovalDate": null,
+  "maintenanceRequests": [],
+  "paymentHistory": [],
+  "documents": [],
+  "preferences": {
+    "notifications": {
+      "email": true,
+      "sms": true
+    },
+    "language": "en"
+  },
+  "status": "active",
+  "signedLeasePath": null,
+  "signedLeaseUploadDate": null,
+  "createdAt": {
+    "$date": "2025-08-18T19:39:02.686Z"
+  },
+  "leases": [],
+  "updatedAt": {
+    "$date": "2025-08-18T19:39:02.686Z"
+  },
+  "__v": 0
+}]

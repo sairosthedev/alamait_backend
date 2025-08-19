@@ -22,8 +22,82 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         // Check if debtor already exists for this user
         const existingDebtor = await Debtor.findOne({ user: user._id });
         if (existingDebtor) {
-            console.log(`Debtor already exists for user ${user.email}`);
-            return existingDebtor;
+            console.log(`Debtor already exists for user ${user.email} - updating with new data`);
+            
+            // Update existing debtor with new application data
+            const updateData = {};
+            
+            if (options.residenceId && !existingDebtor.residence) {
+                updateData.residence = options.residenceId;
+                console.log(`   📍 Updating residence: ${options.residenceId}`);
+            }
+            
+            if (options.roomNumber && !existingDebtor.roomNumber) {
+                updateData.roomNumber = options.roomNumber;
+                console.log(`   🏠 Updating room: ${options.roomNumber}`);
+            }
+            
+            if (options.roomPrice && existingDebtor.roomPrice !== options.roomPrice) {
+                updateData.roomPrice = options.roomPrice;
+                console.log(`   💰 Updating room price: $${options.roomPrice}`);
+            }
+            
+            if (options.startDate && options.endDate) {
+                // Recalculate billing period
+                const billingPeriodMonths = Math.ceil((new Date(options.endDate) - new Date(options.startDate)) / (1000 * 60 * 60 * 24 * 30.44));
+                const expectedTotal = options.roomPrice * billingPeriodMonths;
+                
+                updateData.billingPeriod = {
+                    type: billingPeriodMonths === 3 ? 'quarterly' : 
+                          billingPeriodMonths === 6 ? 'semester' : 
+                          billingPeriodMonths === 12 ? 'annual' : 'monthly',
+                    duration: {
+                        value: billingPeriodMonths,
+                        unit: 'months'
+                    },
+                    startDate: new Date(options.startDate),
+                    endDate: new Date(options.endDate),
+                    billingCycle: {
+                        frequency: 'monthly',
+                        dayOfMonth: 1,
+                        gracePeriod: 5
+                    },
+                    amount: {
+                        monthly: options.roomPrice,
+                        total: expectedTotal,
+                        currency: 'USD'
+                    },
+                    status: 'active',
+                    description: `Billing period for ${user.email}`,
+                    notes: `Updated from application data`,
+                    autoRenewal: {
+                        enabled: false,
+                        renewalType: 'same_period',
+                        customRenewalPeriod: null
+                    }
+                };
+                
+                updateData.totalOwed = expectedTotal;
+                updateData.currentBalance = Math.max(expectedTotal - (existingDebtor.totalPaid || 0), 0);
+                updateData.billingPeriodLegacy = `${billingPeriodMonths} months`;
+                updateData.startDate = options.startDate;
+                updateData.endDate = options.endDate;
+                
+                console.log(`   📅 Updating billing period: ${billingPeriodMonths} months`);
+                console.log(`   💰 Updating total owed: $${expectedTotal}`);
+            }
+            
+            // Update the existing debtor if we have new data
+            if (Object.keys(updateData).length > 0) {
+                await Debtor.findByIdAndUpdate(existingDebtor._id, updateData);
+                console.log(`✅ Updated existing debtor with new application data`);
+                
+                // Return the updated debtor
+                return await Debtor.findById(existingDebtor._id);
+            } else {
+                console.log(`✅ Existing debtor already has all current data`);
+                return existingDebtor;
+            }
         }
 
         // Generate debtor code and account code
@@ -48,29 +122,42 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         try {
             // 1. Check for existing application
             const application = await Application.findOne({ student: user._id })
-                .populate('residence', 'name rooms roomPrice');
+                .populate('residence', 'name rooms');
             
             if (application) {
                 console.log(`📝 Found application for ${user.email}`);
                 startDate = application.startDate || options.startDate;
                 endDate = application.endDate || options.endDate;
-                roomPrice = application.roomPrice || 0;
-                residenceId = residenceId || application.residence?._id;
-                roomNumber = roomNumber || application.allocatedRoom || application.roomNumber;
                 
-                // If no room price from application, try residence
-                if (!roomPrice && application.residence) {
-                    roomPrice = application.residence.roomPrice || 0;
+                // Extract residence and room data from application
+                if (application.residence) {
+                    residenceId = application.residence._id;
+                    console.log(`   📍 Residence: ${application.residence.name}`);
                     
-                    // If still no room price, try to find it in rooms array
-                    if (!roomPrice && application.residence.rooms && application.residence.rooms.length > 0) {
-                        const room = application.residence.rooms.find(r => 
-                            r.roomNumber === roomNumber || r.name === roomNumber
-                        );
-                        if (room && room.price) {
-                            roomPrice = room.price;
+                    // Extract room number from application
+                    roomNumber = application.allocatedRoom || application.preferredRoom || application.roomNumber;
+                    if (roomNumber) {
+                        console.log(`   🏠 Room: ${roomNumber}`);
+                        
+                        // Find room price from residence rooms array
+                        if (application.residence.rooms && application.residence.rooms.length > 0) {
+                            const room = application.residence.rooms.find(r => 
+                                r.roomNumber === roomNumber || r.name === roomNumber
+                            );
+                            if (room && room.price) {
+                                roomPrice = room.price;
+                                console.log(`   💰 Room Price: $${roomPrice}`);
+                            } else {
+                                console.log(`   ⚠️  Room price not found for ${roomNumber}`);
+                            }
                         }
                     }
+                }
+                
+                // If no room price found, try to get it from options or use default
+                if (!roomPrice) {
+                    roomPrice = options.roomPrice || 150;
+                    console.log(`   💰 Using fallback room price: $${roomPrice}`);
                 }
             }
 
@@ -90,19 +177,21 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             if (residenceId && !roomPrice) {
                 const residence = await Residence.findById(residenceId);
                 if (residence) {
-                    roomPrice = residence.roomPrice || 0;
+                    console.log(`🏠 Getting room price from residence: ${residence.name}`);
                     
                     // Try to find room price in rooms array
-                    if (!roomPrice && residence.rooms && residence.rooms.length > 0) {
+                    if (residence.rooms && residence.rooms.length > 0) {
                         const room = residence.rooms.find(r => 
                             r.roomNumber === roomNumber || r.name === roomNumber
                         );
                         if (room && room.price) {
                             roomPrice = room.price;
+                            console.log(`   💰 Found room price: $${roomPrice}`);
                         } else if (residence.rooms[0] && residence.rooms[0].price) {
                             // Use first room's price as fallback
                             roomPrice = residence.rooms[0].price;
                             roomNumber = roomNumber || residence.rooms[0].roomNumber || residence.rooms[0].name;
+                            console.log(`   💰 Using fallback room price: $${roomPrice}`);
                         }
                     }
                 }
@@ -226,17 +315,27 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             createdBy: options.createdBy || user._id
         };
 
+        // Log the data being set in debtor
+        console.log(`\n📊 DEBTOR DATA BEING SET:`);
+        console.log(`   Residence ID: ${residenceId || 'Not set'}`);
+        console.log(`   Room Number: ${roomNumber || 'Not set'}`);
+        console.log(`   Room Price: $${roomPrice}`);
+        console.log(`   Start Date: ${startDate}`);
+        console.log(`   End Date: ${endDate}`);
+
         // Create the debtor
         const debtor = new Debtor(debtorData);
         await debtor.save();
 
-        console.log(`✅ Debtor account created for student ${user.email}: ${debtorCode}`);
+        console.log(`\n✅ Debtor account created for student ${user.email}: ${debtorCode}`);
         console.log(`   Room Price: $${roomPrice}`);
         console.log(`   Billing Period: ${billingPeriodObject.type} (${billingPeriodMonths} months)`);
         console.log(`   Expected Total: $${expectedTotal}`);
         console.log(`   Total Paid: $${totalPaid}`);
         console.log(`   Current Balance: $${currentBalance}`);
         console.log(`   Status: ${status}`);
+        console.log(`   Residence: ${residenceId || 'Not linked'}`);
+        console.log(`   Room: ${roomNumber || 'Not set'}`);
 
         return debtor;
     } catch (error) {

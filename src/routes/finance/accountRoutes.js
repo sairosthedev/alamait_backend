@@ -49,9 +49,15 @@ router.get('/type/:type',
 );
 
 // Get account code suggestions
-router.get('/suggestions/codes', 
+router.get('/code-suggestions', 
     checkRole(['finance', 'finance_admin', 'finance_user', 'admin', 'ceo']), 
     accountController.getCodeSuggestions
+);
+
+// Get next available account code
+router.get('/next-code', 
+    checkRole(['finance', 'finance_admin', 'finance_user', 'admin', 'ceo']), 
+    accountController.getNextAccountCode
 );
 
 // Validate account code

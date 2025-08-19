@@ -291,6 +291,41 @@ exports.validateAccountCode = async (req, res) => {
 };
 
 /**
+ * Get next available account code
+ */
+exports.getNextAccountCode = async (req, res) => {
+  try {
+    const { type, category } = req.query;
+    
+    if (!type) {
+      return res.status(400).json({ error: 'Account type is required' });
+    }
+    
+    // Validate account type
+    const validTypes = ['Asset', 'Liability', 'Equity', 'Income', 'Expense'];
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ 
+        error: 'Invalid account type. Must be one of: Asset, Liability, Equity, Income, Expense' 
+      });
+    }
+    
+    // Get next available code using the Account model's static method
+    const code = await Account.getNextCode(type, category);
+    
+    res.status(200).json({ 
+      success: true, 
+      code,
+      type,
+      category: category || 'Default',
+      message: `Next available code for ${type}${category ? ` - ${category}` : ''}: ${code}`
+    });
+  } catch (error) {
+    console.error('Error getting next account code:', error);
+    res.status(500).json({ error: 'Failed to generate account code' });
+  }
+};
+
+/**
  * Get account type information
  */
 exports.getAccountTypeInfo = async (req, res) => {
