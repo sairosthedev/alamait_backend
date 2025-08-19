@@ -177,6 +177,74 @@ userSchema.pre('save', async function(next) {
 // REMOVED: Auto-creation of debtor - now only created when application is approved
 // This ensures proper linking between application → debtor → residence → room
 
+// 🆕 NEW: Auto-link user to existing applications when user is created
+userSchema.post('save', async function(doc) {
+    try {
+        // Only run this for newly created users (not updates)
+        if (this.isNew) {
+            console.log(`🔗 Auto-linking new user to existing applications: ${this.firstName} ${this.lastName}`);
+            
+            // Check if there are any applications with matching email but no student field
+            const Application = require('./Application');
+            const applicationsToLink = await Application.find({
+                email: this.email,
+                $or: [
+                    { student: { $exists: false } },
+                    { student: null },
+                    { student: undefined }
+                ]
+            });
+            
+            if (applicationsToLink.length > 0) {
+                console.log(`   📋 Found ${applicationsToLink.length} applications to link`);
+                
+                for (const application of applicationsToLink) {
+                    try {
+                        // Update the application with the student field
+                        application.student = this._id;
+                        await application.save();
+                        
+                        console.log(`   ✅ Linked application ${application._id} to user ${this._id}`);
+                        console.log(`      Application: ${application.firstName} ${application.lastName}`);
+                        console.log(`      Status: ${application.status}`);
+                        console.log(`      Room: ${application.allocatedRoom}`);
+                        
+                        // If application is approved, create debtor account
+                        if (application.status === 'approved') {
+                            console.log(`   🏗️  Application is approved, creating debtor account...`);
+                            
+                            try {
+                                const { createDebtorForStudent } = require('../services/debtorService');
+                                const debtor = await createDebtorForStudent(this, {
+                                    createdBy: this._id,
+                                    application: application._id
+                                });
+                                
+                                if (debtor) {
+                                    console.log(`   ✅ Created debtor account: ${debtor.debtorCode}`);
+                                }
+                            } catch (debtorError) {
+                                console.error(`   ❌ Error creating debtor account:`, debtorError.message);
+                            }
+                        }
+                        
+                    } catch (linkError) {
+                        console.error(`   ❌ Error linking application ${application._id}:`, linkError.message);
+                    }
+                }
+                
+                console.log(`   🎯 Auto-linking completed for ${this.firstName} ${this.lastName}`);
+                
+            } else {
+                console.log(`   ℹ️  No applications found to link for ${this.email}`);
+            }
+        }
+    } catch (error) {
+        console.error(`❌ Error in auto-linking middleware for ${this.firstName} ${this.lastName}:`, error);
+        // Don't throw error to prevent user creation from failing
+    }
+});
+
 // createStudentAccount method removed - we now use the Debtor system
 
 // Method to create tenant account
