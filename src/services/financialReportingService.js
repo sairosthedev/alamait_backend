@@ -1058,7 +1058,7 @@ class FinancialReportingService {
                     const activityType = this.getCashFlowActivityType(accountCode, accountType);
                     
                     // Calculate cash flow for cash accounts only
-                    const cashFlow = this.calculateCashFlow(accountType, debit, credit);
+                    const cashFlow = this.calculateCashFlow(accountType, debit, credit, accountCode, accountName);
                     
                     if (activityType === 'operating') {
                         if (cashFlow > 0) {
@@ -2426,9 +2426,14 @@ class FinancialReportingService {
         }
     }
 
-    static calculateCashFlow(accountType, debit, credit) {
+    static calculateCashFlow(accountType, debit, credit, accountCode, accountName) {
         if (accountType === 'Asset' || accountType === 'asset') {
-            return credit - debit; // Asset decrease = cash inflow (+), Asset increase = cash outflow (-)
+            // For cash accounts (1000, 1001, 1002, 1011), use correct logic
+            if (accountCode && /^10/.test(accountCode)) {
+                return debit - credit; // Debit = inflow (+), Credit = outflow (-)
+            } else {
+                return credit - debit; // Asset decrease = cash inflow (+), Asset increase = cash outflow (-)
+            }
         } else if (accountType === 'Liability' || accountType === 'liability') {
             return debit - credit; // Liability increase = cash inflow (+), Liability decrease = cash outflow (-)
         } else if (accountType === 'Income' || accountType === 'income') {
