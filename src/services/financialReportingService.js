@@ -2270,16 +2270,108 @@ class FinancialReportingService {
     }
 
     static getCashFlowActivityType(accountCode, accountType) {
-        // Operating activities
-        if (accountType === 'Income' || accountType === 'Expense') return 'operating';
+        // Convert to string if it's a number
+        accountCode = String(accountCode);
         
-        // Investing activities (asset purchases/sales)
-        if (accountCode.startsWith('1') && accountCode !== '1001' && accountCode !== '1002') return 'investing';
+        // Special case: Security deposits are always financing
+        if (accountCode.startsWith('2020')) {
+            return 'financing';
+        }
         
-        // Financing activities (loans, equity)
-        if (accountCode.startsWith('2') || accountCode.startsWith('3')) return 'financing';
+        // Operating Activities (Cash, Bank, AR, Revenue, Expenses, AP)
+        if (/^(100|101|110|111|40|50|60|20)/.test(accountCode)) {
+            return 'operating';
+        }
+        // Investing Activities (Long-Term Assets, Equipment, Property)
+        else if (/^[2][0-9]/.test(accountCode) && !/^(20)/.test(accountCode)) {
+            return 'investing';
+        }
+        // Financing Activities (Liabilities, Equity, Loans)
+        else if (/^[3-4]/.test(accountCode)) {
+            return 'financing';
+        }
+        // Default to Operating if no match
+        return 'operating';
+    }
+
+    // Enhanced helper method for better account classification
+    static classifyCashFlowActivity(accountCode, accountName) {
+        if (/^[45]/.test(accountCode)) return 'operating';
+        if (/^[6]/.test(accountCode)) return 'investing';
+        if (/^[23]/.test(accountCode)) return 'financing';
+        if (accountName.toLowerCase().includes('deposit')) return 'financing';
+        return 'operating'; // default
+    }
+
+    // Security deposit tracking
+    static trackSecurityDeposits(entries) {
+        const deposits = {
+            received: 0,
+            refunded: 0,
+            forfeited: 0,
+            current_liability: 0
+        };
         
-        return 'operating'; // Default
+        entries.forEach(entry => {
+            entry.entries.forEach(line => {
+                if (line.accountName.toLowerCase().includes('deposit')) {
+                    if (line.accountType === 'Liability') {
+                        if (line.credit > 0) deposits.received += line.credit;
+                        if (line.debit > 0) deposits.refunded += line.debit;
+                        deposits.current_liability += (line.credit - line.debit);
+                    } else if (line.accountType === 'Income' && line.credit > 0) {
+                        deposits.forfeited += line.credit;
+                    }
+                }
+            });
+        });
+        
+        return deposits;
+    }
+
+    // Add validation method
+    static async validateCashFlow(period) {
+        try {
+            const cashFlow = await this.generateMonthlyCashFlow(period);
+            
+            // Basic validation checks
+            const validation = {
+                isBalanced: true,
+                issues: [],
+                warnings: []
+            };
+
+            const monthNames = ['january', 'february', 'march', 'april', 'may', 'june',
+                              'july', 'august', 'september', 'october', 'november', 'december'];
+
+            // Check if cash flows balance
+            monthNames.forEach(month => {
+                const monthData = cashFlow.monthly_breakdown[month];
+                if (monthData) {
+                    const calculatedNet = monthData.operating_activities.net + monthData.investing_activities.net + monthData.financing_activities.net;
+                    
+                    if (Math.abs(calculatedNet - monthData.net_cash_flow) > 0.01) {
+                        validation.isBalanced = false;
+                        validation.issues.push(`${month}: Net cash flow mismatch - calculated: ${calculatedNet}, recorded: ${monthData.net_cash_flow}`);
+                    }
+                }
+            });
+
+            // Check for unusual patterns
+            if (cashFlow.yearly_totals.operating_activities.outflows > cashFlow.yearly_totals.operating_activities.inflows * 2) {
+                validation.warnings.push('Operating outflows significantly exceed inflows - check for unusual expenses');
+            }
+
+            if (cashFlow.yearly_totals.financing_activities.net > cashFlow.yearly_totals.operating_activities.net * 3) {
+                validation.warnings.push('Financing activities dominate cash flow - review business model');
+            }
+
+            return validation;
+
+        } catch (error) {
+            console.error('Error validating cash flow:', error);
+            throw error;
+        }
     }
 
     static calculateCashFlow(accountType, debit, credit) {
