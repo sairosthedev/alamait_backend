@@ -43,10 +43,9 @@ class FinancialReportingService {
                     status: 'posted'
                 });
                 
-                // For accrual basis, look at expenses when they are incurred (expense accruals)
+                // For accrual basis, look at expenses when they are incurred (all expense-related sources)
                 const expenseEntries = await TransactionEntry.find({
                     date: { $gte: startDate, $lte: endDate },
-                    source: 'expense_accrual',
                     status: 'posted'
                 });
                 
@@ -188,7 +187,7 @@ class FinancialReportingService {
                 
                 console.log(`Found ${paymentEntries.length} payment entries and ${expenseEntries.length} expense entries for cash basis`);
                 
-                // Process payment entries
+                // Process payment entries - look for cash inflows (debits to cash accounts)
                 let totalRevenue = 0;
                 const revenueByAccount = {};
                 const residences = new Set();
@@ -196,8 +195,9 @@ class FinancialReportingService {
                 paymentEntries.forEach(entry => {
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
-                            if (lineItem.accountType === 'Income') {
-                                const amount = lineItem.credit || 0; // For cash basis, income increases with credit
+                            // Cash accounts: 1001 (Bank), 1002 (Cash on Hand), 1011 (Admin Petty Cash)
+                            if (['1001', '1002', '1011'].includes(lineItem.accountCode) && lineItem.debit > 0) {
+                                const amount = lineItem.debit; // Cash received (debit to cash account)
                                 totalRevenue += amount;
                                 
                                 const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
@@ -211,25 +211,32 @@ class FinancialReportingService {
                     }
                 });
                 
-                // Process expense entries
+                // Process expense entries - look for cash outflows (credits to cash accounts)
                 let totalExpenses = 0;
                 const expensesByAccount = {};
                 
-                expenseEntries.forEach(entry => {
+                // Also look for cash outflows in ALL entries (not just expense_payment/vendor_payment)
+                const allCashOutflowEntries = await TransactionEntry.find({
+                    date: { $gte: startDate, $lte: endDate },
+                    status: 'posted'
+                });
+                
+                allCashOutflowEntries.forEach(entry => {
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
-                            if (lineItem.accountType === 'Expense') {
-                                const amount = lineItem.debit || 0;
+                            // Cash accounts: 1001 (Bank), 1002 (Cash on Hand), 1011 (Admin Petty Cash)
+                            if (['1001', '1002', '1011'].includes(lineItem.accountCode) && lineItem.credit > 0) {
+                                const amount = lineItem.credit; // Cash paid (credit to cash account)
                                 totalExpenses += amount;
                                 
-                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                const key = `Cash Outflow - ${entry.description}`;
                                 expensesByAccount[key] = (expensesByAccount[key] || 0) + amount;
                             }
                         });
                     }
                 });
                 
-                // Create monthly breakdown for revenue
+                // Create monthly breakdown for revenue (cash inflows)
                 const monthlyRevenue = {};
                 paymentEntries.forEach(entry => {
                     const entryDate = new Date(entry.date);
@@ -237,8 +244,8 @@ class FinancialReportingService {
                     
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
-                            if (lineItem.accountType === 'Income') {
-                                const amount = lineItem.credit || 0;
+                            if (['1001', '1002', '1011'].includes(lineItem.accountCode) && lineItem.debit > 0) {
+                                const amount = lineItem.debit;
                                 if (!monthlyRevenue[monthKey]) {
                                     monthlyRevenue[monthKey] = {};
                                 }
@@ -250,21 +257,21 @@ class FinancialReportingService {
                     }
                 });
                 
-                // Create monthly breakdown for expenses
+                // Create monthly breakdown for expenses (cash outflows)
                 const monthlyExpenses = {};
-                expenseEntries.forEach(entry => {
+                allCashOutflowEntries.forEach(entry => {
                     const entryDate = new Date(entry.date);
                     const monthKey = entryDate.getMonth() + 1; // 1-12
                     
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
-                            if (lineItem.accountType === 'Expense') {
-                                const amount = lineItem.debit || 0;
+                            if (['1001', '1002', '1011'].includes(lineItem.accountCode) && lineItem.credit > 0) {
+                                const amount = lineItem.credit;
                                 if (!monthlyExpenses[monthKey]) {
                                     monthlyExpenses[monthKey] = {};
                                 }
                                 
-                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                const key = `Cash Outflow - ${entry.description}`;
                                 monthlyExpenses[monthKey][key] = (monthlyExpenses[monthKey][key] || 0) + amount;
                             }
                         });
