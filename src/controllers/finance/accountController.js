@@ -302,15 +302,18 @@ exports.getNextAccountCode = async (req, res) => {
     }
     
     // Validate account type
-    const validTypes = ['Asset', 'Liability', 'Equity', 'Income', 'Expense'];
+    const validTypes = ['Asset', 'Liability', 'Equity', 'Income', 'Revenue', 'Expense'];
     if (!validTypes.includes(type)) {
       return res.status(400).json({ 
-        error: 'Invalid account type. Must be one of: Asset, Liability, Equity, Income, Expense' 
+        error: 'Invalid account type. Must be one of: Asset, Liability, Equity, Income, Revenue, Expense' 
       });
     }
     
+    // Map 'Revenue' to 'Income' for the model
+    const modelType = type === 'Revenue' ? 'Income' : type;
+    
     // Get next available code using the Account model's static method
-    const code = await Account.getNextCode(type, category);
+    const code = await Account.getNextCode(modelType, category);
     
     res.status(200).json({ 
       success: true, 

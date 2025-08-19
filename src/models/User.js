@@ -193,28 +193,8 @@ userSchema.pre('save', async function(next) {
 });
 
 // Post-save middleware to create debtor account for students
-userSchema.post('save', async function(doc) {
-    try {
-        // Only run this for new students
-        if (doc.role === 'student') {
-            const { createDebtorForStudent } = require('../services/debtorService');
-            
-            // Check if debtor already exists
-            const Debtor = require('./Debtor');
-            const existingDebtor = await Debtor.findOne({ user: doc._id });
-            
-            if (!existingDebtor) {
-                await createDebtorForStudent(doc, {
-                    createdBy: doc._id
-                });
-                console.log(`✅ Auto-created debtor account for new student: ${doc.email}`);
-            }
-        }
-    } catch (error) {
-        console.error('Error creating debtor account for student:', error);
-        // Don't throw error to prevent user creation from failing
-    }
-});
+// REMOVED: Auto-creation of debtor - now only created when application is approved
+// This ensures proper linking between application → debtor → residence → room
 
 // Method to create student account
 userSchema.methods.createStudentAccount = async function() {

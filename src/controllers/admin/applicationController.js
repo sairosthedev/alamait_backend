@@ -211,6 +211,46 @@ exports.updateApplicationStatus = async (req, res) => {
                     application.residence = residence._id;
                     await application.save();
 
+                    // Create debtor account for the student now that application is approved
+                    try {
+                        const { createDebtorForStudent } = require('../../services/debtorService');
+                        const studentUser = await User.findById(application.student);
+                        
+                        if (studentUser) {
+                            // Check if debtor already exists
+                            const Debtor = require('../../models/Debtor');
+                            const existingDebtor = await Debtor.findOne({ user: studentUser._id });
+                            
+                            if (!existingDebtor) {
+                                // Create debtor with application data
+                                const debtor = await createDebtorForStudent(studentUser, {
+                                    createdBy: req.user._id,
+                                    application: application._id
+                                });
+                                console.log(`✅ Created debtor account for approved student: ${studentUser.email}`);
+                            } else {
+                                // Update existing debtor with application data
+                                existingDebtor.residence = residence._id;
+                                existingDebtor.roomNumber = roomNumber;
+                                existingDebtor.startDate = application.startDate;
+                                existingDebtor.endDate = application.endDate;
+                                
+                                // Recalculate totalOwed based on room price and lease duration
+                                if (room.price) {
+                                    const monthsDiff = Math.ceil((new Date(application.endDate) - new Date(application.startDate)) / (1000 * 60 * 60 * 24 * 30.44));
+                                    existingDebtor.totalOwed = room.price * monthsDiff;
+                                    existingDebtor.currentBalance = existingDebtor.totalOwed - existingDebtor.totalPaid;
+                                }
+                                
+                                await existingDebtor.save();
+                                console.log(`✅ Updated existing debtor account for approved student: ${studentUser.email}`);
+                            }
+                        }
+                    } catch (debtorError) {
+                        console.error('Error creating/updating debtor account:', debtorError);
+                        // Don't fail the approval process if debtor creation fails
+                    }
+
                     // Generate and send lease agreement
                     let attachments = [];
                     try {
