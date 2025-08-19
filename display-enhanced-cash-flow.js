@@ -95,7 +95,8 @@ async function displayEnhancedCashFlow() {
       Object.entries(yearly.operating_activities.breakdown).forEach(([account, amounts]) => {
         const netAmount = amounts.inflows - amounts.outflows;
         const type = netAmount > 0 ? '📈 Inflow' : '📉 Outflow';
-        console.log(`${account.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)} | ${type}`);
+        const displayName = amounts.accountName ? `${account} - ${amounts.accountName}` : account;
+        console.log(`${displayName.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)} | ${type}`);
       });
     } else {
       console.log('No operating activities recorded');
@@ -108,7 +109,8 @@ async function displayEnhancedCashFlow() {
       Object.entries(yearly.investing_activities.breakdown).forEach(([account, amounts]) => {
         const netAmount = amounts.inflows - amounts.outflows;
         const type = netAmount > 0 ? '📈 Inflow' : '📉 Outflow';
-        console.log(`${account.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)} | ${type}`);
+        const displayName = amounts.accountName ? `${account} - ${amounts.accountName}` : account;
+        console.log(`${displayName.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)} | ${type}`);
       });
     } else {
       console.log('No investing activities recorded');
@@ -121,7 +123,8 @@ async function displayEnhancedCashFlow() {
       Object.entries(yearly.financing_activities.breakdown).forEach(([account, amounts]) => {
         const netAmount = amounts.inflows - amounts.outflows;
         const type = netAmount > 0 ? '📈 Inflow' : '📉 Outflow';
-        console.log(`${account.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)} | ${type}`);
+        const displayName = amounts.accountName ? `${account} - ${amounts.accountName}` : account;
+        console.log(`${displayName.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)} | ${type}`);
       });
     } else {
       console.log('No financing activities recorded');
@@ -139,7 +142,8 @@ async function displayEnhancedCashFlow() {
       if (Object.keys(august.operating_activities.breakdown).length > 0) {
         Object.entries(august.operating_activities.breakdown).forEach(([account, amounts]) => {
           const netAmount = amounts.inflows - amounts.outflows;
-          console.log(`${account.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)}`);
+          const displayName = amounts.accountName ? `${account} - ${amounts.accountName}` : account;
+          console.log(`${displayName.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)}`);
         });
       } else {
         console.log('No operating activities recorded');
@@ -151,7 +155,8 @@ async function displayEnhancedCashFlow() {
       if (Object.keys(august.investing_activities.breakdown).length > 0) {
         Object.entries(august.investing_activities.breakdown).forEach(([account, amounts]) => {
           const netAmount = amounts.inflows - amounts.outflows;
-          console.log(`${account.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)}`);
+          const displayName = amounts.accountName ? `${account} - ${amounts.accountName}` : account;
+          console.log(`${displayName.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)}`);
         });
       } else {
         console.log('No investing activities recorded');
@@ -163,7 +168,8 @@ async function displayEnhancedCashFlow() {
       if (Object.keys(august.financing_activities.breakdown).length > 0) {
         Object.entries(august.financing_activities.breakdown).forEach(([account, amounts]) => {
           const netAmount = amounts.inflows - amounts.outflows;
-          console.log(`${account.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)}`);
+          const displayName = amounts.accountName ? `${account} - ${amounts.accountName}` : account;
+          console.log(`${displayName.padEnd(50)} | Inflows: $${amounts.inflows.toString().padStart(8)} | Outflows: $${amounts.outflows.toString().padStart(8)} | Net: $${netAmount.toString().padStart(8)}`);
         });
       } else {
         console.log('No financing activities recorded');

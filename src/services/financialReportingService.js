@@ -1069,7 +1069,8 @@ class FinancialReportingService {
                                 monthlyCashFlow[monthName].operating_activities.breakdown[key] = { 
                                     inflows: 0, 
                                     outflows: 0,
-                                    accountName: accountName // Store the name for display
+                                    accountName: accountName, // Store the name for display
+                                    accountCode: accountCode  // Store the code for display
                                 };
                             }
                             monthlyCashFlow[monthName].operating_activities.breakdown[key].inflows += cashFlow;
@@ -1194,7 +1195,12 @@ class FinancialReportingService {
                 // Aggregate operating account breakdowns
                 Object.entries(monthData.operating_activities.breakdown).forEach(([account, amounts]) => {
                     if (!yearlyTotals.operating_activities.breakdown[account]) {
-                        yearlyTotals.operating_activities.breakdown[account] = { inflows: 0, outflows: 0 };
+                        yearlyTotals.operating_activities.breakdown[account] = { 
+                            inflows: 0, 
+                            outflows: 0,
+                            accountName: amounts.accountName, // Preserve account name
+                            accountCode: amounts.accountCode  // Preserve account code
+                        };
                     }
                     yearlyTotals.operating_activities.breakdown[account].inflows += amounts.inflows;
                     yearlyTotals.operating_activities.breakdown[account].outflows += amounts.outflows;
@@ -1208,7 +1214,12 @@ class FinancialReportingService {
                 // Aggregate investing account breakdowns
                 Object.entries(monthData.investing_activities.breakdown).forEach(([account, amounts]) => {
                     if (!yearlyTotals.investing_activities.breakdown[account]) {
-                        yearlyTotals.investing_activities.breakdown[account] = { inflows: 0, outflows: 0 };
+                        yearlyTotals.investing_activities.breakdown[account] = { 
+                            inflows: 0, 
+                            outflows: 0,
+                            accountName: amounts.accountName, // Preserve account name
+                            accountCode: amounts.accountCode  // Preserve account code
+                        };
                     }
                     yearlyTotals.investing_activities.breakdown[account].inflows += amounts.inflows;
                     yearlyTotals.investing_activities.breakdown[account].outflows += amounts.outflows;
@@ -1222,7 +1233,12 @@ class FinancialReportingService {
                 // Aggregate financing account breakdowns
                 Object.entries(monthData.financing_activities.breakdown).forEach(([account, amounts]) => {
                     if (!yearlyTotals.financing_activities.breakdown[account]) {
-                        yearlyTotals.financing_activities.breakdown[account] = { inflows: 0, outflows: 0 };
+                        yearlyTotals.financing_activities.breakdown[account] = { 
+                            inflows: 0, 
+                            outflows: 0,
+                            accountName: amounts.accountName, // Preserve account name
+                            accountCode: amounts.accountCode  // Preserve account code
+                        };
                     }
                     yearlyTotals.financing_activities.breakdown[account].inflows += amounts.inflows;
                     yearlyTotals.financing_activities.breakdown[account].outflows += amounts.outflows;
