@@ -2466,11 +2466,32 @@ class FinancialReportingService {
             
             console.log(`Found ${entries.length} transaction entries for residence ${residenceId}`);
             
-            // Calculate revenue and expenses
-            const revenue = {};
-            const expenses = {};
+            // Initialize monthly breakdown structure
+            const monthNames = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+            ];
             
+            const monthlyBreakdown = {};
+            monthNames.forEach((month, index) => {
+                monthlyBreakdown[index] = {
+                    month,
+                    monthNumber: index + 1,
+                    revenue: {},
+                    expenses: {},
+                    total_revenue: 0,
+                    total_expenses: 0,
+                    net_income: 0,
+                    residences: [residenceId], // Only this residence
+                    transaction_count: 0
+                };
+            });
+            
+            // Process entries by month
             entries.forEach(entry => {
+                const entryDate = new Date(entry.date);
+                const monthIndex = entryDate.getMonth();
+                
                 if (entry.entries && entry.entries.length > 0) {
                     entry.entries.forEach(line => {
                         const accountCode = line.accountCode;
@@ -2480,38 +2501,55 @@ class FinancialReportingService {
                         const credit = line.credit || 0;
                         
                         if (accountType === 'Income' || accountType === 'income') {
+                            const amount = line.credit || 0; // Income increases with credit
+                            monthlyBreakdown[monthIndex].total_revenue += amount;
+                            
                             const key = `${accountCode} - ${accountName}`;
-                            if (!revenue[key]) revenue[key] = 0;
-                            revenue[key] += debit; // Income increases with debit in this system
+                            monthlyBreakdown[monthIndex].revenue[key] = 
+                                (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
                         } else if (accountType === 'Expense' || accountType === 'expense') {
+                            const amount = line.debit || 0; // Expenses increase with debit
+                            monthlyBreakdown[monthIndex].total_expenses += amount;
+                            
                             const key = `${accountCode} - ${accountName}`;
-                            if (!expenses[key]) expenses[key] = 0;
-                            expenses[key] += debit - credit;
+                            monthlyBreakdown[monthIndex].expenses[key] = 
+                                (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
                         }
                     });
                 }
+                
+                monthlyBreakdown[monthIndex].transaction_count++;
             });
             
-            const totalRevenue = Object.values(revenue).reduce((sum, amount) => sum + amount, 0);
-            const totalExpenses = Object.values(expenses).reduce((sum, amount) => sum + amount, 0);
-            const netIncome = totalRevenue - totalExpenses;
+            // Calculate net income for each month
+            monthNames.forEach((month, index) => {
+                monthlyBreakdown[index].net_income = monthlyBreakdown[index].total_revenue - monthlyBreakdown[index].total_expenses;
+            });
+            
+            // Calculate year totals
+            const yearTotals = {
+                total_revenue: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0),
+                total_expenses: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_expenses, 0),
+                net_income: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].net_income, 0),
+                total_transactions: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].transaction_count, 0)
+            };
             
             return {
                 period,
                 basis,
                 residence: residenceId,
-                revenue: {
-                    ...revenue,
-                    total_revenue: totalRevenue
-                },
-                expenses: {
-                    ...expenses,
-                    total_expenses: totalExpenses
-                },
-                net_income: netIncome,
-                gross_profit: totalRevenue,
-                operating_income: netIncome,
-                transaction_count: entries.length
+                monthly_breakdown: monthlyBreakdown,
+                year_totals: yearTotals,
+                month_names: monthNames,
+                residences_included: true,
+                data_sources: ['TransactionEntry'],
+                accounting_notes: {
+                    basis_type: basis === 'cash' ? 'cash_basis' : 'accrual_basis',
+                    includes_rental_accruals: basis === 'accrual',
+                    includes_cash_payments: basis === 'cash',
+                    source_filter: `Filtered by residence: ${residenceId}`,
+                    note: `Based on ${basis} basis entries from transactionentries collection for specific residence`
+                }
             };
             
         } catch (error) {
