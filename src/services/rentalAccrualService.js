@@ -5,16 +5,225 @@ const Invoice = require('../models/Invoice');
 const mongoose = require('mongoose');
 
 /**
- * Rental Accrual Service
+ * Enhanced Rental Accrual Service
  * 
- * Automatically records rental income when it becomes due (accrual basis)
- * Creates proper double-entry accounting entries for rent accruals
- * Manages student rent invoices and outstanding balances
+ * Implements complete accounting lifecycle for student leases:
+ * 1. Lease Start: Creates initial entries for admin fees and deposits
+ * 2. Monthly Accruals: Records rent as earned each month (accrual basis)
+ * 3. Payment Processing: Handles cash receipts and debt settlement
+ * 
+ * Supports both accrual and cash basis accounting
  */
 class RentalAccrualService {
     
     /**
-     * Create monthly rent accrual for all active students
+     * 🆕 NEW: Process lease start with initial accounting entries
+     * Creates entries for admin fees and deposits when lease begins
+     */
+    static async processLeaseStart(application) {
+        try {
+            console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}`);
+            
+            // Check if lease start entries already exist
+            const existingEntries = await TransactionEntry.findOne({
+                'metadata.studentId': application.student,
+                'metadata.type': 'lease_start',
+                'metadata.leaseStartDate': application.startDate
+            });
+            
+            if (existingEntries) {
+                console.log(`⚠️ Lease start entries already exist for ${application.firstName}`);
+                return { success: false, error: 'Lease start entries already exist' };
+            }
+            
+            // Get residence and room details for pricing
+            const Residence = require('../models/Residence');
+            const residence = await Residence.findById(application.residence);
+            if (!residence) {
+                throw new Error('Residence not found');
+            }
+            
+            // Find room price
+            const room = residence.rooms.find(r => r.roomNumber === application.allocatedRoom);
+            if (!room || !room.price) {
+                throw new Error('Room price not found');
+            }
+            
+            // Calculate prorated rent for start month
+            const startDate = new Date(application.startDate);
+            const endDate = new Date(application.endDate);
+            const daysInMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
+            const startDay = startDate.getDate();
+            const proratedDays = daysInMonth - startDay + 1;
+            const proratedRent = (room.price / daysInMonth) * proratedDays;
+            
+            // Determine admin fee (only for St Kilda)
+            const adminFee = residence.name.toLowerCase().includes('st kilda') ? 20 : 0;
+            
+            // Security deposit (typically 1 month rent)
+            const securityDeposit = room.price;
+            
+            console.log(`   Room Price: $${room.price}`);
+            console.log(`   Prorated Rent (${proratedDays} days): $${proratedRent.toFixed(2)}`);
+            console.log(`   Admin Fee: $${adminFee}`);
+            console.log(`   Security Deposit: $${securityDeposit}`);
+            
+            // Get required accounts
+            const accountsReceivable = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
+            const rentalIncome = await Account.findOne({ code: '4000' }); // Rental Income - Residential
+            const adminIncome = await Account.findOne({ code: '4100' }); // Administrative Income
+            const depositLiability = await Account.findOne({ code: '2020' }); // Tenant Deposits Held
+            
+            if (!accountsReceivable || !rentalIncome || !depositLiability) {
+                throw new Error('Required accounts not found');
+            }
+            
+            // Create transaction for lease start
+            const transaction = new Transaction({
+                transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
+                date: startDate,
+                description: `Lease start: ${application.firstName} ${application.lastName} - ${residence.name}`,
+                type: 'lease_start',
+                status: 'posted',
+                residence: application.residence,
+                createdBy: 'system',
+                metadata: {
+                    studentId: application.student,
+                    studentName: `${application.firstName} ${application.lastName}`,
+                    residence: application.residence,
+                    room: application.allocatedRoom,
+                    type: 'lease_start',
+                    leaseStartDate: application.startDate
+                }
+            });
+            
+            await transaction.save();
+            
+            // Create double-entry accounting entries
+            const entries = [];
+            
+            // 1. Prorated Rent Accrual
+            if (proratedRent > 0) {
+                entries.push({
+                    accountCode: accountsReceivable.code,
+                    accountName: accountsReceivable.name,
+                    accountType: accountsReceivable.type,
+                    debit: proratedRent,
+                    credit: 0,
+                    description: `Prorated rent due from ${application.firstName} ${application.lastName} - ${startDate.toLocaleDateString()} to month end`
+                });
+                
+                entries.push({
+                    accountCode: rentalIncome.code,
+                    accountName: rentalIncome.name,
+                    accountType: rentalIncome.type,
+                    debit: 0,
+                    credit: proratedRent,
+                    description: `Prorated rental income accrued - ${application.firstName} ${application.lastName}`
+                });
+            }
+            
+            // 2. Admin Fee Accrual (if applicable)
+            if (adminFee > 0) {
+                entries.push({
+                    accountCode: accountsReceivable.code,
+                    accountName: accountsReceivable.name,
+                    accountType: accountsReceivable.type,
+                    debit: adminFee,
+                    credit: 0,
+                    description: `Admin fee due from ${application.firstName} ${application.lastName}`
+                });
+                
+                entries.push({
+                    accountCode: adminIncome.code,
+                    accountName: adminIncome.name,
+                    accountType: adminIncome.type,
+                    debit: 0,
+                    credit: adminFee,
+                    description: `Administrative income accrued - ${application.firstName} ${application.lastName}`
+                });
+            }
+            
+            // 3. Security Deposit Liability
+            entries.push({
+                accountCode: accountsReceivable.code,
+                accountName: accountsReceivable.name,
+                accountType: accountsReceivable.type,
+                debit: securityDeposit,
+                credit: 0,
+                description: `Security deposit due from ${application.firstName} ${application.lastName}`
+            });
+            
+            entries.push({
+                accountCode: depositLiability.code,
+                accountName: depositLiability.name,
+                accountType: depositLiability.type,
+                debit: 0,
+                credit: securityDeposit,
+                description: `Security deposit liability created - ${application.firstName} ${application.lastName}`
+            });
+            
+            // Calculate totals
+            const totalDebit = entries.reduce((sum, entry) => sum + entry.debit, 0);
+            const totalCredit = entries.reduce((sum, entry) => sum + entry.credit, 0);
+            
+            // Create transaction entry
+            const transactionEntry = new TransactionEntry({
+                transactionId: transaction.transactionId,
+                date: startDate,
+                description: `Lease start accounting entries: ${application.firstName} ${application.lastName}`,
+                reference: application._id.toString(),
+                entries,
+                totalDebit,
+                totalCredit,
+                source: 'lease_start',
+                sourceId: application._id,
+                sourceModel: 'Application',
+                residence: application.residence,
+                createdBy: 'system',
+                status: 'posted',
+                metadata: {
+                    studentId: application.student,
+                    studentName: `${application.firstName} ${application.lastName}`,
+                    residence: application.residence,
+                    room: application.allocatedRoom,
+                    type: 'lease_start',
+                    leaseStartDate: application.startDate,
+                    proratedRent,
+                    adminFee,
+                    securityDeposit,
+                    totalDebit,
+                    totalCredit
+                }
+            });
+            
+            await transactionEntry.save();
+            
+            // Update transaction with entry reference
+            transaction.entries = [transactionEntry._id];
+            await transaction.save();
+            
+            console.log(`✅ Lease start accounting entries created for ${application.firstName} ${application.lastName}`);
+            console.log(`   Total Debit: $${totalDebit.toFixed(2)}`);
+            console.log(`   Total Credit: $${totalCredit.toFixed(2)}`);
+            
+            return {
+                success: true,
+                transactionId: transaction.transactionId,
+                proratedRent,
+                adminFee,
+                securityDeposit,
+                totalAmount: totalDebit
+            };
+            
+        } catch (error) {
+            console.error(`❌ Error processing lease start for ${application.firstName}:`, error);
+            return { success: false, error: error.message };
+        }
+    }
+    
+    /**
+     * 🆕 ENHANCED: Create monthly rent accrual for all active students
      * This records rent as income when it becomes due, not when paid
      */
     static async createMonthlyRentAccrual(month, year) {
@@ -30,8 +239,8 @@ class RentalAccrualService {
                 .collection('applications')
                 .find({
                     status: 'approved',
-                    startDate: { $lte: endDate },      // Changed from leaseStartDate
-                    endDate: { $gte: startDate },      // Changed from leaseEndDate
+                    startDate: { $lte: endDate },
+                    endDate: { $gte: startDate },
                     paymentStatus: { $ne: 'cancelled' }
                 }).toArray();
             
@@ -73,7 +282,8 @@ class RentalAccrualService {
     }
     
     /**
-     * Create rent accrual for a specific student
+     * 🆕 ENHANCED: Create rent accrual for a specific student
+     * Now handles full month rent (not prorated) and excludes admin fees
      */
     static async createStudentRentAccrual(student, month, year) {
         try {
@@ -82,27 +292,39 @@ class RentalAccrualService {
             
             // Check if accrual already exists for this month
             const existingAccrual = await TransactionEntry.findOne({
-                'metadata.studentId': student._id,
+                'metadata.studentId': student.student || student._id,
                 'metadata.accrualMonth': month,
                 'metadata.accrualYear': year,
-                'metadata.type': 'rent_accrual'
+                'metadata.type': 'monthly_rent_accrual'
             });
             
             if (existingAccrual) {
                 return { success: false, error: 'Accrual already exists for this month' };
             }
             
-            // Calculate rent amount (assuming $200/month from your data)
-            const rentAmount = 200;
-            const adminFee = 20; // St Kilda admin fee
-            const totalAmount = rentAmount + adminFee;
+            // Get residence and room details for pricing
+            const Residence = require('../models/Residence');
+            const residence = await Residence.findById(student.residence);
+            if (!residence) {
+                throw new Error('Residence not found');
+            }
+            
+            // Find room price
+            const room = residence.rooms.find(r => r.roomNumber === student.allocatedRoom);
+            if (!room || !room.price) {
+                throw new Error('Room price not found');
+            }
+            
+            // Full month rent (admin fee was already accrued at lease start)
+            const rentAmount = room.price;
+            
+            console.log(`   ${student.firstName} ${student.lastName}: $${rentAmount} rent for ${month}/${year}`);
             
             // Get required accounts
             const accountsReceivable = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
             const rentalIncome = await Account.findOne({ code: '4000' }); // Rental Income - Residential
-            const adminIncome = await Account.findOne({ code: '4100' }); // Administrative Income
             
-            if (!accountsReceivable || !rentalIncome || !adminIncome) {
+            if (!accountsReceivable || !rentalIncome) {
                 throw new Error('Required accounts not found');
             }
             
@@ -110,18 +332,19 @@ class RentalAccrualService {
             const transaction = new Transaction({
                 transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
                 date: monthStart,
-                description: `Rent accrual for ${student.firstName} ${student.lastName} - ${month}/${year}`,
-                type: 'rental_accrual',
+                description: `Monthly rent accrual for ${student.firstName} ${student.lastName} - ${month}/${year}`,
+                type: 'monthly_rent_accrual',
                 status: 'posted',
+                residence: student.residence,
                 createdBy: 'system',
                 metadata: {
-                    studentId: student._id,
+                    studentId: student.student || student._id,
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
-                    room: student.room,
+                    room: student.allocatedRoom,
                     accrualMonth: month,
                     accrualYear: year,
-                    type: 'rent_accrual'
+                    type: 'monthly_rent_accrual'
                 }
             });
             
@@ -134,9 +357,9 @@ class RentalAccrualService {
                     accountCode: accountsReceivable.code,
                     accountName: accountsReceivable.name,
                     accountType: accountsReceivable.type,
-                    debit: totalAmount,
+                    debit: rentAmount,
                     credit: 0,
-                    description: `Rent due from ${student.firstName} ${student.lastName} - ${month}/${year}`
+                    description: `Monthly rent due from ${student.firstName} ${student.lastName} - ${month}/${year}`
                 },
                 // Credit: Rental Income
                 {
@@ -145,16 +368,7 @@ class RentalAccrualService {
                     accountType: rentalIncome.type,
                     debit: 0,
                     credit: rentAmount,
-                    description: `Rental income accrued - ${student.firstName} ${student.lastName} - ${month}/${year}`
-                },
-                // Credit: Administrative Income
-                {
-                    accountCode: adminIncome.code,
-                    accountName: adminIncome.name,
-                    accountType: adminIncome.type,
-                    debit: 0,
-                    credit: adminFee,
-                    description: `Admin fee accrued - ${student.firstName} ${student.lastName} - ${month}/${year}`
+                    description: `Monthly rental income accrued - ${student.firstName} ${student.lastName} - ${month}/${year}`
                 }
             ];
             
@@ -162,27 +376,27 @@ class RentalAccrualService {
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
                 date: monthStart,
-                description: `Rent accrual: ${student.firstName} ${student.lastName} - ${month}/${year}`,
+                description: `Monthly rent accrual: ${student.firstName} ${student.lastName} - ${month}/${year}`,
                 reference: student._id.toString(),
                 entries,
-                totalDebit: totalAmount,
-                totalCredit: totalAmount,
-                source: 'rental_accrual',
+                totalDebit: rentAmount,
+                totalCredit: rentAmount,
+                source: 'monthly_rent_accrual',
                 sourceId: student._id,
                 sourceModel: 'Application',
+                residence: student.residence,
                 createdBy: 'system',
                 status: 'posted',
                 metadata: {
-                    studentId: student._id,
+                    studentId: student.student || student._id,
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
-                    room: student.room,
+                    room: student.allocatedRoom,
                     accrualMonth: month,
                     accrualYear: year,
-                    type: 'rent_accrual',
+                    type: 'monthly_rent_accrual',
                     rentAmount,
-                    adminFee,
-                    totalAmount
+                    totalAmount: rentAmount
                 }
             });
             
@@ -192,20 +406,17 @@ class RentalAccrualService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
             
-            // Create invoice for the student
-            await this.createStudentInvoice(student, month, year, totalAmount, rentAmount, adminFee);
-            
-            console.log(`✅ Rent accrual created for ${student.firstName} ${student.lastName} - $${totalAmount}`);
+            console.log(`✅ Monthly rent accrual created for ${student.firstName} ${student.lastName} - $${rentAmount}`);
             
             return {
                 success: true,
                 transactionId: transaction.transactionId,
-                amount: totalAmount,
+                amount: rentAmount,
                 student: `${student.firstName} ${student.lastName}`
             };
             
         } catch (error) {
-            console.error(`❌ Error creating rent accrual for ${student.firstName}:`, error);
+            console.error(`❌ Error creating monthly rent accrual for ${student.firstName}:`, error);
             return { success: false, error: error.message };
         }
     }

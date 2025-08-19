@@ -898,6 +898,64 @@ const createPayment = async (req, res) => {
             const totalPaid = debtor ? debtor.totalPaid : 0;
             const outstandingAccrued = totalAccrued - totalPaid;
             
+            // Analyze payment month vs current month to determine payment type
+            const currentDate = new Date();
+            const currentMonth = currentDate.getMonth(); // 0-11
+            const currentYear = currentDate.getFullYear();
+            
+            // Parse payment month if provided
+            let paymentMonthDate = null;
+            let isAdvancePayment = false;
+            let isCurrentPeriodPayment = false;
+            let isPastDuePayment = false;
+            
+            if (payment.paymentMonth) {
+                try {
+                    // Try to parse payment month (e.g., "September 2025", "Sep 2025", "09/2025")
+                    const monthNames = [
+                        'january', 'february', 'march', 'april', 'may', 'june',
+                        'july', 'august', 'september', 'october', 'november', 'december'
+                    ];
+                    const monthAbbr = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+                    
+                    let month = -1;
+                    let year = currentYear;
+                    
+                    // Check for month names or abbreviations
+                    const lowerPaymentMonth = payment.paymentMonth.toLowerCase();
+                    month = monthNames.findIndex(m => lowerPaymentMonth.includes(m));
+                    if (month === -1) {
+                        month = monthAbbr.findIndex(m => lowerPaymentMonth.includes(m));
+                    }
+                    
+                    // Check for year
+                    const yearMatch = payment.paymentMonth.match(/\b(20\d{2})\b/);
+                    if (yearMatch) {
+                        year = parseInt(yearMatch[1]);
+                    }
+                    
+                    if (month !== -1) {
+                        paymentMonthDate = new Date(year, month, 1);
+                        
+                        // Determine payment type based on month comparison
+                        const currentMonthDate = new Date(currentYear, currentMonth, 1);
+                        
+                        if (paymentMonthDate > currentMonthDate) {
+                            isAdvancePayment = true;
+                            console.log(`💰 ADVANCE PAYMENT: ${studentName} paying for ${payment.paymentMonth} (future month)`);
+                        } else if (paymentMonthDate.getTime() === currentMonthDate.getTime()) {
+                            isCurrentPeriodPayment = true;
+                            console.log(`💰 CURRENT PERIOD PAYMENT: ${studentName} paying for ${payment.paymentMonth} (current month)`);
+                        } else {
+                            isPastDuePayment = true;
+                            console.log(`💰 PAST DUE PAYMENT: ${studentName} paying for ${payment.paymentMonth} (past month)`);
+                        }
+                    }
+                } catch (error) {
+                    console.log(`⚠️  Could not parse payment month: ${payment.paymentMonth}`);
+                }
+            }
+            
             // Determine if this is a debt settlement or current period payment
             const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
             const hasAccruedRentals = accruedRentals.length > 0;
@@ -914,10 +972,14 @@ const createPayment = async (req, res) => {
             let entries = [];
             let transactionType = 'current_payment';
 
-            if (studentHasOutstandingDebt || hasAccruedRentals) {
-                // Student has outstanding debt or accrued rentals - this payment settles the debt
-                transactionType = 'debt_settlement';
-                
+            // Get Deferred Income account for advance payments
+            const deferredIncomeAccount = await Account.findOne({ code: '2030' }); // Deferred Income - Tenant Advances
+            const adminFeeAccount = await Account.findOne({ code: '4100' }); // Administrative Income
+            const depositAccount = await Account.findOne({ code: '2020' }); // Tenant Deposits Held
+            
+            // Handle payment breakdown if available
+            if (parsedPayments && parsedPayments.length > 0) {
+                // Process each payment component separately
                 entries = [
                     {
                         transaction: txn._id,
@@ -926,63 +988,205 @@ const createPayment = async (req, res) => {
                         credit: 0,
                         type: receivingAccount.type || 'asset',
                         description: `Payment received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
-                    },
-                    {
-                        transaction: txn._id,
-                        account: studentAccount._id,
-                        debit: 0,
-                        credit: totalAmount,
-                        type: studentAccount.type || 'asset',
-                        description: `Settlement of outstanding debt by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
                     }
                 ];
-
-                // If this payment settles accrued rentals, create additional entry to recognize income
-                if (hasAccruedRentals && outstandingAccrued > 0) {
-                    const amountToRecognize = Math.min(totalAmount, outstandingAccrued);
+                
+                // Process each payment component
+                for (const paymentItem of parsedPayments) {
+                    const amount = paymentItem.amount || 0;
+                    if (amount <= 0) continue;
                     
-                    if (amountToRecognize > 0) {
-                        // Add rental income recognition entry
-                        entries.push({
+                    switch (paymentItem.type) {
+                        case 'admin':
+                            // Admin fee is always revenue (earned immediately)
+                            if (adminFeeAccount) {
+                                entries.push({
+                                    transaction: txn._id,
+                                    account: adminFeeAccount._id,
+                                    debit: 0,
+                                    credit: amount,
+                                    type: adminFeeAccount.type || 'income',
+                                    description: `Admin fee from ${studentName} (${payment.paymentId})`
+                                });
+                                console.log(`💰 ADMIN FEE: $${amount.toFixed(2)} recorded as Administrative Income`);
+                            }
+                            break;
+                            
+                        case 'deposit':
+                            // Deposit is always a liability (held until lease end)
+                            if (depositAccount) {
+                                entries.push({
+                                    transaction: txn._id,
+                                    account: depositAccount._id,
+                                    debit: 0,
+                                    credit: amount,
+                                    type: depositAccount.type || 'liability',
+                                    description: `Security deposit from ${studentName} (${payment.paymentId})`
+                                });
+                                console.log(`💰 DEPOSIT: $${amount.toFixed(2)} recorded as Tenant Deposit Liability`);
+                            }
+                            break;
+                            
+                        case 'rent':
+                            // Rent handling depends on payment month logic
+                            if (isAdvancePayment && deferredIncomeAccount) {
+                                // Future rent - use Deferred Income
+                                entries.push({
+                                    transaction: txn._id,
+                                    account: deferredIncomeAccount._id,
+                                    debit: 0,
+                                    credit: amount,
+                                    type: deferredIncomeAccount.type || 'liability',
+                                    description: `Deferred rent income from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
+                                });
+                                console.log(`💰 ADVANCE RENT: $${amount.toFixed(2)} recorded as Deferred Income for ${payment.paymentMonth}`);
+                            } else if (isPastDuePayment || studentHasOutstandingDebt || hasAccruedRentals) {
+                                // Past due rent - settle debt
+                                entries.push({
+                                    transaction: txn._id,
+                                    account: studentAccount._id,
+                                    debit: 0,
+                                    credit: amount,
+                                    type: studentAccount.type || 'asset',
+                                    description: `Rent payment settles debt from ${studentName} for ${payment.paymentMonth || 'past period'} (${payment.paymentId})`
+                                });
+                                console.log(`💰 PAST DUE RENT: $${amount.toFixed(2)} settles debt for ${payment.paymentMonth || 'past period'}`);
+                            } else {
+                                // Current period rent - recognize as income
+                                entries.push({
+                                    transaction: txn._id,
+                                    account: rentAccount._id,
+                                    debit: 0,
+                                    credit: amount,
+                                    type: rentAccount.type || 'income',
+                                    description: `Rent income from ${studentName} for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
+                                });
+                                console.log(`💰 CURRENT RENT: $${amount.toFixed(2)} recorded as Rental Income`);
+                            }
+                            break;
+                            
+                        default:
+                            // Unknown payment type - treat as general income
+                            entries.push({
+                                transaction: txn._id,
+                                account: rentAccount._id,
+                                debit: 0,
+                                credit: amount,
+                                type: rentAccount.type || 'income',
+                                description: `${paymentItem.type} payment from ${studentName} (${payment.paymentId})`
+                            });
+                            console.log(`💰 UNKNOWN TYPE: $${amount.toFixed(2)} recorded as general income`);
+                    }
+                }
+                
+                // Set transaction type based on what we processed
+                if (isAdvancePayment) {
+                    transactionType = 'advance_payment';
+                } else if (isPastDuePayment || studentHasOutstandingDebt || hasAccruedRentals) {
+                    transactionType = 'debt_settlement';
+                } else {
+                    transactionType = 'current_payment';
+                }
+                
+            } else {
+                // Fallback to old logic for payments without breakdown
+                if (studentHasOutstandingDebt || hasAccruedRentals || isPastDuePayment) {
+                    // Student has outstanding debt, accrued rentals, or paying for past month - this payment settles the debt
+                    transactionType = 'debt_settlement';
+                    
+                    entries = [
+                        {
+                            transaction: txn._id,
+                            account: receivingAccount._id,
+                            debit: totalAmount,
+                            credit: 0,
+                            type: receivingAccount.type || 'asset',
+                            description: `Payment received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                        },
+                        {
+                            transaction: txn._id,
+                            account: studentAccount._id,
+                            debit: 0,
+                            credit: totalAmount,
+                            type: studentAccount.type || 'asset',
+                            description: `Settlement of outstanding debt by ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                        }
+                    ];
+
+                    // If this payment settles accrued rentals, create additional entry to recognize income
+                    if (hasAccruedRentals && outstandingAccrued > 0) {
+                        const amountToRecognize = Math.min(totalAmount, outstandingAccrued);
+                        
+                        if (amountToRecognize > 0) {
+                            // Add rental income recognition entry
+                            entries.push({
+                                transaction: txn._id,
+                                account: rentAccount._id,
+                                debit: 0,
+                                credit: amountToRecognize,
+                                type: rentAccount.type || 'income',
+                                description: `Rental income recognized from ${studentName} for accrued period (${payment.paymentId})`
+                            });
+
+                            // Adjust the Accounts Receivable entry to balance
+                            const arEntry = entries.find(e => e.account.toString() === studentAccount._id.toString());
+                            if (arEntry) {
+                                arEntry.credit = arEntry.credit - amountToRecognize;
+                            }
+
+                            console.log(`💰 Payment ${amountToRecognize.toFixed(2)} recognized as rental income from accrued rentals`);
+                        }
+                    }
+                } else if (isAdvancePayment && deferredIncomeAccount) {
+                    // This is an advance payment for future rent - use Deferred Income
+                    transactionType = 'advance_payment';
+                    
+                    entries = [
+                        {
+                            transaction: txn._id,
+                            account: receivingAccount._id,
+                            debit: totalAmount,
+                            credit: 0,
+                            type: receivingAccount.type || 'asset',
+                            description: `Advance payment received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                        },
+                        {
+                            transaction: txn._id,
+                            account: deferredIncomeAccount._id,
+                            debit: 0,
+                            credit: totalAmount,
+                            type: deferredIncomeAccount.type || 'liability',
+                            description: `Deferred income from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
+                        }
+                    ];
+                    
+                    console.log(`💰 ADVANCE PAYMENT: ${totalAmount.toFixed(2)} recorded as Deferred Income for ${payment.paymentMonth}`);
+                    
+                } else {
+                    // Student has no outstanding debt and this is current period payment
+                    transactionType = 'current_payment';
+                    
+                    entries = [
+                        {
+                            transaction: txn._id,
+                            account: receivingAccount._id,
+                            debit: totalAmount,
+                            credit: 0,
+                            type: receivingAccount.type || 'asset',
+                            description: `Payment received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
+                        },
+                        {
                             transaction: txn._id,
                             account: rentAccount._id,
                             debit: 0,
-                            credit: amountToRecognize,
+                            credit: totalAmount,
                             type: rentAccount.type || 'income',
-                            description: `Rental income recognized from ${studentName} for accrued period (${payment.paymentId})`
-                        });
-
-                        // Adjust the Accounts Receivable entry to balance
-                        const arEntry = entries.find(e => e.account.toString() === studentAccount._id.toString());
-                        if (arEntry) {
-                            arEntry.credit = arEntry.credit - amountToRecognize;
+                            description: `Rental income from ${studentName} for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
                         }
-
-                        console.log(`💰 Payment ${amountToRecognize.toFixed(2)} recognized as rental income from accrued rentals`);
-                    }
+                    ];
+                    
+                    console.log(`💰 CURRENT PERIOD PAYMENT: ${totalAmount.toFixed(2)} recorded as Rental Income`);
                 }
-            } else {
-                // Student has no outstanding debt or accrued rentals - this is current period payment
-                transactionType = 'current_payment';
-                
-                entries = [
-                    {
-                        transaction: txn._id,
-                        account: receivingAccount._id,
-                        debit: totalAmount,
-                        credit: 0,
-                        type: receivingAccount.type || 'asset',
-                        description: `Payment received from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
-                    },
-                    {
-                        transaction: txn._id,
-                        account: rentAccount._id,
-                        debit: 0,
-                        credit: totalAmount,
-                        type: rentAccount.type || 'income',
-                        description: `Rental income from ${studentName} (${method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
-                    }
-                ];
             }
 
             // Validate that debits equal credits

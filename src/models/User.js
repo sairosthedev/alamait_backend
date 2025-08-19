@@ -170,73 +170,14 @@ userSchema.pre('save', async function(next) {
   }
 });
 
-// Pre-save middleware to automatically create accounts for students and tenants
-userSchema.pre('save', async function(next) {
-    try {
-        // Only run this for new users
-        if (this.isNew) {
-            // Auto-create student account if role is student
-            if (this.role === 'student') {
-                await this.createStudentAccount();
-            }
-            
-            // Auto-create tenant account if role is tenant
-            if (this.role === 'tenant') {
-                await this.createTenantAccount();
-            }
-        }
-        next();
-    } catch (error) {
-        console.error('Error in user pre-save middleware:', error);
-        next(error);
-    }
-});
+// Pre-save middleware removed - no more auto-creation of StudentAccount or TenantAccount
+// We now use the Debtor system for students, created only when applications are approved
 
 // Post-save middleware to create debtor account for students
 // REMOVED: Auto-creation of debtor - now only created when application is approved
 // This ensures proper linking between application → debtor → residence → room
 
-// Method to create student account
-userSchema.methods.createStudentAccount = async function() {
-    try {
-        const StudentAccount = require('./StudentAccount');
-        const Account = require('./Account');
-        
-        // Check if account already exists
-        const existingAccount = await StudentAccount.findOne({ student: this._id });
-        if (existingAccount) {
-            console.log(`Student account already exists for ${this.firstName} ${this.lastName}`);
-            return existingAccount;
-        }
-        
-        // Create student account
-        const studentAccount = new StudentAccount({
-            student: this._id,
-            balance: 0,
-            notes: `Auto-created account for student ${this.firstName} ${this.lastName}`,
-            createdBy: this._id // Self-created
-        });
-        
-        await studentAccount.save();
-        
-        // Create corresponding chart of accounts entry
-        const chartAccount = new Account({
-            code: studentAccount.accountCode,
-            name: `Student Account - ${this.firstName} ${this.lastName}`,
-            type: 'Asset'
-        });
-        
-        await chartAccount.save();
-        
-        console.log(`✅ Auto-created student account for ${this.firstName} ${this.lastName} (${studentAccount.accountCode})`);
-        return studentAccount;
-        
-    } catch (error) {
-        console.error(`❌ Error creating student account for ${this.firstName} ${this.lastName}:`, error);
-        // Don't throw error to prevent user creation from failing
-        return null;
-    }
-};
+// createStudentAccount method removed - we now use the Debtor system
 
 // Method to create tenant account
 userSchema.methods.createTenantAccount = async function() {
