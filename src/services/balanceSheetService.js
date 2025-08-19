@@ -293,6 +293,7 @@ class BalanceSheetService {
                 accountsPayable: this.formatAccountsPayable(monthBalanceSheet.liabilities.current),
                 accruedExpenses: this.formatAccruedExpenses(monthBalanceSheet.liabilities.current),
                 tenantDeposits: this.formatTenantDeposits(monthBalanceSheet.liabilities.current),
+                deferredIncome: this.formatDeferredIncome(monthBalanceSheet.liabilities.current),
                 taxesPayable: this.formatTaxesPayable(monthBalanceSheet.liabilities.current),
                 total: Math.abs(monthBalanceSheet.liabilities.totalCurrent)
               },
@@ -551,7 +552,9 @@ class BalanceSheetService {
     const deposits = {};
     
     Object.entries(currentLiabilities).forEach(([code, liability]) => {
-      if (liability.name.toLowerCase().includes('deposit')) {
+      if (liability.name.toLowerCase().includes('deposit') || 
+          liability.name.toLowerCase().includes('deferred') ||
+          liability.name.toLowerCase().includes('unearned')) {
         deposits[code] = {
           accountCode: code,
           accountName: liability.name,
@@ -581,6 +584,26 @@ class BalanceSheetService {
     });
     
     return taxes;
+  }
+
+  static formatDeferredIncome(currentLiabilities) {
+    const deferredIncome = {};
+    
+    Object.entries(currentLiabilities).forEach(([code, liability]) => {
+      if (liability.name.toLowerCase().includes('deferred') || 
+          liability.name.toLowerCase().includes('unearned') ||
+          code === '2030') { // Specifically include account 2030
+        deferredIncome[code] = {
+          accountCode: code,
+          accountName: liability.name,
+          amount: Math.abs(liability.balance),
+          description: liability.description,
+          category: liability.category
+        };
+      }
+    });
+    
+    return deferredIncome;
   }
 
   static formatLongTermLoans(nonCurrentLiabilities) {
@@ -628,8 +651,8 @@ class BalanceSheetService {
   }
   
   static isCurrentLiability(accountCode, accountName) {
-    const currentLiabilityCodes = ['2000', '2100', '2200', '2300'];
-    const currentLiabilityNames = ['payable', 'accrued', 'deposit', 'tax', 'short term'];
+    const currentLiabilityCodes = ['2000', '2010', '2020', '2030', '2040', '2100', '2200', '2300'];
+    const currentLiabilityNames = ['payable', 'accrued', 'deposit', 'tax', 'deferred', 'unearned', 'short term'];
     
     return currentLiabilityCodes.includes(accountCode) || 
            currentLiabilityNames.some(name => accountName.toLowerCase().includes(name));
@@ -671,6 +694,248 @@ class BalanceSheetService {
     }
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 module.exports = BalanceSheetService;
  
