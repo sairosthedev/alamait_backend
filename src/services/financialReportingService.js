@@ -1044,38 +1044,45 @@ class FinancialReportingService {
                     const debit = line.debit || 0;
                     const credit = line.credit || 0;
                     
-                    // For cash basis, only include accounts that represent actual cash movements
+                    // For cash basis, ONLY include CASH accounts (1000, 1001, 1002, 1011)
                     if (basis === 'cash') {
-                        // Skip AR/AP accounts unless they represent actual cash collection/payment
-                        if (accountCode.startsWith('110') || accountCode.startsWith('200')) {
-                            // Only include if this represents actual cash collection/payment
-                            // Skip if it's just accrual entries or balance adjustments
-                            if (!['manual', 'expense_payment', 'payment', 'rental_payment'].includes(entry.source)) {
-                                // Skip non-cash AR/AP entries
-                                return;
-                            }
+                        const isCashAccount = /^10/.test(accountCode);
+                        
+                        // Skip non-cash accounts completely - they don't represent cash flow
+                        if (!isCashAccount) {
+                            return;
                         }
                     }
                     
                     // Determine activity type and cash flow
                     const activityType = this.getCashFlowActivityType(accountCode, accountType);
+                    
+                    // Calculate cash flow for cash accounts only
                     const cashFlow = this.calculateCashFlow(accountType, debit, credit);
                     
                     if (activityType === 'operating') {
                         if (cashFlow > 0) {
                             monthlyCashFlow[monthName].operating_activities.inflows += cashFlow;
-                            // Track account breakdown for inflows
-                            const key = `${accountCode} - ${accountName}`;
+                            // Track account breakdown for inflows - use account code as primary key to avoid duplicates
+                            const key = `${accountCode}`;
                             if (!monthlyCashFlow[monthName].operating_activities.breakdown[key]) {
-                                monthlyCashFlow[monthName].operating_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                                monthlyCashFlow[monthName].operating_activities.breakdown[key] = { 
+                                    inflows: 0, 
+                                    outflows: 0,
+                                    accountName: accountName // Store the name for display
+                                };
                             }
                             monthlyCashFlow[monthName].operating_activities.breakdown[key].inflows += cashFlow;
                         } else {
                             monthlyCashFlow[monthName].operating_activities.outflows += Math.abs(cashFlow);
-                            // Track account breakdown for outflows
-                            const key = `${accountCode} - ${accountName}`;
+                            // Track account breakdown for outflows - use account code as primary key to avoid duplicates
+                            const key = `${accountCode}`;
                             if (!monthlyCashFlow[monthName].operating_activities.breakdown[key]) {
-                                monthlyCashFlow[monthName].operating_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                                monthlyCashFlow[monthName].operating_activities.breakdown[key] = { 
+                                    inflows: 0, 
+                                    outflows: 0,
+                                    accountName: accountName // Store the name for display
+                                };
                             }
                             monthlyCashFlow[monthName].operating_activities.breakdown[key].outflows += Math.abs(cashFlow);
                         }
@@ -1083,18 +1090,26 @@ class FinancialReportingService {
                     } else if (activityType === 'investing') {
                         if (cashFlow > 0) {
                             monthlyCashFlow[monthName].investing_activities.inflows += cashFlow;
-                            // Track account breakdown for inflows
-                            const key = `${accountCode} - ${accountName}`;
+                            // Track account breakdown for inflows - use account code as primary key to avoid duplicates
+                            const key = `${accountCode}`;
                             if (!monthlyCashFlow[monthName].investing_activities.breakdown[key]) {
-                                monthlyCashFlow[monthName].investing_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                                monthlyCashFlow[monthName].investing_activities.breakdown[key] = { 
+                                    inflows: 0, 
+                                    outflows: 0,
+                                    accountName: accountName // Store the name for display
+                                };
                             }
                             monthlyCashFlow[monthName].investing_activities.breakdown[key].inflows += cashFlow;
                         } else {
                             monthlyCashFlow[monthName].investing_activities.outflows += Math.abs(cashFlow);
-                            // Track account breakdown for outflows
-                            const key = `${accountCode} - ${accountName}`;
+                            // Track account breakdown for outflows - use account code as primary key to avoid duplicates
+                            const key = `${accountCode}`;
                             if (!monthlyCashFlow[monthName].investing_activities.breakdown[key]) {
-                                monthlyCashFlow[monthName].investing_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                                monthlyCashFlow[monthName].investing_activities.breakdown[key] = { 
+                                    inflows: 0, 
+                                    outflows: 0,
+                                    accountName: accountName // Store the name for display
+                                };
                             }
                             monthlyCashFlow[monthName].investing_activities.breakdown[key].outflows += Math.abs(cashFlow);
                         }
@@ -1102,18 +1117,26 @@ class FinancialReportingService {
                     } else if (activityType === 'financing') {
                         if (cashFlow > 0) {
                             monthlyCashFlow[monthName].financing_activities.inflows += cashFlow;
-                            // Track account breakdown for inflows
-                            const key = `${accountCode} - ${accountName}`;
+                            // Track account breakdown for inflows - use account code as primary key to avoid duplicates
+                            const key = `${accountCode}`;
                             if (!monthlyCashFlow[monthName].financing_activities.breakdown[key]) {
-                                monthlyCashFlow[monthName].financing_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                                monthlyCashFlow[monthName].financing_activities.breakdown[key] = { 
+                                    inflows: 0, 
+                                    outflows: 0,
+                                    accountName: accountName // Store the name for display
+                                };
                             }
                             monthlyCashFlow[monthName].financing_activities.breakdown[key].inflows += cashFlow;
                         } else {
                             monthlyCashFlow[monthName].financing_activities.outflows += Math.abs(cashFlow);
-                            // Track account breakdown for outflows
-                            const key = `${accountCode} - ${accountName}`;
+                            // Track account breakdown for outflows - use account code as primary key to avoid duplicates
+                            const key = `${accountCode}`;
                             if (!monthlyCashFlow[monthName].financing_activities.breakdown[key]) {
-                                monthlyCashFlow[monthName].financing_activities.breakdown[key] = { inflows: 0, outflows: 0 };
+                                monthlyCashFlow[monthName].financing_activities.breakdown[key] = { 
+                                    inflows: 0, 
+                                    outflows: 0,
+                                    accountName: accountName // Store the name for display
+                                };
                             }
                             monthlyCashFlow[monthName].financing_activities.breakdown[key].outflows += Math.abs(cashFlow);
                         }
