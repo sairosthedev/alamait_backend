@@ -968,9 +968,30 @@ class FinancialReportingService {
             
             console.log(`Generating monthly cash flow for ${period} from ${startDate} to ${endDate}`);
             
-            const entries = await TransactionEntry.find({
+            // For cash basis, only include actual cash transactions
+            let query = {
                 date: { $gte: startDate, $lte: endDate }
-            }).populate('entries');
+            };
+            
+            if (basis === 'cash') {
+                // Cash basis: only include transactions that represent actual cash flow
+                query.source = {
+                    $in: [
+                        'rental_payment',      // When rent is actually received
+                        'expense_payment',     // When expenses are actually paid
+                        'manual',              // Manual cash transactions
+                        'payment_collection',  // Cash payments
+                        'bank_transfer',       // Bank transfers
+                        'payment'              // Cash payments (rent, deposits, etc.)
+                    ]
+                };
+                console.log('🔵 CASH BASIS: Only including actual cash transactions');
+            } else {
+                // Accrual basis: include all transactions
+                console.log('🔵 ACCRUAL BASIS: Including all transactions');
+            }
+            
+            const entries = await TransactionEntry.find(query).populate('entries');
             
             const monthNames = [
                 'january', 'february', 'march', 'april', 'may', 'june',
@@ -994,6 +1015,12 @@ class FinancialReportingService {
             entries.forEach(entry => {
                 const month = entry.date.getMonth();
                 const monthName = monthNames[month];
+                
+                // Skip if no entries or entries is not an array
+                if (!entry.entries || !Array.isArray(entry.entries)) {
+                    console.log(`⚠️  Skipping transaction ${entry._id}: no valid entries`);
+                    return;
+                }
                 
                 entry.entries.forEach(line => {
                     const accountCode = line.accountCode;
