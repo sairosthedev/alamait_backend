@@ -1065,6 +1065,34 @@ exports.updateRequest = async (req, res) => {
         await request.save();
         console.log('✅ Request saved successfully');
 
+        // Send email notifications for maintenance requests (non-blocking)
+        if (request.type === 'maintenance') {
+            try {
+                // Send notification when request is assigned
+                if (updateData.assignedTo && request.assignedTo) {
+                    const assignedUser = await User.findById(request.assignedTo._id);
+                    await EmailNotificationService.sendMaintenanceRequestAssigned(
+                        request, 
+                        user, 
+                        assignedUser
+                    );
+                }
+
+                // Send notification when status is updated
+                if (updateData.status && updateData.status !== request.status) {
+                    const previousStatus = request.status;
+                    await EmailNotificationService.sendMaintenanceStatusUpdate(
+                        request,
+                        previousStatus,
+                        user
+                    );
+                }
+            } catch (emailError) {
+                console.error('Failed to send maintenance email notifications:', emailError);
+                // Don't fail the request if email fails
+            }
+        }
+
         // Send email notification when request is sent to CEO for approval
         if (updateData.status === 'pending_ceo_approval') {
             try {
@@ -1294,13 +1322,19 @@ exports.financeApproval = async (req, res) => {
         // Update finance status ONLY (do not change overall request status)
         if (isApproved) {
             request.financeStatus = 'approved';
+            request.status = 'pending-ceo-approval'; // ✅ ADDED: Set status to pending CEO approval
             console.log('✅ Setting financeStatus to approved');
+            console.log('✅ Setting status to pending-ceo-approval');
         } else if (isRejected) {
             request.financeStatus = 'rejected';
+            request.status = 'rejected'; // ✅ ADDED: Set status to rejected
             console.log('❌ Setting financeStatus to rejected');
+            console.log('❌ Setting status to rejected');
         } else if (isWaitlisted) {
             request.financeStatus = 'waitlisted';
+            request.status = 'waitlisted'; // ✅ ADDED: Set status to waitlisted
             console.log('⏳ Setting financeStatus to waitlisted');
+            console.log('⏳ Setting status to waitlisted');
         }
         
         // Add to request history
