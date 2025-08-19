@@ -42,8 +42,7 @@ class FinancialReportsController {
             let incomeStatement;
             if (residence) {
                 // Use residence-filtered method with basis and monthly breakdown
-                incomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
-                // Note: You may need to add residence filtering to FinancialReportingService
+                incomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
             } else {
                 // Use FinancialReportingService with basis parameter and monthly breakdown
                 incomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
@@ -94,8 +93,7 @@ class FinancialReportsController {
                 // Note: You may need to add month filtering to FinancialReportingService
             } else if (residence) {
                 // Use residence-filtered method with basis
-                monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
-                // Note: You may need to add residence filtering to FinancialReportingService
+                monthlyIncomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
             } else {
                 // Use FinancialReportingService with basis parameter
                 monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
