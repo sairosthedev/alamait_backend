@@ -2284,13 +2284,13 @@ class FinancialReportingService {
 
     static calculateCashFlow(accountType, debit, credit) {
         if (accountType === 'Asset' || accountType === 'asset') {
-            return credit - debit; // Asset decrease = cash inflow
+            return credit - debit; // Asset decrease = cash inflow (+), Asset increase = cash outflow (-)
         } else if (accountType === 'Liability' || accountType === 'liability') {
-            return debit - credit; // Liability increase = cash inflow
+            return debit - credit; // Liability increase = cash inflow (+), Liability decrease = cash outflow (-)
         } else if (accountType === 'Income' || accountType === 'income') {
-            return debit; // Income increase = cash inflow (income increases with debit in this system)
+            return credit; // Income = cash inflow (+) - when you receive money
         } else if (accountType === 'Expense' || accountType === 'expense') {
-            return debit - credit; // Expense increase = cash outflow
+            return -(debit - credit); // Expense = cash outflow (-) - when you pay money
         }
         return 0;
     }
