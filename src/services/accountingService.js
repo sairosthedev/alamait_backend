@@ -861,67 +861,32 @@ class AccountingService {
      */
     static async getAccountsReceivableBalance(asOfDate, residenceId = null) {
         try {
-            // Get total rent accruals up to the date
-            let accrualQuery = {
-                'metadata.type': 'rent_accrual',
+            // Robust: compute AR directly from ledger by netting 1100 entries (debits - credits)
+            const query = {
                 date: { $lte: asOfDate },
-                status: 'posted'
+                status: 'posted',
+                'entries.accountCode': '1100'
             };
-            
+
             if (residenceId) {
-                accrualQuery['residence'] = residenceId;
+                query['residence'] = residenceId;
             }
-            
-            const accrualEntries = await TransactionEntry.find(accrualQuery);
-            let totalAccruals = 0;
-            
-            // Sum all income credits on accrual entries. These credits correspond to the AR debit
-            // that was posted to `1100` in the same accrual transaction.
-            for (const entry of accrualEntries) {
+
+            const arEntries = await TransactionEntry.find(query);
+            let netAR = 0;
+
+            for (const entry of arEntries) {
                 if (entry.entries && Array.isArray(entry.entries)) {
                     for (const subEntry of entry.entries) {
-                        const isIncomeAccount =
-                            (subEntry.accountType && subEntry.accountType.toLowerCase() === 'income') ||
-                            (subEntry.accountCode && subEntry.accountCode.startsWith('4'));
-                        if (isIncomeAccount && (subEntry.credit || 0) > 0) {
-                            totalAccruals += subEntry.credit;
+                        if (subEntry.accountCode === '1100') {
+                            netAR += (subEntry.debit || 0) - (subEntry.credit || 0);
                         }
                     }
                 }
             }
-            
-            // Get total payments received up to the date
-            let paymentQuery = {
-                'metadata.type': 'rent_payment',
-                date: { $lte: asOfDate },
-                status: 'posted'
-            };
-            
-            if (residenceId) {
-                paymentQuery['residence'] = residenceId;
-            }
-            
-            const paymentEntries = await TransactionEntry.find(paymentQuery);
-            let totalPayments = 0;
-            
-            // Sum all credits to AR (1100) from payment entries which reduce receivables
-            for (const entry of paymentEntries) {
-                if (entry.entries && Array.isArray(entry.entries)) {
-                    for (const subEntry of entry.entries) {
-                        if (subEntry.accountCode === '1100' && (subEntry.credit || 0) > 0) {
-                            totalPayments += subEntry.credit;
-                        }
-                    }
-                }
-            }
-            
-            // Accounts Receivable = Accruals - Payments
-            const accountsReceivable = totalAccruals - totalPayments;
-            
-            console.log(`📊 Accounts Receivable calculation: Accruals $${totalAccruals} - Payments $${totalPayments} = $${accountsReceivable}`);
-            
-            return Math.max(0, accountsReceivable); // Can't be negative
-            
+
+            console.log(`📊 Accounts Receivable (1100) net balance as of ${asOfDate.toISOString()}: $${netAR}`);
+            return Math.max(0, netAR);
         } catch (error) {
             console.error('❌ Error calculating Accounts Receivable:', error);
             return 0;
