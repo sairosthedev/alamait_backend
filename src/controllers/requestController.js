@@ -1323,8 +1323,21 @@ exports.financeApproval = async (req, res) => {
         if (isApproved) {
             request.financeStatus = 'approved';
             request.status = 'pending-ceo-approval'; // ✅ ADDED: Set status to pending CEO approval
+            
+            // ✅ ADDED: Map totalEstimatedCost to amount for expense creation
+            if (request.totalEstimatedCost && request.totalEstimatedCost > 0) {
+                request.amount = request.totalEstimatedCost;
+                console.log(`💰 Mapped totalEstimatedCost (${request.totalEstimatedCost}) to amount field`);
+            } else {
+                // Fallback: calculate from items if totalEstimatedCost is not set
+                const calculatedAmount = request.items?.reduce((sum, item) => sum + (item.totalCost || 0), 0) || 0;
+                request.amount = calculatedAmount;
+                console.log(`💰 Calculated amount from items: ${calculatedAmount}`);
+            }
+            
             console.log('✅ Setting financeStatus to approved');
             console.log('✅ Setting status to pending-ceo-approval');
+            console.log(`💰 Final amount for expense creation: ${request.amount}`);
         } else if (isRejected) {
             request.financeStatus = 'rejected';
             request.status = 'rejected'; // ✅ ADDED: Set status to rejected
