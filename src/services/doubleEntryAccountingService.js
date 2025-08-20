@@ -1050,6 +1050,7 @@ class DoubleEntryAccountingService {
                         const monthStart = new Date(py, pm - 1, 1);
                         const monthEnd = new Date(py, pm, 0);
 
+                        // 1) Try actual accrual entries first
                         const monthAccruals = await TransactionEntry.find({
                             source: 'rental_accrual',
                             'metadata.studentId': payment.student,
@@ -1066,6 +1067,39 @@ class DoubleEntryAccountingService {
                             if (acc.metadata?.proratedRent) accrued += Number(acc.metadata.proratedRent) || 0;
                         }
 
+                        // 2) If no accruals found, compute expected from debtor data (fallback)
+                        if (accrued === 0 && debtor) {
+                            // Determine expected monthly rent
+                            const monthlyRent = Number(
+                                (debtor.financialBreakdown?.monthlyRent) ||
+                                (debtor.billingPeriod?.amount?.monthly) ||
+                                debtor.roomPrice ||
+                                0
+                            ) || 0;
+
+                            // Determine if this is the lease start month
+                            const leaseStart = debtor.startDate || debtor.billingPeriod?.startDate;
+                            const isStartMonth = leaseStart
+                                ? (new Date(leaseStart).getFullYear() === py && (new Date(leaseStart).getMonth() + 1) === pm)
+                                : false;
+
+                            if (monthlyRent > 0) {
+                                if (isStartMonth && leaseStart) {
+                                    // Prorate from lease start date to month end (inclusive)
+                                    const startDateObj = new Date(leaseStart);
+                                    const daysInMonth = new Date(py, pm, 0).getDate();
+                                    const startDay = startDateObj.getDate();
+                                    const proratedDays = Math.max(0, daysInMonth - startDay + 1);
+                                    const dailyRate = monthlyRent / daysInMonth;
+                                    accrued = Math.round((proratedDays * dailyRate) * 100) / 100;
+                                } else {
+                                    // Full month expected
+                                    accrued = monthlyRent;
+                                }
+                            }
+                        }
+
+                        // 3) Determine paid rent tracked in debtor monthlyPayments (if available)
                         let paid = 0;
                         const monthKey = `${py}-${String(pm).padStart(2, '0')}`;
                         if (debtor) {
@@ -1073,7 +1107,7 @@ class DoubleEntryAccountingService {
                             if (mp && mp.paidComponents?.rent) paid = Number(mp.paidComponents.rent) || 0;
                         }
 
-                        const outstanding = Math.max(0, accrued - paid);
+                        const outstanding = Math.max(0, (Number(accrued) || 0) - (Number(paid) || 0));
                         return { accrued, paid, outstanding };
                     } catch (err) {
                         console.log('⚠️ Error computing outstanding rent for payment month:', err.message);
@@ -1131,7 +1165,7 @@ class DoubleEntryAccountingService {
                                 break;
                             }
 
-                            // Allocate to Accounts Receivable up to the month's accrued rent, remainder to Deferred Income
+                            // Allocate to Accounts Receivable up to the month's accrued rent, remainder goes to Deferred Income as advance
                             const outstandingForMonth = paymentMonthRent.outstanding || 0;
                             const allocateToAR = Math.min(amount, outstandingForMonth);
                             const excess = Math.max(0, amount - allocateToAR);

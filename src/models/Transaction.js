@@ -19,7 +19,7 @@ const TransactionSchema = new mongoose.Schema({
   // Transaction type
   type: {
     type: String,
-    enum: ['approval', 'payment', 'adjustment', 'accrual', 'other'],
+    enum: ['approval', 'payment', 'adjustment', 'accrual', 'other', 'current_payment', 'advance_payment', 'debt_settlement'],
     default: 'other'
   },
   // Amount (calculated from entries)
