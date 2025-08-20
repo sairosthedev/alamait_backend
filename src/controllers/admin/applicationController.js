@@ -502,24 +502,24 @@ exports.updateApplicationStatus = async (req, res) => {
                 application.waitlistedRoom = roomNumber;
 
                 // Find the residence with the room to get capacity
-                const residence = await Residence.findOne({ 'rooms.roomNumber': roomNumber });
-                let roomInfo = null;
+                const waitlistResidence = await Residence.findOne({ 'rooms.roomNumber': roomNumber });
+                let waitlistRoomInfo = null;
                 
-                if (residence) {
-                    const room = residence.rooms.find(r => r.roomNumber === roomNumber);
-                    if (room) {
+                if (waitlistResidence) {
+                    const waitlistRoom = waitlistResidence.rooms.find(r => r.roomNumber === roomNumber);
+                    if (waitlistRoom) {
                         application.roomOccupancy = {
-                            current: room.currentOccupancy,
-                            capacity: room.capacity || (room.type === 'single' ? 1 : room.type === 'double' ? 2 : room.type === 'studio' ? 1 : 4)
+                            current: waitlistRoom.currentOccupancy,
+                            capacity: waitlistRoom.capacity || (waitlistRoom.type === 'single' ? 1 : waitlistRoom.type === 'double' ? 2 : waitlistRoom.type === 'studio' ? 1 : 4)
                         };
                         
                         // Prepare room information to return to the frontend
-                        roomInfo = {
+                        waitlistRoomInfo = {
                             name: roomNumber,
-                            status: room.status,
-                            currentOccupancy: room.currentOccupancy,
-                            capacity: room.capacity,
-                            occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+                            status: waitlistRoom.status,
+                            currentOccupancy: waitlistRoom.currentOccupancy,
+                            capacity: waitlistRoom.capacity,
+                            occupancyDisplay: `${waitlistRoom.currentOccupancy}/${waitlistRoom.capacity}`
                         };
                         
                         // Update user's waitlisted room
@@ -556,7 +556,7 @@ exports.updateApplicationStatus = async (req, res) => {
                 res.json({ 
                     message: 'Application waitlisted successfully',
                     application,
-                    room: roomInfo
+                    room: waitlistRoomInfo
                 });
                 break;
 
@@ -569,7 +569,7 @@ exports.updateApplicationStatus = async (req, res) => {
             { email: application.email },
             {
                 $set: {
-                    residence: application.roomOccupancy.residence,
+                    residence: application.roomOccupancy?.residence,
                     currentRoom: application.allocatedRoom
                 }
             }
@@ -726,6 +726,186 @@ exports.updatePaymentStatus = async (req, res) => {
 
     } catch (error) {
         console.error('Error in updatePaymentStatus:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Update room validity for a user
+exports.updateRoomValidity = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { newValidUntil } = req.body;
+        
+        if (!newValidUntil) {
+            return res.status(400).json({ error: 'New valid until date is required' });
+        }
+        
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        if (user.role !== 'student') {
+            return res.status(400).json({ error: 'User is not a student' });
+        }
+        
+        // Update room validity
+        await User.findByIdAndUpdate(userId, {
+            roomValidUntil: new Date(newValidUntil)
+        });
+        
+        console.log(`✅ Updated room validity for student ${user.email} to ${newValidUntil}`);
+        
+        res.json({
+            message: 'Room validity updated successfully',
+            userId,
+            newValidUntil
+        });
+        
+    } catch (error) {
+        console.error('❌ Error updating room validity:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Sync room occupancy with allocations
+exports.syncRoomOccupancy = async (req, res) => {
+    try {
+        console.log('🔄 Syncing room occupancy with allocations...');
+        
+        const Residence = require('../../models/Residence');
+        const residences = await Residence.find({});
+        
+        let updatedRooms = 0;
+        
+        for (const residence of residences) {
+            for (const room of residence.rooms) {
+                // Count active applications for this room
+                const activeApplications = await Application.countDocuments({
+                    allocatedRoom: room.roomNumber,
+                    status: 'approved',
+                    paymentStatus: { $in: ['paid', 'unpaid'] }
+                });
+                
+                // Update room occupancy
+                if (room.currentOccupancy !== activeApplications) {
+                    room.currentOccupancy = activeApplications;
+                    
+                    // Update room status based on occupancy
+                    if (room.currentOccupancy >= room.capacity) {
+                        room.status = 'occupied';
+                    } else if (room.currentOccupancy > 0) {
+                        room.status = 'reserved';
+                    } else {
+                        room.status = 'available';
+                    }
+                    
+                    updatedRooms++;
+                }
+            }
+            
+            await residence.save();
+        }
+        
+        console.log(`✅ Synced ${updatedRooms} rooms across ${residences.length} residences`);
+        
+        res.json({
+            message: 'Room occupancy synced successfully',
+            updatedRooms,
+            totalResidences: residences.length
+        });
+        
+    } catch (error) {
+        console.error('❌ Error syncing room occupancy:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Delete application
+exports.deleteApplication = async (req, res) => {
+    try {
+        const { applicationId } = req.params;
+
+        const application = await Application.findById(applicationId);
+        if (!application) {
+            return res.status(404).json({ error: 'Application not found' });
+        }
+
+        // Check if application is already approved and has a debtor
+        if (application.status === 'approved' && application.debtor) {
+            return res.status(400).json({ 
+                error: 'Cannot delete approved application with active debtor account. Please contact finance department.' 
+            });
+        }
+
+        // If application has a student, remove the room allocation
+        if (application.student) {
+            await User.findByIdAndUpdate(
+                application.student,
+                {
+                    $unset: {
+                        currentRoom: 1,
+                        waitlistedRoom: 1,
+                        roomValidUntil: 1,
+                        roomApprovalDate: 1,
+                        residence: 1
+                    }
+                }
+            );
+        }
+
+        // Delete the application
+        await Application.findByIdAndDelete(applicationId);
+
+        res.json({ 
+            message: 'Application deleted successfully',
+            deletedApplicationId: applicationId
+        });
+
+    } catch (error) {
+        console.error('Error in deleteApplication:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Get expired students
+exports.getExpiredStudents = async (req, res) => {
+    try {
+        console.log('🔍 Getting expired students...');
+        
+        const currentDate = new Date();
+        
+        // Find students whose room validity has expired
+        const expiredStudents = await User.find({
+            role: 'student',
+            roomValidUntil: { $lt: currentDate },
+            currentRoom: { $exists: true, $ne: null }
+        }).select('firstName lastName email currentRoom roomValidUntil roomApprovalDate residence')
+          .populate('residence', 'name');
+        
+        console.log(`✅ Found ${expiredStudents.length} expired students`);
+        
+        res.json({
+            success: true,
+            count: expiredStudents.length,
+            expiredStudents: expiredStudents.map(student => ({
+                id: student._id,
+                firstName: student.firstName,
+                lastName: student.lastName,
+                email: student.email,
+                currentRoom: student.currentRoom,
+                roomValidUntil: student.roomValidUntil,
+                roomApprovalDate: student.roomApprovalDate,
+                residence: student.residence ? {
+                    id: student.residence._id,
+                    name: student.residence.name
+                } : null,
+                daysExpired: Math.ceil((currentDate - student.roomValidUntil) / (1000 * 60 * 60 * 24))
+            }))
+        });
+        
+    } catch (error) {
+        console.error('❌ Error getting expired students:', error);
         res.status(500).json({ error: 'Server error' });
     }
 };
