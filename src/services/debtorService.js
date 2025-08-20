@@ -53,141 +53,7 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             }
         }
         
-        // Check if debtor already exists for this user
-        const existingDebtor = await Debtor.findOne({ user: actualUser._id });
-        if (existingDebtor) {
-            console.log(`Debtor already exists for user ${actualUser.email} - updating with new data`);
-            
-            // Update existing debtor with new application data
-            const updateData = {};
-            
-            if (options.residenceId && !existingDebtor.residence) {
-                updateData.residence = options.residenceId;
-                console.log(`   📍 Updating residence: ${options.residenceId}`);
-            }
-            
-            if (options.roomNumber && !existingDebtor.roomNumber) {
-                updateData.roomNumber = options.roomNumber;
-                console.log(`   🏠 Updating room: ${options.roomNumber}`);
-            }
-            
-            if (options.roomPrice && existingDebtor.roomPrice !== options.roomPrice) {
-                updateData.roomPrice = options.roomPrice;
-                console.log(`   💰 Updating room price: $${options.roomPrice}`);
-            }
-            
-            // Update application linking if provided
-            if (options.application && !existingDebtor.application) {
-                updateData.application = options.application;
-                console.log(`   🔗 Linking to application: ${options.application}`);
-            }
-            
-            if (options.applicationCode && !existingDebtor.applicationCode) {
-                updateData.applicationCode = options.applicationCode;
-                console.log(`   🔗 Linking to application code: ${options.applicationCode}`);
-            }
-            
-            if (options.startDate && options.endDate) {
-                // Recalculate billing period
-                const billingPeriodMonths = Math.ceil((new Date(options.endDate) - new Date(options.startDate)) / (1000 * 60 * 60 * 24 * 30.44));
-                
-                // Determine admin fee based on residence
-                let adminFee = 0;
-                if (options.residenceId) {
-                    try {
-                        const residence = await Residence.findById(options.residenceId);
-                        if (residence && residence.name.toLowerCase().includes('st kilda')) {
-                            adminFee = 20; // St Kilda has $20 admin fee
-                        }
-                    } catch (error) {
-                        console.log(`⚠️  Could not determine admin fee: ${error.message}`);
-                    }
-                }
-                
-                // Calculate deposit (typically 1 month's rent)
-                const deposit = options.roomPrice || 0;
-                
-                // Calculate total owed: (Room Price × Months) + Admin Fee + Deposit
-                const totalRent = (options.roomPrice || 0) * billingPeriodMonths;
-                const expectedTotal = totalRent + adminFee + deposit;
-                
-                updateData.billingPeriod = {
-                    type: billingPeriodMonths === 3 ? 'quarterly' : 
-                          billingPeriodMonths === 6 ? 'semester' : 
-                          billingPeriodMonths === 12 ? 'annual' : 'monthly',
-                    duration: {
-                        value: billingPeriodMonths,
-                        unit: 'months'
-                    },
-                    startDate: new Date(options.startDate),
-                    endDate: new Date(options.endDate),
-                    billingCycle: {
-                        frequency: 'monthly',
-                        dayOfMonth: 1,
-                        gracePeriod: 5
-                    },
-                    amount: {
-                        monthly: options.roomPrice,
-                        total: expectedTotal,
-                        currency: 'USD'
-                    },
-                    status: 'active',
-                    description: `Billing period for ${actualUser.email}`,
-                    notes: options.applicationCode ? 
-                        `Updated from approved application ${options.applicationCode}` : 
-                        `Updated from application data`,
-                    autoRenewal: {
-                        enabled: false,
-                        renewalType: 'same_period',
-                        customRenewalPeriod: null
-                    }
-                };
-                
-                updateData.totalOwed = expectedTotal;
-                updateData.currentBalance = Math.max(expectedTotal - (existingDebtor.totalPaid || 0), 0);
-                updateData.billingPeriodLegacy = `${billingPeriodMonths} months`;
-                updateData.startDate = options.startDate;
-                updateData.endDate = options.endDate;
-                
-                // Add financial breakdown
-                updateData.financialBreakdown = {
-                    monthlyRent: options.roomPrice || 0,
-                    numberOfMonths: billingPeriodMonths,
-                    totalRent: totalRent,
-                    adminFee: adminFee,
-                    deposit: deposit,
-                    totalOwed: expectedTotal
-                };
-                
-                console.log(`   📅 Updating billing period: ${billingPeriodMonths} months`);
-                console.log(`   💰 Updating total owed: $${expectedTotal}`);
-            }
-            
-            // Update the existing debtor if we have new data
-            if (Object.keys(updateData).length > 0) {
-                await Debtor.findByIdAndUpdate(existingDebtor._id, updateData);
-                console.log(`✅ Updated existing debtor with new application data`);
-                
-                // Return the updated debtor
-                return await Debtor.findById(existingDebtor._id);
-            } else {
-                console.log(`✅ Existing debtor already has all current data`);
-                return existingDebtor;
-            }
-        }
-
-        // Generate debtor code and account code
-        const debtorCode = await Debtor.generateDebtorCode();
-        const accountCode = await Debtor.generateAccountCode();
-
-        // Prepare contact info
-        const contactInfo = {
-            name: `${actualUser.firstName} ${actualUser.lastName}`,
-            email: actualUser.email,
-            phone: actualUser.phone
-        };
-
-        // Initialize financial data
+        // Initialize financial data first so we can use it for existing debtor updates
         let roomPrice = 0;
         let startDate = null;
         let endDate = null;
@@ -231,51 +97,6 @@ exports.createDebtorForStudent = async (user, options = {}) => {
                         }
                     }
                 }
-            } else {
-                // Try to find application by user ID
-                const foundApplication = await Application.findOne({ 
-                    student: actualUser._id,
-                    status: 'approved' // Only use approved applications for debtor creation
-                }).populate('residence', 'name rooms');
-                
-                if (foundApplication) {
-                    console.log(`📝 Found APPROVED application for ${actualUser.email}`);
-                    application = foundApplication;
-                    
-                    // Use application dates as primary source
-                    if (foundApplication.startDate && foundApplication.endDate) {
-                        startDate = foundApplication.startDate;
-                        endDate = foundApplication.endDate;
-                        console.log(`   📅 Using application dates: ${startDate.toDateString()} to ${endDate.toDateString()}`);
-                    }
-                    
-                    // Extract residence and room data from application
-                    if (foundApplication.residence) {
-                        residenceId = foundApplication.residence._id;
-                        console.log(`   📍 Residence: ${foundApplication.residence.name}`);
-                        
-                        // Extract room number from application (prioritize allocated room)
-                        roomNumber = foundApplication.allocatedRoom || foundApplication.preferredRoom || foundApplication.roomNumber;
-                        if (roomNumber) {
-                            console.log(`   🏠 Room: ${roomNumber}`);
-                            
-                            // Find room price from residence rooms array
-                            if (foundApplication.residence.rooms && foundApplication.residence.rooms.length > 0) {
-                                const room = foundApplication.residence.rooms.find(r => 
-                                    r.roomNumber === roomNumber || r.name === roomNumber
-                                );
-                                if (room && room.price) {
-                                    roomPrice = room.price;
-                                    console.log(`   💰 Room Price: $${roomPrice}`);
-                                } else {
-                                    console.log(`   ⚠️  Room price not found for ${roomNumber}`);
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    console.log(`ℹ️  No approved application found for ${actualUser.email} - will use fallback data`);
-                }
             }
             
             // If no room price found, try to get it from options or use default
@@ -283,7 +104,153 @@ exports.createDebtorForStudent = async (user, options = {}) => {
                 roomPrice = options.roomPrice || 150;
                 console.log(`   💰 Using fallback room price: $${roomPrice}`);
             }
+        } catch (error) {
+            console.error(`❌ Error extracting financial data:`, error);
+            roomPrice = options.roomPrice || 150;
+        }
 
+        // Check if debtor already exists for this user
+        const existingDebtor = await Debtor.findOne({ user: actualUser._id });
+        if (existingDebtor) {
+            console.log(`Debtor already exists for user ${actualUser.email} - updating with new data`);
+            
+            // Update existing debtor with new application data
+            const updateData = {};
+            
+            if (residenceId && !existingDebtor.residence) {
+                updateData.residence = residenceId;
+                console.log(`   📍 Updating residence: ${residenceId}`);
+            }
+            
+            if (roomNumber && !existingDebtor.roomNumber) {
+                updateData.roomNumber = roomNumber;
+                console.log(`   🏠 Updating room: ${roomNumber}`);
+            }
+            
+            if (roomPrice && existingDebtor.roomPrice !== roomPrice) {
+                updateData.roomPrice = roomPrice;
+                console.log(`   💰 Updating room price from $${existingDebtor.roomPrice} to $${roomPrice}`);
+            }
+            
+            // Update application linking if provided
+            if (options.application && !existingDebtor.application) {
+                updateData.application = options.application;
+                console.log(`   🔗 Linking to application: ${options.application}`);
+            }
+            
+            if (options.applicationCode && !existingDebtor.applicationCode) {
+                updateData.applicationCode = options.applicationCode;
+                console.log(`   🔗 Linking to application code: ${options.applicationCode}`);
+            }
+            
+            if ((options.startDate && options.endDate) || (startDate && endDate)) {
+                // Use provided options dates or extracted dates
+                const useStartDate = options.startDate || startDate;
+                const useEndDate = options.endDate || endDate;
+                // Recalculate billing period
+                const billingPeriodMonths = Math.ceil((new Date(useEndDate) - new Date(useStartDate)) / (1000 * 60 * 60 * 24 * 30.44));
+                
+                // Determine admin fee based on residence
+                let adminFee = 0;
+                if (residenceId) {
+                    try {
+                        const residence = await Residence.findById(residenceId);
+                        if (residence && residence.name.toLowerCase().includes('st kilda')) {
+                            adminFee = 20; // St Kilda has $20 admin fee
+                        }
+                    } catch (error) {
+                        console.log(`⚠️  Could not determine admin fee: ${error.message}`);
+                    }
+                }
+                
+                // Calculate deposit (typically 1 month's rent)
+                const deposit = roomPrice || 0;
+                
+                // Calculate total owed: (Room Price × Months) + Admin Fee + Deposit
+                const totalRent = (roomPrice || 0) * billingPeriodMonths;
+                const expectedTotal = totalRent + adminFee + deposit;
+                
+                updateData.billingPeriod = {
+                    type: billingPeriodMonths === 3 ? 'quarterly' : 
+                          billingPeriodMonths === 6 ? 'semester' : 
+                          billingPeriodMonths === 12 ? 'annual' : 'monthly',
+                    duration: {
+                        value: billingPeriodMonths,
+                        unit: 'months'
+                    },
+                    startDate: new Date(useStartDate),
+                    endDate: new Date(useEndDate),
+                    billingCycle: {
+                        frequency: 'monthly',
+                        dayOfMonth: 1,
+                        gracePeriod: 5
+                    },
+                    amount: {
+                        monthly: roomPrice,
+                        total: expectedTotal,
+                        currency: 'USD'
+                    },
+                    status: 'active',
+                    description: `Billing period for ${actualUser.email}`,
+                    notes: options.applicationCode ? 
+                        `Updated from approved application ${options.applicationCode}` : 
+                        `Updated from application data`,
+                    autoRenewal: {
+                        enabled: false,
+                        renewalType: 'same_period',
+                        customRenewalPeriod: null
+                    }
+                };
+                
+                updateData.totalOwed = expectedTotal;
+                updateData.currentBalance = Math.max(expectedTotal - (existingDebtor.totalPaid || 0), 0);
+                updateData.billingPeriodLegacy = `${billingPeriodMonths} months`;
+                updateData.startDate = useStartDate;
+                updateData.endDate = useEndDate;
+                updateData.roomPrice = roomPrice;
+                
+                // Add financial breakdown
+                updateData.financialBreakdown = {
+                    monthlyRent: roomPrice || 0,
+                    numberOfMonths: billingPeriodMonths,
+                    totalRent: totalRent,
+                    adminFee: adminFee,
+                    deposit: deposit,
+                    totalOwed: expectedTotal
+                };
+                
+                console.log(`   📅 Updating billing period: ${billingPeriodMonths} months`);
+                console.log(`   💰 Updating total owed: $${expectedTotal}`);
+            }
+            
+            // Update the existing debtor if we have new data
+            if (Object.keys(updateData).length > 0) {
+                await Debtor.findByIdAndUpdate(existingDebtor._id, updateData);
+                console.log(`✅ Updated existing debtor with new application data`);
+                
+                // Return the updated debtor
+                return await Debtor.findById(existingDebtor._id);
+            } else {
+                console.log(`✅ Existing debtor already has all current data`);
+                return existingDebtor;
+            }
+        }
+
+        // Generate debtor code and account code
+        const debtorCode = await Debtor.generateDebtorCode();
+        const accountCode = await Debtor.generateAccountCode();
+
+        // Prepare contact info
+        const contactInfo = {
+            name: `${actualUser.firstName} ${actualUser.lastName}`,
+            email: actualUser.email,
+            phone: actualUser.phone
+        };
+
+        // Financial data already extracted above, use the same variables
+        
+        // Continue with additional data sources if needed
+        try {
             // 2. Check for existing lease if no application data
             if (!startDate || !endDate) {
                 const lease = await Lease.findOne({ studentId: actualUser._id });
