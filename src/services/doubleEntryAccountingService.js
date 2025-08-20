@@ -1321,6 +1321,11 @@ class DoubleEntryAccountingService {
                         admin: adminAmount,
                         deposit: depositAmount
                     },
+                    paymentComponents: {
+                        rent: rentAmount,
+                        admin: adminAmount,
+                        deposit: depositAmount
+                    },
                     accountsReceivableCollection: isPastDuePayment || studentHasOutstandingDebt
                 }
             });

@@ -164,7 +164,7 @@ class FinancialReportingService {
                         includes_rental_accruals: true,
                         includes_expenses_incurred: true,
                         includes_cash_payments: false,
-                        source_filter: "Includes rental accruals and manual expense entries",
+                        source_filter: "Includes rental accrual entries and manual expense entries",
                         note: "Based on rental accrual entries and manual expense entries from transactionentries collection"
                     }
                 };
@@ -516,14 +516,39 @@ class FinancialReportingService {
                     const monthIndex = entryDate.getMonth();
                     
                     if (entry.entries && Array.isArray(entry.entries)) {
+                        // For cash basis, look at cash account debits (money received)
                         entry.entries.forEach(lineItem => {
-                            if (lineItem.accountType === 'Income') {
-                                const amount = lineItem.credit || 0;
+                            // Cash basis: Recognize income when cash is received
+                            if (lineItem.accountType === 'Asset' && lineItem.accountCode && lineItem.accountCode.startsWith('10') && lineItem.debit > 0) {
+                                // This is cash received - determine revenue category from payment metadata
+                                let revenueCategory = 'Other Income';
+                                let revenueAccount = '4000';
+                                
+                                // Check if this is a student payment with components
+                                if (entry.metadata && entry.metadata.paymentComponents) {
+                                    const components = entry.metadata.paymentComponents;
+                                    
+                                    if (components.rent && components.rent > 0) {
+                                        revenueCategory = 'Rental Income';
+                                        revenueAccount = '4001';
+                                    } else if (components.admin && components.admin > 0) {
+                                        revenueCategory = 'Administrative Income';
+                                        revenueAccount = '4002';
+                                    } else if (components.deposit && components.deposit > 0) {
+                                        revenueCategory = 'Security Deposit';
+                                        revenueAccount = '2020';
+                                    }
+                                }
+                                
+                                // For cash basis, recognize the full cash amount as income
+                                const amount = lineItem.debit;
                                 monthlyBreakdown[monthIndex].total_revenue += amount;
                                 
-                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                const key = `${revenueAccount} - ${revenueCategory}`;
                                 monthlyBreakdown[monthIndex].revenue[key] = 
                                     (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
+                                
+                                console.log(`💰 Cash basis: Recognized $${amount} as ${revenueCategory} for month ${monthIndex + 1}`);
                             }
                         });
                     }
