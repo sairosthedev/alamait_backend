@@ -58,25 +58,26 @@ const applicationSchema = new mongoose.Schema({
     },
     preferredRoom: {
         type: String,
-        required: function() { return this.requestType === 'new'; }
+        required: false // Made optional to avoid conflicts with roomDetails
     },
     alternateRooms: [{
         type: String
     }],
     currentRoom: {
         type: String,
-        required: function() { return this.requestType === 'upgrade'; }
+        required: false // Made optional to avoid conflicts with roomDetails
     },
     requestedRoom: {
         type: String,
-        required: function() { return this.requestType === 'upgrade'; }
+        required: false // Made optional to avoid conflicts with roomDetails
     },
     reason: {
         type: String,
         required: function() { return this.requestType === 'upgrade'; }
     },
     allocatedRoom: {
-        type: String
+        type: String,
+        required: false // Made optional to avoid conflicts with roomDetails
     },
     waitlistedRoom: {
         type: String
@@ -106,6 +107,25 @@ const applicationSchema = new mongoose.Schema({
         ref: 'Residence',
         required: true
     },
+    
+    // Allocated room details with price linking
+    allocatedRoomDetails: {
+        roomNumber: String,
+        roomId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Residence.rooms'
+        },
+        price: Number,
+        type: String,
+        capacity: Number
+    },
+    
+    // Link to Debtor (for financial tracking)
+    debtor: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Debtor'
+    },
+    
     additionalInfo: {
         dateOfBirth: {
             type: Date
@@ -127,6 +147,7 @@ applicationSchema.index({ status: 1, requestType: 1 });
 applicationSchema.index({ email: 1 });
 applicationSchema.index({ applicationDate: -1 });
 applicationSchema.index({ applicationCode: 1 });
+applicationSchema.index({ debtor: 1 });
 
 // Generate unique application code
 applicationSchema.pre('save', async function(next) {

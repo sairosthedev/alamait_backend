@@ -4,6 +4,10 @@ const { createDebtorForStudent } = require('../services/debtorService');
  * Middleware to automatically create debtor accounts for students
  * This ensures that when role is student, they are automatically debtors
  * so they can be fetched in the debtors collection in frontend
+ * 
+ * NOTE: Debtors are now only created from approved applications, not automatically
+ * when students are created. This middleware is kept for backward compatibility
+ * but the automatic creation is disabled.
  */
 
 const autoCreateDebtor = async (req, res, next) => {
@@ -13,6 +17,10 @@ const autoCreateDebtor = async (req, res, next) => {
             return next();
         }
 
+        // DISABLED: Automatic debtor creation when students are created
+        // Debtors should only be created from approved applications
+        // This prevents creating debtors without proper financial data
+        
         // If this is a new student being created
         if (req.method === 'POST' && req.body.role === 'student') {
             // Store the original response.json method
@@ -20,15 +28,10 @@ const autoCreateDebtor = async (req, res, next) => {
             
             // Override res.json to intercept the response
             res.json = function(data) {
-                // If student was created successfully, create debtor account
+                // DISABLED: Don't create debtor automatically
+                // Debtors will be created when applications are approved
                 if (data.user && data.user._id && data.user.role === 'student') {
-                    createDebtorForStudent(data.user, {
-                        createdBy: data.user._id
-                    }).then(() => {
-                        console.log(`✅ Auto-created debtor account for student: ${data.user.email}`);
-                    }).catch((error) => {
-                        console.error(`❌ Failed to auto-create debtor account for student: ${data.user.email}`, error);
-                    });
+                    console.log(`ℹ️  Student created: ${data.user.email} - Debtor will be created when application is approved`);
                 }
                 
                 // Call the original json method
@@ -40,24 +43,15 @@ const autoCreateDebtor = async (req, res, next) => {
         if (req.method === 'PUT' || req.method === 'PATCH') {
             const userId = req.params.id || req.body._id;
             if (userId && req.body.role === 'student') {
+                // DISABLED: Don't create debtor automatically
                 // Check if debtor already exists
                 const Debtor = require('../models/Debtor');
                 const existingDebtor = await Debtor.findOne({ user: userId });
                 
                 if (!existingDebtor) {
-                    // Get user details
-                    const User = require('../models/User');
-                    const user = await User.findById(userId);
-                    
-                    if (user) {
-                        createDebtorForStudent(user, {
-                            createdBy: req.user?._id || 'system'
-                        }).then(() => {
-                            console.log(`✅ Auto-created debtor account for existing student: ${user.email}`);
-                        }).catch((error) => {
-                            console.error(`❌ Failed to auto-create debtor account for existing student: ${user.email}`, error);
-                        });
-                    }
+                    console.log(`ℹ️  Student role updated: ${userId} - Debtor will be created when application is approved`);
+                } else {
+                    console.log(`✅ Debtor already exists for student: ${userId}`);
                 }
             }
         }

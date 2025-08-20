@@ -45,7 +45,26 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             if (options.startDate && options.endDate) {
                 // Recalculate billing period
                 const billingPeriodMonths = Math.ceil((new Date(options.endDate) - new Date(options.startDate)) / (1000 * 60 * 60 * 24 * 30.44));
-                const expectedTotal = options.roomPrice * billingPeriodMonths;
+                
+                // Determine admin fee based on residence
+                let adminFee = 0;
+                if (options.residenceId) {
+                    try {
+                        const residence = await Residence.findById(options.residenceId);
+                        if (residence && residence.name.toLowerCase().includes('st kilda')) {
+                            adminFee = 20; // St Kilda has $20 admin fee
+                        }
+                    } catch (error) {
+                        console.log(`⚠️  Could not determine admin fee: ${error.message}`);
+                    }
+                }
+                
+                // Calculate deposit (typically 1 month's rent)
+                const deposit = options.roomPrice || 0;
+                
+                // Calculate total owed: (Room Price × Months) + Admin Fee + Deposit
+                const totalRent = (options.roomPrice || 0) * billingPeriodMonths;
+                const expectedTotal = totalRent + adminFee + deposit;
                 
                 updateData.billingPeriod = {
                     type: billingPeriodMonths === 3 ? 'quarterly' : 
@@ -82,6 +101,16 @@ exports.createDebtorForStudent = async (user, options = {}) => {
                 updateData.billingPeriodLegacy = `${billingPeriodMonths} months`;
                 updateData.startDate = options.startDate;
                 updateData.endDate = options.endDate;
+                
+                // Add financial breakdown
+                updateData.financialBreakdown = {
+                    monthlyRent: options.roomPrice || 0,
+                    numberOfMonths: billingPeriodMonths,
+                    totalRent: totalRent,
+                    adminFee: adminFee,
+                    deposit: deposit,
+                    totalOwed: expectedTotal
+                };
                 
                 console.log(`   📅 Updating billing period: ${billingPeriodMonths} months`);
                 console.log(`   💰 Updating total owed: $${expectedTotal}`);
@@ -120,21 +149,28 @@ exports.createDebtorForStudent = async (user, options = {}) => {
 
         // Try to get financial data from various sources
         try {
-            // 1. Check for existing application
-            const application = await Application.findOne({ student: user._id })
-                .populate('residence', 'name rooms');
+            // 1. Check for existing application (PRIORITY: Use application data first)
+            const application = await Application.findOne({ 
+                student: user._id,
+                status: 'approved' // Only use approved applications for debtor creation
+            }).populate('residence', 'name rooms');
             
             if (application) {
-                console.log(`📝 Found application for ${user.email}`);
-                startDate = application.startDate || options.startDate;
-                endDate = application.endDate || options.endDate;
+                console.log(`📝 Found APPROVED application for ${user.email}`);
+                
+                // Use application dates as primary source
+                if (application.startDate && application.endDate) {
+                    startDate = application.startDate;
+                    endDate = application.endDate;
+                    console.log(`   📅 Using application dates: ${startDate.toDateString()} to ${endDate.toDateString()}`);
+                }
                 
                 // Extract residence and room data from application
                 if (application.residence) {
                     residenceId = application.residence._id;
                     console.log(`   📍 Residence: ${application.residence.name}`);
                     
-                    // Extract room number from application
+                    // Extract room number from application (prioritize allocated room)
                     roomNumber = application.allocatedRoom || application.preferredRoom || application.roomNumber;
                     if (roomNumber) {
                         console.log(`   🏠 Room: ${roomNumber}`);
@@ -159,6 +195,8 @@ exports.createDebtorForStudent = async (user, options = {}) => {
                     roomPrice = options.roomPrice || 150;
                     console.log(`   💰 Using fallback room price: $${roomPrice}`);
                 }
+            } else {
+                console.log(`ℹ️  No approved application found for ${user.email} - will use fallback data`);
             }
 
             // 2. Check for existing lease if no application data
@@ -223,7 +261,32 @@ exports.createDebtorForStudent = async (user, options = {}) => {
 
         // Calculate billing period and expected total
         const billingPeriodMonths = Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24 * 30.44));
-        const expectedTotal = roomPrice * billingPeriodMonths;
+        
+        // Determine admin fee based on residence
+        let adminFee = 0;
+        if (residenceId) {
+            try {
+                const residence = await Residence.findById(residenceId);
+                if (residence && residence.name.toLowerCase().includes('st kilda')) {
+                    adminFee = 20; // St Kilda has $20 admin fee
+                }
+            } catch (error) {
+                console.log(`⚠️  Could not determine admin fee: ${error.message}`);
+            }
+        }
+        
+        // Calculate deposit (typically 1 month's rent)
+        const deposit = roomPrice;
+        
+        // Calculate total owed: (Room Price × Months) + Admin Fee + Deposit
+        const totalRent = roomPrice * billingPeriodMonths;
+        const expectedTotal = totalRent + adminFee + deposit;
+        
+        console.log(`💰 Financial Calculation:`);
+        console.log(`   Monthly Rent: $${roomPrice} × ${billingPeriodMonths} months = $${totalRent}`);
+        console.log(`   Admin Fee: $${adminFee}`);
+        console.log(`   Deposit: $${deposit}`);
+        console.log(`   Total Owed: $${expectedTotal}`);
 
         // Get existing payments for this student
         const payments = await Payment.find({
@@ -311,6 +374,15 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             startDate,
             endDate,
             roomPrice,
+            // Add financial breakdown
+            financialBreakdown: {
+                monthlyRent: roomPrice,
+                numberOfMonths: billingPeriodMonths,
+                totalRent: totalRent,
+                adminFee: adminFee,
+                deposit: deposit,
+                totalOwed: expectedTotal
+            },
             contactInfo,
             createdBy: options.createdBy || user._id
         };
@@ -487,6 +559,251 @@ exports.studentHasDebtor = async (userId) => {
         return !!debtor;
     } catch (error) {
         console.error('Error checking if student has debtor:', error);
+        throw error;
+    }
+};
+
+/**
+ * Create debtors from approved applications
+ * This function processes all approved applications and creates/updates debtors
+ * @returns {Promise<Object>} Summary of operations
+ */
+exports.createDebtorsFromApprovedApplications = async () => {
+    try {
+        console.log('🚀 Creating debtors from approved applications...\n');
+        
+        // Get all approved applications
+        const approvedApplications = await Application.find({ 
+            status: 'approved',
+            student: { $exists: true, $ne: null }
+        }).populate('student', 'firstName lastName email role')
+          .populate('residence', 'name rooms');
+        
+        console.log(`📋 Found ${approvedApplications.length} approved applications with students\n`);
+        
+        let newDebtorsCreated = 0;
+        let existingDebtorsUpdated = 0;
+        let errors = [];
+        
+        for (const application of approvedApplications) {
+            try {
+                console.log(`\n🔍 Processing: ${application.applicationCode} - ${application.firstName} ${application.lastName}`);
+                
+                if (!application.student) {
+                    console.log('   ❌ No student linked, skipping...');
+                    continue;
+                }
+                
+                if (application.student.role !== 'student') {
+                    console.log(`   ⚠️  User is not a student (${application.student.role}), skipping...`);
+                    continue;
+                }
+                
+                // Check if debtor already exists
+                const existingDebtor = await Debtor.findOne({ user: application.student._id });
+                
+                if (existingDebtor) {
+                    console.log(`   🔄 Updating existing debtor: ${existingDebtor.debtorCode}`);
+                    
+                    // Update debtor with application data
+                    const updateData = {};
+                    
+                    if (application.residence && !existingDebtor.residence) {
+                        updateData.residence = application.residence._id;
+                    }
+                    
+                    if (application.allocatedRoom && !existingDebtor.roomNumber) {
+                        updateData.roomNumber = application.allocatedRoom;
+                    }
+                    
+                    if (application.startDate && application.endDate) {
+                        updateData.startDate = application.startDate;
+                        updateData.endDate = application.endDate;
+                        
+                        // Get room price and calculate financials
+                        let roomPrice = 0;
+                        if (application.residence && application.residence.rooms) {
+                            const room = application.residence.rooms.find(r => 
+                                r.roomNumber === application.allocatedRoom
+                            );
+                            if (room && room.price) {
+                                roomPrice = room.price;
+                                updateData.roomPrice = roomPrice;
+                                
+                                // Calculate months and total owed
+                                const startDate = new Date(application.startDate);
+                                const endDate = new Date(application.endDate);
+                                const monthsDiff = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24 * 30.44));
+                                
+                                // Determine admin fee
+                                let adminFee = 0;
+                                if (application.residence.name.toLowerCase().includes('st kilda')) {
+                                    adminFee = 20;
+                                }
+                                
+                                const deposit = roomPrice;
+                                const totalRent = roomPrice * monthsDiff;
+                                const totalOwed = totalRent + adminFee + deposit;
+                                
+                                updateData.totalOwed = totalOwed;
+                                updateData.financialBreakdown = {
+                                    monthlyRent: roomPrice,
+                                    numberOfMonths: monthsDiff,
+                                    totalRent: totalRent,
+                                    adminFee: adminFee,
+                                    deposit: deposit,
+                                    totalOwed: totalOwed
+                                };
+                                
+                                console.log(`   💰 Updated financials: $${roomPrice}/month × ${monthsDiff} months + $${adminFee} admin + $${deposit} deposit = $${totalOwed}`);
+                            }
+                        }
+                    }
+                    
+                    if (Object.keys(updateData).length > 0) {
+                        await Debtor.findByIdAndUpdate(existingDebtor._id, updateData);
+                        console.log(`   ✅ Debtor updated successfully`);
+                        existingDebtorsUpdated++;
+                    } else {
+                        console.log(`   ℹ️  No updates needed`);
+                    }
+                    
+                } else {
+                    console.log(`   🆕 Creating new debtor...`);
+                    
+                    // Create new debtor using the existing service
+                    const newDebtor = await exports.createDebtorForStudent(application.student, {
+                        residenceId: application.residence?._id,
+                        roomNumber: application.allocatedRoom,
+                        startDate: application.startDate,
+                        endDate: application.endDate,
+                        createdBy: application.student._id
+                    });
+                    
+                    console.log(`   ✅ New debtor created: ${newDebtor.debtorCode}`);
+                    newDebtorsCreated++;
+                }
+                
+            } catch (error) {
+                console.error(`   ❌ Error processing application ${application.applicationCode}:`, error.message);
+                errors.push({
+                    applicationCode: application.applicationCode,
+                    error: error.message
+                });
+            }
+        }
+        
+        const summary = {
+            totalApplications: approvedApplications.length,
+            newDebtorsCreated,
+            existingDebtorsUpdated,
+            errors: errors.length,
+            errorDetails: errors
+        };
+        
+        console.log(`\n📊 Summary:`);
+        console.log(`   Total Approved Applications: ${summary.totalApplications}`);
+        console.log(`   New Debtors Created: ${summary.newDebtorsCreated}`);
+        console.log(`   Existing Debtors Updated: ${summary.existingDebtorsUpdated}`);
+        console.log(`   Errors: ${summary.errors}`);
+        
+        if (errors.length > 0) {
+            console.log('\n❌ Errors encountered:');
+            errors.forEach(error => {
+                console.log(`   - ${error.applicationCode}: ${error.error}`);
+            });
+        }
+        
+        console.log('\n✅ Debtor creation from applications completed!');
+        return summary;
+        
+    } catch (error) {
+        console.error('❌ Error in createDebtorsFromApprovedApplications:', error);
+        throw error;
+    }
+};
+
+/**
+ * Create debtors from approved applications that don't have debtors yet
+ * This is useful for migrating existing approved applications
+ * @returns {Promise<Object>} Summary of created debtors
+ */
+exports.createDebtorsFromApprovedApplications = async () => {
+    try {
+        console.log('🔍 Finding approved applications without debtors...');
+        
+        // Find all approved applications that don't have debtors
+        const applications = await Application.find({
+            status: 'approved',
+            $or: [
+                { debtor: { $exists: false } },
+                { debtor: null }
+            ]
+        }).populate('student', 'firstName lastName email phone')
+          .populate('residence', 'name rooms');
+        
+        console.log(`📋 Found ${applications.length} approved applications without debtors`);
+        
+        const results = {
+            total: applications.length,
+            created: 0,
+            failed: 0,
+            errors: []
+        };
+        
+        for (const application of applications) {
+            try {
+                if (!application.student) {
+                    console.log(`⚠️  Application ${application._id} has no student - skipping`);
+                    results.failed++;
+                    continue;
+                }
+                
+                // Check if debtor already exists for this student
+                const existingDebtor = await Debtor.findOne({ user: application.student._id });
+                if (existingDebtor) {
+                    console.log(`ℹ️  Debtor already exists for student ${application.student.email} - linking to application`);
+                    
+                    // Link the existing debtor to the application
+                    application.debtor = existingDebtor._id;
+                    await application.save();
+                    console.log(`✅ Linked existing debtor ${existingDebtor._id} to application ${application._id}`);
+                    continue;
+                }
+                
+                // Create new debtor for this student
+                const debtor = await exports.createDebtorForStudent(application.student, {
+                    createdBy: 'system',
+                    residenceId: application.residence?._id,
+                    roomNumber: application.allocatedRoom || application.preferredRoom,
+                    startDate: application.startDate,
+                    endDate: application.endDate,
+                    application: application._id
+                });
+                
+                // Link the debtor to the application
+                application.debtor = debtor._id;
+                await application.save();
+                
+                console.log(`✅ Created debtor ${debtor._id} for student ${application.student.email}`);
+                results.created++;
+                
+            } catch (error) {
+                console.error(`❌ Failed to create debtor for application ${application._id}:`, error.message);
+                results.failed++;
+                results.errors.push({
+                    applicationId: application._id,
+                    studentEmail: application.student?.email || 'unknown',
+                    error: error.message
+                });
+            }
+        }
+        
+        console.log(`📊 Debtor creation summary:`, results);
+        return results;
+        
+    } catch (error) {
+        console.error('❌ Error in createDebtorsFromApprovedApplications:', error);
         throw error;
     }
 }; 

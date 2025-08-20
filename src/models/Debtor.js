@@ -97,10 +97,31 @@ const debtorSchema = new mongoose.Schema({
     trim: true
   },
   
+  // Room details from residence collection
+  roomDetails: {
+    roomId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Residence.rooms'
+    },
+    roomType: String,
+    roomCapacity: Number,
+    roomFeatures: [String],
+    roomAmenities: [String],
+    roomFloor: Number,
+    roomArea: Number
+  },
+  
   // Application Information (for syncing)
   application: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Application'
+  },
+  
+  // Application Code for easier linking
+  applicationCode: {
+    type: String,
+    trim: true,
+    index: true
   },
   
   // Enhanced Billing Period Object
@@ -221,6 +242,40 @@ const debtorSchema = new mongoose.Schema({
     type: Number,
     default: 0,
     min: 0
+  },
+  
+  // Financial breakdown for transparency
+  financialBreakdown: {
+    monthlyRent: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    numberOfMonths: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    totalRent: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    adminFee: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    deposit: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    totalOwed: {
+      type: Number,
+      default: 0,
+      min: 0
+    }
   },
   
   // ENHANCED: Comprehensive Payment Tracking with Month Allocation

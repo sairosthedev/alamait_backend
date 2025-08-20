@@ -1,5 +1,6 @@
 const Account = require('../../models/Account');
 const AccountCodeService = require('../../services/accountCodeService');
+const mongoose = require('mongoose'); // Added for database connection check
 
 /**
  * Get all accounts with optional filtering
@@ -309,6 +310,15 @@ exports.getNextAccountCode = async (req, res) => {
       });
     }
     
+    // Check database connection before proceeding
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Database not connected. Ready state:', mongoose.connection.readyState);
+      return res.status(503).json({ 
+        error: 'Database service temporarily unavailable. Please try again in a moment.',
+        details: 'Database connection is not ready'
+      });
+    }
+    
     // Map 'Revenue' to 'Income' for the model
     const modelType = type === 'Revenue' ? 'Income' : type;
     
@@ -324,6 +334,22 @@ exports.getNextAccountCode = async (req, res) => {
     });
   } catch (error) {
     console.error('Error getting next account code:', error);
+    
+    // Provide more specific error messages
+    if (error.name === 'MongooseError' && error.message.includes('buffering timed out')) {
+      return res.status(503).json({ 
+        error: 'Database connection timeout. Please try again.',
+        details: 'The database operation timed out while waiting for connection'
+      });
+    }
+    
+    if (error.name === 'MongoNetworkError') {
+      return res.status(503).json({ 
+        error: 'Database network error. Please try again.',
+        details: 'Unable to connect to the database server'
+      });
+    }
+    
     res.status(500).json({ error: 'Failed to generate account code' });
   }
 };
@@ -430,5 +456,43 @@ exports.getAccountStats = async (req, res) => {
   } catch (error) {
     console.error('Error fetching account statistics:', error);
     res.status(500).json({ error: 'Failed to fetch account statistics' });
+  }
+};
+
+/**
+ * Get debtors by application code
+ */
+exports.getDebtorsByApplicationCode = async (req, res) => {
+  try {
+    const { applicationCode } = req.params;
+    
+    if (!applicationCode) {
+      return res.status(400).json({ error: 'Application code is required' });
+    }
+    
+    const Debtor = require('../../models/Debtor');
+    
+    const debtors = await Debtor.find({ applicationCode })
+      .populate('application', 'firstName lastName startDate endDate status')
+      .populate('user', 'firstName lastName email')
+      .populate('residence', 'name');
+    
+    if (debtors.length === 0) {
+      return res.status(404).json({ 
+        error: 'No debtors found with this application code',
+        applicationCode 
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      applicationCode,
+      count: debtors.length,
+      debtors
+    });
+    
+  } catch (error) {
+    console.error('Error fetching debtors by application code:', error);
+    res.status(500).json({ error: 'Failed to fetch debtors' });
   }
 }; 

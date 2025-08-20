@@ -20,7 +20,9 @@
     "update-all-waitlisted": "node scripts/updateAllWaitlistedApplications.js",
     "update-room-c2": "node scripts/updateRoomC2Status.js",
     "update-specific-room": "node scripts/updateSpecificRoomStatus.js",
-    "fix-room-types": "node scripts/fixInvalidRoomTypes.js"
+    "fix-room-types": "node scripts/fixInvalidRoomTypes.js",
+    "create-debtors-from-applications": "node scripts/create-debtors-from-approved-applications.js",
+    "update-macdonald-debtor": "node scripts/update-macdonald-debtor.js"
   },
   "keywords": [],
   "author": "",

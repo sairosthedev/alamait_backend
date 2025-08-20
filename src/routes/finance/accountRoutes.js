@@ -84,4 +84,10 @@ router.get('/stats/overview',
     accountController.getAccountStats
 );
 
+// Get debtors by application code
+router.get('/debtors/application/:applicationCode', 
+    checkRole(['finance', 'finance_admin', 'finance_user', 'admin', 'ceo']), 
+    accountController.getDebtorsByApplicationCode
+);
+
 module.exports = router; 
