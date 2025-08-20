@@ -1124,31 +1124,27 @@ class DoubleEntryAccountingService {
 
                     switch (paymentItem.type) {
                         case 'admin':
-                            // Admin fee is always revenue (earned immediately)
-                            if (adminFeeAccount) {
-                                entries.push({
-                                    accountCode: adminFeeAccount,
-                                    accountName: 'Administrative Income',
-                                    accountType: 'Income',
-                                    debit: 0,
-                                    credit: amount,
-                                    description: `Admin fee from ${studentName} (${payment.paymentId})`
-                                });
-                            }
+                            // Accrual basis: settle AR for admin fee (revenue was recognized at lease start)
+                            entries.push({
+                                accountCode: studentAccount,
+                                accountName: 'Accounts Receivable - Tenants',
+                                accountType: 'Asset',
+                                debit: 0,
+                                credit: amount,
+                                description: `Admin fee payment settles accrual for ${studentName} (${payment.paymentId})`
+                            });
                             break;
                             
                         case 'deposit':
-                            // Deposit is always a liability (owed back to tenant)
-                            if (depositAccount) {
-                                entries.push({
-                                    accountCode: depositAccount,
-                                    accountName: 'Tenant Deposits Held',
-                                    accountType: 'Liability',
-                                    debit: 0,
-                                    credit: amount,
-                                    description: `Security deposit from ${studentName} (${payment.paymentId})`
-                                });
-                            }
+                            // Accrual basis: settle AR for deposit (liability was recognized at lease start)
+                            entries.push({
+                                accountCode: studentAccount,
+                                accountName: 'Accounts Receivable - Tenants',
+                                accountType: 'Asset',
+                                debit: 0,
+                                credit: amount,
+                                description: `Security deposit payment settles accrual for ${studentName} (${payment.paymentId})`
+                            });
                             break;
                             
                         case 'rent': {
