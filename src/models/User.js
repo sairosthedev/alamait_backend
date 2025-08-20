@@ -219,9 +219,9 @@ userSchema.post('save', async function(doc) {
                         console.log(`      Room: ${application.allocatedRoom}`);
                         console.log(`      Match Type: ${application.email === this.email ? 'Email' : 'Application Code'}`);
                         
-                        // If application is approved, create debtor account NOW (when student registers)
+                        // If application is approved, create debtor account
                         if (application.status === 'approved') {
-                            console.log(`   🏗️  Application is approved, creating debtor account for new student...`);
+                            console.log(`   🏗️  Application is approved, creating debtor account...`);
                             
                             try {
                                 const { createDebtorForStudent } = require('../services/debtorService');
@@ -257,8 +257,6 @@ userSchema.post('save', async function(doc) {
                             } catch (debtorError) {
                                 console.error(`   ❌ Error creating debtor account:`, debtorError.message);
                             }
-                        } else {
-                            console.log(`   ℹ️  Application not approved (${application.status}), debtor will be created when approved`);
                         }
                         
                     } catch (linkError) {
