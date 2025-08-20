@@ -409,7 +409,7 @@ class RentalAccrualService {
                 createdBy: 'system',
                 status: 'posted',
                 metadata: {
-                    studentId: student.student || student._id,
+                    applicationId: student._id.toString(),
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
                     room: student.allocatedRoom,
