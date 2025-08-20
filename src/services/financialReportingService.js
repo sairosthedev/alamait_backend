@@ -349,7 +349,7 @@ class FinancialReportingService {
                 // For accrual basis, also get expense entries
                 const expenseQuery = {
                     date: { $gte: startDate, $lte: endDate },
-                    source: 'expense_accrual',
+                    source: { $in: ['expense_accrual', 'manual'] },
                     status: 'posted'
                 };
                 

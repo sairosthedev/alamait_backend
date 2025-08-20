@@ -182,7 +182,7 @@ class RentalAccrualService {
                 createdBy: 'system',
                 status: 'posted',
                 metadata: {
-                    studentId: application.student,
+                    applicationId: application._id.toString(),
                     studentName: `${application.firstName} ${application.lastName}`,
                     residence: application.residence,
                     room: application.allocatedRoom,
@@ -297,13 +297,13 @@ class RentalAccrualService {
                     const leaseStartMonth = leaseStartDate.getMonth() + 1;
                     const leaseStartYear = leaseStartDate.getFullYear();
                     if (leaseStartMonth === month && leaseStartYear === year) {
-                        // Extra safety: if a lease_start entry exists for this student and start date, skip
+                        // Extra safety: if a lease_start entry exists for this application and start date, skip
                         const existingLeaseStart = await TransactionEntry.findOne({
-                            'metadata.studentId': student.student || student._id,
+                            'metadata.applicationId': student._id.toString(),
                             'metadata.type': 'lease_start',
-                            'metadata.leaseStartDate': student.startDate || leaseStartDate.toISOString()
+                            'metadata.leaseStartDate': student.startDate || leaseStartDate
                         });
-                        if (existingLeaseStart || true) {
+                        if (existingLeaseStart) {
                             return { success: false, error: 'Lease start month is already accrued (prorated). Skipping monthly accrual.' };
                         }
                     }
@@ -312,7 +312,7 @@ class RentalAccrualService {
 
             // Check if accrual already exists for this month
             const existingAccrual = await TransactionEntry.findOne({
-                'metadata.studentId': student.student || student._id,
+                'metadata.applicationId': student._id.toString(),
                 'metadata.accrualMonth': month,
                 'metadata.accrualYear': year,
                 'metadata.type': 'monthly_rent_accrual'
@@ -359,7 +359,7 @@ class RentalAccrualService {
                 residence: student.residence,
                 createdBy: 'system',
                 metadata: {
-                    studentId: student.student || student._id,
+                    applicationId: student._id.toString(),
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
                     room: student.allocatedRoom,
