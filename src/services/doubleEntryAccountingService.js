@@ -498,7 +498,7 @@ class DoubleEntryAccountingService {
             
             // Check if transaction already exists to prevent duplicates
             const existingTransaction = await TransactionEntry.findOne({
-                source: 'expense_payment',
+                source: 'expense_accrual',
                 sourceId: request._id,
                 'metadata.requestType': 'maintenance',
                 createdAt: { $gte: new Date(Date.now() - 60000) } // Within last minute
@@ -602,8 +602,8 @@ class DoubleEntryAccountingService {
                         });
                     } else {
                         entries.push({
-                            accountCode: await this.getOrCreateAccount('2000', 'Accounts Payable: General', 'Liability'),
-                            accountName: 'Accounts Payable: General',
+                            accountCode: '2000',
+                            accountName: 'Accounts Payable',
                             accountType: 'Liability',
                             debit: 0,
                             credit: amount,
@@ -623,7 +623,7 @@ class DoubleEntryAccountingService {
                 entries,
                 totalDebit: totalAmount,
                 totalCredit: totalAmount,
-                source: 'expense_payment',
+                source: 'expense_accrual',
                 sourceId: request._id,
                 sourceModel: 'Request',
                 residence: request.residence, // Add residence reference
