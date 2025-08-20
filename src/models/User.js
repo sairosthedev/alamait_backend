@@ -184,23 +184,14 @@ userSchema.post('save', async function(doc) {
         if (this.isNew) {
             console.log(`🔗 Auto-linking new user to existing applications: ${this.firstName} ${this.lastName}`);
             
-            // Check if there are any applications with matching email OR application code but no student field
+            // Check if there are any applications with matching email but no student field
             const Application = require('./Application');
             const applicationsToLink = await Application.find({
-                $and: [
-                    {
-                        $or: [
-                            { email: this.email },
-                            { applicationCode: this.applicationCode }
-                        ]
-                    },
-                    {
-                        $or: [
-                            { student: { $exists: false } },
-                            { student: null },
-                            { student: undefined }
-                        ]
-                    }
+                email: this.email,
+                $or: [
+                    { student: { $exists: false } },
+                    { student: null },
+                    { student: undefined }
                 ]
             });
             
@@ -217,7 +208,6 @@ userSchema.post('save', async function(doc) {
                         console.log(`      Application: ${application.firstName} ${application.lastName}`);
                         console.log(`      Status: ${application.status}`);
                         console.log(`      Room: ${application.allocatedRoom}`);
-                        console.log(`      Match Type: ${application.email === this.email ? 'Email' : 'Application Code'}`);
                         
                         // If application is approved, create debtor account
                         if (application.status === 'approved') {
@@ -225,34 +215,13 @@ userSchema.post('save', async function(doc) {
                             
                             try {
                                 const { createDebtorForStudent } = require('../services/debtorService');
+                                const debtor = await createDebtorForStudent(this, {
+                                    createdBy: this._id,
+                                    application: application._id
+                                });
                                 
-                                // Get residence and room data from application
-                                const residenceId = application.residence;
-                                const roomNumber = application.allocatedRoom;
-                                
-                                if (residenceId && roomNumber) {
-                                    const debtor = await createDebtorForStudent(this, {
-                                        createdBy: this._id,
-                                        residenceId: residenceId,
-                                        roomNumber: roomNumber,
-                                        startDate: application.startDate,
-                                        endDate: application.endDate,
-                                        application: application._id,
-                                        applicationCode: application.applicationCode
-                                    });
-                                    
-                                    if (debtor) {
-                                        console.log(`   ✅ Created debtor account: ${debtor.debtorCode}`);
-                                        
-                                        // Link the debtor back to the application
-                                        application.debtor = debtor._id;
-                                        await application.save();
-                                        console.log(`   🔗 Linked debtor ${debtor._id} to application ${application._id}`);
-                                    }
-                                } else {
-                                    console.log(`   ⚠️  Cannot create debtor: Missing residence or room data`);
-                                    console.log(`      Residence: ${residenceId || 'Not set'}`);
-                                    console.log(`      Room: ${roomNumber || 'Not set'}`);
+                                if (debtor) {
+                                    console.log(`   ✅ Created debtor account: ${debtor.debtorCode}`);
                                 }
                             } catch (debtorError) {
                                 console.error(`   ❌ Error creating debtor account:`, debtorError.message);
@@ -267,7 +236,7 @@ userSchema.post('save', async function(doc) {
                 console.log(`   🎯 Auto-linking completed for ${this.firstName} ${this.lastName}`);
                 
             } else {
-                console.log(`   ℹ️  No applications found to link for ${this.email} (email) or ${this.applicationCode || 'no code'} (application code)`);
+                console.log(`   ℹ️  No applications found to link for ${this.email}`);
             }
         }
     } catch (error) {

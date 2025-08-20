@@ -22,10 +22,7 @@
     "update-specific-room": "node scripts/updateSpecificRoomStatus.js",
     "fix-room-types": "node scripts/fixInvalidRoomTypes.js",
     "create-debtors-from-applications": "node scripts/create-debtors-from-approved-applications.js",
-    "update-macdonald-debtor": "node scripts/update-macdonald-debtor.js",
-    "debug-application-debtor": "node scripts/debug-application-debtor.js",
-    "map-application-codes": "node scripts/map-application-codes-to-applications.js",
-    "fix-macdonald-mapping": "node scripts/fix-macdonald-application-mapping.js"
+    "update-macdonald-debtor": "node scripts/update-macdonald-debtor.js"
   },
   "keywords": [],
   "author": "",
