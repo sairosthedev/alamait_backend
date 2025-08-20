@@ -393,18 +393,12 @@ app.use((err, req, res, next) => {
     });
 });
 
-// Start the server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Server is running on port ${PORT}`);
-    
-    // Start monthly accrual cron service
-    try {
-        monthlyAccrualCronService.start();
-        console.log('✅ Monthly accrual cron service started');
-    } catch (error) {
-        console.error('❌ Failed to start monthly accrual cron service:', error);
-    }
-});
+// Start monthly accrual cron service
+try {
+    monthlyAccrualCronService.start();
+    console.log('✅ Monthly accrual cron service started');
+} catch (error) {
+    console.error('❌ Failed to start monthly accrual cron service:', error);
+}
 
 module.exports = app;

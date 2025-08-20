@@ -41,3 +41,5 @@ async function checkApplicationSchema() {
 // Run the script
 checkApplicationSchema();
 
+
+
