@@ -1373,8 +1373,9 @@ exports.financeApproval = async (req, res) => {
                 if (request.items && request.items.length > 0) {
                     console.log(`📦 Processing ${request.items.length} items for expense creation...`);
                     
-                    const FinancialService = require('../services/financialService');
-                    financialResult = await FinancialService.createApprovalTransaction(request, user);
+                    // Use the proper DoubleEntryAccountingService for maintenance approval
+                    const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
+                    financialResult = await DoubleEntryAccountingService.recordMaintenanceApproval(request, user);
                     
                     // Update request with expense reference
                     request.convertedToExpense = true;
@@ -1717,24 +1718,31 @@ async function createItemizedExpensesForRequest(request, user) {
                 // Item without quotation - create expense with estimated cost (default to cash)
                 const expenseId = await generateUniqueId('EXP');
                 
-                // Map category to expense account code
-                const categoryExpenseMap = {
-                    'maintenance': '5000', // Repairs and Maintenance
-                    'utilities': '5001',   // Utilities - Water
-                    'supplies': '5013',    // Administrative Expenses
-                    'equipment': '5000',   // Repairs and Maintenance
-                    'services': '5013',    // Administrative Expenses
-                    'cleaning': '5010',    // House keeping
-                    'security': '5011',    // Security Costs
-                    'landscaping': '5000', // Repairs and Maintenance
-                    'electrical': '5002',  // Utilities - Electricity
-                    'plumbing': '5000',    // Repairs and Maintenance
-                    'carpentry': '5000',   // Repairs and Maintenance
-                    'painting': '5000',    // Repairs and Maintenance
-                    'other': '5013'        // Administrative Expenses
-                };
-                
-                const expenseAccountCode = categoryExpenseMap[item.category] || '5013';
+                // Enhanced account resolution using DoubleEntryAccountingService
+                let expenseAccountCode = '5007'; // Default to Property Maintenance
+                try {
+                    const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
+                    expenseAccountCode = await DoubleEntryAccountingService.resolveExpenseAccount(item, request);
+                } catch (error) {
+                    console.warn('Error resolving expense account, using default:', error.message);
+                    // Fallback to default mapping
+                    const categoryExpenseMap = {
+                        'maintenance': '5007', // Property Maintenance
+                        'utilities': '5003',   // Utilities - Electricity
+                        'supplies': '5011',    // Maintenance Supplies
+                        'equipment': '5007',   // Property Maintenance
+                        'services': '5062',    // Professional Fees
+                        'cleaning': '5009',    // Cleaning Services
+                        'security': '5014',    // Security Services
+                        'landscaping': '5012', // Garden & Landscaping
+                        'electrical': '5007',  // Property Maintenance
+                        'plumbing': '5007',    // Property Maintenance
+                        'carpentry': '5007',  // Property Maintenance
+                        'painting': '5007',   // Property Maintenance
+                        'other': '5007'        // Property Maintenance
+                    };
+                    expenseAccountCode = categoryExpenseMap[item.category] || '5007';
+                }
                 
                 const expenseData = {
                     expenseId,
@@ -1753,7 +1761,7 @@ async function createItemizedExpensesForRequest(request, user) {
                     approvedByEmail: user.email,
                     itemIndex: i,
                     expenseAccountCode: expenseAccountCode, // Set expense account code for items without quotations
-                    notes: `Item: ${item.description} | Estimated cost: $${item.estimatedCost || item.totalCost || 0} | Payment: Cash | Account: ${expenseAccountCode}`
+                    notes: `Item: ${item.description} | Estimated cost: $${item.estimatedCost || item.totalCost || 0} | Payment: Cash | Account: ${expenseAccountCode} | Auto-resolved from description`
                 };
                 
                 const newExpense = new Expense(expenseData);
