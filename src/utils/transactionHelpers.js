@@ -4,17 +4,20 @@ const Vendor = require('../models/Vendor');
 const Account = require('../models/Account');
 const mongoose = require('mongoose');
 
-// Payment method to account code mapping (updated to match chart of accounts)
+// Import dynamic account resolver
+const DynamicAccountResolver = require('./dynamicAccountResolver');
+
+// Legacy mapping for backward compatibility (will be deprecated)
 const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
-    'Bank Transfer': '1000',  // Bank - Main Account
-    'Cash': '1011',           // Admin Petty Cash
-    'Online Payment': '1000', // Bank - Main Account
-    'Ecocash': '1011',        // Admin Petty Cash
-    'Innbucks': '1011',       // Admin Petty Cash
-    'MasterCard': '1000',     // Bank - Main Account
-    'Visa': '1000',          // Bank - Main Account
-    'PayPal': '1000',        // Bank - Main Account
-    'Petty Cash': '1011'     // Admin Petty Cash
+    'Bank Transfer': '1001',  // Bank Account
+    'Cash': '1002',           // Cash on Hand
+    'Online Payment': '1001', // Bank Account
+    'Ecocash': '1003',        // Ecocash Wallet
+    'Innbucks': '1004',       // Innbucks Wallet
+    'MasterCard': '1001',     // Bank Account
+    'Visa': '1001',          // Bank Account
+    'PayPal': '1001',        // Bank Account
+    'Petty Cash': '1002'     // Cash on Hand
 };
 
 // Category to account code mapping (updated to match chart of accounts)
@@ -112,25 +115,35 @@ exports.createExpensePaymentTransaction = async (expense, user, paymentMethod = 
             vendor = await Vendor.findById(expense.vendorId);
         }
 
-        // Determine source account based on payment method
-        let sourceAccount;
-        const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1000';
-        sourceAccount = await Account.findOne({ code: sourceAccountCode });
+        // Determine source account based on payment method using dynamic resolver
+        let sourceAccount = await DynamicAccountResolver.getPaymentSourceAccount(paymentMethod);
+        
+        // Fallback to legacy mapping if dynamic resolver fails
+        if (!sourceAccount) {
+            console.log(`⚠️  Dynamic resolver failed for ${paymentMethod}, trying legacy mapping...`);
+            const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1001';
+            sourceAccount = await Account.findOne({ code: sourceAccountCode });
+        }
         
         if (!sourceAccount) {
-            throw new Error(`Source account not found for payment method: ${paymentMethod}`);
+            throw new Error(`Source account not found for payment method: ${paymentMethod}. Please ensure you have a suitable asset account (bank, cash, etc.) in your chart of accounts.`);
         }
 
-        // Get expense account using the new code-based mapping
-        let expenseAccount = null;
-        const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[expense.category] || '5099'; // Default to Other Operating Expenses
-        expenseAccount = await Account.findOne({ 
-            code: expenseAccountCode, 
-            type: 'Expense' 
-        });
+        // Get expense account using dynamic resolver
+        let expenseAccount = await DynamicAccountResolver.getExpenseAccount(expense.category);
+        
+        // Fallback to legacy mapping if dynamic resolver fails
+        if (!expenseAccount) {
+            console.log(`⚠️  Dynamic resolver failed for category ${expense.category}, trying legacy mapping...`);
+            const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[expense.category] || '5099'; // Default to Other Operating Expenses
+            expenseAccount = await Account.findOne({ 
+                code: expenseAccountCode, 
+                type: 'Expense' 
+            });
+        }
         
         if (!expenseAccount) {
-            throw new Error(`Expense account not found for category: ${expense.category} using code: ${expenseAccountCode}`);
+            throw new Error(`Expense account not found for category: ${expense.category}. Please ensure you have a suitable expense account in your chart of accounts.`);
         }
 
         // If vendor exists, debit their Accounts Payable account

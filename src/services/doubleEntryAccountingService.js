@@ -529,16 +529,20 @@ class DoubleEntryAccountingService {
             for (const item of request.items) {
                 const selectedQuotation = item.quotations?.find(q => q.isSelected);
                 
+                // Enhanced account resolution using multiple strategies
+                const expenseAccountCode = await this.resolveExpenseAccount(item, request);
+                const expenseAccountName = await this.getAccountNameByCode(expenseAccountCode);
+                
                 if (selectedQuotation) {
                     // ✅ Items WITH selected quotations
-                    // Debit: Maintenance Expense
+                    // Debit: Resolved Expense Account (not just Maintenance)
                     entries.push({
-                        accountCode: await this.getMaintenanceExpenseAccount(),
-                        accountName: 'Maintenance Expense',
+                        accountCode: expenseAccountCode,
+                        accountName: expenseAccountName,
                         accountType: 'Expense',
                         debit: selectedQuotation.amount,
                         credit: 0,
-                        description: `Maintenance: ${item.description}`
+                        description: `${expenseAccountName}: ${item.description}`
                     });
 
                     // Credit: Accounts Payable (Vendor)
@@ -557,14 +561,14 @@ class DoubleEntryAccountingService {
                     
                     console.log(`💰 Processing item with provider but no quotation: ${provider} - $${amount}`);
                     
-                    // Debit: Maintenance Expense
+                    // Debit: Resolved Expense Account
                     entries.push({
-                        accountCode: await this.getMaintenanceExpenseAccount(),
-                        accountName: 'Maintenance Expense',
+                        accountCode: expenseAccountCode,
+                        accountName: expenseAccountName,
                         accountType: 'Expense',
                         debit: amount,
                         credit: 0,
-                        description: `Maintenance: ${item.description}`
+                        description: `${expenseAccountName}: ${item.description}`
                     });
 
                     // Credit: Accounts Payable: Provider
@@ -580,14 +584,14 @@ class DoubleEntryAccountingService {
                     // ✅ Items WITHOUT providers (general expenses)
                     const amount = item.totalCost || item.estimatedCost || 0;
                     
-                    // Debit: Maintenance Expense
+                    // Debit: Resolved Expense Account
                     entries.push({
-                        accountCode: await this.getMaintenanceExpenseAccount(),
-                        accountName: 'Maintenance Expense',
+                        accountCode: expenseAccountCode,
+                        accountName: expenseAccountName,
                         accountType: 'Expense',
                         debit: amount,
                         credit: 0,
-                        description: `Maintenance: ${item.description}`
+                        description: `${expenseAccountName}: ${item.description}`
                     });
 
                     // Credit: Cash/Bank or General Accounts Payable
@@ -642,8 +646,34 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
+            // Create expense record for tracking
+            const { generateUniqueId } = require('../utils/idGenerator');
+            const expense = new Expense({
+                expenseId: await generateUniqueId('EXP'),
+                requestId: request._id,
+                residence: request.residence._id || request.residence,
+                category: 'Maintenance',
+                amount: totalAmount,
+                description: `Maintenance: ${request.title}`,
+                expenseDate: new Date(),
+                paymentStatus: 'Pending',
+                period: 'monthly',
+                createdBy: user._id,
+                transactionId: transaction._id
+            });
+
+            await expense.save();
+
             console.log('✅ Maintenance approval recorded (accrual basis)');
-            return { transaction, transactionEntry };
+            console.log(`   - Expense created: ${expense.expenseId}`);
+            console.log(`   - Transaction: ${transaction.transactionId}`);
+            console.log(`   - Total amount: $${totalAmount}`);
+            
+            return { 
+                transaction, 
+                expense, 
+                entries: [transactionEntry._id] // Return entries array for compatibility
+            };
 
         } catch (error) {
             console.error('❌ Error recording maintenance approval:', error);
@@ -1615,29 +1645,13 @@ class DoubleEntryAccountingService {
     }
 
     static async getMaintenanceExpenseAccount() {
-        let account = await Account.findOne({ 
-            name: 'Maintenance Expense',
-            type: 'Expense'
-        });
-        
-        if (!account) {
-            account = await this.getOrCreateAccount('5001', 'Maintenance Expense', 'Expense');
-        }
-        
-        return account.code;
+        // Use the actual Property Maintenance account that exists in the database
+        return '5007'; // Property Maintenance
     }
 
     static async getSuppliesExpenseAccount() {
-        let account = await Account.findOne({ 
-            name: 'Supplies Expense',
-            type: 'Expense'
-        });
-        
-        if (!account) {
-            account = await this.getOrCreateAccount('5002', 'Supplies Expense', 'Expense');
-        }
-        
-        return account.code;
+        // Use the actual Maintenance Supplies account that exists in the database
+        return '5011'; // Maintenance Supplies
     }
 
     static async getRentIncomeAccount() {
@@ -1812,6 +1826,164 @@ class DoubleEntryAccountingService {
         }
         
         return account.code;
+    }
+
+    /**
+     * Resolve expense account based on item description/name when no category is specified
+     * Uses intelligent name matching to map to appropriate expense accounts
+     */
+    static async resolveExpenseAccountByDescription(description, fallbackCategory = 'maintenance') {
+        try {
+            if (!description) {
+                return await this.getMaintenanceExpenseAccount();
+            }
+
+            const desc = description.toLowerCase();
+            
+            // Plumbing related - use Property Maintenance (5007) since no specific plumbing account
+            if (desc.includes('plumbing') || desc.includes('pipe') || desc.includes('drain') || 
+                desc.includes('tap') || desc.includes('toilet') || desc.includes('sink') ||
+                desc.includes('shower') || desc.includes('bath') || desc.includes('water')) {
+                return '5007'; // Property Maintenance
+            }
+            
+            // Electrical related - use Property Maintenance (5007) since no specific electrical account
+            if (desc.includes('electrical') || desc.includes('wiring') || desc.includes('power') ||
+                desc.includes('light') || desc.includes('switch') || desc.includes('outlet') ||
+                desc.includes('circuit') || desc.includes('fuse') || desc.includes('breaker')) {
+                return '5007'; // Property Maintenance
+            }
+            
+            // HVAC related - use Property Maintenance (5007) since no specific HVAC account
+            if (desc.includes('hvac') || desc.includes('air') || desc.includes('conditioning') ||
+                desc.includes('heating') || desc.includes('ventilation') || desc.includes('fan')) {
+                return '5007'; // Property Maintenance
+            }
+            
+            // Cleaning related
+            if (desc.includes('cleaning') || desc.includes('clean') || desc.includes('sanitize') ||
+                desc.includes('disinfect') || desc.includes('wash') || desc.includes('mop')) {
+                return '5009'; // Cleaning Services
+            }
+            
+            // Security related
+            if (desc.includes('security') || desc.includes('guard') || desc.includes('camera') ||
+                desc.includes('alarm') || desc.includes('lock') || desc.includes('access')) {
+                return '5014'; // Security Services
+            }
+            
+            // Landscaping related
+            if (desc.includes('landscaping') || desc.includes('garden') || desc.includes('lawn') ||
+                desc.includes('tree') || desc.includes('plant') || desc.includes('irrigation')) {
+                return '5012'; // Garden & Landscaping
+            }
+            
+            // Painting related - use Property Maintenance (5007) since no specific painting account
+            if (desc.includes('paint') || desc.includes('wall') || desc.includes('ceiling') ||
+                desc.includes('color') || desc.includes('brush') || desc.includes('roller')) {
+                return '5007'; // Property Maintenance
+            }
+            
+            // Carpentry related - use Property Maintenance (5007) since no specific carpentry account
+            if (desc.includes('carpentry') || desc.includes('wood') || desc.includes('door') ||
+                desc.includes('window') || desc.includes('cabinet') || desc.includes('shelf')) {
+                return '5007'; // Property Maintenance
+            }
+            
+            // Supplies and materials
+            if (desc.includes('supply') || desc.includes('material') || desc.includes('part') ||
+                desc.includes('tool') || desc.includes('equipment') || desc.includes('hardware')) {
+                return '5011'; // Maintenance Supplies
+            }
+            
+            // Administrative/other services
+            if (desc.includes('service') || desc.includes('admin') || desc.includes('consult') ||
+                desc.includes('inspection') || desc.includes('assessment') || desc.includes('report')) {
+                return '5062'; // Professional Fees
+            }
+            
+            // Default to maintenance expense
+            return '5007'; // Property Maintenance
+            
+        } catch (error) {
+            console.error('Error resolving expense account by description:', error);
+            // Fallback to maintenance expense
+            return '5007'; // Property Maintenance
+        }
+    }
+
+    /**
+     * Enhanced account resolution that tries multiple strategies
+     */
+    static async resolveExpenseAccount(item, request) {
+        try {
+            // Strategy 1: Use item category if available
+            if (item.category) {
+                const categoryMap = {
+                    'maintenance': '5007',      // Property Maintenance
+                    'plumbing': '5007',         // Property Maintenance (no specific plumbing account)
+                    'electrical': '5007',       // Property Maintenance (no specific electrical account)
+                    'hvac': '5007',             // Property Maintenance (no specific HVAC account)
+                    'cleaning': '5009',         // Cleaning Services
+                    'security': '5014',         // Security Services
+                    'landscaping': '5012',      // Garden & Landscaping
+                    'painting': '5007',         // Property Maintenance (no specific painting account)
+                    'carpentry': '5007',       // Property Maintenance (no specific carpentry account)
+                    'supplies': '5011',         // Maintenance Supplies
+                    'utilities': '5003',        // Utilities - Electricity (default)
+                    'services': '5062'          // Professional Fees
+                };
+                
+                if (categoryMap[item.category.toLowerCase()]) {
+                    return categoryMap[item.category.toLowerCase()];
+                }
+            }
+            
+            // Strategy 2: Use request type
+            if (request.type) {
+                const typeMap = {
+                    'maintenance': '5007',         // Property Maintenance
+                    'student_maintenance': '5007', // Property Maintenance
+                    'financial': '5062',           // Professional Fees
+                    'operational': '5007',         // Property Maintenance
+                    'administrative': '5062'       // Professional Fees
+                };
+                
+                if (typeMap[request.type.toLowerCase()]) {
+                    return typeMap[request.type.toLowerCase()];
+                }
+            }
+            
+            // Strategy 3: Use intelligent name matching on description
+            if (item.description) {
+                return await this.resolveExpenseAccountByDescription(item.description);
+            }
+            
+            // Strategy 4: Use request title for context
+            if (request.title) {
+                return await this.resolveExpenseAccountByDescription(request.title);
+            }
+            
+            // Strategy 5: Fallback to maintenance expense
+            return '5007'; // Property Maintenance
+            
+        } catch (error) {
+            console.error('Error in enhanced account resolution:', error);
+            return '5007'; // Property Maintenance
+        }
+    }
+
+    /**
+     * Get account name by code
+     */
+    static async getAccountNameByCode(accountCode) {
+        try {
+            const account = await Account.findOne({ code: accountCode });
+            return account ? account.name : 'Unknown Account';
+        } catch (error) {
+            console.error('Error getting account name by code:', error);
+            return 'Unknown Account';
+        }
     }
 
     /**

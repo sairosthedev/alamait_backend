@@ -9,29 +9,34 @@ const Account = require('../../models/Account');
 const AuditLog = require('../../models/AuditLog');
 const { getPettyCashAccountByRole } = require('../../utils/pettyCashUtils');
 
-// Category to Account Code mapping for Expense linkage (updated to match chart of accounts)
+// Import dynamic account resolver
+const DynamicAccountResolver = require('../../utils/dynamicAccountResolver');
+
+// Legacy category mapping for backward compatibility (will be deprecated)
 const CATEGORY_TO_ACCOUNT_CODE = {
-  'Maintenance': '5003', // Transportation Expense (for maintenance)
-  'Utilities': '5001', // Utilities - Water (for utilities)
-  'Water': '5001', // Utilities - Water (specific for water)
-  'Taxes': '5099', // Other Operating Expenses (for taxes)
-  'Insurance': '5099', // Other Operating Expenses (for insurance)
-  'Salaries': '5099', // Other Operating Expenses (for salaries)
-  'Supplies': '5099', // Other Operating Expenses (for supplies)
-  'Other': '5099' // Other Operating Expenses (fallback)
+  'Maintenance': '5007', // Property Maintenance (corrected)
+  'Utilities': '5003', // Utilities - Electricity (corrected)
+  'Water': '5004', // Utilities - Water (corrected)
+  'WiFi': '5006', // WiFi & Internet (corrected)
+  'Internet': '5006', // WiFi & Internet (corrected)
+  'Taxes': '5099', // Other Operating Expenses
+  'Insurance': '5099', // Other Operating Expenses
+  'Salaries': '5099', // Other Operating Expenses
+  'Supplies': '5099', // Other Operating Expenses
+  'Other': '5099' // Other Operating Expenses
 };
 
 // Payment method to Account Code mapping (updated to match chart of accounts)
 const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
-  'Cash': '1011', // Admin Petty Cash
-  'Bank Transfer': '1000', // Bank - Main Account (assuming this exists)
-  'Ecocash': '1011', // Admin Petty Cash
-  'Innbucks': '1011', // Admin Petty Cash
-  'Petty Cash': '1011', // Admin Petty Cash
-  'Online Payment': '1000', // Bank - Main Account
-  'MasterCard': '1000', // Bank - Main Account
-  'Visa': '1000', // Bank - Main Account
-  'PayPal': '1000' // Bank - Main Account
+  'Cash': '1002', // Cash on Hand
+  'Bank Transfer': '1001', // Bank Account
+  'Ecocash': '1003', // Ecocash Wallet
+  'Innbucks': '1004', // Innbucks Wallet
+  'Petty Cash': '1002', // Cash on Hand
+  'Online Payment': '1001', // Bank Account
+  'MasterCard': '1001', // Bank Account
+  'Visa': '1001', // Bank Account
+  'PayPal': '1001' // Bank Account
 };
 
 // Get expenses with filters
@@ -201,13 +206,19 @@ const addExpense = async (req, res) => {
         try {
             console.log('[Admin Expense] Creating transaction entries for expense:', expense._id, 'category:', expense.category);
             
-            // Get expense account using the category mapping
-            const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[expense.category] || '5099';
-            const expenseAccount = await Account.findOne({ code: expenseAccountCode, type: 'Expense' });
+            // Get expense account using dynamic resolver
+            let expenseAccount = await DynamicAccountResolver.getExpenseAccount(expense.category);
+            
+            // Fallback to legacy mapping if dynamic resolver fails
+            if (!expenseAccount) {
+                console.log(`⚠️  Dynamic resolver failed for category ${expense.category}, trying legacy mapping...`);
+                const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[expense.category] || '5099';
+                expenseAccount = await Account.findOne({ code: expenseAccountCode, type: 'Expense' });
+            }
             
             if (!expenseAccount) {
                 console.error('[Admin Expense] Expense account not found for category:', expense.category);
-                throw new Error('Expense account not found for category: ' + expense.category);
+                throw new Error(`Expense account not found for category: ${expense.category}. Please ensure you have a suitable expense account in your chart of accounts.`);
             }
             
             // If expense is marked as paid, create payment transaction
@@ -623,13 +634,19 @@ const approveExpense = async (req, res) => {
         try {
             console.log('[Admin Approve] Creating payment transaction for expense:', expense._id, 'category:', expense.category);
             
-            // Get expense account using the category mapping
-            const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[expense.category] || '5099';
-            const expenseAccount = await Account.findOne({ code: expenseAccountCode, type: 'Expense' });
+            // Get expense account using dynamic resolver
+            let expenseAccount = await DynamicAccountResolver.getExpenseAccount(expense.category);
+            
+            // Fallback to legacy mapping if dynamic resolver fails
+            if (!expenseAccount) {
+                console.log(`⚠️  Dynamic resolver failed for category ${expense.category}, trying legacy mapping...`);
+                const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[expense.category] || '5099';
+                expenseAccount = await Account.findOne({ code: expenseAccountCode, type: 'Expense' });
+            }
             
             if (!expenseAccount) {
                 console.error('[Admin Approve] Expense account not found for category:', expense.category);
-                throw new Error('Expense account not found for category: ' + expense.category);
+                throw new Error(`Expense account not found for category: ${expense.category}. Please ensure you have a suitable expense account in your chart of accounts.`);
             }
             
             // Get general Accounts Payable account for AP reduction

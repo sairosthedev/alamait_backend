@@ -170,7 +170,7 @@ exports.createDebtorForStudent = async (user, options = {}) => {
                 console.log(`⚠️  Previous debtor code ${previousDebtorCode} not found, creating new debtor`);
             }
         }
-        
+
         // Check if debtor already exists for this user
         const actualUser = user.student ? await User.findById(user.student) : user;
         if (!actualUser) {
@@ -226,88 +226,88 @@ exports.createDebtorForStudent = async (user, options = {}) => {
                     
                     if (billingPeriodMonths > 0) {
                         const roomPrice = options.roomPrice || existingDebtor.roomPrice || 0;
-                        let adminFee = 0;
+                let adminFee = 0;
                         
-                        try {
+                    try {
                             if (options.residenceId) {
                                 const residence = await Residence.findById(options.residenceId);
-                                if (residence && residence.name.toLowerCase().includes('st kilda')) {
-                                    adminFee = 20; // St Kilda has $20 admin fee
+                        if (residence && residence.name.toLowerCase().includes('st kilda')) {
+                            adminFee = 20; // St Kilda has $20 admin fee
                                 }
-                            }
-                        } catch (error) {
-                            console.log(`⚠️  Could not determine admin fee: ${error.message}`);
                         }
-                        
-                        const deposit = roomPrice || 0;
-                        const totalRent = (roomPrice || 0) * billingPeriodMonths;
-                        const expectedTotal = totalRent + adminFee + deposit;
-                        
-                        updateData.billingPeriod = {
-                            type: billingPeriodMonths === 3 ? 'quarterly' : 
-                                  billingPeriodMonths === 6 ? 'semester' : 
-                                  billingPeriodMonths === 12 ? 'annual' : 'monthly',
-                            duration: {
-                                value: billingPeriodMonths,
-                                unit: 'months'
-                            },
+                    } catch (error) {
+                        console.log(`⚠️  Could not determine admin fee: ${error.message}`);
+                }
+                
+                const deposit = roomPrice || 0;
+                const totalRent = (roomPrice || 0) * billingPeriodMonths;
+                const expectedTotal = totalRent + adminFee + deposit;
+                
+                updateData.billingPeriod = {
+                    type: billingPeriodMonths === 3 ? 'quarterly' : 
+                          billingPeriodMonths === 6 ? 'semester' : 
+                          billingPeriodMonths === 12 ? 'annual' : 'monthly',
+                    duration: {
+                        value: billingPeriodMonths,
+                        unit: 'months'
+                    },
                             startDate: startDate,
                             endDate: endDate,
-                            billingCycle: {
-                                frequency: 'monthly',
-                                dayOfMonth: 1,
-                                gracePeriod: 5
-                            },
-                            amount: {
-                                monthly: roomPrice,
-                                total: expectedTotal,
-                                currency: 'USD'
-                            },
-                            status: 'active',
-                            description: `Billing period for ${actualUser.email}`,
-                            notes: options.applicationCode ? 
+                    billingCycle: {
+                        frequency: 'monthly',
+                        dayOfMonth: 1,
+                        gracePeriod: 5
+                    },
+                    amount: {
+                        monthly: roomPrice,
+                        total: expectedTotal,
+                        currency: 'USD'
+                    },
+                    status: 'active',
+                    description: `Billing period for ${actualUser.email}`,
+                    notes: options.applicationCode ? 
                                 `Updated from re-application ${options.applicationCode}` : 
-                                `Updated from application data`,
-                            autoRenewal: {
-                                enabled: false,
-                                renewalType: 'same_period',
-                                customRenewalPeriod: null
-                            }
-                        };
-                        
-                        updateData.totalOwed = expectedTotal;
-                        updateData.currentBalance = Math.max(expectedTotal - (existingDebtor.totalPaid || 0), 0);
-                        updateData.billingPeriodLegacy = `${billingPeriodMonths} months`;
+                        `Updated from application data`,
+                    autoRenewal: {
+                        enabled: false,
+                        renewalType: 'same_period',
+                        customRenewalPeriod: null
+                    }
+                };
+                
+                updateData.totalOwed = expectedTotal;
+                updateData.currentBalance = Math.max(expectedTotal - (existingDebtor.totalPaid || 0), 0);
+                updateData.billingPeriodLegacy = `${billingPeriodMonths} months`;
                         updateData.startDate = startDate;
                         updateData.endDate = endDate;
-                        updateData.roomPrice = roomPrice;
-                        
-                        // Add financial breakdown
-                        updateData.financialBreakdown = {
-                            monthlyRent: roomPrice || 0,
-                            numberOfMonths: billingPeriodMonths,
-                            totalRent: totalRent,
-                            adminFee: adminFee,
-                            deposit: deposit,
-                            totalOwed: expectedTotal
-                        };
-                        
+                updateData.roomPrice = roomPrice;
+                
+                // Add financial breakdown
+                updateData.financialBreakdown = {
+                    monthlyRent: roomPrice || 0,
+                    numberOfMonths: billingPeriodMonths,
+                    totalRent: totalRent,
+                    adminFee: adminFee,
+                    deposit: deposit,
+                    totalOwed: expectedTotal
+                };
+                
                         console.log(`   📅 Updated billing period: ${billingPeriodMonths} months`);
                         console.log(`   💰 Updated total owed: $${expectedTotal}`);
                     }
-                }
+            }
+            
+            // Update the existing debtor if we have new data
+            if (Object.keys(updateData).length > 0) {
+                await Debtor.findByIdAndUpdate(existingDebtor._id, updateData);
+                console.log(`✅ Updated existing debtor with new application data`);
                 
-                // Update the existing debtor if we have new data
-                if (Object.keys(updateData).length > 0) {
-                    await Debtor.findByIdAndUpdate(existingDebtor._id, updateData);
-                    console.log(`✅ Updated existing debtor with new application data`);
-                    
-                    // Return the updated debtor
-                    return await Debtor.findById(existingDebtor._id);
-                } else {
-                    console.log(`✅ Existing debtor already has all current data`);
-                    return existingDebtor;
-                }
+                // Return the updated debtor
+                return await Debtor.findById(existingDebtor._id);
+            } else {
+                console.log(`✅ Existing debtor already has all current data`);
+                return existingDebtor;
+            }
             }
             
             return existingDebtor;
