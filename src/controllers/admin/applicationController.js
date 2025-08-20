@@ -748,14 +748,14 @@ exports.updateRoomValidity = async (req, res) => {
         if (user.role !== 'student') {
             return res.status(400).json({ error: 'User is not a student' });
         }
-        
-        // Update room validity
+
+// Update room validity
         await User.findByIdAndUpdate(userId, {
             roomValidUntil: new Date(newValidUntil)
         });
         
         console.log(`✅ Updated room validity for student ${user.email} to ${newValidUntil}`);
-        
+
         res.json({
             message: 'Room validity updated successfully',
             userId,
@@ -804,8 +804,8 @@ exports.syncRoomOccupancy = async (req, res) => {
                 }
             }
             
-            await residence.save();
-        }
+                await residence.save();
+            }
         
         console.log(`✅ Synced ${updatedRooms} rooms across ${residences.length} residences`);
         
@@ -856,8 +856,8 @@ exports.deleteApplication = async (req, res) => {
 
         // Delete the application
         await Application.findByIdAndDelete(applicationId);
-
-        res.json({ 
+        
+        res.json({
             message: 'Application deleted successfully',
             deletedApplicationId: applicationId
         });
@@ -908,4 +908,4 @@ exports.getExpiredStudents = async (req, res) => {
         console.error('❌ Error getting expired students:', error);
         res.status(500).json({ error: 'Server error' });
     }
-};
+}; 
