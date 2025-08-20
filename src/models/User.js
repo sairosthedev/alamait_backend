@@ -179,21 +179,31 @@ userSchema.pre('save', async function(next) {
 
 // 🆕 NEW: Auto-link user to existing applications when user is created
 userSchema.post('save', async function(doc) {
+    console.log('🔍 POST-SAVE MIDDLEWARE EXECUTING for:', this.firstName, this.lastName);
     try {
-        // Only run this for newly created users (not updates)
-        if (this.isNew) {
-            console.log(`🔗 Auto-linking new user to existing applications: ${this.firstName} ${this.lastName}`);
+        // Run this for newly created users OR when application code exists
+        console.log(`🔍 Checking middleware conditions:`);
+        console.log(`   isNew: ${this.isNew}`);
+        console.log(`   applicationCode: ${this.applicationCode}`);
+        console.log(`   Condition result: ${this.isNew || this.applicationCode}`);
+        
+        if (this.isNew || this.applicationCode) {
+            console.log(`🔗 Auto-linking middleware triggered for: ${this.firstName} ${this.lastName}`);
             
-            // Check if there are any applications with matching email but no student field
+            // Check if there are any applications with matching email or application code but no student field
             const Application = require('./Application');
+            console.log(`   🔍 Looking for applications with:`);
+            console.log(`      Email: ${this.email}`);
+            console.log(`      Application Code: ${this.applicationCode}`);
+            
             const applicationsToLink = await Application.find({
-                email: this.email,
-                $or: [
-                    { student: { $exists: false } },
-                    { student: null },
-                    { student: undefined }
+                $and: [
+                    { $or: [{ email: this.email }, { applicationCode: this.applicationCode }] },
+                    { $or: [{ student: { $exists: false } }, { student: null }, { student: undefined }] }
                 ]
             });
+            
+            console.log(`   📋 Found ${applicationsToLink.length} applications to link`);
             
             if (applicationsToLink.length > 0) {
                 console.log(`   📋 Found ${applicationsToLink.length} applications to link`);

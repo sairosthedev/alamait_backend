@@ -41,19 +41,10 @@ exports.register = async (req, res) => {
         ('Saved user role:', user.role);
         ('Password after save:', user.password.substring(0, 10) + '...');
 
-        // Automatically create debtor account for students
+        // NOTE: Debtor creation is now handled by User model post-save middleware
+        // This ensures debtors are only created from approved applications, not automatically
         if (user.role === 'student') {
-            try {
-                await createDebtorForStudent(user, {
-                    createdBy: user._id
-                });
-                console.log('✅ Debtor account created for student:', email);
-            } catch (debtorError) {
-                console.error('❌ Failed to create debtor account:', debtorError);
-                // Continue with registration even if debtor creation fails
-                // But log this for monitoring
-                console.log('⚠️ Student registered but debtor creation failed. Manual intervention may be needed.');
-            }
+            console.log('📝 Student registered - debtor will be created by middleware if approved application exists');
         }
 
         // Send verification email
