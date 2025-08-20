@@ -22,6 +22,7 @@ if (process.env.NODE_ENV === 'production') {
 // Import routes
 const authRoutes = require('./routes/auth');
 const publicApplicationRoutes = require('./routes/public/applicationRoutes');
+const reapplicationRoutes = require('./routes/public/reapplicationRoutes');
 const publicResidenceRoutes = require('./routes/public/residenceRoutes');
 const residenceRoutes = require('./routes/residenceRoutes');
 const maintenanceRoutes = require('./routes/maintenanceRoutes');
@@ -217,7 +218,9 @@ app.use('/api/residences', residenceRoutes);
 
 // Alias routes for frontend compatibility
 app.use('/api/applications/public', publicApplicationRoutes);
-app.use('/api/applications', publicApplicationRoutes);
+
+// Re-application routes for existing students
+app.use('/api/reapplications', reapplicationRoutes);
 
 // Maintenance routes with debugging
 // Define specific routes first

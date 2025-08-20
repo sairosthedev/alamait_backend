@@ -118,227 +118,258 @@ exports.getApplications = async (req, res) => {
 exports.updateApplicationStatus = async (req, res) => {
     try {
         const { action, roomNumber, residenceId } = req.body;
-        
-        if (!action) {
-            return res.status(400).json({ error: 'Action is required' });
-        }
+        const { applicationId } = req.params;
 
-        if (action === 'approve' && (!roomNumber || !residenceId)) {
-            return res.status(400).json({ error: 'Room number and residence ID are required for approval' });
-        }
-        
-        if (action === 'waitlist' && !roomNumber) {
-            return res.status(400).json({ error: 'Room number is required for waitlisting' });
-        }
-
-        const application = await Application.findById(req.params.applicationId);
+        const application = await Application.findById(applicationId);
         if (!application) {
             return res.status(404).json({ error: 'Application not found' });
         }
 
-        // Update application based on action
+        // Check if this is a re-application
+        const isReapplication = application.isReapplication || false;
+        const previousDebtorCode = application.previousDebtorCode;
+        
+        if (isReapplication) {
+            console.log(`🔄 Processing re-application: ${application.applicationCode}`);
+            console.log(`   Previous debtor: ${previousDebtorCode || 'None'}`);
+            console.log(`   Previous student: ${application.previousStudentId || 'None'}`);
+        }
+
         switch (action) {
             case 'approve':
-                try {
-                    // Set the application status to approved directly
-                    application.status = 'approved';
-                    application.allocatedRoom = roomNumber;
-                    application.paymentStatus = 'unpaid';
-                    const approvalDate = new Date();
+                // Handle room allocation and approval
+                if (!roomNumber || !residenceId) {
+                    return res.status(400).json({ error: 'Room number and residence ID are required for approval' });
+                }
 
-                    // Generate application code if not exists
-                    if (!application.applicationCode) {
-                        const year = new Date().getFullYear().toString().substr(-2);
-                        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-                        application.applicationCode = `APP${year}${random}`;
-                    }
+                // Find the residence and room
+                const residence = await Residence.findById(residenceId);
+                if (!residence) {
+                    return res.status(404).json({ error: 'Residence not found' });
+                }
 
-                    // Find the residence with the room
-                    const residence = await Residence.findById(residenceId);
-                    if (!residence) {
-                        return res.status(404).json({ error: 'Residence not found with the provided ID' });
-                    }
+                const room = residence.rooms.find(r => r.roomNumber === roomNumber);
+                if (!room) {
+                    return res.status(404).json({ error: 'Room not found in this residence' });
+                }
 
-                    // Get the room and verify it exists in this residence
-                    const room = residence.rooms.find(r => r.roomNumber === roomNumber);
-                    if (!room) {
-                        return res.status(404).json({ error: `Room ${roomNumber} not found in residence ${residence.name}` });
-                    }
+                // Check room availability
+                if (room.currentOccupancy >= room.capacity) {
+                    return res.status(400).json({ error: 'Room is at full capacity' });
+                }
 
-                    // Calculate validity period (4 months from now)
-                    const validUntil = new Date(approvalDate);
-                    validUntil.setMonth(approvalDate.getMonth() + 4);
+                // Update application status
+                application.status = 'approved';
+                application.allocatedRoom = roomNumber;
+                application.allocatedRoomDetails = {
+                    roomNumber: room.roomNumber,
+                    roomId: room._id,
+                    price: room.price,
+                    type: room.type,
+                    capacity: room.capacity
+                };
+                application.actionDate = new Date();
+                application.actionBy = req.user._id;
 
-                    if (application.requestType === 'upgrade') {
-                        // Handle room upgrade
-                        const oldRoom = residence.rooms.find(r => r.roomNumber === application.currentRoom);
-                        if (oldRoom) {
-                            oldRoom.currentOccupancy = Math.max(0, oldRoom.currentOccupancy - 1);
-                            if (oldRoom.currentOccupancy === 0) {
-                                oldRoom.status = 'available';
-                            }
+                // Set admin approval
+                application.approval.admin = {
+                    approved: true,
+                    approvedBy: req.user._id,
+                    approvedByEmail: req.user.email,
+                    approvedAt: new Date(),
+                    notes: `Application approved by ${req.user.firstName} ${req.user.lastName}`
+                };
+
+                // Calculate validity period (4 months from now)
+                const approvalDate = new Date();
+                const validUntil = new Date(approvalDate);
+                validUntil.setMonth(approvalDate.getMonth() + 4);
+
+                if (application.requestType === 'upgrade') {
+                    // Handle room upgrade
+                    const oldRoom = residence.rooms.find(r => r.roomNumber === application.currentRoom);
+                    if (oldRoom) {
+                        oldRoom.currentOccupancy = Math.max(0, oldRoom.currentOccupancy - 1);
+                        if (oldRoom.currentOccupancy === 0) {
+                            oldRoom.status = 'available';
                         }
                     }
+                }
 
-                    // Increment room occupancy
-                    room.currentOccupancy += 1;
-                    
-                    // Update room status based on occupancy
-                    if (room.currentOccupancy >= room.capacity) {
-                        room.status = 'occupied';
-                    } else if (room.currentOccupancy > 0) {
-                        room.status = 'reserved';
-                    }
+                // Increment room occupancy
+                room.currentOccupancy += 1;
+                
+                // Update room status based on occupancy
+                if (room.currentOccupancy >= room.capacity) {
+                    room.status = 'occupied';
+                } else if (room.currentOccupancy > 0) {
+                    room.status = 'reserved';
+                }
 
-                    // Set the admin user as the manager
-                    residence.manager = req.user._id;
-                    await residence.save();
+                // Set the admin user as the manager
+                residence.manager = req.user._id;
+                await residence.save();
 
-                    // Update student's current room and validity
-                    await User.findByIdAndUpdate(
-                        application.student,
-                        {
+                // Handle student user creation/update for re-applications
+                let student = null;
+                
+                if (isReapplication && application.previousStudentId) {
+                    // This is a re-application - find existing student
+                    student = await User.findById(application.previousStudentId);
+                    if (student) {
+                        console.log(`✅ Found existing student for re-application: ${student.email}`);
+                        
+                        // Update existing student with new room and residence
+                        await User.findByIdAndUpdate(student._id, {
                             $set: {
                                 currentRoom: roomNumber,
                                 roomValidUntil: validUntil,
                                 roomApprovalDate: approvalDate,
                                 residence: residence._id
                             }
-                        }
-                    );
-
-                    // Update application with residence reference
-                    application.residence = residence._id;
-                    await application.save();
-
-                    // Create debtor account for the student now that application is approved
-                    try {
-                        console.log(`\n🏗️  Application approved - debtor will be created when student registers`);
-                        console.log(`   Student: ${application.firstName} ${application.lastName} (${application.email})`);
-                        console.log(`   Room: ${roomNumber} (Price: $${room.price || 'Not set'})`);
-                        console.log(`   Residence: ${residence.name} (${residence._id})`);
-                        console.log(`   Application Code: ${application.applicationCode}`);
-                        console.log(`   Note: Debtor will be created automatically when student registers with this application code`);
-                        
-                        // No need to create debtor here - it will be created when student registers
-                        // The User model middleware will handle debtor creation
-                        
-                    } catch (error) {
-                        console.error('❌ Error in application approval process:', error);
-                        // Don't fail the approval if debtor creation fails
-                    }
-
-                    // Generate and send lease agreement
-                    let attachments = [];
-                    try {
-                        // Get lease template attachment from S3
-                        const templateAttachment = await getLeaseTemplateAttachment(residence.name);
-                        if (templateAttachment) {
-                            attachments.push(templateAttachment);
-                        } else {
-                            throw new Error(`No lease template found for residence ${residence.name}`);
-                        }
-                    } catch (error) {
-                        console.error('Error attaching lease agreement:', error);
-                        // Send email without attachment and log the error
-                        await sendEmail({
-                            to: application.email,
-                            subject: 'Application Approved - Action Required',
-                            text: `
-                                Dear ${application.firstName} ${application.lastName},
-
-                                We are pleased to inform you that your application for Alamait Student Accommodation has been approved.
-
-                                IMPORTANT: We were unable to attach the lease agreement to this email. Please contact administration to receive your lease agreement.
-
-                                Application Details:
-                                - Application Code: ${application.applicationCode}
-                                - Allocated Room: ${roomNumber}
-                                - Approval Date: ${approvalDate.toLocaleDateString()}
-                                - Valid Until: ${validUntil.toLocaleDateString()}
-
-                                Best regards,
-                                Alamait Student Accommodation Team
-                            `
                         });
-                        // Define roomInfo for the response even in case of failure
-                        const roomInfo = {
-                            name: roomNumber,
-                            status: room.status,
-                            currentOccupancy: room.currentOccupancy,
-                            capacity: room.capacity,
-                            occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
-                        };
-                        // Skip the rest of the logic for sending the email with attachment
-                        return res.json({ 
-                            message: 'Application approved, but failed to attach lease agreement. Email sent without attachment.',
-                            application,
-                            room: roomInfo
-                        });
+                        
+                        console.log(`✅ Updated existing student with new room: ${roomNumber}`);
                     }
-
-                    // Send approval email
-                    await sendEmail({
-                        to: application.email,
-                        subject: 'Application Approved - Alamait Student Accommodation',
-                        text: `
-                            Dear ${application.firstName} ${application.lastName},
-
-                            We are pleased to inform you that your application for Alamait Student Accommodation has been approved.
-
-                            Application Details:
-                            - Application Code: ${application.applicationCode}
-                            - Allocated Room: ${roomNumber}
-                            - Approval Date: ${approvalDate.toLocaleDateString()}
-                            - Valid Until: ${validUntil.toLocaleDateString()}
-
-                            Please use this application code when registering on our platform.
-
-                            Next Steps:
-                            1. Register on our platform using your application code
-                            2. Complete your profile
-                            3. Make the required payments to secure your room
-                            4. Submit any additional documents
-
-                            If you have any questions, please don't hesitate to contact us.
-
-                            Best regards,
-                            Alamait Student Accommodation Team
-                        `,
-                        attachments: attachments.length > 0 ? attachments : undefined
+                }
+                
+                // If no existing student found or this is a new application, create one
+                if (!student) {
+                    // Create new student user
+                    student = new User({
+                        email: application.email,
+                        firstName: application.firstName,
+                        lastName: application.lastName,
+                        phone: application.phone,
+                        password: Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4),
+                        role: 'student',
+                        isVerified: true,
+                        currentRoom: roomNumber,
+                        roomValidUntil: validUntil,
+                        roomApprovalDate: approvalDate,
+                        residence: residence._id,
+                        applicationCode: application.applicationCode
                     });
+                    
+                    await student.save();
+                    console.log(`✅ Created new student user: ${student.email}`);
+                }
 
-                    // Send room change approval notification if this is a room change request (non-blocking)
-                    if (application.requestType === 'upgrade' || application.requestType === 'downgrade') {
-                        try {
-                            await EmailNotificationService.sendRoomChangeApprovalNotification(application, req.user);
-                        } catch (emailError) {
-                            console.error('Failed to send room change approval email notification:', emailError);
-                            // Don't fail the request if email fails
-                        }
-                    }
+                // Update application with residence reference and student link
+                application.residence = residence._id;
+                application.student = student._id;
+                await application.save();
 
-                    // Prepare room information to return to the frontend
-                    const roomInfo = {
-                        name: roomNumber,
-                        status: room.status,
-                        currentOccupancy: room.currentOccupancy,
-                        capacity: room.capacity,
-                        occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+                // Create or update debtor account for the student
+                try {
+                    console.log(`🏗️  Creating/updating debtor account for student: ${student.email}`);
+                    
+                    const { createDebtorForStudent } = require('../../services/debtorService');
+                    
+                    // Pass re-application information to debtor service
+                    const debtorOptions = {
+                        residenceId: residence._id,
+                        roomNumber: roomNumber,
+                        createdBy: req.user._id,
+                        startDate: application.startDate,
+                        endDate: application.endDate,
+                        roomPrice: room.price,
+                        application: application._id,
+                        applicationCode: application.applicationCode,
+                        isReapplication: isReapplication,
+                        previousDebtorCode: previousDebtorCode
                     };
                     
-                    res.json({ 
-                        message: 'Application approved successfully',
-                        application,
-                        room: roomInfo
-                    });
-                } catch (error) {
-                    console.error('Error in approval process:', error);
-                    return res.status(400).json({ 
-                        error: 'Failed to complete approval process',
-                        details: error.message 
-                    });
+                    const debtor = await createDebtorForStudent(student, debtorOptions);
+                    
+                    if (debtor) {
+                        console.log(`✅ Debtor account ${isReapplication ? 'updated' : 'created'}: ${debtor.debtorCode}`);
+                        
+                        // Link the debtor back to the application
+                        application.debtor = debtor._id;
+                        await application.save();
+                        console.log(`🔗 Linked debtor ${debtor._id} to application ${application._id}`);
+                        
+                        // 🆕 TRIGGER RENTAL ACCRUAL SERVICE - Lease starts now!
+                        try {
+                            console.log(`🏠 Triggering rental accrual service for lease start...`);
+                            const RentalAccrualService = require('../../services/rentalAccrualService');
+                            
+                            const accrualResult = await RentalAccrualService.processLeaseStart(application);
+                            
+                            if (accrualResult && accrualResult.success) {
+                                console.log(`✅ Rental accrual service completed successfully`);
+                                console.log(`   - Initial accounting entries created`);
+                                console.log(`   - Prorated rent, admin fees, and deposits recorded`);
+                                console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
+                            } else {
+                                console.log(`⚠️  Rental accrual service completed with warnings:`, accrualResult?.error || 'Unknown issue');
+                            }
+                        } catch (accrualError) {
+                            console.error(`❌ Error in rental accrual service:`, accrualError);
+                        }
+                    }
+                } catch (debtorError) {
+                    console.error(`❌ Error creating/updating debtor account:`, debtorError);
+                    // Don't fail the approval if debtor creation fails
                 }
+
+                // Send approval email
+                const emailContent = `
+                    Dear ${application.firstName} ${application.lastName},
+
+                    Congratulations! Your application for Alamait Student Accommodation has been approved.
+
+                    ${isReapplication ? `
+                    🎉 Welcome back! Your re-application has been approved.
+                    Your previous financial history has been preserved and linked to your new lease.
+                    ` : ''}
+
+                    Application Details:
+                    - Application Code: ${application.applicationCode}
+                    - Room: ${roomNumber}
+                    - Residence: ${residence.name}
+                    - Room Type: ${room.type}
+                    - Monthly Rent: $${room.price}
+                    - Approval Date: ${approvalDate.toLocaleDateString()}
+
+                    ${isReapplication ? `
+                    💰 Financial Continuity:
+                    Your previous payment history and financial records have been maintained.
+                    This ensures continuity in your accommodation account.
+                    ` : ''}
+
+                    Please complete your lease agreement and payment to secure your room.
+
+                    Best regards,
+                    Alamait Student Accommodation Team
+                `;
+
+                try {
+                    const { sendEmail } = require('../../utils/email');
+                    await sendEmail({
+                        to: application.email,
+                        subject: `Application Approved - Alamait Student Accommodation`,
+                        text: emailContent
+                    });
+                    console.log(`✅ Approval email sent to: ${application.email}`);
+                } catch (emailError) {
+                    console.log(`⚠️  Failed to send approval email:`, emailError.message);
+                }
+
+                res.json({
+                    success: true,
+                    message: `Application approved successfully${isReapplication ? ' (Re-application)' : ''}`,
+                    data: {
+                        applicationId: application._id,
+                        status: application.status,
+                        allocatedRoom: roomNumber,
+                        residence: residence.name,
+                        studentId: student._id,
+                        debtorCode: application.debtor ? 'Created' : 'Pending',
+                        isReapplication: isReapplication
+                    }
+                });
                 break;
 
             case 'reject':

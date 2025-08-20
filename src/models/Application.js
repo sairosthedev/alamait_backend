@@ -33,7 +33,7 @@ const applicationSchema = new mongoose.Schema({
     },
     requestType: {
         type: String,
-        enum: ['new', 'upgrade'],
+        enum: ['new', 'upgrade', 'renewal'], // Added 'renewal' for re-applications
         required: true
     },
     status: {
@@ -126,37 +126,230 @@ const applicationSchema = new mongoose.Schema({
         ref: 'Debtor'
     },
     
+    // Re-application fields for preserving financial history
+    isReapplication: {
+        type: Boolean,
+        default: false
+    },
+    previousStudentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    previousDebtorCode: {
+        type: String,
+        trim: true
+    },
+    previousFinancialSummary: {
+        debtorCode: String,
+        previousBalance: Number,
+        totalPaid: Number,
+        totalOwed: Number,
+        lastPaymentDate: Date,
+        lastPaymentAmount: Number,
+        transactionCount: Number,
+        recentTransactions: [{
+            date: Date,
+            description: String,
+            amount: Number,
+            type: String
+        }]
+    },
+    
     additionalInfo: {
-        dateOfBirth: {
-            type: Date
-        },
+        dateOfBirth: Date,
         gender: {
             type: String,
             enum: ['male', 'female', 'other']
         },
-        specialRequirements: {
-            type: String
+        nationality: String,
+        studentId: String,
+        institution: String,
+        course: String,
+        yearOfStudy: Number,
+        emergencyContact: {
+            name: String,
+            relationship: String,
+            phone: String,
+            email: String
+        },
+        specialRequirements: String,
+        dietaryRestrictions: String,
+        medicalConditions: String,
+        allergies: String
+    },
+    
+    // Document uploads
+    documents: [{
+        type: {
+            type: String,
+            enum: ['id', 'passport', 'student_card', 'other']
+        },
+        filename: String,
+        originalname: String,
+        path: String,
+        mimetype: String,
+        size: Number,
+        uploadedAt: {
+            type: Date,
+            default: Date.now
         }
+    }],
+    
+    // Signed lease information
+    signedLeasePath: String,
+    signedLeaseUploadDate: Date,
+    signedLeaseFileName: String,
+    signedLeaseSize: Number,
+    
+    // Rejection information
+    rejectionReason: String,
+    rejectedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    rejectedAt: Date,
+    
+    // Waitlist information
+    waitlistPosition: Number,
+    waitlistDate: Date,
+    
+    // Financial information
+    totalEstimatedCost: {
+        type: Number,
+        default: 0
+    },
+    amount: {
+        type: Number,
+        default: 0
+    },
+    
+    // Approval workflow
+    approval: {
+        admin: {
+            approved: {
+                type: Boolean,
+                default: false
+            },
+            approvedBy: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            approvedByEmail: String,
+            approvedAt: Date,
+            notes: String
+        },
+        finance: {
+            approved: {
+                type: Boolean,
+                default: false
+            },
+            approvedBy: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            approvedByEmail: String,
+            approvedAt: Date,
+            notes: String,
+            rejected: {
+                type: Boolean,
+                default: false
+            },
+            waitlisted: {
+                type: Boolean,
+                default: false
+            }
+        },
+        ceo: {
+            approved: {
+                type: Boolean,
+                default: false
+            },
+            approvedBy: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User'
+            },
+            approvedByEmail: String,
+            approvedAt: Date,
+            notes: String
+        }
+    },
+    
+    // Financial service integration
+    financial: {
+        status: {
+            type: String,
+            enum: ['pending', 'partial', 'complete', 'failed'],
+            default: 'pending'
+        },
+        message: String,
+        convertedToExpense: {
+            type: Boolean,
+            default: false
+        }
+    },
+    
+    // Quotations and vendor information
+    quotations: [{
+        vendor: String,
+        amount: Number,
+        description: String,
+        validUntil: Date,
+        accepted: {
+            type: Boolean,
+            default: false
+        }
+    }],
+    
+    // Request items for operational requests
+    items: [{
+        description: String,
+        quantity: Number,
+        unitCost: Number,
+        totalCost: Number,
+        purpose: String,
+        quotations: [{
+            vendor: String,
+            amount: Number,
+            description: String,
+            validUntil: Date
+        }]
+    }],
+    
+    // Vendor and delivery information
+    proposedVendor: String,
+    deliveryLocation: String,
+    priority: {
+        type: String,
+        enum: ['low', 'medium', 'high', 'urgent'],
+        default: 'medium'
+    },
+    
+    // Timestamps
+    createdAt: {
+        type: Date,
+        default: Date.now
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
     }
 }, {
     timestamps: true
 });
 
-// Add indexes for common queries
-applicationSchema.index({ status: 1, requestType: 1 });
-applicationSchema.index({ email: 1 });
-applicationSchema.index({ applicationDate: -1 });
-applicationSchema.index({ applicationCode: 1 });
-applicationSchema.index({ debtor: 1 });
-
-// Generate unique application code
-applicationSchema.pre('save', async function(next) {
-    if (!this.applicationCode && this.status === 'approved') {
-        const year = new Date().getFullYear().toString().substr(-2);
-        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-        this.applicationCode = `APP${year}${random}`;
-    }
+// Pre-save middleware to update timestamps
+applicationSchema.pre('save', function(next) {
+    this.updatedAt = new Date();
     next();
 });
+
+// Indexes for efficient queries
+applicationSchema.index({ email: 1 });
+applicationSchema.index({ status: 1 });
+applicationSchema.index({ applicationDate: -1 });
+applicationSchema.index({ residence: 1 });
+applicationSchema.index({ student: 1 });
+applicationSchema.index({ isReapplication: 1 });
+applicationSchema.index({ previousDebtorCode: 1 });
 
 module.exports = mongoose.model('Application', applicationSchema); 

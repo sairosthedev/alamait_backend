@@ -4,6 +4,7 @@ const whatsappService = require('../../services/whatsappService');
 const User = require('../../models/User');
 const ExpiredStudent = require('../../models/ExpiredStudent');
 const Residence = require('../../models/Residence');
+const Debtor = require('../../models/Debtor');
 const { validationResult } = require('express-validator');
 
 // Submit new application
@@ -29,10 +30,71 @@ exports.submitApplication = async (req, res) => {
             additionalInfo
         } = req.body;
 
-        // Check if email already has an application
-        const existingApplication = await Application.findOne({ email });
-        if (existingApplication) {
-            return res.status(400).json({ error: 'An application with this email already exists' });
+        // Check if this is a re-application from an existing student
+        let existingUser = await User.findOne({ email: email.toLowerCase() });
+        let isReapplication = false;
+        let previousDebtor = null;
+        let previousFinancialHistory = null;
+
+        if (existingUser) {
+            console.log(`🔄 Re-application detected for existing student: ${email}`);
+            isReapplication = true;
+            
+            // Check if user has previous financial history (debtor account)
+            previousDebtor = await Debtor.findOne({ user: existingUser._id });
+            
+            if (previousDebtor) {
+                console.log(`💰 Found previous debtor account: ${previousDebtor.debtorCode}`);
+                console.log(`   Previous balance: ${previousDebtor.currentBalance}`);
+                console.log(`   Total paid: ${previousDebtor.totalPaid}`);
+                console.log(`   Total owed: ${previousDebtor.totalOwed}`);
+                
+                // Get previous financial history from transactions
+                const { Transaction } = require('../../models/Transaction');
+                const previousTransactions = await Transaction.find({
+                    'metadata.applicationId': { $exists: true },
+                    $or: [
+                        { 'metadata.applicationId': previousDebtor.applicationCode },
+                        { 'metadata.applicationId': existingUser._id.toString() }
+                    ]
+                }).sort({ date: -1 }).limit(10);
+                
+                previousFinancialHistory = {
+                    debtorCode: previousDebtor.debtorCode,
+                    previousBalance: previousDebtor.currentBalance,
+                    totalPaid: previousDebtor.totalPaid,
+                    totalOwed: previousDebtor.totalOwed,
+                    lastPaymentDate: previousDebtor.lastPaymentDate,
+                    lastPaymentAmount: previousDebtor.lastPaymentAmount,
+                    transactionCount: previousTransactions.length,
+                    recentTransactions: previousTransactions.map(t => ({
+                        date: t.date,
+                        description: t.description,
+                        amount: t.totalDebit || t.totalCredit,
+                        type: t.source
+                    }))
+                };
+                
+                console.log(`📊 Previous financial summary:`, previousFinancialHistory);
+            }
+            
+            // Check if user has any active applications
+            const activeApplication = await Application.findOne({
+                email: email.toLowerCase(),
+                status: { $in: ['pending', 'approved', 'waitlisted'] }
+            });
+            
+            if (activeApplication) {
+                return res.status(400).json({ 
+                    error: 'You already have an active application. Please wait for the current application to be processed.',
+                    existingApplication: {
+                        id: activeApplication._id,
+                        status: activeApplication.status,
+                        applicationCode: activeApplication.applicationCode,
+                        submittedDate: activeApplication.applicationDate
+                    }
+                });
+            }
         }
 
         // Handle residence - if not provided, find the first available residence
@@ -48,10 +110,11 @@ exports.submitApplication = async (req, res) => {
         // Generate unique application code
         const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
 
-        const application = new Application({
+        // Create application with re-application metadata
+        const applicationData = {
             firstName,
             lastName,
-            email,
+            email: email.toLowerCase(),
             phone,
             requestType,
             preferredRoom,
@@ -63,20 +126,47 @@ exports.submitApplication = async (req, res) => {
             additionalInfo,
             applicationCode,
             status: 'pending',
-            applicationDate: new Date()
-        });
+            applicationDate: new Date(),
+            // Add re-application metadata
+            isReapplication: isReapplication,
+            previousStudentId: existingUser?._id || null,
+            previousDebtorCode: previousDebtor?.debtorCode || null,
+            previousFinancialSummary: previousFinancialHistory
+        };
 
+        // If this is a re-application, link to existing user
+        if (isReapplication && existingUser) {
+            applicationData.student = existingUser._id;
+            applicationData.requestType = 'renewal'; // Mark as renewal for admin processing
+        }
+
+        const application = new Application(applicationData);
         await application.save();
 
-        // Send confirmation email
+        console.log(`✅ Application ${isReapplication ? 're-' : ''}submitted successfully:`, {
+            applicationCode: application.applicationCode,
+            email: application.email,
+            isReapplication: application.isReapplication,
+            previousDebtorCode: application.previousDebtorCode
+        });
+
+        // Send confirmation email with re-application context
         const emailContent = `
             Dear ${firstName} ${lastName},
 
-            Thank you for submitting your application to Alamait Student Accommodation.
+            Thank you for ${isReapplication ? 're-' : ''}submitting your application to Alamait Student Accommodation.
             
-            Your application has been received and is being processed. We will notify you once your application has been reviewed.
+            ${isReapplication ? `
+            📋 Re-Application Details:
+            - This is a renewal application for your accommodation
+            - Your previous financial history will be preserved
+            - Previous debtor account: ${previousDebtor?.debtorCode || 'N/A'}
+            - Previous balance: $${previousDebtor?.currentBalance || 0}
+            - Total amount paid in previous lease: $${previousDebtor?.totalPaid || 0}
+            ` : ''}
             
             Application Details:
+            - Application Code: ${application.applicationCode}
             - Preferred Room: ${preferredRoom}
             ${reason ? `- Reason: ${reason}` : ''}
             ${startDate ? `- Desired Start Date: ${new Date(startDate).toLocaleDateString()}` : ''}
@@ -84,6 +174,12 @@ exports.submitApplication = async (req, res) => {
             ${additionalInfo?.gender ? `- Gender: ${additionalInfo.gender}` : ''}
             ${additionalInfo?.dateOfBirth ? `- Date of Birth: ${new Date(additionalInfo.dateOfBirth).toLocaleDateString()}` : ''}
             ${additionalInfo?.specialRequirements ? `- Special Requirements: ${additionalInfo.specialRequirements}` : ''}
+            
+            ${isReapplication ? `
+            💰 Financial History Preserved:
+            Your previous payment history and financial records will be maintained.
+            This ensures continuity in your accommodation account.
+            ` : ''}
             
             Please keep this email for your records.
             
@@ -93,24 +189,42 @@ exports.submitApplication = async (req, res) => {
 
         await sendEmail({
             to: email,
-            subject: 'Application Received - Alamait Student Accommodation',
+            subject: `${isReapplication ? 'Re-' : ''}Application Received - Alamait Student Accommodation`,
             text: emailContent
         });
 
         // Send WhatsApp confirmation
-        await whatsappService.sendMessage(
-            phone,
-            `Dear ${firstName}, your application for Alamait Student Accommodation has been received and is being processed. We will notify you once your application has been reviewed. Your preferred room is ${preferredRoom}.`
-        );
+        try {
+            await whatsappService.sendMessage({
+                to: phone,
+                message: `Hi ${firstName}! Your ${isReapplication ? 're-' : ''}application for Alamait Student Accommodation has been received. Application Code: ${application.applicationCode}. We'll notify you once it's reviewed.`
+            });
+        } catch (whatsappError) {
+            console.log('WhatsApp notification failed:', whatsappError.message);
+        }
 
+        // Return response with re-application context
         res.status(201).json({
             success: true,
-            message: 'Application submitted successfully',
-            applicationCode: application.applicationCode
+            message: `Application ${isReapplication ? 're-' : ''}submitted successfully`,
+            data: {
+                applicationCode: application.applicationCode,
+                email: application.email,
+                status: application.status,
+                isReapplication: application.isReapplication,
+                previousFinancialSummary: application.previousFinancialSummary,
+                message: isReapplication ? 
+                    'Welcome back! Your previous financial history will be preserved.' : 
+                    'New application submitted successfully.'
+            }
         });
+
     } catch (error) {
         console.error('Error submitting application:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ 
+            error: 'Failed to submit application',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 };
 
