@@ -202,7 +202,25 @@ class MonthlyAccrualCronService {
             }
             
             console.log(`🔄 Manually triggering monthly accruals for ${month}/${year}...`);
-            await this.processMonthlyAccruals();
+            
+            // Create monthly accruals for the specified month (not current month)
+            const result = await RentalAccrualService.createMonthlyRentAccrual(month, year);
+            
+            if (result && result.success) {
+                console.log(`✅ Manual monthly accruals created successfully for ${month}/${year}`);
+                console.log(`   Accruals created: ${result.accrualsCreated}`);
+                console.log(`   Errors: ${result.errors?.length || 0}`);
+                
+                if (result.errors && result.errors.length > 0) {
+                    console.log('⚠️ Some errors occurred:');
+                    result.errors.forEach((error, index) => {
+                        console.log(`   ${index + 1}. ${error.student}: ${error.error}`);
+                    });
+                }
+            } else {
+                console.log(`❌ Failed to create manual monthly accruals for ${month}/${year}`);
+                console.log(`   Error: ${result?.error || 'Unknown error'}`);
+            }
             
         } catch (error) {
             console.error('❌ Error in manual accrual trigger:', error);

@@ -318,6 +318,8 @@ class RentalAccrualService {
             const rentAmount = room.price;
             
             console.log(`   ${student.firstName} ${student.lastName}: $${rentAmount} rent for ${month}/${year}`);
+            console.log(`   📅 Month start date: ${monthStart.toISOString()}`);
+            console.log(`   📅 Month end date: ${monthEnd.toISOString()}`);
             
             // Get required accounts
             const accountsReceivable = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
@@ -327,10 +329,10 @@ class RentalAccrualService {
                 throw new Error('Required accounts not found');
             }
             
-            // Create transaction
+            // Create transaction with CORRECT date (1st of the month)
             const transaction = new Transaction({
                 transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-                date: monthStart,
+                date: monthStart, // This should be 1st of the month
                 description: `Monthly rent accrual for ${student.firstName} ${student.lastName} - ${month}/${year}`,
                 type: 'accrual',
                 residence: student.residence,
@@ -370,10 +372,10 @@ class RentalAccrualService {
                 }
             ];
             
-            // Create transaction entry
+            // Create transaction entry with CORRECT date (1st of the month)
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: monthStart,
+                date: monthStart, // This should be 1st of the month
                 description: `Monthly rent accrual: ${student.firstName} ${student.lastName} - ${month}/${year}`,
                 reference: student._id.toString(),
                 entries,
