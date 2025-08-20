@@ -1649,15 +1649,14 @@ class DoubleEntryAccountingService {
     }
 
     static async getAccountsReceivableAccount() {
-        let account = await Account.findOne({ 
-            name: 'Accounts Receivable',
-            type: 'Asset'
-        });
-        
+        // Prefer tenant AR account 1100; fallback to generic AR (1101) if needed
+        let account = await Account.findOne({ code: '1100' });
         if (!account) {
-            account = await this.getOrCreateAccount('1101', 'Accounts Receivable', 'Asset');
+            account = await Account.findOne({ name: 'Accounts Receivable - Tenants', type: 'Asset' });
         }
-        
+        if (!account) {
+            account = await this.getOrCreateAccount('1100', 'Accounts Receivable - Tenants', 'Asset');
+        }
         return account.code;
     }
 

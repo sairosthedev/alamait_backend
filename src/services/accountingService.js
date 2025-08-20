@@ -715,7 +715,8 @@ class AccountingService {
             // Liabilities with account codes
             const accountsPayable = await this.getAccountBalance('2000', monthEnd, residenceId);
             const tenantDeposits = await this.getAccountBalance('2020', monthEnd, residenceId);
-            const totalLiabilities = accountsPayable + tenantDeposits;
+            const deferredIncome = await this.getAccountBalance('1102', monthEnd, residenceId);
+            const totalLiabilities = Math.abs(accountsPayable) + Math.abs(tenantDeposits) + Math.abs(deferredIncome);
             
             // Equity with account codes
             const retainedEarnings = await this.getRetainedEarnings(monthEnd, residenceId);
@@ -745,8 +746,9 @@ class AccountingService {
                 },
                 liabilities: {
                     current: {
-                        accountsPayable: { amount: accountsPayable, accountCode: '2000', accountName: 'Accounts Payable' },
-                        tenantDeposits: { amount: tenantDeposits, accountCode: '2020', accountName: 'Tenant Deposits Held' }
+                        accountsPayable: { amount: Math.abs(accountsPayable), accountCode: '2000', accountName: 'Accounts Payable' },
+                        tenantDeposits: { amount: Math.abs(tenantDeposits), accountCode: '2020', accountName: 'Tenant Deposits Held' },
+                        deferredIncome: { amount: Math.abs(deferredIncome), accountCode: '1102', accountName: 'Deferred Income - Tenant Advances' }
                     },
                     total: totalLiabilities
                 },
@@ -861,11 +863,11 @@ class AccountingService {
      */
     static async getAccountsReceivableBalance(asOfDate, residenceId = null) {
         try {
-            // Robust: compute AR directly from ledger by netting 1100 entries (debits - credits)
+            // Robust: compute AR directly from ledger by netting tenant AR (1100) and generic AR (1101)
             const query = {
                 date: { $lte: asOfDate },
                 status: 'posted',
-                'entries.accountCode': '1100'
+                'entries.accountCode': { $in: ['1100', '1101'] }
             };
 
             if (residenceId) {
@@ -878,14 +880,14 @@ class AccountingService {
             for (const entry of arEntries) {
                 if (entry.entries && Array.isArray(entry.entries)) {
                     for (const subEntry of entry.entries) {
-                        if (subEntry.accountCode === '1100') {
+                        if (subEntry.accountCode === '1100' || subEntry.accountCode === '1101') {
                             netAR += (subEntry.debit || 0) - (subEntry.credit || 0);
                         }
                     }
                 }
             }
 
-            console.log(`📊 Accounts Receivable (1100) net balance as of ${asOfDate.toISOString()}: $${netAR}`);
+            console.log(`📊 Accounts Receivable (1100/1101) net balance as of ${asOfDate.toISOString()}: $${netAR}`);
             return Math.max(0, netAR);
         } catch (error) {
             console.error('❌ Error calculating Accounts Receivable:', error);
