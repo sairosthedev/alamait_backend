@@ -5,7 +5,7 @@ const Debtor = require('../src/models/Debtor');
 const { createDebtorForStudent } = require('../src/services/debtorService');
 
 // Database connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/test';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://macdonaldsairos24:macdonald24@cluster0.ulvve.mongodb.net/test?retryWrites=true&w=majority&appName=Cluster0';
 
 async function connectToDatabase() {
     try {

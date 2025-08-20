@@ -44,6 +44,12 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             application = await Application.findById(options.application).populate('residence', 'name rooms');
             if (application) {
                 console.log(`📋 Found application: ${application._id} (${application.status})`);
+                console.log(`   Residence: ${application.residence ? application.residence.name : 'Not set'}`);
+                console.log(`   Room: ${application.allocatedRoom || 'Not set'}`);
+                console.log(`   Start Date: ${application.startDate || 'Not set'}`);
+                console.log(`   End Date: ${application.endDate || 'Not set'}`);
+            } else {
+                console.log(`⚠️  Application ID provided but not found: ${options.application}`);
             }
         }
         

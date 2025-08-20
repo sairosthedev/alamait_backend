@@ -216,33 +216,22 @@ userSchema.post('save', async function(doc) {
                             try {
                                 const { createDebtorForStudent } = require('../services/debtorService');
                                 
-                                // Get residence and room data from application
-                                const residenceId = application.residence;
-                                const roomNumber = application.allocatedRoom;
+                                // Pass the FULL application object so debtor service can extract all data
+                                const debtor = await createDebtorForStudent(this, {
+                                    createdBy: this._id,
+                                    application: application._id,           // Application ID
+                                    applicationCode: application.applicationCode,  // Application code
+                                    // Let the debtor service extract data from the application
+                                    // Don't pass individual fields - let it use the application object
+                                });
                                 
-                                if (residenceId && roomNumber) {
-                                    const debtor = await createDebtorForStudent(this, {
-                                        createdBy: this._id,
-                                        residenceId: residenceId,
-                                        roomNumber: roomNumber,
-                                        startDate: application.startDate,
-                                        endDate: application.endDate,
-                                        application: application._id,
-                                        applicationCode: application.applicationCode
-                                    });
+                                if (debtor) {
+                                    console.log(`   ✅ Created debtor account: ${debtor.debtorCode}`);
                                     
-                                    if (debtor) {
-                                        console.log(`   ✅ Created debtor account: ${debtor.debtorCode}`);
-                                        
-                                        // Link the debtor back to the application
-                                        application.debtor = debtor._id;
-                                        await application.save();
-                                        console.log(`   🔗 Linked debtor ${debtor._id} to application ${application._id}`);
-                                    }
-                                } else {
-                                    console.log(`   ⚠️  Cannot create debtor: Missing residence or room data`);
-                                    console.log(`      Residence: ${residenceId || 'Not set'}`);
-                                    console.log(`      Room: ${roomNumber || 'Not set'}`);
+                                    // Link the debtor back to the application
+                                    application.debtor = debtor._id;
+                                    await application.save();
+                                    console.log(`   🔗 Linked debtor ${debtor._id} to application ${application._id}`);
                                 }
                             } catch (debtorError) {
                                 console.error(`   ❌ Error creating debtor account:`, debtorError.message);
