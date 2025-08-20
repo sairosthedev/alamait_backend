@@ -70,9 +70,9 @@ class RentalAccrualService {
             
             // Get required accounts
             const accountsReceivable = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
-            const rentalIncome = await Account.findOne({ code: '4000' }); // Rental Income - Residential
-            const adminIncome = await Account.findOne({ code: '4100' }); // Administrative Income
-            const depositLiability = await Account.findOne({ code: '2020' }); // Tenant Deposits Held
+            const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
+            const adminIncome = await Account.findOne({ code: '4002' }); // Administrative Fees
+            const depositLiability = await Account.findOne({ code: '2020' }); // Tenant Security Deposits
             
             if (!accountsReceivable || !rentalIncome || !depositLiability) {
                 throw new Error('Required accounts not found');
@@ -83,10 +83,9 @@ class RentalAccrualService {
                 transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
                 date: startDate,
                 description: `Lease start: ${application.firstName} ${application.lastName} - ${residence.name}`,
-                type: 'lease_start',
-                status: 'posted',
+                type: 'accrual',
                 residence: application.residence,
-                createdBy: 'system',
+                createdBy: 'system', // System-generated transaction
                 metadata: {
                     studentId: application.student,
                     studentName: `${application.firstName} ${application.lastName}`,
@@ -176,9 +175,9 @@ class RentalAccrualService {
                 entries,
                 totalDebit,
                 totalCredit,
-                source: 'lease_start',
+                source: 'rental_accrual',
                 sourceId: application._id,
-                sourceModel: 'Application',
+                sourceModel: 'Lease',
                 residence: application.residence,
                 createdBy: 'system',
                 status: 'posted',
@@ -322,7 +321,7 @@ class RentalAccrualService {
             
             // Get required accounts
             const accountsReceivable = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
-            const rentalIncome = await Account.findOne({ code: '4000' }); // Rental Income - Residential
+            const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             
             if (!accountsReceivable || !rentalIncome) {
                 throw new Error('Required accounts not found');
@@ -333,8 +332,7 @@ class RentalAccrualService {
                 transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
                 date: monthStart,
                 description: `Monthly rent accrual for ${student.firstName} ${student.lastName} - ${month}/${year}`,
-                type: 'monthly_rent_accrual',
-                status: 'posted',
+                type: 'accrual',
                 residence: student.residence,
                 createdBy: 'system',
                 metadata: {
@@ -381,9 +379,9 @@ class RentalAccrualService {
                 entries,
                 totalDebit: rentAmount,
                 totalCredit: rentAmount,
-                source: 'monthly_rent_accrual',
+                source: 'rental_accrual',
                 sourceId: student._id,
-                sourceModel: 'Application',
+                sourceModel: 'Lease',
                 residence: student.residence,
                 createdBy: 'system',
                 status: 'posted',

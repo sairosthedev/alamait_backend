@@ -242,6 +242,27 @@ userSchema.post('save', async function(doc) {
                                     application.debtor = debtor._id;
                                     await application.save();
                                     console.log(`   🔗 Linked debtor ${debtor._id} to application ${application._id}`);
+                                    
+                                    // 🆕 TRIGGER RENTAL ACCRUAL SERVICE - Lease starts now!
+                                    try {
+                                        console.log(`   🏠 Triggering rental accrual service for lease start...`);
+                                        const RentalAccrualService = require('../services/rentalAccrualService');
+                                        
+                                        const accrualResult = await RentalAccrualService.processLeaseStart(application);
+                                        
+                                        if (accrualResult && accrualResult.success) {
+                                            console.log(`   ✅ Rental accrual service completed successfully`);
+                                            console.log(`      - Initial accounting entries created`);
+                                            console.log(`      - Prorated rent, admin fees, and deposits recorded`);
+                                            console.log(`      - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
+                                        } else {
+                                            console.log(`   ⚠️  Rental accrual service completed with warnings:`, accrualResult?.error || 'Unknown issue');
+                                        }
+                                    } catch (accrualError) {
+                                        console.error(`   ❌ Error in rental accrual service:`, accrualError.message);
+                                        // Don't fail the registration process if accrual fails
+                                        console.log(`   ℹ️  Student registration completed, but rental accrual failed. Manual intervention may be needed.`);
+                                    }
                                 }
                             } catch (debtorError) {
                                 console.error(`   ❌ Error creating debtor account:`, debtorError.message);

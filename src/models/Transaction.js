@@ -34,11 +34,17 @@ const TransactionSchema = new mongoose.Schema({
     uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
   },
   entries: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TransactionEntry' }],
-  // Created by
+  // Created by (can be User ObjectId or "system" string)
   createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: mongoose.Schema.Types.Mixed, // Allows ObjectId or String
+    required: true,
+    validate: {
+      validator: function(value) {
+        // Allow ObjectId or the string "system"
+        return mongoose.Types.ObjectId.isValid(value) || value === 'system';
+      },
+      message: 'createdBy must be a valid ObjectId or "system"'
+    }
   }
 }, {
   timestamps: true

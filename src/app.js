@@ -93,6 +93,9 @@ const app = express();
 // Initialize cron jobs
 initCronJobs();
 
+// Start monthly accrual cron service
+const monthlyAccrualCronService = require('./services/monthlyAccrualCronService');
+
 // CORS configuration
 const allowedOrigins = [
   'http://localhost:5173',
@@ -388,6 +391,20 @@ app.use((err, req, res, next) => {
         error: 'Something went wrong!',
         message: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
+});
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`🚀 Server is running on port ${PORT}`);
+    
+    // Start monthly accrual cron service
+    try {
+        monthlyAccrualCronService.start();
+        console.log('✅ Monthly accrual cron service started');
+    } catch (error) {
+        console.error('❌ Failed to start monthly accrual cron service:', error);
+    }
 });
 
 module.exports = app;

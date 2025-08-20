@@ -73,8 +73,15 @@ const transactionEntrySchema = new mongoose.Schema({
   
   // Audit Trail
   createdBy: {
-    type: String, // User email
-    required: true
+    type: String, // User email or "system"
+    required: true,
+    validate: {
+      validator: function(value) {
+        // Allow any string, but give special treatment to "system"
+        return typeof value === 'string' && value.length > 0;
+      },
+      message: 'createdBy must be a non-empty string (user email or "system")'
+    }
   },
   createdAt: {
     type: Date,
