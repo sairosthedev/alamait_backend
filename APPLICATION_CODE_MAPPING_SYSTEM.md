@@ -2,33 +2,45 @@
 
 ## Overview
 
-The Application Code Mapping System ensures that when students register with an application code, they are automatically linked to their corresponding applications, and debtors are created when applications are approved.
+The Application Code Mapping System ensures that when students register with an application code, they are automatically linked to their corresponding applications, and debtors are created when students register with approved applications.
 
-## 🔄 **Complete Flow**
+## 🔄 **Correct Flow**
 
 ### **1. Application Creation (Admin/Public)**
 ```
-Admin creates application → Application gets unique applicationCode
+Admin creates application → Application status: "pending" (NO applicationCode yet)
 ```
 
-### **2. Student Registration**
+### **2. Admin Approval**
 ```
-Student registers with applicationCode → System automatically links to application
+Admin approves application → Application gets applicationCode + status: "approved" (NO debtor yet)
 ```
 
-### **3. Application Approval**
+### **3. Student Registration**
 ```
-Admin approves application → System automatically creates debtor
+Student registers with applicationCode → System links user ID to application → Creates debtor
 ```
 
 ### **4. Debtor Creation**
 ```
-Debtor created with complete application data → Linked back to application
+Debtor created automatically when student registers with approved application
 ```
 
 ## 🏗️ **How It Works**
 
-### **A. User Registration with Application Code**
+### **A. Application Approval (Admin)**
+
+When an admin approves an application:
+
+```javascript
+// In src/controllers/admin/applicationController.js
+case 'approve':
+    application.status = 'approved';
+    // Generate application code and approve
+    // NO debtor created yet - only when student registers
+```
+
+### **B. Student Registration with Application Code**
 
 When a student registers with an `applicationCode`:
 
@@ -49,9 +61,9 @@ user = new User({
 });
 ```
 
-### **B. Auto-Linking Middleware (User Model)**
+### **C. Auto-Linking Middleware (User Model)**
 
-The User model automatically links to existing applications:
+The User model automatically links to existing applications AND creates debtors:
 
 ```javascript
 // In src/models/User.js - post-save middleware
@@ -81,35 +93,26 @@ userSchema.post('save', async function(doc) {
             application.student = this._id;
             await application.save();
             
-            // If approved, create debtor immediately
+            // If approved, create debtor NOW (when student registers)
             if (application.status === 'approved') {
-                // Create debtor with application data
+                // Create debtor with complete application data
+                const debtor = await createDebtorForStudent(this, {
+                    createdBy: this._id,
+                    residenceId: application.residence,
+                    roomNumber: application.allocatedRoom,
+                    startDate: application.startDate,
+                    endDate: application.endDate,
+                    application: application._id,
+                    applicationCode: application.applicationCode
+                });
+                
+                // Link debtor back to application
+                application.debtor = debtor._id;
+                await application.save();
             }
         }
     }
 });
-```
-
-### **C. Application Approval Process**
-
-When an admin approves an application:
-
-```javascript
-// In src/controllers/admin/applicationController.js
-case 'approve':
-    application.status = 'approved';
-    
-    // Create debtor account for the student
-    const debtor = await createDebtorForStudent(studentUser, {
-        createdBy: req.user._id,
-        residenceId: residence._id,
-        roomNumber: roomNumber,
-        roomPrice: room.price || 0,
-        startDate: application.startDate,
-        endDate: application.endDate,
-        application: application._id,           // ← Link to application
-        applicationCode: application.applicationCode  // ← Link application code
-    });
 ```
 
 ### **D. Debtor Creation with Application Data**
@@ -169,8 +172,8 @@ npm run debug-application-debtor <applicationId>
 // Application should have:
 {
     _id: "application_id",
-    student: "user_id",           // ← Should be set
-    applicationCode: "APP123...",
+    student: "user_id",           // ← Should be set when student registers
+    applicationCode: "APP123...", // ← Should be set when admin approves
     status: "approved"
 }
 ```
@@ -201,24 +204,24 @@ npm run debug-application-debtor <applicationId>
 ## 🚨 **Common Issues & Solutions**
 
 ### **Issue 1: Application Missing Student Field**
-**Cause**: User registration didn't trigger auto-linking
-**Solution**: Run `npm run map-application-codes`
+**Cause**: Student hasn't registered yet with the application code
+**Solution**: Student needs to register with the application code
 
 ### **Issue 2: Debtor Missing Application Link**
 **Cause**: Debtor created before application approval
 **Solution**: Run `npm run map-application-codes` to update existing debtors
 
 ### **Issue 3: No Debtor Created**
-**Cause**: Application not approved or missing room/residence data
-**Solution**: Check application status and room allocation
+**Cause**: Student hasn't registered or application not approved
+**Solution**: Ensure student registers with correct application code
 
 ## ✅ **Benefits of This System**
 
-1. **Automatic Linking**: No manual intervention needed
+1. **Proper Flow**: Debtors only created when students actually register
 2. **Complete Data**: Debtors have all application information
 3. **Audit Trail**: Full traceability from application to debtor
 4. **Error Prevention**: Prevents orphaned applications or debtors
-5. **Real-time Creation**: Debtors created immediately when applications approved
+5. **Student-Driven**: Debtors created when students are ready
 
 ## 🔧 **Maintenance**
 

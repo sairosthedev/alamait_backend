@@ -213,139 +213,19 @@ exports.updateApplicationStatus = async (req, res) => {
 
                     // Create debtor account for the student now that application is approved
                     try {
-                        console.log(`\n🏗️  Creating/updating debtor for approved application: ${application.applicationCode}`);
+                        console.log(`\n🏗️  Application approved - debtor will be created when student registers`);
                         console.log(`   Student: ${application.firstName} ${application.lastName} (${application.email})`);
                         console.log(`   Room: ${roomNumber} (Price: $${room.price || 'Not set'})`);
                         console.log(`   Residence: ${residence.name} (${residence._id})`);
+                        console.log(`   Application Code: ${application.applicationCode}`);
+                        console.log(`   Note: Debtor will be created automatically when student registers with this application code`);
                         
-                        const { createDebtorForStudent } = require('../../services/debtorService');
-                        const studentUser = await User.findById(application.student);
+                        // No need to create debtor here - it will be created when student registers
+                        // The User model middleware will handle debtor creation
                         
-                        if (studentUser) {
-                            console.log(`   ✅ Found student user: ${studentUser.email}`);
-                            
-                            // Check if debtor already exists
-                            const Debtor = require('../../models/Debtor');
-                            const existingDebtor = await Debtor.findOne({ user: studentUser._id });
-                            
-                            if (!existingDebtor) {
-                                console.log(`   🔨 Creating NEW debtor account...`);
-                                
-                                // Create debtor with application data
-                                const debtor = await createDebtorForStudent(studentUser, {
-                                    createdBy: req.user._id,
-                                    residenceId: residence._id,
-                                    roomNumber: roomNumber,
-                                    roomPrice: room.price || 0,
-                                    startDate: application.startDate,
-                                    endDate: application.endDate,
-                                    application: application._id,
-                                    applicationCode: application.applicationCode
-                                });
-                                console.log(`   ✅ Created debtor account: ${debtor.debtorCode}`);
-                                
-                                // Link the debtor back to the application
-                                application.debtor = debtor._id;
-                                await application.save();
-                                console.log(`   🔗 Linked debtor ${debtor._id} to application ${application._id}`);
-                                
-                            } else {
-                                console.log(`   🔄 Updating EXISTING debtor account: ${existingDebtor.debtorCode}`);
-                                
-                                // Update existing debtor with application data
-                                const updateData = {
-                                    residence: residence._id,
-                                    roomNumber: roomNumber,
-                                    startDate: application.startDate,
-                                    endDate: application.endDate,
-                                    application: application._id,  // ← ADD THIS: Link to application
-                                    applicationCode: application.applicationCode,  // ← ADD THIS: Link application code
-                                    updatedAt: new Date()
-                                };
-                                
-                                // Recalculate totalOwed based on room price and lease duration
-                                if (room.price && application.startDate && application.endDate) {
-                                    const monthsDiff = Math.ceil((new Date(application.endDate) - new Date(application.startDate)) / (1000 * 60 * 60 * 24 * 30.44));
-                                    const totalRent = room.price * monthsDiff;
-                                    
-                                    // Calculate admin fee based on residence
-                                    let adminFee = 0;
-                                    if (residence.name.toLowerCase().includes('st kilda')) {
-                                        adminFee = 20; // St Kilda has $20 admin fee
-                                    }
-                                    
-                                    // Calculate deposit (typically 1 month's rent)
-                                    const deposit = room.price;
-                                    
-                                    const expectedTotal = totalRent + adminFee + deposit;
-                                    
-                                    updateData.totalOwed = expectedTotal;
-                                    updateData.currentBalance = Math.max(expectedTotal - (existingDebtor.totalPaid || 0), 0);
-                                    updateData.roomPrice = room.price;
-                                    
-                                    // Update billing period information
-                                    updateData.billingPeriod = {
-                                        type: monthsDiff === 3 ? 'quarterly' : 
-                                              monthsDiff === 6 ? 'semester' : 
-                                              monthsDiff === 12 ? 'annual' : 'monthly',
-                                        duration: {
-                                            value: monthsDiff,
-                                            unit: 'months'
-                                        },
-                                        startDate: new Date(application.startDate),
-                                        endDate: new Date(application.endDate),
-                                        billingCycle: {
-                                            frequency: 'monthly',
-                                            dayOfMonth: 1,
-                                            gracePeriod: 5
-                                        },
-                                        amount: {
-                                            monthly: room.price,
-                                            total: expectedTotal,
-                                            currency: 'USD'
-                                        },
-                                        status: 'active',
-                                        description: `Billing period for ${studentUser.email}`,
-                                        notes: `Updated from approved application ${application.applicationCode}`,  // ← ADD APPLICATION CODE
-                                        autoRenewal: {
-                                            enabled: false,
-                                            renewalType: 'same_period',
-                                            customRenewalPeriod: null
-                                        }
-                                    };
-                                    
-                                    updateData.financialBreakdown = {
-                                        monthlyRent: room.price,
-                                        numberOfMonths: monthsDiff,
-                                        totalRent: totalRent,
-                                        adminFee: adminFee,
-                                        deposit: deposit,
-                                        totalOwed: expectedTotal
-                                    };
-                                }
-                                
-                                await Debtor.findByIdAndUpdate(existingDebtor._id, updateData);
-                                console.log(`   ✅ Updated existing debtor account for approved student: ${studentUser.email}`);
-                                console.log(`   📊 Updated fields: residence, room, dates, application link`);
-                                
-                                // Link the debtor back to the application
-                                application.debtor = existingDebtor._id;
-                                await application.save();
-                                console.log(`   🔗 Linked existing debtor ${existingDebtor._id} to application ${application._id}`);
-                                console.log(`   📋 Application now has debtor reference: ${application.debtor}`);
-                            }
-                        } else {
-                            console.error(`   ❌ Student user not found for application: ${application._id}`);
-                        }
-                    } catch (debtorError) {
-                        console.error('   ❌ Error creating/updating debtor account:', debtorError);
-                        // Don't fail the approval process if debtor creation fails
-                        // But log it for investigation
-                        console.error('   🔍 Debtor creation failed for application:', {
-                            applicationId: application._id,
-                            studentId: application.student,
-                            error: debtorError.message
-                        });
+                    } catch (error) {
+                        console.error('❌ Error in application approval process:', error);
+                        // Don't fail the approval if debtor creation fails
                     }
 
                     // Generate and send lease agreement
