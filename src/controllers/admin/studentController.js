@@ -933,21 +933,10 @@ exports.manualAddStudent = async (req, res) => {
 
         await student.save();
 
-        // Automatically create debtor account for the new student
-        try {
-            await createDebtorForStudent(student, {
-                residenceId: residenceId,
-                roomNumber: roomNumber,
-                createdBy: req.user._id
-            });
-            console.log(`✅ Debtor account created for manually added student ${student.email}`);
-        } catch (debtorError) {
-            console.error('❌ Failed to create debtor account:', debtorError);
-            // Continue with student creation even if debtor creation fails
-            console.log('⚠️ Student manually added but debtor creation failed. Manual intervention may be needed.');
-        }
+        // Generate application code
+        const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
 
-        // Create application record (following the existing application logic)
+        // Create application record with proper application code
         const application = new Application({
             student: student._id,
             email,
@@ -962,12 +951,37 @@ exports.manualAddStudent = async (req, res) => {
             preferredRoom: roomNumber,
             allocatedRoom: roomNumber,
             residence: residenceId,
+            applicationCode: applicationCode, // Set the generated application code
             applicationDate: new Date(),
             actionDate: new Date(),
             actionBy: req.user.id
         });
 
         await application.save();
+
+        // Update student with application code
+        student.applicationCode = application.applicationCode;
+        await student.save();
+
+        // Automatically create debtor account for the new student with application link
+        try {
+            await createDebtorForStudent(student, {
+                residenceId: residenceId,
+                roomNumber: roomNumber,
+                createdBy: req.user._id,
+                application: application._id, // Link to the application
+                applicationCode: application.applicationCode, // Link application code
+                startDate: startDate,
+                endDate: endDate,
+                roomPrice: monthlyRent
+            });
+            console.log(`✅ Debtor account created for manually added student ${student.email}`);
+            console.log(`   Application Code: ${application.applicationCode}`);
+        } catch (debtorError) {
+            console.error('❌ Failed to create debtor account:', debtorError);
+            // Continue with student creation even if debtor creation fails
+            console.log('⚠️ Student manually added but debtor creation failed. Manual intervention may be needed.');
+        }
 
         // Update room occupancy and status (following existing logic)
         room.currentOccupancy = (room.currentOccupancy || 0) + 1;
@@ -1040,19 +1054,6 @@ exports.manualAddStudent = async (req, res) => {
         // Update student with current booking
         student.currentBooking = booking._id;
         await student.save();
-
-        // Automatically create debtor account for the new student
-        try {
-            await createDebtorForStudent(student, {
-                residenceId: residenceId,
-                roomNumber: roomNumber,
-                createdBy: req.user._id
-            });
-            console.log(`✅ Debtor account created for manually added student ${student.email}`);
-        } catch (debtorError) {
-            console.error('❌ Failed to create debtor account for manually added student:', debtorError);
-            // Continue with student creation even if debtor creation fails
-        }
 
         // Prepare lease agreement attachment (following existing logic)
         let attachments = [];
@@ -1135,7 +1136,8 @@ exports.manualAddStudent = async (req, res) => {
                 residence: residence.name,
                 roomNumber,
                 startDate,
-                endDate
+                endDate,
+                applicationCode: application.applicationCode
             },
             loginDetails: {
                 email,
