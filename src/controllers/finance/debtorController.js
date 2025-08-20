@@ -397,37 +397,23 @@ exports.addPayment = async (req, res) => {
         await debtor.addPayment(amount, description);
 
         // Create transaction entry for double-entry bookkeeping
-        const transaction = new Transaction({
-            date: new Date(),
-            description: description || `Payment received from ${debtor.contactInfo.name}`,
-            reference: paymentId || `PAY-${Date.now()}`,
-            type: 'payment',
-            createdBy: req.user._id
-        });
+		const mongoose = require('mongoose');
+		const DoubleEntryAccountingService = require('../../services/doubleEntryAccountingService');
+		const paymentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+		const pseudoPayment = {
+			_id: new mongoose.Types.ObjectId(),
+			paymentId: paymentId || `PAY-${Date.now()}`,
+			student: debtor.user,
+			user: debtor.user,
+			residence: debtor.residence,
+			totalAmount: amount,
+			method: paymentMethod || 'Bank Transfer',
+			date: new Date(),
+			paymentMonth,
+			payments: [{ type: 'rent', amount }]
+		};
 
-        await transaction.save();
-
-        // Create transaction entries
-        const entries = [
-            {
-                transaction: transaction._id,
-                account: '1000', // Bank - Main Account
-                debit: amount,
-                credit: 0,
-                description: description || 'Payment received',
-                paymentMethod
-            },
-            {
-                transaction: transaction._id,
-                account: debtor.accountCode, // Accounts Receivable
-                debit: 0,
-                credit: amount,
-                description: description || 'Payment received',
-                debtorId: debtor._id
-            }
-        ];
-
-        await TransactionEntry.insertMany(entries);
+		await DoubleEntryAccountingService.recordStudentRentPayment(pseudoPayment, req.user);
 
         await debtor.populate('user', 'firstName lastName email phone');
 

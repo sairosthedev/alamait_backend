@@ -849,8 +849,7 @@ class DoubleEntryAccountingService {
             // 🚨 DUPLICATE TRANSACTION PREVENTION
             const existingTransaction = await TransactionEntry.findOne({
                 source: 'payment',
-                sourceId: payment._id,
-                createdAt: { $gte: new Date(Date.now() - 60000) }
+                sourceId: payment._id
             });
 
             if (existingTransaction) {
@@ -1249,6 +1248,22 @@ class DoubleEntryAccountingService {
             }
 
             // Create transaction entry
+            console.log('🔧 Creating TransactionEntry with data:', {
+                transactionId: transaction.transactionId,
+                date: transactionDate,
+                description: transactionDescription,
+                reference: payment._id.toString(),
+                entriesCount: entries.length,
+                totalDebit: payment.totalAmount,
+                totalCredit: payment.totalAmount,
+                source: 'payment',
+                sourceId: payment._id,
+                sourceModel: 'Payment',
+                residence: residenceId,
+                createdBy: user.email || 'system',
+                status: 'posted'
+            });
+            
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
                 date: transactionDate,
@@ -1261,7 +1276,7 @@ class DoubleEntryAccountingService {
                 sourceId: payment._id,
                 sourceModel: 'Payment',
                 residence: residenceId,
-                createdBy: user.email,
+                createdBy: user.email || 'system',
                 status: 'posted',
                 metadata: {
                     paymentType: paymentType,
@@ -1280,8 +1295,19 @@ class DoubleEntryAccountingService {
                 }
             });
 
-            await transactionEntry.save();
-            console.log(`✅ Transaction entry created: ${transactionEntry._id}`);
+            console.log('💾 Saving TransactionEntry to database...');
+            try {
+                await transactionEntry.save();
+                console.log(`✅ Transaction entry created and saved: ${transactionEntry._id}`);
+                console.log(`   Total Debit: $${transactionEntry.totalDebit}`);
+                console.log(`   Total Credit: $${transactionEntry.totalCredit}`);
+                console.log(`   Entries Count: ${transactionEntry.entries?.length || 0}`);
+            } catch (saveError) {
+                console.error('❌ Error saving TransactionEntry:', saveError);
+                console.error('   Validation errors:', saveError.errors);
+                console.error('   TransactionEntry data:', transactionEntry.toObject());
+                throw saveError;
+            }
             
             // Update transaction with entry reference
             transaction.entries = [transactionEntry._id];

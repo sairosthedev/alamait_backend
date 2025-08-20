@@ -80,7 +80,7 @@ const paymentSchema = new mongoose.Schema({
     status: {
         type: String,
         enum: ['Pending', 'Confirmed', 'Failed', 'Verified', 'Rejected', 'Clarification Requested'],
-        default: 'Pending'
+        default: 'Confirmed'
     },
     applicationStatus: {
         type: String,
@@ -237,6 +237,27 @@ paymentSchema.methods.validateMapping = async function() {
         residence: debtor.residence
     };
 };
+
+// Ensure double-entry transaction exists after save
+paymentSchema.post('save', async function(doc) {
+    try {
+        const TransactionEntry = require('../models/TransactionEntry');
+        const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
+
+        // If an entry already exists for this payment, do nothing
+        const existing = await TransactionEntry.findOne({ source: 'payment', sourceId: doc._id });
+        if (existing) return;
+
+        // Build a minimal user object for createdBy
+        const systemUser = { _id: doc.createdBy, email: 'system@alamait.com' };
+
+        // Call service to create the transaction and entry
+        await DoubleEntryAccountingService.recordStudentRentPayment(doc, systemUser);
+        console.log(`✅ Auto-created double-entry for payment ${doc.paymentId}`);
+    } catch (hookErr) {
+        console.error('⚠️ post-save Payment hook failed to create accounting entry:', hookErr.message);
+    }
+});
 
 const Payment = mongoose.model('Payment', paymentSchema);
 

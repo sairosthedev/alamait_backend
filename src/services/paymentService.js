@@ -81,10 +81,49 @@ class PaymentService {
             try {
                 const DoubleEntryAccountingService = require('./doubleEntryAccountingService');
                 console.log('💰 Creating double-entry accounting transaction (via PaymentService)...');
-                await DoubleEntryAccountingService.recordStudentRentPayment(payment, createdBy || { _id: payment.createdBy });
-                console.log('✅ Double-entry accounting transaction created for payment');
+                
+                // Ensure payment has all required fields for transaction creation
+                const paymentForTransaction = {
+                    ...payment.toObject(),
+                    _id: payment._id,
+                    paymentId: payment.paymentId,
+                    student: payment.student,
+                    user: payment.user,
+                    residence: payment.residence,
+                    method: payment.method || 'Bank Transfer',
+                    totalAmount: payment.totalAmount,
+                    date: payment.date || new Date(),
+                    paymentMonth: payment.paymentMonth,
+                    rentAmount: payment.rentAmount || 0,
+                    adminFee: payment.adminFee || 0,
+                    deposit: payment.deposit || 0
+                };
+                
+                const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(paymentForTransaction, createdBy || { _id: payment.createdBy });
+                
+                if (accountingResult && accountingResult.transaction && accountingResult.transactionEntry) {
+                    console.log('✅ Double-entry accounting transaction created for payment');
+                    console.log(`   Transaction ID: ${accountingResult.transaction.transactionId}`);
+                    console.log(`   Transaction Entry ID: ${accountingResult.transactionEntry._id}`);
+                    
+                    // Verify transaction entry was created
+                    const TransactionEntry = require('../models/TransactionEntry');
+                    const createdEntry = await TransactionEntry.findById(accountingResult.transactionEntry._id);
+                    if (createdEntry) {
+                        console.log(`   ✅ Transaction entry verified in database`);
+                        console.log(`   Total Debit: $${createdEntry.totalDebit}`);
+                        console.log(`   Total Credit: $${createdEntry.totalCredit}`);
+                        console.log(`   Entries Count: ${createdEntry.entries?.length || 0}`);
+                    } else {
+                        console.log(`   ⚠️ Transaction entry not found in database after creation`);
+                    }
+                } else {
+                    console.log(`   ⚠️ Accounting service returned incomplete result`);
+                }
             } catch (accountingError) {
                 console.error('❌ Error creating accounting transaction from PaymentService:', accountingError.message);
+                console.error('   Error details:', accountingError.message);
+                console.error('   Stack trace:', accountingError.stack);
             }
 
             return { payment, debtor, userId };

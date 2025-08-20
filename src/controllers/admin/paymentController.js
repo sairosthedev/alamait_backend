@@ -767,12 +767,45 @@ const createPayment = async (req, res) => {
             console.log(`   Date Type: ${typeof payment.date}`);
             console.log(`   Date Valid: ${payment.date instanceof Date ? 'Yes' : 'No'}`);
             
-            const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(payment, req.user);
+            // Ensure payment has all required fields for transaction creation
+            const paymentForTransaction = {
+                ...payment.toObject(),
+                _id: payment._id,
+                paymentId: payment.paymentId,
+                student: payment.student,
+                user: payment.user,
+                residence: payment.residence,
+                method: payment.method,
+                totalAmount: payment.totalAmount,
+                date: payment.date,
+                paymentMonth: payment.paymentMonth,
+                rentAmount: payment.rentAmount || 0,
+                adminFee: payment.adminFee || 0,
+                deposit: payment.deposit || 0
+            };
             
-            console.log('✅ Double-entry accounting transaction created for payment');
-            console.log(`   Transaction ID: ${accountingResult.transaction.transactionId}`);
-            console.log(`   Transaction Entry ID: ${accountingResult.transactionEntry._id}`);
-            console.log(`   Amount: $${accountingResult.transactionEntry.totalDebit}`);
+            const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(paymentForTransaction, req.user);
+            
+            if (accountingResult && accountingResult.transaction && accountingResult.transactionEntry) {
+                console.log('✅ Double-entry accounting transaction created for payment');
+                console.log(`   Transaction ID: ${accountingResult.transaction.transactionId}`);
+                console.log(`   Transaction Entry ID: ${accountingResult.transactionEntry._id}`);
+                console.log(`   Amount: $${accountingResult.transactionEntry.totalDebit}`);
+                
+                // Verify transaction entry was created
+                const TransactionEntry = require('../../models/TransactionEntry');
+                const createdEntry = await TransactionEntry.findById(accountingResult.transactionEntry._id);
+                if (createdEntry) {
+                    console.log(`   ✅ Transaction entry verified in database`);
+                    console.log(`   Total Debit: $${createdEntry.totalDebit}`);
+                    console.log(`   Total Credit: $${createdEntry.totalCredit}`);
+                    console.log(`   Entries Count: ${createdEntry.entries?.length || 0}`);
+                } else {
+                    console.log(`   ⚠️ Transaction entry not found in database after creation`);
+                }
+            } else {
+                console.log(`   ⚠️ Accounting service returned incomplete result`);
+            }
         } catch (accountingError) {
             console.error('❌ Error creating accounting transaction:', accountingError);
             console.error('   Error details:', accountingError.message);
