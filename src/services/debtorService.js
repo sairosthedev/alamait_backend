@@ -346,7 +346,9 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             status: 'active',
             
             description: `Billing period for ${user.email}`,
-            notes: `Auto-generated from application data`,
+            notes: options.applicationCode ? 
+                `Auto-generated from approved application ${options.applicationCode}` : 
+                `Auto-generated from application data`,
             
             autoRenewal: {
                 enabled: false,
@@ -374,6 +376,9 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             startDate,
             endDate,
             roomPrice,
+            // Add application linking if provided
+            ...(options.application && { application: options.application }),
+            ...(options.applicationCode && { applicationCode: options.applicationCode }),
             // Add financial breakdown
             financialBreakdown: {
                 monthlyRent: roomPrice,

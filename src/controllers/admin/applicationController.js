@@ -213,15 +213,24 @@ exports.updateApplicationStatus = async (req, res) => {
 
                     // Create debtor account for the student now that application is approved
                     try {
+                        console.log(`\n🏗️  Creating/updating debtor for approved application: ${application.applicationCode}`);
+                        console.log(`   Student: ${application.firstName} ${application.lastName} (${application.email})`);
+                        console.log(`   Room: ${roomNumber} (Price: $${room.price || 'Not set'})`);
+                        console.log(`   Residence: ${residence.name} (${residence._id})`);
+                        
                         const { createDebtorForStudent } = require('../../services/debtorService');
                         const studentUser = await User.findById(application.student);
                         
                         if (studentUser) {
+                            console.log(`   ✅ Found student user: ${studentUser.email}`);
+                            
                             // Check if debtor already exists
                             const Debtor = require('../../models/Debtor');
                             const existingDebtor = await Debtor.findOne({ user: studentUser._id });
                             
                             if (!existingDebtor) {
+                                console.log(`   🔨 Creating NEW debtor account...`);
+                                
                                 // Create debtor with application data
                                 const debtor = await createDebtorForStudent(studentUser, {
                                     createdBy: req.user._id,
@@ -230,21 +239,28 @@ exports.updateApplicationStatus = async (req, res) => {
                                     roomPrice: room.price || 0,
                                     startDate: application.startDate,
                                     endDate: application.endDate,
-                                    application: application._id
+                                    application: application._id,
+                                    applicationCode: application.applicationCode
                                 });
-                                console.log(`✅ Created debtor account for approved student: ${studentUser.email}`);
+                                console.log(`   ✅ Created debtor account: ${debtor.debtorCode}`);
                                 
                                 // Link the debtor back to the application
                                 application.debtor = debtor._id;
                                 await application.save();
-                                console.log(`✅ Linked debtor ${debtor._id} to application ${application._id}`);
+                                console.log(`   🔗 Linked debtor ${debtor._id} to application ${application._id}`);
+                                
                             } else {
+                                console.log(`   🔄 Updating EXISTING debtor account: ${existingDebtor.debtorCode}`);
+                                
                                 // Update existing debtor with application data
                                 const updateData = {
                                     residence: residence._id,
                                     roomNumber: roomNumber,
                                     startDate: application.startDate,
-                                    endDate: application.endDate
+                                    endDate: application.endDate,
+                                    application: application._id,  // ← ADD THIS: Link to application
+                                    applicationCode: application.applicationCode,  // ← ADD THIS: Link application code
+                                    updatedAt: new Date()
                                 };
                                 
                                 // Recalculate totalOwed based on room price and lease duration
@@ -290,7 +306,7 @@ exports.updateApplicationStatus = async (req, res) => {
                                         },
                                         status: 'active',
                                         description: `Billing period for ${studentUser.email}`,
-                                        notes: `Updated from approved application`,
+                                        notes: `Updated from approved application ${application.applicationCode}`,  // ← ADD APPLICATION CODE
                                         autoRenewal: {
                                             enabled: false,
                                             renewalType: 'same_period',
@@ -309,21 +325,23 @@ exports.updateApplicationStatus = async (req, res) => {
                                 }
                                 
                                 await Debtor.findByIdAndUpdate(existingDebtor._id, updateData);
-                                console.log(`✅ Updated existing debtor account for approved student: ${studentUser.email}`);
+                                console.log(`   ✅ Updated existing debtor account for approved student: ${studentUser.email}`);
+                                console.log(`   📊 Updated fields: residence, room, dates, application link`);
                                 
                                 // Link the debtor back to the application
                                 application.debtor = existingDebtor._id;
                                 await application.save();
-                                console.log(`✅ Linked existing debtor ${existingDebtor._id} to application ${application._id}`);
+                                console.log(`   🔗 Linked existing debtor ${existingDebtor._id} to application ${application._id}`);
+                                console.log(`   📋 Application now has debtor reference: ${application.debtor}`);
                             }
                         } else {
-                            console.error(`❌ Student user not found for application: ${application._id}`);
+                            console.error(`   ❌ Student user not found for application: ${application._id}`);
                         }
                     } catch (debtorError) {
-                        console.error('Error creating/updating debtor account:', debtorError);
+                        console.error('   ❌ Error creating/updating debtor account:', debtorError);
                         // Don't fail the approval process if debtor creation fails
                         // But log it for investigation
-                        console.error('Debtor creation failed for application:', {
+                        console.error('   🔍 Debtor creation failed for application:', {
                             applicationId: application._id,
                             studentId: application.student,
                             error: debtorError.message
@@ -696,296 +714,18 @@ exports.updatePaymentStatus = async (req, res) => {
             text: emailText
         });
 
-        // Auto-generate receipt for application payment
-        try {
-            const { createReceipt } = require('../receiptController');
-            
-            // Create receipt items based on application type
-            let receiptItems = [];
-            let paymentDescription = '';
-            
-            if (application.requestType === 'upgrade') {
-                paymentDescription = 'Room Upgrade Payment';
-                receiptItems = [{
-                    description: `Room Upgrade Payment - ${roomNumber}`,
-                    quantity: 1,
-                    unitPrice: application.paymentAmount || 0,
-                    totalPrice: application.paymentAmount || 0
-                }];
-            } else {
-                paymentDescription = 'Room Allocation Payment';
-                receiptItems = [{
-                    description: `Room Allocation Payment - ${roomNumber}`,
-                    quantity: 1,
-                    unitPrice: application.paymentAmount || 0,
-                    totalPrice: application.paymentAmount || 0
-                }];
-            }
-            
-            // Create receipt data
-            const receiptData = {
-                student: application.student._id,
-                items: receiptItems,
-                notes: `${paymentDescription} for ${application.firstName} ${application.lastName} - Room ${roomNumber}`,
-                template: 'default',
-                paymentMethod: application.paymentMethod || 'bank_transfer',
-                paymentReference: `APP-${application.applicationCode}`,
-                residence: residence._id,
-                room: roomNumber
-            };
-
-            // Create receipt
-            const receiptReq = {
-                body: receiptData,
-                user: req.user
-            };
-            
-            const receiptRes = {
-                status: (code) => ({
-                    json: (data) => {
-                        if (code === 201) {
-                            console.log(`✅ Receipt automatically generated for application payment`);
-                            console.log(`   Application: ${application.applicationCode}`);
-                            console.log(`   Student: ${application.firstName} ${application.lastName}`);
-                            console.log(`   Room: ${roomNumber}`);
-                            console.log(`   Receipt Number: ${data?.data?.receipt?.receiptNumber || 'N/A'}`);
-                        } else {
-                            console.error('❌ Failed to generate receipt for application payment:', data);
-                        }
-                    }
-                })
-            };
-
-            await createReceipt(receiptReq, receiptRes);
-            
-        } catch (receiptError) {
-            console.error('❌ Error auto-generating receipt for application payment:', receiptError);
-            console.error('   Application:', application.applicationCode);
-            console.error('   Student:', application.firstName, application.lastName);
-            // Don't fail the application update if receipt generation fails
-        }
-
-        // Return updated room information along with the application
-        const updatedRoom = {
-            name: roomNumber,
-            status: room.status,
-            currentOccupancy: room.currentOccupancy,
-            capacity: room.capacity,
-            occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
-        };
-
         res.json({
-            message: 'Payment marked as paid and room allocated successfully',
+            message: 'Payment confirmed and room allocated successfully',
             application,
-            room: updatedRoom
+            room: {
+                number: roomNumber,
+                occupancy: `${room.currentOccupancy}/${room.capacity}`,
+                status: room.status
+            }
         });
+
     } catch (error) {
         console.error('Error in updatePaymentStatus:', error);
         res.status(500).json({ error: 'Server error' });
     }
 };
-
-// Delete application
-exports.deleteApplication = async (req, res) => {
-    try {
-        const applicationId = req.params.applicationId;
-        console.log('Attempting to delete application with ID:', applicationId);
-        // Find the application by ID
-        const application = await Application.findById(applicationId).populate('student');
-        
-        if (!application) {
-            console.error('Application not found for ID:', applicationId);
-            return res.status(404).json({ error: 'Application not found' });
-        }
-
-        // Archive before removing the user and application
-        try {
-            const ExpiredStudent = require('../../models/ExpiredStudent');
-            const Booking = require('../../models/Booking');
-            const Lease = require('../../models/Lease');
-            let user = null;
-            if (application.student) {
-                user = await User.findById(application.student._id);
-            }
-            // Fetch payment history
-            let paymentHistory = [];
-            if (user) {
-                const bookings = await Booking.find({ student: user._id }).lean();
-                paymentHistory = bookings.flatMap(booking => booking.payments || []);
-            }
-            // Fetch leases
-            let leases = [];
-            if (user) {
-                leases = await Lease.find({ studentId: user._id }).lean();
-            }
-            await ExpiredStudent.create({
-                student: user ? user.toObject() : null,
-                application: application.toObject(),
-                previousApplicationCode: application.applicationCode,
-                archivedAt: new Date(),
-                reason: 'application_deleted',
-                paymentHistory,
-                leases
-            });
-        } catch (archiveError) {
-            console.error('Error archiving to ExpiredStudent:', archiveError);
-        }
-
-        // Delete the application itself
-        try {
-            await application.deleteOne();
-            console.log('Deleted application with ID:', applicationId);
-        } catch (appDeleteError) {
-            console.error('Error deleting application:', appDeleteError);
-            return res.status(500).json({ error: 'Failed to delete application', details: appDeleteError.message });
-        }
-
-        // Delete the associated user if it exists
-        if (application.student && application.student._id) {
-            try {
-                await User.findByIdAndDelete(application.student._id);
-                console.log('Deleted user with ID:', application.student._id);
-            } catch (userDeleteError) {
-                console.error('Error deleting user:', userDeleteError);
-                // Don't fail the entire operation if user deletion fails
-            }
-        } else if (application.email) {
-            // If no student reference, try to delete user by email
-            try {
-                const deletedUser = await User.findOneAndDelete({ email: application.email });
-                if (deletedUser) {
-                    console.log('Deleted user by email:', application.email);
-                } else {
-                    console.log('No user found with email:', application.email);
-                }
-            } catch (userDeleteError) {
-                console.error('Error deleting user by email:', userDeleteError);
-                // Don't fail the entire operation if user deletion fails
-            }
-        }
-
-        res.json({ message: 'Application and associated user deleted successfully' });
-    } catch (error) {
-        console.error('Error in deleteApplication:', error, error.stack);
-        res.status(500).json({ error: 'Server error', details: error.message });
-    }
-};
-
-// Update room validity
-exports.updateRoomValidity = async (req, res) => {
-    try {
-        const { userId } = req.params;
-        // Set base date to March 2025
-        const baseDate = new Date(2025, 2, 28); // March 28, 2025
-        const validUntil = new Date(baseDate);
-        validUntil.setMonth(baseDate.getMonth() + 4); // Add 4 months to get to July 2025
-
-        const user = await User.findByIdAndUpdate(
-            userId,
-            { $set: { roomValidUntil: validUntil } },
-            { new: true }
-        );
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        res.json({
-            message: 'Room validity updated successfully',
-            roomValidUntil: validUntil
-        });
-    } catch (error) {
-        console.error('Error updating room validity:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-};
-
-// Sync room occupancy with allocations
-exports.syncRoomOccupancy = async (req, res) => {
-    try {
-        // Get all approved applications with allocated rooms
-        const allocatedApplications = await Application.find({
-            status: 'approved',
-            allocatedRoom: { $exists: true, $ne: null }
-        });
-
-        // Get all residences
-        const residences = await Residence.find({});
-        
-        // Create a map to track room occupancy
-        const roomOccupancyMap = {};
-        
-        // Count allocations for each room
-        allocatedApplications.forEach(app => {
-            if (!roomOccupancyMap[app.allocatedRoom]) {
-                roomOccupancyMap[app.allocatedRoom] = 0;
-            }
-            roomOccupancyMap[app.allocatedRoom] += 1;
-        });
-        
-        // Update room occupancy in residences
-        let updatedRooms = 0;
-        
-        for (const residence of residences) {
-            let residenceUpdated = false;
-            
-            residence.rooms.forEach(room => {
-                const allocatedCount = roomOccupancyMap[room.roomNumber] || 0;
-                
-                // If the current occupancy doesn't match the allocated count, update it
-                if (room.currentOccupancy !== allocatedCount) {
-                    room.currentOccupancy = allocatedCount;
-                    
-                    // Update room status based on occupancy
-                    if (allocatedCount === 0) {
-                        room.status = 'available';
-                    } else if (allocatedCount >= room.capacity) {
-                        room.status = 'occupied';
-                    } else {
-                        room.status = 'reserved';
-                    }
-                    
-                    updatedRooms++;
-                    residenceUpdated = true;
-                }
-            });
-            
-            // Save the residence if any rooms were updated
-            if (residenceUpdated) {
-                await residence.save();
-            }
-        }
-        
-        res.json({
-            message: `Room occupancy synced successfully. Updated ${updatedRooms} rooms.`
-        });
-    } catch (error) {
-        console.error('Error in syncRoomOccupancy:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-};
-
-// Get expired students (for applications route)
-exports.getExpiredStudents = async (req, res) => {
-    try {
-        const { page = 1, limit = 20 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-        const total = await ExpiredStudent.countDocuments();
-        const expiredStudents = await ExpiredStudent.find()
-            .sort({ archivedAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
-        res.json({
-            success: true,
-            expiredStudents,
-            pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / limit),
-                total,
-                limit: parseInt(limit)
-            }
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-}; 
