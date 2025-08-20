@@ -7,7 +7,7 @@ const Payment = require('../models/Payment');
 
 /**
  * Automatically create a debtor account for a new student with full financial data
- * @param {Object} user - The user object (student)
+ * @param {Object} user - The user object (student) OR application object
  * @param {Object} options - Additional options
  * @param {string} options.residenceId - Residence ID if available
  * @param {string} options.roomNumber - Room number if available
@@ -15,14 +15,42 @@ const Payment = require('../models/Payment');
  * @param {Date} options.startDate - Lease start date if available
  * @param {Date} options.endDate - Lease end date if available
  * @param {number} options.roomPrice - Room price if available
+ * @param {string} options.application - Application ID if available
+ * @param {string} options.applicationCode - Application code if available
  * @returns {Promise<Object>} Created debtor object
  */
 exports.createDebtorForStudent = async (user, options = {}) => {
     try {
+        let actualUser = user;
+        let application = null;
+        
+        // If we have an application code, find the user by it
+        if (options.applicationCode) {
+            console.log(`🔍 Looking for user with application code: ${options.applicationCode}`);
+            
+            // Find user by application code
+            const userByCode = await User.findOne({ applicationCode: options.applicationCode });
+            if (userByCode) {
+                actualUser = userByCode;
+                console.log(`✅ Found user by application code: ${actualUser.email}`);
+            } else {
+                console.log(`⚠️  No user found with application code: ${options.applicationCode}`);
+                // Continue with the provided user object
+            }
+        }
+        
+        // If we have an application ID, get the application data
+        if (options.application) {
+            application = await Application.findById(options.application).populate('residence', 'name rooms');
+            if (application) {
+                console.log(`📋 Found application: ${application._id} (${application.status})`);
+            }
+        }
+        
         // Check if debtor already exists for this user
-        const existingDebtor = await Debtor.findOne({ user: user._id });
+        const existingDebtor = await Debtor.findOne({ user: actualUser._id });
         if (existingDebtor) {
-            console.log(`Debtor already exists for user ${user.email} - updating with new data`);
+            console.log(`Debtor already exists for user ${actualUser.email} - updating with new data`);
             
             // Update existing debtor with new application data
             const updateData = {};
@@ -40,6 +68,17 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             if (options.roomPrice && existingDebtor.roomPrice !== options.roomPrice) {
                 updateData.roomPrice = options.roomPrice;
                 console.log(`   💰 Updating room price: $${options.roomPrice}`);
+            }
+            
+            // Update application linking if provided
+            if (options.application && !existingDebtor.application) {
+                updateData.application = options.application;
+                console.log(`   🔗 Linking to application: ${options.application}`);
+            }
+            
+            if (options.applicationCode && !existingDebtor.applicationCode) {
+                updateData.applicationCode = options.applicationCode;
+                console.log(`   🔗 Linking to application code: ${options.applicationCode}`);
             }
             
             if (options.startDate && options.endDate) {
@@ -87,8 +126,10 @@ exports.createDebtorForStudent = async (user, options = {}) => {
                         currency: 'USD'
                     },
                     status: 'active',
-                    description: `Billing period for ${user.email}`,
-                    notes: `Updated from application data`,
+                    description: `Billing period for ${actualUser.email}`,
+                    notes: options.applicationCode ? 
+                        `Updated from approved application ${options.applicationCode}` : 
+                        `Updated from application data`,
                     autoRenewal: {
                         enabled: false,
                         renewalType: 'same_period',
@@ -135,9 +176,9 @@ exports.createDebtorForStudent = async (user, options = {}) => {
 
         // Prepare contact info
         const contactInfo = {
-            name: `${user.firstName} ${user.lastName}`,
-            email: user.email,
-            phone: user.phone
+            name: `${actualUser.firstName} ${actualUser.lastName}`,
+            email: actualUser.email,
+            phone: actualUser.phone
         };
 
         // Initialize financial data
@@ -150,13 +191,8 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         // Try to get financial data from various sources
         try {
             // 1. Check for existing application (PRIORITY: Use application data first)
-            const application = await Application.findOne({ 
-                student: user._id,
-                status: 'approved' // Only use approved applications for debtor creation
-            }).populate('residence', 'name rooms');
-            
             if (application) {
-                console.log(`📝 Found APPROVED application for ${user.email}`);
+                console.log(`📝 Using provided application data for ${actualUser.email}`);
                 
                 // Use application dates as primary source
                 if (application.startDate && application.endDate) {
@@ -189,21 +225,64 @@ exports.createDebtorForStudent = async (user, options = {}) => {
                         }
                     }
                 }
-                
-                // If no room price found, try to get it from options or use default
-                if (!roomPrice) {
-                    roomPrice = options.roomPrice || 150;
-                    console.log(`   💰 Using fallback room price: $${roomPrice}`);
-                }
             } else {
-                console.log(`ℹ️  No approved application found for ${user.email} - will use fallback data`);
+                // Try to find application by user ID
+                const foundApplication = await Application.findOne({ 
+                    student: actualUser._id,
+                    status: 'approved' // Only use approved applications for debtor creation
+                }).populate('residence', 'name rooms');
+                
+                if (foundApplication) {
+                    console.log(`📝 Found APPROVED application for ${actualUser.email}`);
+                    application = foundApplication;
+                    
+                    // Use application dates as primary source
+                    if (foundApplication.startDate && foundApplication.endDate) {
+                        startDate = foundApplication.startDate;
+                        endDate = foundApplication.endDate;
+                        console.log(`   📅 Using application dates: ${startDate.toDateString()} to ${endDate.toDateString()}`);
+                    }
+                    
+                    // Extract residence and room data from application
+                    if (foundApplication.residence) {
+                        residenceId = foundApplication.residence._id;
+                        console.log(`   📍 Residence: ${foundApplication.residence.name}`);
+                        
+                        // Extract room number from application (prioritize allocated room)
+                        roomNumber = foundApplication.allocatedRoom || foundApplication.preferredRoom || foundApplication.roomNumber;
+                        if (roomNumber) {
+                            console.log(`   🏠 Room: ${roomNumber}`);
+                            
+                            // Find room price from residence rooms array
+                            if (foundApplication.residence.rooms && foundApplication.residence.rooms.length > 0) {
+                                const room = foundApplication.residence.rooms.find(r => 
+                                    r.roomNumber === roomNumber || r.name === roomNumber
+                                );
+                                if (room && room.price) {
+                                    roomPrice = room.price;
+                                    console.log(`   💰 Room Price: $${roomPrice}`);
+                                } else {
+                                    console.log(`   ⚠️  Room price not found for ${roomNumber}`);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    console.log(`ℹ️  No approved application found for ${actualUser.email} - will use fallback data`);
+                }
+            }
+            
+            // If no room price found, try to get it from options or use default
+            if (!roomPrice) {
+                roomPrice = options.roomPrice || 150;
+                console.log(`   💰 Using fallback room price: $${roomPrice}`);
             }
 
             // 2. Check for existing lease if no application data
             if (!startDate || !endDate) {
-                const lease = await Lease.findOne({ studentId: user._id });
+                const lease = await Lease.findOne({ studentId: actualUser._id });
                 if (lease) {
-                    console.log(`📄 Found lease for ${user.email}`);
+                    console.log(`�� Found lease for ${actualUser.email}`);
                     startDate = startDate || lease.startDate;
                     endDate = endDate || lease.endDate;
                     residenceId = residenceId || lease.residence;
@@ -238,21 +317,21 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             // 4. Set default values if still no data
             if (!roomPrice) {
                 roomPrice = options.roomPrice || 150; // Default room price
-                console.log(`⚠️  Using default room price $${roomPrice} for ${user.email}`);
+                console.log(`⚠️  Using default room price $${roomPrice} for ${actualUser.email}`);
             }
 
             if (!startDate) {
                 startDate = options.startDate || new Date(); // Default to current date
-                console.log(`⚠️  Using current date as start date for ${user.email}`);
+                console.log(`⚠️  Using current date as start date for ${actualUser.email}`);
             }
 
             if (!endDate) {
                 endDate = options.endDate || new Date(new Date().setMonth(new Date().getMonth() + 6)); // Default to 6 months
-                console.log(`⚠️  Using 6-month default end date for ${user.email}`);
+                console.log(`⚠️  Using 6-month default end date for ${actualUser.email}`);
             }
 
         } catch (error) {
-            console.error(`❌ Error gathering financial data for ${user.email}:`, error);
+            console.error(`❌ Error gathering financial data for ${actualUser.email}:`, error);
             // Continue with default values
             roomPrice = options.roomPrice || 150;
             startDate = options.startDate || new Date();
@@ -290,7 +369,7 @@ exports.createDebtorForStudent = async (user, options = {}) => {
 
         // Get existing payments for this student
         const payments = await Payment.find({
-            student: user._id,
+            student: actualUser._id,
             status: { $in: ['verified', 'paid', 'confirmed'] }
         });
 
@@ -345,7 +424,7 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             
             status: 'active',
             
-            description: `Billing period for ${user.email}`,
+            description: `Billing period for ${actualUser.email}`,
             notes: options.applicationCode ? 
                 `Auto-generated from approved application ${options.applicationCode}` : 
                 `Auto-generated from application data`,
@@ -360,7 +439,7 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         // Create debtor object with full financial data
         const debtorData = {
             debtorCode,
-            user: user._id,
+            user: actualUser._id,
             accountCode,
             status,
             currentBalance,
@@ -389,7 +468,7 @@ exports.createDebtorForStudent = async (user, options = {}) => {
                 totalOwed: expectedTotal
             },
             contactInfo,
-            createdBy: options.createdBy || user._id
+            createdBy: options.createdBy || actualUser._id
         };
 
         // Log the data being set in debtor
@@ -404,7 +483,7 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         const debtor = new Debtor(debtorData);
         await debtor.save();
 
-        console.log(`\n✅ Debtor account created for student ${user.email}: ${debtorCode}`);
+        console.log(`\n✅ Debtor account created for student ${actualUser.email}: ${debtorCode}`);
         console.log(`   Room Price: $${roomPrice}`);
         console.log(`   Billing Period: ${billingPeriodObject.type} (${billingPeriodMonths} months)`);
         console.log(`   Expected Total: $${expectedTotal}`);
