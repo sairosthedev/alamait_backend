@@ -77,6 +77,16 @@ class PaymentService {
             // 🆕 NEW: Validate payment mapping
             await this.validatePaymentMapping(payment);
 
+            // 🆕 NEW: Always create double-entry transaction for the payment
+            try {
+                const DoubleEntryAccountingService = require('./doubleEntryAccountingService');
+                console.log('💰 Creating double-entry accounting transaction (via PaymentService)...');
+                await DoubleEntryAccountingService.recordStudentRentPayment(payment, createdBy || { _id: payment.createdBy });
+                console.log('✅ Double-entry accounting transaction created for payment');
+            } catch (accountingError) {
+                console.error('❌ Error creating accounting transaction from PaymentService:', accountingError.message);
+            }
+
             return { payment, debtor, userId };
             
         } catch (error) {

@@ -976,6 +976,15 @@ class DoubleEntryAccountingService {
                 transactionDate = new Date();
             }
 
+            // Use existing debtor or load if needed for allocation context
+            if (!debtor) {
+                try {
+                    debtor = await Debtor.findOne({ user: payment.user || payment.student });
+                } catch (e) {
+                    console.log('⚠️ Could not load debtor for payment allocation context');
+                }
+            }
+
             // 🆕 NEW: Determine transaction description based on payment analysis
             let transactionDescription;
             let paymentType;
@@ -1030,6 +1039,51 @@ class DoubleEntryAccountingService {
                     description: `Payment received from ${studentName} (${payment.method}, ${payment.paymentId}, ${payment.paymentMonth || ''})`
                 });
 
+                // Helper: compute outstanding accrued rent for the payment month
+                const computeOutstandingRentForPaymentMonth = async () => {
+                    try {
+                        if (!payment.paymentMonth) return { accrued: 0, paid: 0, outstanding: 0 };
+                        const [py, pm] = payment.paymentMonth.includes('-')
+                            ? payment.paymentMonth.split('-').map(n => parseInt(n))
+                            : [null, null];
+                        if (!py || !pm) return { accrued: 0, paid: 0, outstanding: 0 };
+
+                        const monthStart = new Date(py, pm - 1, 1);
+                        const monthEnd = new Date(py, pm, 0);
+
+                        const monthAccruals = await TransactionEntry.find({
+                            source: 'rental_accrual',
+                            'metadata.studentId': payment.student,
+                            status: 'posted',
+                            $or: [
+                                { 'metadata.type': 'monthly_rent_accrual', 'metadata.accrualMonth': pm, 'metadata.accrualYear': py },
+                                { 'metadata.type': 'lease_start', date: { $gte: monthStart, $lte: monthEnd } }
+                            ]
+                        }).lean();
+
+                        let accrued = 0;
+                        for (const acc of monthAccruals) {
+                            if (acc.metadata?.rentAmount) accrued += Number(acc.metadata.rentAmount) || 0;
+                            if (acc.metadata?.proratedRent) accrued += Number(acc.metadata.proratedRent) || 0;
+                        }
+
+                        let paid = 0;
+                        const monthKey = `${py}-${String(pm).padStart(2, '0')}`;
+                        if (debtor) {
+                            const mp = debtor.monthlyPayments?.find(m => m.month === monthKey);
+                            if (mp && mp.paidComponents?.rent) paid = Number(mp.paidComponents.rent) || 0;
+                        }
+
+                        const outstanding = Math.max(0, accrued - paid);
+                        return { accrued, paid, outstanding };
+                    } catch (err) {
+                        console.log('⚠️ Error computing outstanding rent for payment month:', err.message);
+                        return { accrued: 0, paid: 0, outstanding: 0 };
+                    }
+                };
+
+                const paymentMonthRent = await computeOutstandingRentForPaymentMonth();
+
                 // 2. Process each payment component
                 for (const paymentItem of parsedPayments) {
                     const amount = paymentItem.amount || 0;
@@ -1064,9 +1118,9 @@ class DoubleEntryAccountingService {
                             }
                             break;
                             
-                        case 'rent':
+                        case 'rent': {
                             if (isAdvancePayment && deferredIncomeAccount) {
-                                // Advance rent goes to Deferred Income (liability)
+                                // Entire rent is for future period
                                 entries.push({
                                     accountCode: deferredIncomeAccount,
                                     accountName: 'Deferred Income - Tenant Advances',
@@ -1075,28 +1129,37 @@ class DoubleEntryAccountingService {
                                     credit: amount,
                                     description: `Deferred rent income from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
                                 });
-                            } else if (isPastDuePayment || studentHasOutstandingDebt || hasAccruedRentals) {
-                                // Past due rent settles existing debt
+                                break;
+                            }
+
+                            // Allocate to Accounts Receivable up to the month's accrued rent, remainder to Deferred Income
+                            const outstandingForMonth = paymentMonthRent.outstanding || 0;
+                            const allocateToAR = Math.min(amount, outstandingForMonth);
+                            const excess = Math.max(0, amount - allocateToAR);
+
+                            if (allocateToAR > 0) {
                                 entries.push({
                                     accountCode: studentAccount,
                                     accountName: 'Accounts Receivable - Tenants',
                                     accountType: 'Asset',
                                     debit: 0,
-                                    credit: amount,
-                                    description: `Rent payment settles debt from ${studentName} for ${payment.paymentMonth || 'past period'} (${payment.paymentId})`
+                                    credit: allocateToAR,
+                                    description: `Rent payment settles ${payment.paymentMonth || 'period'} accrual from ${studentName} (${payment.paymentId})`
                                 });
-                            } else {
-                                // Current period rent is revenue
+                            }
+
+                            if (excess > 0 && deferredIncomeAccount) {
                                 entries.push({
-                                    accountCode: rentAccount,
-                                    accountName: 'Rental Income - Residential',
-                                    accountType: 'Income',
+                                    accountCode: deferredIncomeAccount,
+                                    accountName: 'Deferred Income - Tenant Advances',
+                                    accountType: 'Liability',
                                     debit: 0,
-                                    credit: amount,
-                                    description: `Rental income from ${studentName} for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
+                                    credit: excess,
+                                    description: `Advance rent from ${studentName} for future periods (${payment.paymentId})`
                                 });
                             }
                             break;
+                        }
                             
                         default:
                             // Fallback for unknown payment types

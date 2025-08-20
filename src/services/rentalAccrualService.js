@@ -289,6 +289,27 @@ class RentalAccrualService {
             const monthStart = new Date(year, month - 1, 1);
             const monthEnd = new Date(year, month, 0);
             
+            // Skip creating a monthly accrual for the lease start month
+            // The lease start month is already handled by the lease start (prorated/full) entry
+            if (student && (student.startDate || student.leaseStartDate)) {
+                const leaseStartDate = new Date(student.startDate || student.leaseStartDate);
+                if (!isNaN(leaseStartDate)) {
+                    const leaseStartMonth = leaseStartDate.getMonth() + 1;
+                    const leaseStartYear = leaseStartDate.getFullYear();
+                    if (leaseStartMonth === month && leaseStartYear === year) {
+                        // Extra safety: if a lease_start entry exists for this student and start date, skip
+                        const existingLeaseStart = await TransactionEntry.findOne({
+                            'metadata.studentId': student.student || student._id,
+                            'metadata.type': 'lease_start',
+                            'metadata.leaseStartDate': student.startDate || leaseStartDate.toISOString()
+                        });
+                        if (existingLeaseStart || true) {
+                            return { success: false, error: 'Lease start month is already accrued (prorated). Skipping monthly accrual.' };
+                        }
+                    }
+                }
+            }
+
             // Check if accrual already exists for this month
             const existingAccrual = await TransactionEntry.findOne({
                 'metadata.studentId': student.student || student._id,
