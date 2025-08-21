@@ -1189,41 +1189,9 @@ exports.sendToFinance = async (req, res) => {
                 changes: [`Monthly request for ${month}/${year} sent to finance`]
             });
 
-            // Automatically create a monthly request for this specific month
-            let createdMonthlyRequest = null;
-            try {
-                const monthlyRequestData = {
-                    title: `${monthlyRequest.title} - ${month}/${year}`,
-                    description: formatDescriptionWithMonth(monthlyRequest.description, month, year),
-                    residence: monthlyRequest.residence,
-                    month: parseInt(month),
-                    year: parseInt(year),
-                    items: monthlyRequest.items.map(item => ({
-                        title: item.title,
-                        description: item.description,
-                        quantity: item.quantity,
-                        estimatedCost: item.estimatedCost,
-                        category: item.category,
-                        priority: item.priority,
-                        notes: item.notes
-                    })),
-                    totalEstimatedCost: monthlyRequest.totalEstimatedCost,
-                    status: 'pending',
-                    submittedBy: user._id,
-                    isTemplate: false,
-                    createdFromTemplate: true,
-                    templateId: monthlyRequest._id,
-                    notes: `Created from template: ${monthlyRequest.title}`
-                };
-
-                const newMonthlyRequest = new MonthlyRequest(monthlyRequestData);
-                createdMonthlyRequest = await newMonthlyRequest.save();
-
-                console.log(`Created monthly request for ${month}/${year} from template:`, createdMonthlyRequest._id);
-            } catch (error) {
-                console.error('Error creating monthly request from template:', error);
-                // Don't fail the main operation if monthly request creation fails
-            }
+            // ✅ FIXED: Don't create monthly request here - only create it when approved
+            // This prevents duplication - only 1 request per month
+            console.log(`📝 Template submitted for ${month}/${year} - monthly request will be created upon approval`);
 
         } else {
             // For regular requests, update main status
@@ -1305,26 +1273,15 @@ exports.sendToFinance = async (req, res) => {
                         
                         await monthlyRequest.save();
                         
-                        // Auto-convert to expenses
-                        const tempRequest = {
-                            ...monthlyRequest.toObject(),
-                            items: monthlyApproval.items,
-                            totalEstimatedCost: monthlyApproval.totalCost,
-                            month: monthlyApproval.month,
-                            year: monthlyApproval.year,
-                            status: 'approved',
-                            isTemplate: false
-                        };
-                        
-                        const expenseConversionResult = await convertRequestToExpenses(tempRequest, user);
+                        // ✅ FIXED: Don't auto-convert to expenses here - wait for proper approval
+                        // This prevents duplication and ensures proper workflow
+                        console.log(`📝 Auto-approved ${targetMonth}/${targetYear} - expenses will be created upon proper approval`);
                         
                         autoApprovalResult = {
                             autoApproved: true,
-                            converted: expenseConversionResult.expenses.length,
-                            errors: expenseConversionResult.errors.length > 0 ? expenseConversionResult.errors : undefined
+                            converted: 0,
+                            message: 'Auto-approved but expenses will be created upon proper approval'
                         };
-                        
-                        console.log(`Auto-approved and converted ${expenseConversionResult.expenses.length} expenses for ${targetMonth}/${targetYear}: ${monthlyRequest._id}`);
                     }
                 } catch (autoApprovalError) {
                     console.error('Error auto-approving past/current month:', autoApprovalError);
@@ -1344,14 +1301,7 @@ exports.sendToFinance = async (req, res) => {
                 ? `Monthly request for ${targetMonth}/${targetYear} sent to finance successfully`
                 : 'Request sent to finance successfully',
             monthlyRequest: updatedRequest,
-            autoApproval: autoApprovalResult,
-            createdMonthlyRequest: createdMonthlyRequest ? {
-                id: createdMonthlyRequest._id,
-                title: createdMonthlyRequest.title,
-                month: createdMonthlyRequest.month,
-                year: createdMonthlyRequest.year,
-                status: createdMonthlyRequest.status
-            } : null
+            autoApproval: autoApprovalResult
         });
 
     } catch (error) {
@@ -1533,14 +1483,28 @@ exports.approveMonthlyRequest = async (req, res) => {
                     );
 
                     if (monthlyApproval) {
+                        console.log(`🔍 Found monthly approval for ${targetMonth}/${targetYear}:`, {
+                            itemCount: monthlyApproval.items.length,
+                            items: monthlyApproval.items.map(item => ({ title: item.title, estimatedCost: item.estimatedCost }))
+                        });
+                        
                         let derivedMonthly = await MonthlyRequest.findOne({
                             templateId: monthlyRequest._id,
                             month: targetMonth,
                             year: targetYear,
                             isTemplate: false
                         });
+                        
+                        console.log(`🔍 Searching for derived monthly request:`, {
+                            templateId: monthlyRequest._id,
+                            month: targetMonth,
+                            year: targetYear,
+                            found: !!derivedMonthly,
+                            foundId: derivedMonthly?._id
+                        });
 
                         if (!derivedMonthly) {
+                            console.log(`🆕 Creating new monthly request for ${targetMonth}/${targetYear} from template approval`);
                             const derivedData = {
                                 title: `${monthlyRequest.title} - ${targetMonth}/${targetYear}`,
                                 description: formatDescriptionWithMonth(monthlyRequest.description, targetMonth, targetYear),
@@ -1561,16 +1525,24 @@ exports.approveMonthlyRequest = async (req, res) => {
                             };
                             derivedMonthly = new MonthlyRequest(derivedData);
                             await derivedMonthly.save();
+                            console.log(`✅ Created monthly request: ${derivedMonthly._id}`);
                         } else {
+                            console.log(`🔄 Found existing monthly request for ${targetMonth}/${targetYear}: ${derivedMonthly._id}`);
                             // Ensure approved status
                             derivedMonthly.status = 'approved';
                             derivedMonthly.approvedBy = user._id;
                             derivedMonthly.approvedAt = new Date();
                             derivedMonthly.approvedByEmail = user.email;
                             await derivedMonthly.save();
+                            console.log(`✅ Updated existing monthly request status to approved`);
                         }
 
                         // Convert the derived monthly request (non-template) to expenses and entries
+                        console.log(`🔄 Converting derived monthly request to expenses:`, {
+                            derivedRequestId: derivedMonthly._id,
+                            itemCount: derivedMonthly.items.length,
+                            items: derivedMonthly.items.map(item => ({ title: item.title, estimatedCost: item.estimatedCost }))
+                        });
                         expenseConversionResult = await convertRequestToExpenses(derivedMonthly, user);
                     }
                 } else {
@@ -2476,6 +2448,23 @@ async function convertRequestToExpenses(request, user) {
             return { expenses: [], errors: [{ message: 'Skipped: templates do not create expenses or entries' }] };
         }
         
+        // ✅ Check if expenses already exist for this request to prevent duplication
+        const existingExpenses = await Expense.find({ monthlyRequestId: request._id });
+        if (existingExpenses.length > 0) {
+            console.log(`⚠️ Expenses already exist for request ${request._id}:`, {
+                existingCount: existingExpenses.length,
+                existingExpenses: existingExpenses.map(exp => ({ expenseId: exp.expenseId, title: exp.title }))
+            });
+            return { expenses: existingExpenses, errors: [] };
+        }
+        
+        console.log(`🔄 Starting expense creation for request:`, {
+            requestId: request._id,
+            title: request.title,
+            itemCount: request.items.length,
+            items: request.items.map(item => ({ title: item.title, estimatedCost: item.estimatedCost }))
+        });
+        
         // ✅ FIXED: Create individual item expenses for regular monthly requests (non-templates)
         // This ensures we only get the actual items (Electricity, Gas) and not duplicate template expenses
         for (let i = 0; i < request.items.length; i++) {
@@ -2590,6 +2579,12 @@ async function convertRequestToExpenses(request, user) {
             }
         }
         console.log(`\n✅ Monthly request conversion completed: ${createdExpenses.length} expenses created with double-entry transactions`);
+        console.log(`📋 Created expenses:`, createdExpenses.map(exp => ({
+            expenseId: exp.expenseId,
+            title: exp.title,
+            amount: exp.amount,
+            itemIndex: exp.itemIndex
+        })));
         
     } catch (error) {
         errors.push({
