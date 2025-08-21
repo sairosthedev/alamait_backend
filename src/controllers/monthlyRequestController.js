@@ -1312,7 +1312,8 @@ exports.sendToFinance = async (req, res) => {
                             totalEstimatedCost: monthlyApproval.totalCost,
                             month: monthlyApproval.month,
                             year: monthlyApproval.year,
-                            status: 'approved'
+                            status: 'approved',
+                            isTemplate: false
                         };
                         
                         const expenseConversionResult = await convertRequestToExpenses(tempRequest, user);
@@ -1543,8 +1544,8 @@ exports.approveMonthlyRequest = async (req, res) => {
                         expenseConversionResult = await convertRequestToExpenses(tempRequest, user);
                     }
                 } else {
-                    // For regular requests, convert directly
-                    expenseConversionResult = await convertRequestToExpenses(monthlyRequest, user);
+                    // For regular requests, convert directly (ensure isTemplate false)
+                    expenseConversionResult = await convertRequestToExpenses({ ...monthlyRequest.toObject(), isTemplate: false }, user);
                 }
                 
                 console.log(`Auto-converted ${expenseConversionResult?.expenses?.length || 0} expenses for approved request: ${monthlyRequest._id}`);
@@ -2405,13 +2406,10 @@ async function convertRequestToExpenses(request, user) {
         // Generate unique expense ID
         const expenseId = generateExpenseId();
         
-        // ✅ FIXED: Handle monthly templates separately with dedicated accrual method
+        // ✅ Enforce: Templates should NOT create expenses or entries
         if (request.isTemplate) {
-            console.log(`🔄 Monthly template detected: ${request.title}`);
-            console.log(`   Using dedicated monthly template conversion method`);
-            
-            const result = await convertMonthlyTemplateToExpenses(request, user);
-            return result;
+            console.log(`🚫 Template detected (${request.title}) - skipping expense/entry creation as requested`);
+            return { expenses: [], errors: [{ message: 'Skipped: templates do not create expenses or entries' }] };
         }
         
         // ✅ FIXED: Create individual item expenses for regular monthly requests (non-templates)
@@ -2460,7 +2458,8 @@ async function convertRequestToExpenses(request, user) {
                     const tempRequest = {
                         ...request.toObject(),
                         items: [item], // Only this item
-                        totalEstimatedCost: item.estimatedCost
+                        totalEstimatedCost: item.estimatedCost,
+                        isTemplate: false
                     };
                     
                     const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
@@ -4018,7 +4017,8 @@ exports.approveTemplateForMonth = async (req, res) => {
                     totalEstimatedCost: monthlyApproval.totalCost,
                     month: monthlyApproval.month,
                     year: monthlyApproval.year,
-                    status: 'approved'
+                    status: 'approved',
+                    isTemplate: false
                 };
                 
                 const expenseConversionResult = await convertRequestToExpenses(tempRequest, req.user);

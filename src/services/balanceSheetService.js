@@ -63,6 +63,9 @@ class BalanceSheetService {
       
       console.log(`🔍 Found ${allEntries.length} transaction entries and ${allAccounts.length} accounts in database`);
       
+      // Debug: Show all accounts found
+      console.log('📋 All accounts from database:', allAccounts.map(acc => ({ code: acc.code, name: acc.name, type: acc.type })));
+      
       // Process entries to build account balances
       const accountBalances = {};
       
@@ -223,6 +226,23 @@ class BalanceSheetService {
       console.log('Non-Current Liabilities:', Object.keys(balanceSheet.liabilities.nonCurrent));
       console.log('Equity:', Object.keys(balanceSheet.equity));
       
+      // Debug: Show specific account processing for petty cash
+      console.log('\n🔍 PETTY CASH DEBUG:');
+      const pettyCashAccounts = Object.values(accountBalances).filter(acc => 
+        acc.code.startsWith('101') || acc.name.toLowerCase().includes('petty')
+      );
+      console.log('Petty cash accounts found:', pettyCashAccounts.map(acc => ({
+        code: acc.code,
+        name: acc.name,
+        type: acc.type,
+        balance: acc.balance,
+        isCurrentAsset: this.isCurrentAsset(acc.code, acc.name)
+      })));
+      
+      if (pettyCashAccounts.length === 0) {
+        console.log('❌ NO PETTY CASH ACCOUNTS FOUND!');
+      }
+      
       // Calculate totals and ratios
       balanceSheet.assets.totalAssets = balanceSheet.assets.totalCurrent + balanceSheet.assets.totalNonCurrent;
       // Ensure liability totals are always positive
@@ -333,6 +353,8 @@ class BalanceSheetService {
               },
               total: monthBalanceSheet.assets.totalAssets
             },
+            
+            // Debug: Show what's in cashAndBank after formatting (move logs outside object construction)
             liabilities: {
               current: {
                 accountsPayable: this.formatAccountsPayable(monthBalanceSheet.liabilities.current),

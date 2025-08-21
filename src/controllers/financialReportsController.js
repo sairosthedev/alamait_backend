@@ -1,6 +1,7 @@
 const FinancialReportingService = require('../services/financialReportingService');
 const AccountingService = require('../services/accountingService');
 const BalanceSheetService = require('../services/balanceSheetService');
+const Account = require('../models/Account');
 const { validateToken } = require('../middleware/auth');
 
 /**
@@ -16,6 +17,61 @@ const { validateToken } = require('../middleware/auth');
  */
 
 class FinancialReportsController {
+    /**
+     * Get all balance sheet accounts (Assets, Liabilities, Equity)
+     * GET /api/financial-reports/balance-sheet-accounts
+     */
+    static async getBalanceSheetAccounts(req, res) {
+        try {
+            const { includeInactive = 'false' } = req.query;
+            const filter = {
+                type: { $in: ['Asset', 'Liability', 'Equity'] }
+            };
+            if (includeInactive !== 'true') {
+                filter.isActive = true;
+            }
+
+            const accounts = await Account.find(filter).sort({ code: 1 });
+
+            // Shape response grouped by type
+            const grouped = {
+                assets: [],
+                liabilities: [],
+                equity: []
+            };
+
+            accounts.forEach(acc => {
+                const base = {
+                    code: acc.code,
+                    name: acc.name,
+                    type: acc.type,
+                    category: acc.category || null,
+                    subcategory: acc.subcategory || null,
+                    description: acc.description || null,
+                    isActive: acc.isActive,
+                    level: acc.level,
+                    sortOrder: acc.sortOrder
+                };
+                if (acc.type === 'Asset') grouped.assets.push(base);
+                else if (acc.type === 'Liability') grouped.liabilities.push(base);
+                else if (acc.type === 'Equity') grouped.equity.push(base);
+            });
+
+            res.json({
+                success: true,
+                data: grouped,
+                count: accounts.length,
+                message: 'Balance sheet accounts fetched from chart of accounts'
+            });
+        } catch (error) {
+            console.error('Error fetching balance sheet accounts:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error fetching balance sheet accounts',
+                error: error.message
+            });
+        }
+    }
     
     /**
      * Generate Income Statement
