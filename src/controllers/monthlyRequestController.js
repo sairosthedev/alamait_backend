@@ -2491,8 +2491,9 @@ async function convertRequestToExpenses(request, user) {
                 
                 // ✅ STRICT ORDER: Create double-entry first, then expense; fail if entry fails
                 console.log(`💰 Creating double-entry transaction for: ${item.title}`);
+                const baseRequest = (request && typeof request.toObject === 'function') ? request.toObject() : request;
                 const tempRequest = {
-                    ...request.toObject(),
+                    ...baseRequest,
                     items: [item], // Only this item
                     totalEstimatedCost: item.estimatedCost,
                     isTemplate: false,
