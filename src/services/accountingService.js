@@ -700,16 +700,23 @@ class AccountingService {
             
             const monthEnd = new Date(year, month, 0);
             
-            // Assets with account codes
+            // Assets with account codes (include user petty cash accounts 1010-1014)
             const bankBalance = await this.getAccountBalance('1001', monthEnd, residenceId);
             const ecocashBalance = await this.getAccountBalance('1002', monthEnd, residenceId);
             const innbucksBalance = await this.getAccountBalance('1003', monthEnd, residenceId);
             const pettyCashBalance = await this.getAccountBalance('1004', monthEnd, residenceId);
             const cashBalance = await this.getAccountBalance('1005', monthEnd, residenceId);
+            // User/role petty cash accounts
+            const generalPettyCash = await this.getAccountBalance('1010', monthEnd, residenceId);
+            const adminPettyCash = await this.getAccountBalance('1011', monthEnd, residenceId);
+            const financePettyCash = await this.getAccountBalance('1012', monthEnd, residenceId);
+            const propertyMgrPettyCash = await this.getAccountBalance('1013', monthEnd, residenceId);
+            const maintenancePettyCash = await this.getAccountBalance('1014', monthEnd, residenceId);
             // Fix: Calculate Accounts Receivable correctly (Accruals - Payments)
             const accountsReceivable = await this.getAccountsReceivableBalance(monthEnd, residenceId);
             
-            const totalCashAndBank = bankBalance + ecocashBalance + innbucksBalance + pettyCashBalance + cashBalance;
+            const totalCashAndBank = bankBalance + ecocashBalance + innbucksBalance + pettyCashBalance + cashBalance
+                + generalPettyCash + adminPettyCash + financePettyCash + propertyMgrPettyCash + maintenancePettyCash;
             const totalAssets = totalCashAndBank + accountsReceivable;
             
             // Liabilities with account codes
@@ -733,11 +740,17 @@ class AccountingService {
                 assets: {
                     current: {
                         cashAndBank: {
-                        bank: { amount: bankBalance, accountCode: '1001', accountName: 'Bank Account' },
+                            bank: { amount: bankBalance, accountCode: '1001', accountName: 'Bank Account' },
                             ecocash: { amount: ecocashBalance, accountCode: '1002', accountName: 'Ecocash' },
                             innbucks: { amount: innbucksBalance, accountCode: '1003', accountName: 'Innbucks' },
                             pettyCash: { amount: pettyCashBalance, accountCode: '1004', accountName: 'Petty Cash' },
                             cash: { amount: cashBalance, accountCode: '1005', accountName: 'Cash on Hand' },
+                            // User petty cash accounts breakdown
+                            generalPettyCash: { amount: generalPettyCash, accountCode: '1010', accountName: 'General Petty Cash' },
+                            adminPettyCash: { amount: adminPettyCash, accountCode: '1011', accountName: 'Admin Petty Cash' },
+                            financePettyCash: { amount: financePettyCash, accountCode: '1012', accountName: 'Finance Petty Cash' },
+                            propertyManagerPettyCash: { amount: propertyMgrPettyCash, accountCode: '1013', accountName: 'Property Manager Petty Cash' },
+                            maintenancePettyCash: { amount: maintenancePettyCash, accountCode: '1014', accountName: 'Maintenance Petty Cash' },
                             total: totalCashAndBank
                         },
                         accountsReceivable: { amount: accountsReceivable, accountCode: '1100', accountName: 'Accounts Receivable - Tenants' }
@@ -899,7 +912,7 @@ class AccountingService {
      * Get total cash balance across all cash accounts
      */
     static async getTotalCashBalance(asOfDate, residenceId = null) {
-        const cashAccounts = ['1001', '1002', '1003', '1004', '1005'];
+        const cashAccounts = ['1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014'];
         let totalCash = 0;
         
         for (const accountCode of cashAccounts) {
@@ -961,7 +974,7 @@ class AccountingService {
     
     static async getCashCollections(startDate, endDate, residenceId = null) {
         let query = {
-            'entries.accountCode': { $in: ['1001', '1002', '1003', '1004', '1005'] },
+            'entries.accountCode': { $in: ['1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014'] },
             date: { $gte: startDate, $lte: endDate },
             status: 'posted'
         };
@@ -976,7 +989,7 @@ class AccountingService {
         for (const entry of entries) {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
-                    if (['1001', '1002', '1003', '1004', '1005'].includes(subEntry.accountCode) && subEntry.debit > 0) {
+                    if (['1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014'].includes(subEntry.accountCode) && subEntry.debit > 0) {
                         totalCollections += subEntry.debit;
                     }
                 }
@@ -988,7 +1001,7 @@ class AccountingService {
     
     static async getCashPayments(startDate, endDate, residenceId = null) {
         let query = {
-            'entries.accountCode': { $in: ['1001', '1002', '1003', '1004', '1005'] },
+            'entries.accountCode': { $in: ['1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014'] },
             date: { $gte: startDate, $lte: endDate },
             status: 'posted'
         };
@@ -1003,7 +1016,7 @@ class AccountingService {
         for (const entry of entries) {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
-                    if (['1001', '1002', '1003', '1004', '1005'].includes(subEntry.accountCode) && subEntry.credit > 0) {
+                    if (['1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014'].includes(subEntry.accountCode) && subEntry.credit > 0) {
                         totalPayments += subEntry.credit;
                     }
                 }
