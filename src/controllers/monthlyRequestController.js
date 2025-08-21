@@ -2460,7 +2460,34 @@ async function convertRequestToExpenses(request, user) {
                 console.log(`   - Expense Account: ${expenseAccountCode} - ${expenseAccount ? expenseAccount.name : 'Unknown'}`);
                 console.log(`   - Expense Category: ${expenseCategory}`);
                 
-                // Create expense record - always use estimated cost for monthly requests
+                // ✅ STRICT ORDER: Create double-entry first, then expense; fail if entry fails
+                console.log(`💰 Creating double-entry transaction for: ${item.title}`);
+                const tempRequest = {
+                    ...request.toObject(),
+                    items: [item], // Only this item
+                    totalEstimatedCost: item.estimatedCost,
+                    isTemplate: false,
+                    itemIndex: i,
+                    skipExpenseCreation: true,
+                    disableDuplicateCheck: true
+                };
+
+                const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+
+                // Resolve transaction id
+                let linkedTransactionId = null;
+                if (transactionResult && transactionResult.transaction && transactionResult.transaction._id) {
+                    linkedTransactionId = transactionResult.transaction._id;
+                } else if (transactionResult && transactionResult.transactionEntry && transactionResult.transactionEntry.transactionId) {
+                    const txn = await Transaction.findOne({ transactionId: transactionResult.transactionEntry.transactionId });
+                    if (txn) linkedTransactionId = txn._id;
+                }
+
+                if (!linkedTransactionId) {
+                    throw new Error(`Accrual double-entry not created for item index ${i} (${item.title})`);
+                }
+
+                // Create expense record AFTER successful double-entry
                 const expense = new Expense({
                     expenseId: `${expenseId}_item_${i}`,
                     title: `${request.title} - ${item.title}`,
@@ -2475,47 +2502,13 @@ async function convertRequestToExpenses(request, user) {
                     itemIndex: i,
                     residence: request.residence,
                     createdBy: user._id,
-                    notes: `Converted from monthly request item: ${item.title} - Account: ${expenseAccountCode}`
+                    notes: `Converted from monthly request item: ${item.title} - Account: ${expenseAccountCode}`,
+                    transactionId: linkedTransactionId
                 });
-                
-                await expense.save();
-                console.log(`✅ Expense created: ${item.title} - $${item.estimatedCost}`);
-                
-                // ✅ ALWAYS create double-entry transaction for monthly request items
-                try {
-                    console.log(`💰 Creating double-entry transaction for: ${item.title}`);
-                    
-                    const tempRequest = {
-                        ...request.toObject(),
-                        items: [item], // Only this item
-                        totalEstimatedCost: item.estimatedCost,
-                        isTemplate: false,
-                        itemIndex: i,
-                        skipExpenseCreation: true,
-                        disableDuplicateCheck: true
-                    };
-                    
-                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
 
-                    // Link expense to transaction robustly
-                    if (transactionResult && transactionResult.transaction && transactionResult.transaction._id) {
-                        expense.transactionId = transactionResult.transaction._id;
-                    } else if (transactionResult && transactionResult.transactionEntry) {
-                        const txn = await Transaction.findOne({ transactionId: transactionResult.transactionEntry.transactionId });
-                        if (txn) {
-                            expense.transactionId = txn._id;
-                        }
-                    }
-                    await expense.save();
-                    
-                    console.log(`✅ Double-entry transaction created: ${transactionResult.transaction._id}`);
-                    console.log(`✅ Expense linked to transaction: ${expense.transactionId}`);
-                    
-                } catch (transactionError) {
-                    console.error(`❌ Error creating double-entry transaction for ${item.title}:`, transactionError);
-                    // Don't fail the expense creation if transaction fails
-                }
-                
+                await expense.save();
+                console.log(`✅ Expense created and linked: ${item.title} - $${item.estimatedCost} (txn ${linkedTransactionId})`);
+
                 createdExpenses.push(expense);
                 
             } catch (itemError) {
