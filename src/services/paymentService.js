@@ -99,8 +99,7 @@ class PaymentService {
                     deposit: payment.deposit || 0
                 };
                 
-                // Use the new advance balance handling method for better payment processing
-        const accountingResult = await DoubleEntryAccountingService.recordStudentRentPaymentWithAdvanceHandling(paymentForTransaction, createdBy || { _id: payment.createdBy });
+                const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(paymentForTransaction, createdBy || { _id: payment.createdBy });
                 
                 if (accountingResult && accountingResult.transaction && accountingResult.transactionEntry) {
                     console.log('✅ Double-entry accounting transaction created for payment');

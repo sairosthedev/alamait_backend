@@ -2038,8 +2038,7 @@ class DoubleEntryAccountingService {
                 
                 case 'student_rent_payment':
                     const payment = await this.getPaymentById(sourceId);
-                    // Use the new advance balance handling method by default
-        return await this.recordStudentRentPaymentWithAdvanceHandling(payment, user);
+                    return await this.recordStudentRentPayment(payment, user);
                 
                 case 'invoice_issuance':
                     const invoice = await this.getInvoiceById(sourceId);

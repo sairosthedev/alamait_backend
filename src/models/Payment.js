@@ -252,8 +252,7 @@ paymentSchema.post('save', async function(doc) {
         const systemUser = { _id: doc.createdBy, email: 'system@alamait.com' };
 
         // Call service to create the transaction and entry
-        // Use the new advance balance handling method for better payment processing
-        await DoubleEntryAccountingService.recordStudentRentPaymentWithAdvanceHandling(doc, systemUser);
+        await DoubleEntryAccountingService.recordStudentRentPayment(doc, systemUser);
         console.log(`✅ Auto-created double-entry for payment ${doc.paymentId}`);
     } catch (hookErr) {
         console.error('⚠️ post-save Payment hook failed to create accounting entry:', hookErr.message);

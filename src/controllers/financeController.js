@@ -284,8 +284,7 @@ class FinanceController {
             await payment.save();
 
             // Record double-entry accounting transaction (Cash Basis)
-            // Use the new advance balance handling method for better payment processing
-        const accountingResult = await DoubleEntryAccountingService.recordStudentRentPaymentWithAdvanceHandling(payment, req.user);
+            const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(payment, req.user);
 
             console.log('✅ Student rent payment processed and accounting recorded');
 
