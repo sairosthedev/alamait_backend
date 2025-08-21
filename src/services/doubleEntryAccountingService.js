@@ -1196,6 +1196,17 @@ class DoubleEntryAccountingService {
             console.log(`     Has Outstanding Debt: ${studentHasOutstandingDebt}`);
             console.log(`     Payment Breakdown: Rent $${rentAmount}, Admin $${adminAmount}, Deposit $${depositAmount}`);
             console.log(`     Using Payment Breakdown: ${parsedPayments && parsedPayments.length > 0 ? 'YES' : 'NO (using fallback)'}`);
+            
+            // 🚨 CRITICAL DEBUG: Log the exact payment structure
+            console.log(`🚨 CRITICAL DEBUG - Payment Structure:`);
+            console.log(`   Payment Object Keys:`, Object.keys(payment));
+            console.log(`   Payment.payments:`, payment.payments);
+            console.log(`   Payment.paymentMonth:`, payment.paymentMonth);
+            console.log(`   Payment.date:`, payment.date);
+            console.log(`   Payment.totalAmount:`, payment.totalAmount);
+            console.log(`   Parsed Payments Array:`, parsedPayments);
+            console.log(`   Is Advance Payment Flag:`, isAdvancePayment);
+            console.log(`   Will Use Fallback Logic:`, !(parsedPayments && parsedPayments.length > 0));
 
             const transactionId = await this.generateTransactionId();
             
@@ -1501,9 +1512,12 @@ class DoubleEntryAccountingService {
                 // 🚨 FALLBACK: Enhanced logic for payments without breakdown
                 console.log('⚠️ No payment breakdown found, using enhanced fallback logic');
                 
-                if (isAdvancePayment && deferredIncomeAccount) {
-                    // 🆕 FIXED: Advance payment goes to Deferred Income (Liability)
-                    console.log(`💰 Processing advance payment for ${payment.paymentMonth} - routing to deferred income`);
+                // 🆕 CRITICAL OVERRIDE: If this is an advance payment, ALWAYS use deferred income
+                if (isAdvancePayment) {
+                    console.log(`🚨 CRITICAL OVERRIDE: Advance payment detected - FORCING deferred income routing`);
+                    console.log(`   Payment Month: ${payment.paymentMonth}`);
+                    console.log(`   Current Month: ${currentMonth + 1}/${currentYear}`);
+                    console.log(`   This is DEFINITELY an advance payment - routing to deferred income`);
                     
                     entries.push({
                         accountCode: receivingAccount,
@@ -1522,6 +1536,8 @@ class DoubleEntryAccountingService {
                         credit: payment.totalAmount,
                         description: `Deferred rent income from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
                     });
+                    
+                    console.log(`✅ CRITICAL OVERRIDE SUCCESS: Created deferred income entries for advance payment`);
                 } else if (studentHasOutstandingDebt || hasAccruedRentals) {
                     // Payment settles existing debt
                     entries.push({
@@ -1584,6 +1600,26 @@ class DoubleEntryAccountingService {
                 }
             }
 
+            // 🚨 FINAL SAFETY CHECK: Ensure no rental income for advance payments
+            if (isAdvancePayment) {
+                console.log(`🚨 FINAL SAFETY CHECK: Verifying no rental income entries for advance payment`);
+                const hasRentalIncome = entries.some(entry => 
+                    entry.accountCode === '4001' || 
+                    entry.accountName?.includes('Rental Income') ||
+                    entry.accountName?.includes('Rent Income')
+                );
+                
+                if (hasRentalIncome) {
+                    console.error(`❌ CRITICAL ERROR: Advance payment has rental income entries!`);
+                    console.error(`   This violates accrual accounting principles!`);
+                    console.error(`   Payment Month: ${payment.paymentMonth}`);
+                    console.error(`   Current Month: ${currentMonth + 1}/${currentYear}`);
+                    throw new Error(`CRITICAL: Advance payment cannot have rental income entries. Payment month: ${payment.paymentMonth}, Current month: ${currentMonth + 1}/${currentYear}`);
+                } else {
+                    console.log(`✅ FINAL SAFETY CHECK PASSED: No rental income entries found for advance payment`);
+                }
+            }
+            
             // Create transaction entry
             console.log('🔧 Creating TransactionEntry with data:', {
                 transactionId: transaction.transactionId,
