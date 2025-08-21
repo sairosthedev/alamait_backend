@@ -1559,10 +1559,51 @@ class DoubleEntryAccountingService {
 
             console.log(`   Expected monthly rent: $${monthlyRentExpected}`);
 
-            // Check if this payment is for a future month (advance payment)
-            const isAdvancePayment = payment.paymentMonth && 
-                payment.paymentMonth.toLowerCase() !== 'current' && 
-                payment.paymentMonth.toLowerCase() !== 'now';
+            // 🎯 THE KEY LOGIC: Check if this is an advance payment for a future month
+            // Parse payment month to determine if it's an advance payment
+            let isAdvancePayment = false;
+            let targetMonth = null;
+            let targetYear = null;
+            
+            if (payment.paymentMonth) {
+                // Check if paymentMonth is in format "2025-09" or similar
+                const monthYearMatch = payment.paymentMonth.match(/^(\d{4})-(\d{1,2})$/);
+                if (monthYearMatch) {
+                    targetYear = parseInt(monthYearMatch[1]);
+                    targetMonth = parseInt(monthYearMatch[2]);
+                    
+                    // Check if this is for a future month relative to payment date
+                    const paymentDate = new Date(payment.date);
+                    const currentYear = paymentDate.getFullYear();
+                    const currentMonth = paymentDate.getMonth() + 1; // getMonth() returns 0-11
+                    
+                    isAdvancePayment = (targetYear > currentYear) || 
+                                     (targetYear === currentYear && targetMonth > currentMonth);
+                    
+                    console.log(`   📅 Payment Month: ${payment.paymentMonth} (Year: ${targetYear}, Month: ${targetMonth})`);
+                    console.log(`   📅 Payment Date: ${paymentDate.toISOString().slice(0, 7)} (Year: ${currentYear}, Month: ${currentMonth})`);
+                    console.log(`   📅 Is Advance Payment: ${isAdvancePayment}`);
+                } else {
+                    // Check for text-based month names
+                    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                                      'july', 'august', 'september', 'october', 'november', 'december'];
+                    const lowerPaymentMonth = payment.paymentMonth.toLowerCase();
+                    const monthIndex = monthNames.findIndex(m => lowerPaymentMonth.includes(m));
+                    
+                    if (monthIndex !== -1) {
+                        targetMonth = monthIndex + 1;
+                        targetYear = new Date().getFullYear();
+                        
+                        // Check if this month is in the future
+                        const currentMonth = new Date().getMonth() + 1;
+                        isAdvancePayment = targetMonth > currentMonth;
+                        
+                        console.log(`   📅 Payment Month: ${payment.paymentMonth} (Month: ${targetMonth})`);
+                        console.log(`   📅 Current Month: ${currentMonth}`);
+                        console.log(`   📅 Is Advance Payment: ${isAdvancePayment}`);
+                    }
+                }
+            }
 
             // Declare variables that will be used throughout the method
             let amountForCurrentMonth = 0;
@@ -1572,17 +1613,16 @@ class DoubleEntryAccountingService {
             if (isAdvancePayment) {
                 console.log(`   📅 This is an advance payment for: ${payment.paymentMonth}`);
                 
-                // For advance payments, we need to check if we're completing a month or creating excess
-                const targetMonthAdvances = await this.getAdvanceBalanceForMonth(debtor.user, payment.paymentMonth);
-                const totalAdvancesForTargetMonth = targetMonthAdvances + existingAdvanceBalance;
+                // For advance payments, we need to check existing advances for the target month
+                // First, get the total existing advance balance for this student
+                console.log(`   💰 Existing advance balance: $${existingAdvanceBalance}`);
                 
-                console.log(`   💰 Total advances for ${payment.paymentMonth}: $${totalAdvancesForTargetMonth}`);
-                
-                // Calculate how much completes the target month vs becomes excess
-                const amountToCompleteTargetMonth = Math.max(0, monthlyRentExpected - totalAdvancesForTargetMonth);
+                // Calculate how much of this payment completes the target month vs becomes excess
+                const amountToCompleteTargetMonth = Math.max(0, monthlyRentExpected - existingAdvanceBalance);
                 amountForCurrentMonth = Math.min(rentAmount, amountToCompleteTargetMonth);
                 amountForNewAdvance = Math.max(0, rentAmount - amountForCurrentMonth);
                 
+                console.log(`   🎯 Expected monthly rent: $${monthlyRentExpected}`);
                 console.log(`   🎯 Amount to complete ${payment.paymentMonth}: $${amountToCompleteTargetMonth}`);
                 console.log(`   🎯 Amount for ${payment.paymentMonth}: $${amountForCurrentMonth}`);
                 console.log(`   🎯 Amount for new advance: $${amountForNewAdvance}`);
@@ -1636,10 +1676,18 @@ class DoubleEntryAccountingService {
 
             // Create transaction description
             let transactionDescription;
-            if (amountForNewAdvance > 0) {
-                transactionDescription = `Payment from ${studentName}: $${amountForCurrentMonth} for current month, $${amountForNewAdvance} advance`;
+            if (isAdvancePayment) {
+                if (amountForNewAdvance > 0) {
+                    transactionDescription = `Payment from ${studentName}: $${amountForCurrentMonth} for ${payment.paymentMonth}, $${amountForNewAdvance} advance`;
+                } else {
+                    transactionDescription = `Payment from ${studentName} for ${payment.paymentMonth} rent`;
+                }
             } else {
-                transactionDescription = `Payment from ${studentName} for current month rent`;
+                if (amountForNewAdvance > 0) {
+                    transactionDescription = `Payment from ${studentName}: $${amountForCurrentMonth} for current month, $${amountForNewAdvance} advance`;
+                } else {
+                    transactionDescription = `Payment from ${studentName} for current month rent`;
+                }
             }
 
             const transactionId = await this.generateTransactionId();
@@ -1710,22 +1758,30 @@ class DoubleEntryAccountingService {
                         
                     case 'rent': {
                         // 🎯 THE KEY LOGIC: Split between current month and new advance
-                        if (amountForCurrentMonth > 0) {
-                            // Part of payment settles current month's rent
-                            const currentMonthAmount = Math.min(amount, amountForCurrentMonth);
+                        // Calculate how much of this rent payment goes to current month vs advance
+                        let remainingRentAmount = amount;
+                        let remainingCurrentMonth = amountForCurrentMonth;
+                        let remainingAdvance = amountForNewAdvance;
+                        
+                        // First, allocate to current month if needed
+                        if (remainingCurrentMonth > 0 && remainingRentAmount > 0) {
+                            const currentMonthAmount = Math.min(remainingRentAmount, remainingCurrentMonth);
                             entries.push({
                                 accountCode: rentAccount,
                                 accountName: 'Rental Income - Residential',
                                 accountType: 'Income',
                                 debit: 0,
                                 credit: currentMonthAmount,
-                                description: `Rent income from ${studentName} for current month (${payment.paymentId})`
+                                description: `Rent income from ${studentName} for ${isAdvancePayment ? payment.paymentMonth : 'current month'} (${payment.paymentId})`
                             });
+                            
+                            remainingRentAmount -= currentMonthAmount;
+                            remainingCurrentMonth -= currentMonthAmount;
                         }
-
-                        if (amountForNewAdvance > 0 && deferredIncomeAccount) {
-                            // Remaining amount becomes new advance
-                            const advanceAmount = Math.min(amount, amountForNewAdvance);
+                        
+                        // Then, allocate remaining amount to advance if needed
+                        if (remainingAdvance > 0 && remainingRentAmount > 0 && deferredIncomeAccount) {
+                            const advanceAmount = Math.min(remainingRentAmount, remainingAdvance);
                             entries.push({
                                 accountCode: deferredIncomeAccount,
                                 accountName: 'Deferred Income - Tenant Advances',
@@ -1733,6 +1789,21 @@ class DoubleEntryAccountingService {
                                 debit: 0,
                                 credit: advanceAmount,
                                 description: `Advance rent from ${studentName} for future periods (${payment.paymentId})`
+                            });
+                            
+                            remainingRentAmount -= advanceAmount;
+                            remainingAdvance -= advanceAmount;
+                        }
+                        
+                        // If there's still remaining amount, allocate to current month as fallback
+                        if (remainingRentAmount > 0) {
+                            entries.push({
+                                accountCode: rentAccount,
+                                accountName: 'Rental Income - Residential',
+                                accountType: 'Income',
+                                debit: 0,
+                                credit: remainingRentAmount,
+                                description: `Rent income from ${studentName} (remaining amount) (${payment.paymentId})`
                             });
                         }
                         break;
