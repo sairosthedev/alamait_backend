@@ -1575,7 +1575,12 @@ exports.approveMonthlyRequest = async (req, res) => {
                     }
                 } else {
                     // For regular requests, convert directly (ensure isTemplate false)
-                    expenseConversionResult = await convertRequestToExpenses({ ...monthlyRequest.toObject(), isTemplate: false }, user);
+                    // Create a clean object with isTemplate: false but preserve the Mongoose document for saving
+                    const requestForConversion = {
+                        ...monthlyRequest.toObject(),
+                        isTemplate: false
+                    };
+                    expenseConversionResult = await convertRequestToExpenses(requestForConversion, user);
                 }
                 
                 console.log(`Auto-converted ${expenseConversionResult?.expenses?.length || 0} expenses for approved request: ${monthlyRequest._id}`);
@@ -2491,9 +2496,12 @@ async function convertRequestToExpenses(request, user) {
                 
                 // ✅ STRICT ORDER: Create double-entry first, then expense; fail if entry fails
                 console.log(`💰 Creating double-entry transaction for: ${item.title}`);
-                const baseRequest = (request && typeof request.toObject === 'function') ? request.toObject() : request;
+                
+                // Create a clean temp request object for the accounting service
                 const tempRequest = {
-                    ...baseRequest,
+                    _id: request._id,
+                    title: request.title,
+                    residence: request.residence,
                     items: [item], // Only this item
                     totalEstimatedCost: item.estimatedCost,
                     isTemplate: false,
@@ -2556,15 +2564,31 @@ async function convertRequestToExpenses(request, user) {
         }
 
         // Update request status to completed only when we have posted entries and created expenses
-        request.status = 'completed';
-        request.requestHistory.push({
-            date: new Date(),
-            action: 'Converted to expenses with double-entry transactions',
-            user: user._id,
-            changes: [`${createdExpenses.length} items converted to expenses with proper double-entry accounting`]
-        });
-
-        await request.save();
+        // Note: request parameter might be a plain object from template approval, so we need to find and update the actual document
+        if (request._id && typeof request.save === 'function') {
+            // This is a Mongoose document, update it directly
+            request.status = 'completed';
+            request.requestHistory.push({
+                date: new Date(),
+                action: 'Converted to expenses with double-entry transactions',
+                user: user._id,
+                changes: [`${createdExpenses.length} items converted to expenses with proper double-entry accounting`]
+            });
+            await request.save();
+        } else {
+            // This is a plain object (from template approval), find and update the actual document
+            const actualRequest = await MonthlyRequest.findById(request._id);
+            if (actualRequest) {
+                actualRequest.status = 'completed';
+                actualRequest.requestHistory.push({
+                    date: new Date(),
+                    action: 'Converted to expenses with double-entry transactions',
+                    user: user._id,
+                    changes: [`${createdExpenses.length} items converted to expenses with proper double-entry accounting`]
+                });
+                await actualRequest.save();
+            }
+        }
         console.log(`\n✅ Monthly request conversion completed: ${createdExpenses.length} expenses created with double-entry transactions`);
         
     } catch (error) {
