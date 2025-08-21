@@ -496,15 +496,10 @@ class DoubleEntryAccountingService {
         try {
             console.log('🏗️ Recording maintenance approval (accrual basis)');
 
-            // Use per-item sourceId to avoid suppressing other items in the same request
-            const perItemSourceId = (request && request.itemIndex !== undefined)
-                ? `${request._id}-item-${request.itemIndex}`
-                : (request?._id);
-
-            // Check if transaction already exists to prevent duplicates (per item)
+            // Check if transaction already exists to prevent duplicates (per item via metadata)
             const duplicateQuery = {
                 source: 'expense_accrual',
-                sourceId: perItemSourceId,
+                sourceId: request._id,
                 'metadata.requestType': 'maintenance',
                 createdAt: { $gte: new Date(Date.now() - 60000) } // Within last minute
             };
@@ -637,7 +632,7 @@ class DoubleEntryAccountingService {
                 totalDebit: totalAmount,
                 totalCredit: totalAmount,
                 source: 'expense_accrual',
-                sourceId: perItemSourceId,
+                sourceId: request._id,
                 sourceModel: 'Request',
                 residence: request.residence, // Add residence reference
                 createdBy: user.email,
