@@ -2449,23 +2449,101 @@ async function convertRequestToExpenses(request, user) {
                 
                 await expense.save();
                 
-                // ✅ ADD: Create double-entry transaction for this item
-                try {
-                    const tempRequest = {
-                        ...request.toObject(),
-                        items: [item], // Only this item
-                        totalEstimatedCost: approvedQuotation.amount
-                    };
+                // ✅ FIXED: Handle monthly template items with proper accrual accounting
+                // Monthly templates need accruals, not maintenance approval transactions
+                if (request.isTemplate) {
+                    // For monthly templates: Create proper accrual entries
+                    try {
+                        console.log(`💰 Creating accrual entries for monthly template item: ${item.title}`);
+                        
+                        // Create simple accrual transaction for monthly template items
+                        const accrualTransaction = new Transaction({
+                            transactionId: await DoubleEntryAccountingService.generateTransactionId(),
+                            date: new Date(),
+                            description: `Monthly template accrual: ${item.title}`,
+                            type: 'accrual',
+                            reference: request._id.toString(),
+                            residence: request.residence,
+                            residenceName: request.residence?.name || 'Unknown Residence',
+                            createdBy: user._id
+                        });
+                        
+                        await accrualTransaction.save();
+                        
+                        // Create accrual entries: Dr. Expense, Cr. Accrued Expenses
+                        const accrualEntries = new TransactionEntry({
+                            transactionId: accrualTransaction.transactionId,
+                            date: new Date(),
+                            description: `Monthly template accrual: ${item.title} - ${item.description}`,
+                            reference: request._id.toString(),
+                            entries: [
+                                {
+                                    // Debit: Expense Account (based on item category)
+                                    accountCode: expenseAccountCode,
+                                    accountName: expenseAccountName,
+                                    accountType: 'Expense',
+                                    debit: approvedQuotation.amount,
+                                    credit: 0,
+                                    description: `${expenseAccountName}: ${item.title} (monthly accrual)`
+                                },
+                                {
+                                    // Credit: Accrued Expenses (liability account)
+                                    accountCode: '2100', // Accrued Expenses account code
+                                    accountName: 'Accrued Expenses',
+                                    accountType: 'Liability',
+                                    debit: 0,
+                                    credit: approvedQuotation.amount,
+                                    description: `Accrued expense for ${item.title}`
+                                }
+                            ],
+                            totalDebit: approvedQuotation.amount,
+                            totalCredit: approvedQuotation.amount,
+                            source: 'monthly_template_accrual',
+                            sourceId: request._id,
+                            sourceModel: 'MonthlyRequest',
+                            residence: request.residence,
+                            createdBy: user.email,
+                            status: 'posted',
+                            metadata: {
+                                requestType: 'monthly_template',
+                                itemTitle: item.title,
+                                itemCategory: item.category,
+                                isAccrual: true
+                            }
+                        });
+                        
+                        await accrualEntries.save();
+                        
+                        // Link expense to accrual transaction
+                        expense.transactionId = accrualTransaction._id;
+                        await expense.save();
+                        
+                        console.log(`✅ Monthly template accrual created for ${item.title}: $${approvedQuotation.amount}`);
+                        
+                    } catch (accrualError) {
+                        console.error(`❌ Error creating monthly template accrual for ${item.title}:`, accrualError);
+                        // Don't fail the expense creation if accrual fails
+                    }
                     
-                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
-                    
-                    // Link expense to transaction
-                    expense.transactionId = transactionResult.transaction._id;
-                    await expense.save();
-                    
-                    console.log('✅ Double-entry transaction created for monthly request item');
-                } catch (transactionError) {
-                    console.error('❌ Error creating double-entry transaction for item:', transactionError);
+                } else {
+                    // For regular monthly requests: Use existing maintenance approval logic
+                    try {
+                        const tempRequest = {
+                            ...request.toObject(),
+                            items: [item], // Only this item
+                            totalEstimatedCost: approvedQuotation.amount
+                        };
+                        
+                        const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+                        
+                        // Link expense to transaction
+                        expense.transactionId = transactionResult.transaction._id;
+                        await expense.save();
+                        
+                        console.log('✅ Double-entry transaction created for monthly request item');
+                    } catch (transactionError) {
+                        console.error('❌ Error creating double-entry transaction for item:', transactionError);
+                    }
                 }
                 
                 createdExpenses.push(expense);
@@ -2528,7 +2606,7 @@ async function convertRequestToExpenses(request, user) {
                                     accountCode: expenseAccountCode,
                                     accountName: expenseAccountName,
                                     accountType: 'Expense',
-                                    debit: item.estimatedCost,
+                                    debit: approvedQuotation.amount,
                                     credit: 0,
                                     description: `${expenseAccountName}: ${item.title} (monthly accrual)`
                                 },
@@ -2538,12 +2616,12 @@ async function convertRequestToExpenses(request, user) {
                                     accountName: 'Accrued Expenses',
                                     accountType: 'Liability',
                                     debit: 0,
-                                    credit: item.estimatedCost,
+                                    credit: approvedQuotation.amount,
                                     description: `Accrued expense for ${item.title}`
                                 }
                             ],
-                            totalDebit: item.estimatedCost,
-                            totalCredit: item.estimatedCost,
+                            totalDebit: approvedQuotation.amount,
+                            totalCredit: approvedQuotation.amount,
                             source: 'monthly_template_accrual',
                             sourceId: request._id,
                             sourceModel: 'MonthlyRequest',
@@ -2564,7 +2642,7 @@ async function convertRequestToExpenses(request, user) {
                         expense.transactionId = accrualTransaction._id;
                         await expense.save();
                         
-                        console.log(`✅ Monthly template accrual created for ${item.title}: $${item.estimatedCost}`);
+                        console.log(`✅ Monthly template accrual created for ${item.title}: $${approvedQuotation.amount}`);
                         
                     } catch (accrualError) {
                         console.error(`❌ Error creating monthly template accrual for ${item.title}:`, accrualError);
@@ -2577,7 +2655,7 @@ async function convertRequestToExpenses(request, user) {
                         const tempRequest = {
                             ...request.toObject(),
                             items: [item], // Only this item
-                            totalEstimatedCost: item.estimatedCost
+                            totalEstimatedCost: approvedQuotation.amount
                         };
                         
                         const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
@@ -2586,7 +2664,7 @@ async function convertRequestToExpenses(request, user) {
                         expense.transactionId = transactionResult.transaction._id;
                         await expense.save();
                         
-                        console.log('✅ Double-entry transaction created for monthly request item (estimated)');
+                        console.log('✅ Double-entry transaction created for monthly request item');
                     } catch (transactionError) {
                         console.error('❌ Error creating double-entry transaction for item:', transactionError);
                     }
