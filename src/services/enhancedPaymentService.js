@@ -414,35 +414,7 @@ class EnhancedPaymentService {
             
             // Get required accounts
             const accounts = await this.getRequiredAccounts();
-            console.log('🔍 Retrieved accounts:', Object.keys(accounts).map(key => `${key}: ${accounts[key]?.name || 'NOT FOUND'}`));
-            
             const cashAccount = this.getCashAccount(payment.method, accounts);
-            if (!cashAccount) {
-                throw new Error(`No cash account found for payment method: ${payment.method}`);
-            }
-            
-            // Validate that we have at least basic accounts
-            if (!accounts.rentalIncome) {
-                console.log('⚠️ Rental Income account not found, creating fallback...');
-                accounts.rentalIncome = await Account.findOne({ type: 'income' });
-                if (!accounts.rentalIncome) {
-                    throw new Error('No income accounts found in database');
-                }
-            }
-            if (!accounts.deferredIncome) {
-                console.log('⚠️ Deferred Income account not found, creating fallback...');
-                accounts.deferredIncome = await Account.findOne({ type: 'liability' });
-                if (!accounts.deferredIncome) {
-                    throw new Error('No liability accounts found in database');
-                }
-            }
-            if (!accounts.securityDeposit) {
-                console.log('⚠️ Security Deposit account not found, creating fallback...');
-                accounts.securityDeposit = await Account.findOne({ type: 'liability' });
-                if (!accounts.securityDeposit) {
-                    throw new Error('No liability accounts found in database');
-                }
-            }
             
             // Generate transaction ID
             const transactionId = this.generateTransactionId();
@@ -607,20 +579,6 @@ class EnhancedPaymentService {
             
             // Debug: Log entries before validation
             console.log(`🔍 Created ${entries.length} double-entry entries:`, entries);
-            
-            // If no entries were created, create a basic one to prevent empty array
-            if (entries.length === 0) {
-                console.log('⚠️ No entries created, creating basic entry...');
-                entries.push({
-                    accountCode: accounts.rentalIncome.code,
-                    accountName: accounts.rentalIncome.name,
-                    accountType: accounts.rentalIncome.type,
-                    debit: 0,
-                    credit: payment.totalAmount,
-                    description: `Basic payment from ${studentName}`
-                });
-                console.log('✅ Created basic entry as fallback');
-            }
             
             // Validate double-entry balance
             const totalDebits = entries.reduce((sum, entry) => sum + (entry.debit || 0), 0);

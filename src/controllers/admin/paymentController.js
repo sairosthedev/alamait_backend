@@ -755,12 +755,12 @@ const createPayment = async (req, res) => {
 
         // Record double-entry accounting transaction
         try {
-            const EnhancedPaymentService = require('../../services/enhancedPaymentService');
+            const DoubleEntryAccountingService = require('../../services/doubleEntryAccountingService');
             
             console.log('💰 Creating double-entry accounting transaction...');
             console.log(`   Payment ID: ${payment.paymentId}`);
             console.log(`   Student: ${payment.student}`);
-            console.log(`   User ID: ${payment.user}`);
+            console.log(`   User ID: ${payment.user}`);  // ← NEW: Log user ID
             console.log(`   Residence: ${payment.residence}`);
             console.log(`   Amount: $${payment.totalAmount}`);
             console.log(`   Method: ${payment.method}`);
@@ -768,20 +768,22 @@ const createPayment = async (req, res) => {
             console.log(`   Date Type: ${typeof payment.date}`);
             console.log(`   Date Valid: ${payment.date instanceof Date ? 'Yes' : 'No'}`);
             
-            // Debug: Log the exact payment object being sent
-            console.log('🔍 Payment object being sent to EnhancedPaymentService:', {
+            // Ensure payment has all required fields for transaction creation
+            const paymentForTransaction = {
+                ...payment.toObject(),
                 _id: payment._id,
                 paymentId: payment.paymentId,
                 student: payment.student,
-                totalAmount: payment.totalAmount,
-                rentAmount: payment.rentAmount,
-                adminFee: payment.adminFee,
-                deposit: payment.deposit,
+                user: payment.user,
+                residence: payment.residence,
                 method: payment.method,
+                totalAmount: payment.totalAmount,
                 date: payment.date,
                 paymentMonth: payment.paymentMonth,
-                residence: payment.residence
-            });
+                rentAmount: payment.rentAmount || 0,
+                adminFee: payment.adminFee || 0,
+                deposit: payment.deposit || 0
+            };
             
             // Use the enhanced payment service for proper double-entry accounting
             const accountingResult = await EnhancedPaymentService.recordStudentPayment(payment, req.user);
