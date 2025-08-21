@@ -983,7 +983,7 @@ class DoubleEntryAccountingService {
                 depositAmount = parsedPayments.find(p => p.type === 'deposit')?.amount || 0;
             }
 
-            // 🆕 NEW: Analyze payment month vs current month to determine payment type
+            // 🆕 IMPROVED: Analyze payment month vs current month to determine payment type
             const currentDate = new Date();
             const currentMonth = currentDate.getMonth(); // 0-11
             const currentYear = currentDate.getFullYear();
@@ -1018,17 +1018,29 @@ class DoubleEntryAccountingService {
                         paymentMonthDate = new Date(year, month, 1);
                         const currentMonthDate = new Date(currentYear, currentMonth, 1);
                         
+                        console.log(`📅 Payment Month Analysis:`);
+                        console.log(`   Payment Month Date: ${paymentMonthDate.toISOString()}`);
+                        console.log(`   Current Month Date: ${currentMonthDate.toISOString()}`);
+                        console.log(`   Payment Month > Current Month: ${paymentMonthDate > currentMonthDate}`);
+                        
                         if (paymentMonthDate > currentMonthDate) {
                             isAdvancePayment = true;
+                            console.log(`✅ Identified as ADVANCE PAYMENT for future month`);
                         } else if (paymentMonthDate.getTime() === currentMonthDate.getTime()) {
                             isCurrentPeriodPayment = true;
+                            console.log(`✅ Identified as CURRENT PERIOD PAYMENT`);
                         } else {
                             isPastDuePayment = true;
+                            console.log(`✅ Identified as PAST DUE PAYMENT`);
                         }
+                    } else {
+                        console.log(`⚠️ Could not identify month from: ${payment.paymentMonth}`);
                     }
                 } catch (error) {
-                    console.log(`⚠️ Could not parse payment month: ${payment.paymentMonth}`);
+                    console.log(`⚠️ Error parsing payment month: ${payment.paymentMonth}`, error.message);
                 }
+            } else {
+                console.log(`⚠️ No payment month specified, will use fallback logic`);
             }
 
             // Check if student has outstanding debt
@@ -1036,6 +1048,14 @@ class DoubleEntryAccountingService {
             const debtor = await Debtor.findOne({ user: payment.student });
             const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
             const hasAccruedRentals = debtor && debtor.currentBalance > 0;
+            
+            // 🆕 CRITICAL: Advance payments should NEVER be treated as debt settlement
+            // Even if student has outstanding debt, future month payments go to Deferred Income
+            if (isAdvancePayment && studentHasOutstandingDebt) {
+                console.log(`⚠️ Student has outstanding debt ($${debtor.currentBalance}) but payment is for future month`);
+                console.log(`   This payment will be routed to Deferred Income, NOT to settle existing debt`);
+                console.log(`   Outstanding debt should be settled with separate payments for past months`);
+            }
 
             console.log(`   Payment Analysis:`);
             console.log(`     Current Month: ${currentMonth + 1}/${currentYear}`);
@@ -1300,13 +1320,25 @@ class DoubleEntryAccountingService {
                     }
                 }
                 
-                // Set transaction type based on processed items
+                // 🆕 FIXED: Set transaction type based on payment analysis (not debt status)
                 if (isAdvancePayment) {
                     transaction.type = 'advance_payment';
-                } else if (isPastDuePayment || studentHasOutstandingDebt) {
+                    console.log(`✅ Transaction type set to: advance_payment`);
+                } else if (isPastDuePayment) {
                     transaction.type = 'debt_settlement';
-                } else {
+                    console.log(`✅ Transaction type set to: debt_settlement`);
+                } else if (isCurrentPeriodPayment) {
                     transaction.type = 'current_payment';
+                    console.log(`✅ Transaction type set to: current_payment`);
+                } else {
+                    // 🆕 FALLBACK: Determine type based on payment month analysis
+                    if (paymentMonthDate && paymentMonthDate > new Date(currentYear, currentMonth, 1)) {
+                        transaction.type = 'advance_payment';
+                        console.log(`✅ Fallback: Transaction type set to: advance_payment (future month detected)`);
+                    } else {
+                        transaction.type = 'current_payment';
+                        console.log(`✅ Fallback: Transaction type set to: current_payment`);
+                    }
                 }
                 await transaction.save();
                 
@@ -1314,8 +1346,10 @@ class DoubleEntryAccountingService {
                 // 🚨 FALLBACK: Old logic for payments without breakdown
                 console.log('⚠️ No payment breakdown found, using fallback logic');
                 
+                // 🆕 FIXED: Prioritize advance payment logic over debt settlement
                 if (isAdvancePayment && deferredIncomeAccount) {
-                    // Advance payment goes to Deferred Income
+                    // Advance payment goes to Deferred Income (highest priority)
+                    console.log(`💰 Processing advance payment for ${payment.paymentMonth} - routing to Deferred Income`);
                     entries.push({
                         accountCode: receivingAccount,
                         accountName: this.getPaymentAccountName(payment.method),
@@ -1333,8 +1367,9 @@ class DoubleEntryAccountingService {
                         credit: payment.totalAmount,
                         description: `Deferred rent income from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
                     });
-                } else if (studentHasOutstandingDebt || hasAccruedRentals) {
-                    // Payment settles existing debt
+                } else if (isPastDuePayment || (studentHasOutstandingDebt && !isAdvancePayment)) {
+                    // Payment settles existing debt (only if NOT an advance payment)
+                    console.log(`💰 Processing debt settlement payment - routing to Accounts Receivable`);
                     entries.push({
                         accountCode: receivingAccount,
                         accountName: this.getPaymentAccountName(payment.method),
@@ -1352,8 +1387,9 @@ class DoubleEntryAccountingService {
                         credit: payment.totalAmount,
                         description: `Settlement of outstanding debt from ${studentName}`
                     });
-                } else {
+                } else if (isCurrentPeriodPayment) {
                     // Current period payment
+                    console.log(`💰 Processing current period payment - routing to Rent Income`);
                     entries.push({
                         accountCode: receivingAccount,
                         accountName: this.getPaymentAccountName(payment.method),
@@ -1371,6 +1407,47 @@ class DoubleEntryAccountingService {
                         credit: payment.totalAmount,
                         description: `Rent income from ${studentName} for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
                     });
+                } else {
+                    // 🆕 FALLBACK: Default to advance payment if month is in the future
+                    console.log(`💰 No specific payment type determined, defaulting to advance payment routing`);
+                    if (deferredIncomeAccount) {
+                        entries.push({
+                            accountCode: receivingAccount,
+                            accountName: this.getPaymentAccountName(payment.method),
+                            accountType: 'Asset',
+                            debit: payment.totalAmount,
+                            credit: 0,
+                            description: `Advance payment received from ${studentName} (${payment.paymentId})`
+                        });
+                        
+                        entries.push({
+                            accountCode: deferredIncomeAccount,
+                            accountName: 'Deferred Income - Tenant Advances',
+                            accountType: 'Liability',
+                            debit: 0,
+                            credit: payment.totalAmount,
+                            description: `Deferred rent income from ${studentName} for ${payment.paymentMonth || 'future period'} (${payment.paymentId})`
+                        });
+                    } else {
+                        // Last resort: route to rent income
+                        entries.push({
+                            accountCode: receivingAccount,
+                            accountName: this.getPaymentAccountName(payment.method),
+                            accountType: 'Asset',
+                            debit: payment.totalAmount,
+                            credit: 0,
+                            description: `Rent payment via ${payment.method}`
+                        });
+                        
+                        entries.push({
+                            accountCode: rentAccount,
+                            accountName: 'Rent Income',
+                            accountType: 'Income',
+                            debit: 0,
+                            credit: payment.totalAmount,
+                            description: `Rent income from ${studentName} (${payment.paymentId})`
+                        });
+                    }
                 }
             }
 
