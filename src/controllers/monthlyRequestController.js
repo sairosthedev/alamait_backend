@@ -2405,174 +2405,134 @@ async function convertRequestToExpenses(request, user) {
         
         // For templates, create one expense with total cost
         if (request.isTemplate) {
-            // Get proper expense account for template (use first item as reference)
-            const firstItem = request.items[0];
-            const expenseAccountCode = firstItem ? await AccountMappingService.getExpenseAccountForItem(firstItem) : await AccountMappingService.getDefaultExpenseAccount();
-            const expenseAccount = await Account.findOne({ code: expenseAccountCode });
-            const expenseCategory = mapAccountNameToExpenseCategory(expenseAccount ? expenseAccount.name : 'Other Operating Expenses');
+            // ⚠️ FIXED: Don't create template-level expense - only create individual item expenses
+            // This prevents duplication where we create both template expense AND item expenses
+            console.log(`ℹ️  Skipping template-level expense creation for ${request.title} - will create individual item expenses instead`);
             
-            const expense = new Expense({
-                expenseId: expenseId,
-                title: `Monthly Request - ${request.title}`,
-                description: request.description || `Monthly request for ${request.residence.name}`,
-                amount: request.totalEstimatedCost,
-                category: expenseCategory,
-                expenseDate: new Date(request.year || new Date().getFullYear(), (request.month || new Date().getMonth() + 1) - 1, 1),
-                period: 'monthly',
-                paymentStatus: 'Pending',
-                paymentMethod: 'Bank Transfer', // Default payment method
-                monthlyRequestId: request._id,
-                residence: request.residence, // Add residence field
-                createdBy: user._id,
-                notes: `Converted from monthly request template: ${request.title}. Total items: ${request.items.length}${request.items.some(item => item.provider) ? ` - Providers: ${request.items.filter(item => item.provider).map(item => item.provider).join(', ')}` : ''} - Account: ${expenseAccountCode}`
-            });
+            // For templates, we should NOT create a template-level expense
+            // Instead, we'll create individual expenses for each item below
+            // This prevents the duplication issue where we get 3 expenses instead of 2
             
-            await expense.save();
-            
-            // ✅ ADD: Create double-entry transaction
-            try {
-                const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(request, user);
+        }
+        
+        // ✅ FIXED: Create individual item expenses for BOTH templates AND regular requests
+        // This ensures we only get the actual items (Electricity, Gas) and not duplicate template expenses
+        for (let i = 0; i < request.items.length; i++) {
+            const item = request.items[i];
+            const approvedQuotation = item.quotations?.find(q => q.isApproved);
                 
-                // Link expense to transaction
-                expense.transactionId = transactionResult.transaction._id;
+            if (approvedQuotation) {
+                // Get proper expense account using the new mapping service
+                const expenseAccountCode = await AccountMappingService.getExpenseAccountForItem(item);
+                const expenseAccount = await Account.findOne({ code: expenseAccountCode });
+                const expenseCategory = mapAccountNameToExpenseCategory(expenseAccount ? expenseAccount.name : 'Other Operating Expenses');
+                
+                const expense = new Expense({
+                    expenseId: `${expenseId}_item_${i}`,
+                    title: `${request.title} - ${item.title}`,
+                    description: item.description,
+                    amount: approvedQuotation.amount,
+                    category: expenseCategory,
+                    expenseDate: new Date(request.year, request.month - 1, 1),
+                    period: 'monthly',
+                    paymentStatus: 'Pending',
+                    paymentMethod: 'Bank Transfer',
+                    monthlyRequestId: request._id,
+                    itemIndex: i,
+                    quotationId: approvedQuotation._id,
+                    residence: request.residence, // Add residence field
+                    createdBy: user._id,
+                    notes: `Converted from monthly request item: ${item.title}${item.provider ? ` - Provider: ${item.provider}` : ''} - Account: ${expenseAccountCode}`
+                });
+                
                 await expense.save();
                 
-                console.log('✅ Double-entry transaction created for monthly request template');
-            } catch (transactionError) {
-                console.error('❌ Error creating double-entry transaction:', transactionError);
-                // Don't fail the expense creation if transaction fails
-            }
-            
-            createdExpenses.push(expense);
-            
-            // Update request status to completed
-            request.status = 'completed';
-            request.requestHistory.push({
-                date: new Date(),
-                action: 'Converted to expense with double-entry transaction',
-                user: user._id,
-                changes: [`Template converted to expense with total cost: $${request.totalEstimatedCost}`]
-            });
-            
-        } else {
-            // For regular monthly requests, create expense for each item
-            for (let i = 0; i < request.items.length; i++) {
-                const item = request.items[i];
-                const approvedQuotation = item.quotations?.find(q => q.isApproved);
+                // ✅ ADD: Create double-entry transaction for this item
+                try {
+                    const tempRequest = {
+                        ...request.toObject(),
+                        items: [item], // Only this item
+                        totalEstimatedCost: approvedQuotation.amount
+                    };
                     
-                    if (approvedQuotation) {
-                        // Get proper expense account using the new mapping service
-                        const expenseAccountCode = await AccountMappingService.getExpenseAccountForItem(item);
-                        const expenseAccount = await Account.findOne({ code: expenseAccountCode });
-                        const expenseCategory = mapAccountNameToExpenseCategory(expenseAccount ? expenseAccount.name : 'Other Operating Expenses');
-                        
-                        const expense = new Expense({
-                        expenseId: `${expenseId}_item_${i}`,
-                        title: `${request.title} - ${item.title}`,
-                            description: item.description,
-                            amount: approvedQuotation.amount,
-                        category: expenseCategory,
-                        expenseDate: new Date(request.year, request.month - 1, 1),
-                        period: 'monthly',
-                        paymentStatus: 'Pending',
-                        paymentMethod: 'Bank Transfer',
-                            monthlyRequestId: request._id,
-                        itemIndex: i,
-                        quotationId: approvedQuotation._id,
-                        residence: request.residence, // Add residence field
-                        createdBy: user._id,
-                        notes: `Converted from monthly request item: ${item.title}${item.provider ? ` - Provider: ${item.provider}` : ''} - Account: ${expenseAccountCode}`
-                        });
-                        
-                        await expense.save();
-                        
-                        // ✅ ADD: Create double-entry transaction for this item
-                        try {
-                            const tempRequest = {
-                                ...request.toObject(),
-                                items: [item], // Only this item
-                                totalEstimatedCost: approvedQuotation.amount
-                            };
-                            
-                            const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
-                            
-                            // Link expense to transaction
-                            expense.transactionId = transactionResult.transaction._id;
-                            await expense.save();
-                            
-                            console.log('✅ Double-entry transaction created for monthly request item');
-                        } catch (transactionError) {
-                            console.error('❌ Error creating double-entry transaction for item:', transactionError);
-                        }
-                        
-                        createdExpenses.push(expense);
-                } else {
-                    // If no approved quotation, use estimated cost
-                        // Get proper expense account using the new mapping service
-                        const expenseAccountCode = await AccountMappingService.getExpenseAccountForItem(item);
-                        const expenseAccount = await Account.findOne({ code: expenseAccountCode });
-                        const expenseCategory = mapAccountNameToExpenseCategory(expenseAccount ? expenseAccount.name : 'Other Operating Expenses');
-                        
-                        const expense = new Expense({
-                        expenseId: `${expenseId}_item_${i}`,
-                        title: `${request.title} - ${item.title}`,
-                        description: item.description,
-                        amount: item.estimatedCost,
-                        category: expenseCategory,
-                        expenseDate: new Date(request.year, request.month - 1, 1),
-                        period: 'monthly',
-                        paymentStatus: 'Pending',
-                        paymentMethod: 'Bank Transfer',
-                        monthlyRequestId: request._id,
-                        itemIndex: i,
-                        residence: request.residence, // Add residence field
-                        createdBy: user._id,
-                        notes: `Converted from monthly request item: ${item.title} (estimated cost)${item.provider ? ` - Provider: ${item.provider}` : ''} - Account: ${expenseAccountCode}`
-                    });
+                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
                     
+                    // Link expense to transaction
+                    expense.transactionId = transactionResult.transaction._id;
                     await expense.save();
                     
-                    // ✅ ADD: Create double-entry transaction for this item
-                    try {
-                        const tempRequest = {
-                            ...request.toObject(),
-                            items: [item], // Only this item
-                            totalEstimatedCost: item.estimatedCost
-                        };
-                        
-                        const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
-                        
-                        // Link expense to transaction
-                        expense.transactionId = transactionResult.transaction._id;
-                        await expense.save();
-                        
-                        console.log('✅ Double-entry transaction created for monthly request item (estimated)');
-                    } catch (transactionError) {
-                        console.error('❌ Error creating double-entry transaction for item:', transactionError);
-                    }
-                    
-                    createdExpenses.push(expense);
-                }
-            }
-            
-            // Update request status to completed
-                        request.status = 'completed';
-                        request.requestHistory.push({
-                            date: new Date(),
-                            action: 'Converted to expenses with double-entry transactions',
-                            user: user._id,
-                changes: [`${createdExpenses.length} items converted to expenses`]
-                        });
+                    console.log('✅ Double-entry transaction created for monthly request item');
+                } catch (transactionError) {
+                    console.error('❌ Error creating double-entry transaction for item:', transactionError);
                 }
                 
-                await request.save();
+                createdExpenses.push(expense);
+            } else {
+                // If no approved quotation, use estimated cost
+                // Get proper expense account using the new mapping service
+                const expenseAccountCode = await AccountMappingService.getExpenseAccountForItem(item);
+                const expenseAccount = await Account.findOne({ code: expenseAccountCode });
+                const expenseCategory = mapAccountNameToExpenseCategory(expenseAccount ? expenseAccount.name : 'Other Operating Expenses');
                 
-            } catch (error) {
-                errors.push({
-                    requestId: request._id,
-                    error: error.message
+                const expense = new Expense({
+                    expenseId: `${expenseId}_item_${i}`,
+                    title: `${request.title} - ${item.title}`,
+                    description: item.description,
+                    amount: item.estimatedCost,
+                    category: expenseCategory,
+                    expenseDate: new Date(request.year, request.month - 1, 1),
+                    period: 'monthly',
+                    paymentStatus: 'Pending',
+                    paymentMethod: 'Bank Transfer',
+                    monthlyRequestId: request._id,
+                    itemIndex: i,
+                    residence: request.residence, // Add residence field
+                    createdBy: user._id,
+                    notes: `Converted from monthly request item: ${item.title} (estimated cost)${item.provider ? ` - Provider: ${item.provider}` : ''} - Account: ${expenseAccountCode}`
                 });
+                
+                await expense.save();
+                
+                // ✅ ADD: Create double-entry transaction for this item
+                try {
+                    const tempRequest = {
+                        ...request.toObject(),
+                        items: [item], // Only this item
+                        totalEstimatedCost: item.estimatedCost
+                    };
+                    
+                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+                    
+                    // Link expense to transaction
+                    expense.transactionId = transactionResult.transaction._id;
+                    await expense.save();
+                    
+                    console.log('✅ Double-entry transaction created for monthly request item (estimated)');
+                } catch (transactionError) {
+                    console.error('❌ Error creating double-entry transaction for item:', transactionError);
+                }
+                
+                createdExpenses.push(expense);
             }
+        }
+        
+        // Update request status to completed
+        request.status = 'completed';
+        request.requestHistory.push({
+            date: new Date(),
+            action: 'Converted to expenses with double-entry transactions',
+            user: user._id,
+            changes: [`${createdExpenses.length} items converted to expenses`]
+        });
+        
+        await request.save();
+        
+    } catch (error) {
+        errors.push({
+            requestId: request._id,
+            error: error.message
+        });
+    }
     
     return { expenses: createdExpenses, errors };
 }
