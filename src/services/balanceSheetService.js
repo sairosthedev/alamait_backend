@@ -57,9 +57,32 @@ class BalanceSheetService {
         message: 'Balance sheet generated successfully'
       };
       
+      // Get ALL accounts from the database to ensure none are missing
+      const Account = require('../models/Account');
+      const allAccounts = await Account.find().sort({ code: 1 });
+      
+      console.log(`🔍 Found ${allEntries.length} transaction entries and ${allAccounts.length} accounts in database`);
+      
       // Process entries to build account balances
       const accountBalances = {};
       
+      // Initialize ALL accounts with zero balances first
+      allAccounts.forEach(account => {
+        accountBalances[account.code] = {
+          code: account.code,
+          name: account.name,
+          type: account.type,
+          debitTotal: 0,
+          creditTotal: 0,
+          balance: 0,
+          description: account.description || '',
+          category: account.category || 'Other'
+        };
+      });
+      
+      console.log(`🔍 Initialized ${Object.keys(accountBalances).length} accounts from database`);
+      
+      // Process transaction entries to update balances
       allEntries.forEach(entry => {
         if (entry.entries && Array.isArray(entry.entries)) {
           entry.entries.forEach(lineItem => {
@@ -69,22 +92,30 @@ class BalanceSheetService {
             const debit = lineItem.debit || 0;
             const credit = lineItem.credit || 0;
             
-            if (!accountBalances[accountCode]) {
+            if (accountBalances[accountCode]) {
+              accountBalances[accountCode].debitTotal += debit;
+              accountBalances[accountCode].creditTotal += credit;
+              // Update name and type from transaction if more recent
+              if (accountName) accountBalances[accountCode].name = accountName;
+              if (accountType) accountBalances[accountCode].type = accountType;
+            } else {
+              // Create account if not found in database (fallback)
               accountBalances[accountCode] = {
                 code: accountCode,
-                name: accountName,
-                type: accountType,
-                debitTotal: 0,
-                creditTotal: 0,
-                balance: 0
+                name: accountName || `Account ${accountCode}`,
+                type: accountType || 'Asset',
+                debitTotal: debit,
+                creditTotal: credit,
+                balance: 0,
+                description: '',
+                category: 'Other'
               };
             }
-            
-            accountBalances[accountCode].debitTotal += debit;
-            accountBalances[accountCode].creditTotal += credit;
           });
         }
       });
+      
+      console.log(`🔍 Account balances after processing transactions:`, Object.keys(accountBalances).length);
       
       // Calculate net balance for each account
       Object.values(accountBalances).forEach(account => {
@@ -113,6 +144,10 @@ class BalanceSheetService {
       Object.values(accountBalances).forEach(account => {
         const balance = account.balance;
         
+        // Use comprehensive category mapping to ensure all accounts are properly categorized
+        const mappedCategory = this.mapAccountToCategory(account.code, account.name, account.type);
+        console.log(`🔍 Account ${account.code} (${account.name}): type=${account.type}, mapped=${mappedCategory}, balance=$${balance}`);
+        
         switch (account.type) {
           case 'Asset':
             if (this.isCurrentAsset(account.code, account.name)) {
@@ -120,17 +155,19 @@ class BalanceSheetService {
                 name: account.name,
                 balance: Math.max(0, balance),
                 description: this.getAssetDescription(account.code, account.name),
-                category: 'Current Asset'
+                category: mappedCategory
               };
               balanceSheet.assets.totalCurrent += Math.max(0, balance);
+              console.log(`✅ Added to current assets: ${account.code} - ${account.name} = $${Math.max(0, balance)}`);
             } else {
               balanceSheet.assets.nonCurrent[account.code] = {
                 name: account.name,
                 balance: Math.max(0, balance),
                 description: this.getAssetDescription(account.code, account.name),
-                category: 'Non-Current Asset'
+                category: mappedCategory
               };
               balanceSheet.assets.totalNonCurrent += Math.max(0, balance);
+              console.log(`✅ Added to non-current assets: ${account.code} - ${account.name} = $${Math.max(0, balance)}`);
             }
             break;
             
@@ -177,6 +214,14 @@ class BalanceSheetService {
             break;
         }
       });
+      
+      // Debug: Show all accounts that were processed
+      console.log('\n📊 BALANCE SHEET SUMMARY:');
+      console.log('Current Assets:', Object.keys(balanceSheet.assets.current));
+      console.log('Non-Current Assets:', Object.keys(balanceSheet.assets.nonCurrent));
+      console.log('Current Liabilities:', Object.keys(balanceSheet.liabilities.current));
+      console.log('Non-Current Liabilities:', Object.keys(balanceSheet.liabilities.nonCurrent));
+      console.log('Equity:', Object.keys(balanceSheet.equity));
       
       // Calculate totals and ratios
       balanceSheet.assets.totalAssets = balanceSheet.assets.totalCurrent + balanceSheet.assets.totalNonCurrent;
@@ -409,24 +454,30 @@ class BalanceSheetService {
     const cashAndBank = {};
     let total = 0;
     
+    console.log('🔍 formatCashAndBankAccounts - Processing current assets:', currentAssets);
+    
     Object.entries(currentAssets).forEach(([code, asset]) => {
-      // Include accounts with 'cash' or 'bank' in name OR specific petty cash codes (1010-1014)
-      if (asset.name.toLowerCase().includes('cash') || 
-          asset.name.toLowerCase().includes('bank') ||
-          ['1010', '1011', '1012', '1013', '1014'].includes(code)) {
+      // Include ALL cash, bank, and petty cash accounts by code pattern
+      if (code.startsWith('100') || code.startsWith('101')) {
+        console.log(`✅ Including account in cashAndBank: ${code} - ${asset.name} = $${asset.balance}`);
         
         cashAndBank[code] = {
           accountCode: code,
           accountName: asset.name,
           amount: asset.balance,
-          description: asset.description,
-          category: asset.category
+          description: asset.description || this.getAssetDescription(code, asset.name),
+          category: asset.category || 'Current Asset'
         };
         total += asset.balance;
+      } else {
+        console.log(`❌ Excluding account from cashAndBank: ${code} - ${asset.name} = $${asset.balance}`);
       }
     });
     
     cashAndBank.total = total;
+    console.log(`💰 cashAndBank total: $${total}`);
+    console.log(`📋 cashAndBank accounts:`, Object.keys(cashAndBank));
+    
     return cashAndBank;
   }
 
@@ -652,6 +703,56 @@ class BalanceSheetService {
     
     return currentAssetCodes.includes(accountCode) || 
            currentAssetNames.some(name => accountName.toLowerCase().includes(name));
+  }
+  
+  // ✅ NEW: Comprehensive account category mapping
+  static mapAccountToCategory(accountCode, accountName, accountType) {
+    // Map by account code pattern first (most reliable)
+    if (accountCode.startsWith('100') || accountCode.startsWith('101')) {
+      return 'Current Asset'; // Cash, Bank, Petty Cash
+    } else if (accountCode.startsWith('110')) {
+      return 'Current Asset'; // Accounts Receivable
+    } else if (accountCode.startsWith('120')) {
+      return 'Current Asset'; // Inventory
+    } else if (accountCode.startsWith('130')) {
+      return 'Current Asset'; // Prepaid Expenses
+    } else if (accountCode.startsWith('200')) {
+      return 'Current Liability'; // Accounts Payable, Deposits, etc.
+    } else if (accountCode.startsWith('210')) {
+      return 'Current Liability'; // Accrued Expenses
+    } else if (accountCode.startsWith('300')) {
+      return 'Equity'; // Capital, Retained Earnings
+    } else if (accountCode.startsWith('400')) {
+      return 'Income'; // Revenue accounts
+    } else if (accountCode.startsWith('500')) {
+      return 'Expense'; // Expense accounts
+    }
+    
+    // Fallback to name-based mapping
+    const nameLower = accountName.toLowerCase();
+    if (nameLower.includes('cash') || nameLower.includes('bank') || nameLower.includes('petty')) {
+      return 'Current Asset';
+    } else if (nameLower.includes('receivable') || nameLower.includes('inventory') || nameLower.includes('prepaid')) {
+      return 'Current Asset';
+    } else if (nameLower.includes('payable') || nameLower.includes('deposit') || nameLower.includes('accrued')) {
+      return 'Current Liability';
+    } else if (nameLower.includes('capital') || nameLower.includes('equity') || nameLower.includes('earnings')) {
+      return 'Equity';
+    } else if (nameLower.includes('revenue') || nameLower.includes('income')) {
+      return 'Income';
+    } else if (nameLower.includes('expense') || nameLower.includes('cost')) {
+      return 'Expense';
+    }
+    
+    // Final fallback based on account type
+    switch (accountType) {
+      case 'Asset': return 'Current Asset';
+      case 'Liability': return 'Current Liability';
+      case 'Equity': return 'Equity';
+      case 'Income': return 'Income';
+      case 'Expense': return 'Expense';
+      default: return 'Other';
+    }
   }
   
   static isCurrentLiability(accountCode, accountName) {
