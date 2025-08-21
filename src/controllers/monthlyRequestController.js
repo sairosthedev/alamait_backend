@@ -2452,77 +2452,30 @@ async function convertRequestToExpenses(request, user) {
                 // ✅ FIXED: Handle monthly template items with proper accrual accounting
                 // Monthly templates need accruals, not maintenance approval transactions
                 if (request.isTemplate) {
-                    // For monthly templates: Create proper accrual entries
+                    // For monthly templates: Use existing double-entry system with template flag
                     try {
-                        console.log(`💰 Creating accrual entries for monthly template item: ${item.title}`);
+                        console.log(`💰 Creating double-entry for monthly template item: ${item.title}`);
                         
-                        // Create simple accrual transaction for monthly template items
-                        const accrualTransaction = new Transaction({
-                            transactionId: await DoubleEntryAccountingService.generateTransactionId(),
-                            date: new Date(),
-                            description: `Monthly template accrual: ${item.title}`,
-                            type: 'accrual',
-                            reference: request._id.toString(),
-                            residence: request.residence,
-                            residenceName: request.residence?.name || 'Unknown Residence',
-                            createdBy: user._id
-                        });
+                        // Use the existing double-entry service but mark it as a monthly template
+                        const tempRequest = {
+                            ...request.toObject(),
+                            items: [item], // Only this item
+                            totalEstimatedCost: item.estimatedCost,
+                            isMonthlyTemplate: true, // Flag to indicate monthly template
+                            paymentMethod: 'Accrual' // Indicate this should create accrual entries
+                        };
                         
-                        await accrualTransaction.save();
+                        const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
                         
-                        // Create accrual entries: Dr. Expense, Cr. Accrued Expenses
-                        const accrualEntries = new TransactionEntry({
-                            transactionId: accrualTransaction.transactionId,
-                            date: new Date(),
-                            description: `Monthly template accrual: ${item.title} - ${item.description}`,
-                            reference: request._id.toString(),
-                            entries: [
-                                {
-                                    // Debit: Expense Account (based on item category)
-                                    accountCode: expenseAccountCode,
-                                    accountName: expenseAccountName,
-                                    accountType: 'Expense',
-                                    debit: approvedQuotation.amount,
-                                    credit: 0,
-                                    description: `${expenseAccountName}: ${item.title} (monthly accrual)`
-                                },
-                                {
-                                    // Credit: Accrued Expenses (liability account)
-                                    accountCode: '2100', // Accrued Expenses account code
-                                    accountName: 'Accrued Expenses',
-                                    accountType: 'Liability',
-                                    debit: 0,
-                                    credit: approvedQuotation.amount,
-                                    description: `Accrued expense for ${item.title}`
-                                }
-                            ],
-                            totalDebit: approvedQuotation.amount,
-                            totalCredit: approvedQuotation.amount,
-                            source: 'monthly_template_accrual',
-                            sourceId: request._id,
-                            sourceModel: 'MonthlyRequest',
-                            residence: request.residence,
-                            createdBy: user.email,
-                            status: 'posted',
-                            metadata: {
-                                requestType: 'monthly_template',
-                                itemTitle: item.title,
-                                itemCategory: item.category,
-                                isAccrual: true
-                            }
-                        });
-                        
-                        await accrualEntries.save();
-                        
-                        // Link expense to accrual transaction
-                        expense.transactionId = accrualTransaction._id;
+                        // Link expense to transaction
+                        expense.transactionId = transactionResult.transaction._id;
                         await expense.save();
                         
-                        console.log(`✅ Monthly template accrual created for ${item.title}: $${approvedQuotation.amount}`);
+                        console.log(`✅ Double-entry created for monthly template item ${item.title}: $${item.estimatedCost}`);
                         
-                    } catch (accrualError) {
-                        console.error(`❌ Error creating monthly template accrual for ${item.title}:`, accrualError);
-                        // Don't fail the expense creation if accrual fails
+                    } catch (transactionError) {
+                        console.error(`❌ Error creating double-entry for monthly template item ${item.title}:`, transactionError);
+                        // Don't fail the expense creation if transaction fails
                     }
                     
                 } else {
@@ -2531,7 +2484,7 @@ async function convertRequestToExpenses(request, user) {
                         const tempRequest = {
                             ...request.toObject(),
                             items: [item], // Only this item
-                            totalEstimatedCost: approvedQuotation.amount
+                            totalEstimatedCost: item.estimatedCost
                         };
                         
                         const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
@@ -2576,77 +2529,30 @@ async function convertRequestToExpenses(request, user) {
                 // ✅ FIXED: Handle monthly template items with proper accrual accounting
                 // Monthly templates need accruals, not maintenance approval transactions
                 if (request.isTemplate) {
-                    // For monthly templates: Create proper accrual entries
+                    // For monthly templates: Use existing double-entry system with template flag
                     try {
-                        console.log(`💰 Creating accrual entries for monthly template item: ${item.title}`);
+                        console.log(`💰 Creating double-entry for monthly template item: ${item.title}`);
                         
-                        // Create simple accrual transaction for monthly template items
-                        const accrualTransaction = new Transaction({
-                            transactionId: await DoubleEntryAccountingService.generateTransactionId(),
-                            date: new Date(),
-                            description: `Monthly template accrual: ${item.title}`,
-                            type: 'accrual',
-                            reference: request._id.toString(),
-                            residence: request.residence,
-                            residenceName: request.residence?.name || 'Unknown Residence',
-                            createdBy: user._id
-                        });
+                        // Use the existing double-entry service but mark it as a monthly template
+                        const tempRequest = {
+                            ...request.toObject(),
+                            items: [item], // Only this item
+                            totalEstimatedCost: item.estimatedCost,
+                            isMonthlyTemplate: true, // Flag to indicate monthly template
+                            paymentMethod: 'Accrual' // Indicate this should create accrual entries
+                        };
                         
-                        await accrualTransaction.save();
+                        const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
                         
-                        // Create accrual entries: Dr. Expense, Cr. Accrued Expenses
-                        const accrualEntries = new TransactionEntry({
-                            transactionId: accrualTransaction.transactionId,
-                            date: new Date(),
-                            description: `Monthly template accrual: ${item.title} - ${item.description}`,
-                            reference: request._id.toString(),
-                            entries: [
-                                {
-                                    // Debit: Expense Account (based on item category)
-                                    accountCode: expenseAccountCode,
-                                    accountName: expenseAccountName,
-                                    accountType: 'Expense',
-                                    debit: approvedQuotation.amount,
-                                    credit: 0,
-                                    description: `${expenseAccountName}: ${item.title} (monthly accrual)`
-                                },
-                                {
-                                    // Credit: Accrued Expenses (liability account)
-                                    accountCode: '2100', // Accrued Expenses account code
-                                    accountName: 'Accrued Expenses',
-                                    accountType: 'Liability',
-                                    debit: 0,
-                                    credit: approvedQuotation.amount,
-                                    description: `Accrued expense for ${item.title}`
-                                }
-                            ],
-                            totalDebit: approvedQuotation.amount,
-                            totalCredit: approvedQuotation.amount,
-                            source: 'monthly_template_accrual',
-                            sourceId: request._id,
-                            sourceModel: 'MonthlyRequest',
-                            residence: request.residence,
-                            createdBy: user.email,
-                            status: 'posted',
-                            metadata: {
-                                requestType: 'monthly_template',
-                                itemTitle: item.title,
-                                itemCategory: item.category,
-                                isAccrual: true
-                            }
-                        });
-                        
-                        await accrualEntries.save();
-                        
-                        // Link expense to accrual transaction
-                        expense.transactionId = accrualTransaction._id;
+                        // Link expense to transaction
+                        expense.transactionId = transactionResult.transaction._id;
                         await expense.save();
                         
-                        console.log(`✅ Monthly template accrual created for ${item.title}: $${approvedQuotation.amount}`);
+                        console.log(`✅ Double-entry created for monthly template item ${item.title}: $${item.estimatedCost}`);
                         
-                    } catch (accrualError) {
-                        console.error(`❌ Error creating monthly template accrual for ${item.title}:`, accrualError);
-                        // Don't fail the expense creation if accrual fails
+                    } catch (transactionError) {
+                        console.error(`❌ Error creating double-entry for monthly template item ${item.title}:`, transactionError);
+                        // Don't fail the expense creation if transaction fails
                     }
                     
                 } else {
@@ -2655,7 +2561,7 @@ async function convertRequestToExpenses(request, user) {
                         const tempRequest = {
                             ...request.toObject(),
                             items: [item], // Only this item
-                            totalEstimatedCost: approvedQuotation.amount
+                            totalEstimatedCost: item.estimatedCost
                         };
                         
                         const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
