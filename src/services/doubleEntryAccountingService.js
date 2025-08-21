@@ -495,14 +495,23 @@ class DoubleEntryAccountingService {
     static async recordMaintenanceApproval(request, user) {
         try {
             console.log('🏗️ Recording maintenance approval (accrual basis)');
-            
-            // Check if transaction already exists to prevent duplicates
-            const existingTransaction = await TransactionEntry.findOne({
+
+            // Use per-item sourceId to avoid suppressing other items in the same request
+            const perItemSourceId = (request && request.itemIndex !== undefined)
+                ? `${request._id}-item-${request.itemIndex}`
+                : (request?._id);
+
+            // Check if transaction already exists to prevent duplicates (per item)
+            const duplicateQuery = {
                 source: 'expense_accrual',
-                sourceId: request._id,
+                sourceId: perItemSourceId,
                 'metadata.requestType': 'maintenance',
                 createdAt: { $gte: new Date(Date.now() - 60000) } // Within last minute
-            });
+            };
+            if (request && request.itemIndex !== undefined) {
+                duplicateQuery['metadata.itemIndex'] = request.itemIndex;
+            }
+            const existingTransaction = await TransactionEntry.findOne(duplicateQuery);
 
             if (existingTransaction) {
                 console.log('⚠️ Duplicate maintenance approval detected, skipping');
@@ -628,7 +637,7 @@ class DoubleEntryAccountingService {
                 totalDebit: totalAmount,
                 totalCredit: totalAmount,
                 source: 'expense_accrual',
-                sourceId: request._id,
+                sourceId: perItemSourceId,
                 sourceModel: 'Request',
                 residence: request.residence, // Add residence reference
                 createdBy: user.email,
@@ -636,7 +645,8 @@ class DoubleEntryAccountingService {
                 metadata: {
                     requestType: 'maintenance',
                     vendorName: request.vendorName,
-                    itemCount: request.items.length
+                    itemCount: request.items.length,
+                    ...(request && request.itemIndex !== undefined ? { itemIndex: request.itemIndex } : {})
                 }
             });
 
@@ -646,26 +656,31 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            // Create expense record for tracking
-            const { generateUniqueId } = require('../utils/idGenerator');
-            const expense = new Expense({
-                expenseId: await generateUniqueId('EXP'),
-                requestId: request._id,
-                residence: request.residence._id || request.residence,
-                category: 'Maintenance',
-                amount: totalAmount,
-                description: `Maintenance: ${request.title}`,
-                expenseDate: new Date(),
-                paymentStatus: 'Pending',
-                period: 'monthly',
-                createdBy: user._id,
-                transactionId: transaction._id
-            });
+            // Create expense record for tracking unless explicitly skipped by caller
+            let expense = null;
+            if (!request || !request.skipExpenseCreation) {
+                const { generateUniqueId } = require('../utils/idGenerator');
+                expense = new Expense({
+                    expenseId: await generateUniqueId('EXP'),
+                    requestId: request._id,
+                    residence: request.residence._id || request.residence,
+                    category: 'Maintenance',
+                    amount: totalAmount,
+                    description: `Maintenance: ${request.title}`,
+                    expenseDate: new Date(),
+                    paymentStatus: 'Pending',
+                    period: 'monthly',
+                    createdBy: user._id,
+                    transactionId: transaction._id
+                });
 
-            await expense.save();
+                await expense.save();
+                console.log(`   - Expense created: ${expense.expenseId}`);
+            } else {
+                console.log('ℹ️ Skipping internal expense creation (handled by caller)');
+            }
 
             console.log('✅ Maintenance approval recorded (accrual basis)');
-            console.log(`   - Expense created: ${expense.expenseId}`);
             console.log(`   - Transaction: ${transaction.transactionId}`);
             console.log(`   - Total amount: $${totalAmount}`);
             

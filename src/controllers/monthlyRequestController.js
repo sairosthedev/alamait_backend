@@ -2459,7 +2459,9 @@ async function convertRequestToExpenses(request, user) {
                         ...request.toObject(),
                         items: [item], // Only this item
                         totalEstimatedCost: item.estimatedCost,
-                        isTemplate: false
+                        isTemplate: false,
+                        itemIndex: i,
+                        skipExpenseCreation: true
                     };
                     
                     const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
