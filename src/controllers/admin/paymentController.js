@@ -14,7 +14,6 @@ const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
 const Debtor = require('../../models/Debtor');
 const { sendEmail } = require('../../utils/email');
-const EnhancedPaymentService = require('../../services/enhancedPaymentService');
 
 // Configure multer for S3 file uploads
 const upload = multer({
@@ -437,7 +436,7 @@ const getPaymentTotals = async (req, res) => {
     }
 };
 
-// Create new payment with enhanced double-entry accounting
+// Create new payment
 const createPayment = async (req, res) => {
     try {
         const errors = validationResult(req);
@@ -785,8 +784,8 @@ const createPayment = async (req, res) => {
                 deposit: payment.deposit || 0
             };
             
-            // Use the enhanced payment service for proper double-entry accounting
-            const accountingResult = await EnhancedPaymentService.recordStudentPayment(payment, req.user);
+            // Use the new advance balance handling method for better payment processing
+        const accountingResult = await DoubleEntryAccountingService.recordStudentRentPaymentWithAdvanceHandling(paymentForTransaction, req.user);
             
             if (accountingResult && accountingResult.transaction && accountingResult.transactionEntry) {
                 console.log('✅ Double-entry accounting transaction created for payment');
