@@ -1579,10 +1579,39 @@ exports.approveMonthlyRequest = async (req, res) => {
                 }
                 
                 console.log(`Auto-converted ${expenseConversionResult?.expenses?.length || 0} expenses for approved request: ${monthlyRequest._id}`);
+
+                // STRICT: If no expenses created or errors present, revert approval and fail
+                const createdCount = expenseConversionResult?.expenses?.length || 0;
+                const hadErrors = Array.isArray(expenseConversionResult?.errors) && expenseConversionResult.errors.length > 0;
+                if (createdCount === 0 || hadErrors) {
+                    console.error('❌ Approval strict mode: accrual/expense creation failed. Reverting approval.');
+                    // Revert approval state
+                    monthlyRequest.status = 'pending';
+                    monthlyRequest.approvedBy = null;
+                    monthlyRequest.approvedAt = null;
+                    monthlyRequest.approvedByEmail = null;
+                    await monthlyRequest.save();
+
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Approval failed: accrual transactions and expenses must be created on approval.',
+                        details: expenseConversionResult?.errors || ['No expenses were created']
+                    });
+                }
             } catch (conversionError) {
                 console.error('Error auto-converting to expenses:', conversionError);
                 // Don't fail the approval if expense conversion fails
-                expenseConversionResult = { expenses: [], errors: [conversionError.message] };
+                // STRICT: Fail approval
+                monthlyRequest.status = 'pending';
+                monthlyRequest.approvedBy = null;
+                monthlyRequest.approvedAt = null;
+                monthlyRequest.approvedByEmail = null;
+                await monthlyRequest.save();
+                return res.status(500).json({
+                    success: false,
+                    message: 'Approval failed: error creating accrual/expenses',
+                    error: conversionError.message
+                });
             }
         }
 
@@ -2520,7 +2549,12 @@ async function convertRequestToExpenses(request, user) {
             }
         }
         
-        // Update request status to completed
+        // If nothing was created, fail strictly so approval cannot pass silently
+        if (createdExpenses.length === 0) {
+            throw new Error('Accrual posting failed: no expenses were created/linked. Approval aborted.');
+        }
+
+        // Update request status to completed only when we have posted entries and created expenses
         request.status = 'completed';
         request.requestHistory.push({
             date: new Date(),
@@ -2528,7 +2562,7 @@ async function convertRequestToExpenses(request, user) {
             user: user._id,
             changes: [`${createdExpenses.length} items converted to expenses with proper double-entry accounting`]
         });
-        
+
         await request.save();
         console.log(`\n✅ Monthly request conversion completed: ${createdExpenses.length} expenses created with double-entry transactions`);
         
