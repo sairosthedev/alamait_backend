@@ -2418,72 +2418,21 @@ async function convertRequestToExpenses(request, user) {
         // This ensures we only get the actual items (Electricity, Gas) and not duplicate template expenses
         for (let i = 0; i < request.items.length; i++) {
             const item = request.items[i];
-            const approvedQuotation = item.quotations?.find(q => q.isApproved);
             
-            console.log(`🔍 Processing item ${i}: ${item.title}`);
-            console.log(`   - Has approved quotation: ${!!approvedQuotation}`);
-            console.log(`   - Is template: ${request.isTemplate}`);
+            console.log(`🔍 Processing monthly request item ${i}: ${item.title}`);
             console.log(`   - Estimated cost: $${item.estimatedCost}`);
-            if (approvedQuotation) {
-                console.log(`   - Quotation amount: $${approvedQuotation.amount}`);
-            }
-                
-            if (approvedQuotation) {
+            console.log(`   - Category: ${item.category}`);
+            
+            try {
                 // Get proper expense account using the new mapping service
                 const expenseAccountCode = await AccountMappingService.getExpenseAccountForItem(item);
                 const expenseAccount = await Account.findOne({ code: expenseAccountCode });
                 const expenseCategory = mapAccountNameToExpenseCategory(expenseAccount ? expenseAccount.name : 'Other Operating Expenses');
                 
-                const expense = new Expense({
-                    expenseId: `${expenseId}_item_${i}`,
-                    title: `${request.title} - ${item.title}`,
-                    description: item.description,
-                    amount: approvedQuotation.amount,
-                    category: expenseCategory,
-                    expenseDate: new Date(request.year, request.month - 1, 1),
-                    period: 'monthly',
-                    paymentStatus: 'Pending',
-                    paymentMethod: 'Bank Transfer',
-                    monthlyRequestId: request._id,
-                    itemIndex: i,
-                    quotationId: approvedQuotation._id,
-                    residence: request.residence, // Add residence field
-                    createdBy: user._id,
-                    notes: `Converted from monthly request item: ${item.title}${item.provider ? ` - Provider: ${item.provider}` : ''} - Account: ${expenseAccountCode}`
-                });
+                console.log(`   - Expense Account: ${expenseAccountCode} - ${expenseAccount ? expenseAccount.name : 'Unknown'}`);
+                console.log(`   - Expense Category: ${expenseCategory}`);
                 
-                await expense.save();
-                console.log(`✅ Expense created for item with quotation: ${item.title} - $${approvedQuotation.amount}`);
-                
-                // ✅ FIXED: Create double-entry transaction for regular monthly request items
-                try {
-                    const tempRequest = {
-                        ...request.toObject(),
-                        items: [item], // Only this item
-                        totalEstimatedCost: item.estimatedCost
-                    };
-                    
-                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
-                    
-                    // Link expense to transaction
-                    expense.transactionId = transactionResult.transaction._id;
-                    await expense.save();
-                    
-                    console.log('✅ Double-entry transaction created for monthly request item');
-                } catch (transactionError) {
-                    console.error('❌ Error creating double-entry transaction for item:', transactionError);
-                }
-                
-                createdExpenses.push(expense);
-            } else {
-                // If no approved quotation, use estimated cost
-                console.log(`📝 No approved quotation found for ${item.title}, using estimated cost: $${item.estimatedCost}`);
-                
-                // Get proper expense account using the new mapping service
-                const expenseAccountCode = await AccountMappingService.getExpenseAccountForItem(item);
-                const expenseAccount = await Account.findOne({ code: expenseAccountCode });
-                const expenseCategory = mapAccountNameToExpenseCategory(expenseAccount ? expenseAccount.name : 'Other Operating Expenses');
-                
+                // Create expense record - always use estimated cost for monthly requests
                 const expense = new Expense({
                     expenseId: `${expenseId}_item_${i}`,
                     title: `${request.title} - ${item.title}`,
@@ -2496,16 +2445,18 @@ async function convertRequestToExpenses(request, user) {
                     paymentMethod: 'Bank Transfer',
                     monthlyRequestId: request._id,
                     itemIndex: i,
-                    residence: request.residence, // Add residence field
+                    residence: request.residence,
                     createdBy: user._id,
-                    notes: `Converted from monthly request item: ${item.title} (estimated cost)${item.provider ? ` - Provider: ${item.provider}` : ''} - Account: ${expenseAccountCode}`
+                    notes: `Converted from monthly request item: ${item.title} - Account: ${expenseAccountCode}`
                 });
                 
                 await expense.save();
-                console.log(`✅ Expense created for item without quotation: ${item.title} - $${item.estimatedCost}`);
+                console.log(`✅ Expense created: ${item.title} - $${item.estimatedCost}`);
                 
-                // ✅ FIXED: Create double-entry transaction for regular monthly request items
+                // ✅ ALWAYS create double-entry transaction for monthly request items
                 try {
+                    console.log(`💰 Creating double-entry transaction for: ${item.title}`);
+                    
                     const tempRequest = {
                         ...request.toObject(),
                         items: [item], // Only this item
@@ -2518,12 +2469,22 @@ async function convertRequestToExpenses(request, user) {
                     expense.transactionId = transactionResult.transaction._id;
                     await expense.save();
                     
-                    console.log('✅ Double-entry transaction created for monthly request item');
+                    console.log(`✅ Double-entry transaction created: ${transactionResult.transaction._id}`);
+                    console.log(`✅ Expense linked to transaction: ${expense.transactionId}`);
+                    
                 } catch (transactionError) {
-                    console.error('❌ Error creating double-entry transaction for item:', transactionError);
+                    console.error(`❌ Error creating double-entry transaction for ${item.title}:`, transactionError);
+                    // Don't fail the expense creation if transaction fails
                 }
                 
                 createdExpenses.push(expense);
+                
+            } catch (itemError) {
+                console.error(`❌ Error processing item ${item.title}:`, itemError);
+                errors.push({
+                    itemTitle: item.title,
+                    error: itemError.message
+                });
             }
         }
         
@@ -2533,10 +2494,11 @@ async function convertRequestToExpenses(request, user) {
             date: new Date(),
             action: 'Converted to expenses with double-entry transactions',
             user: user._id,
-            changes: [`${createdExpenses.length} items converted to expenses`]
+            changes: [`${createdExpenses.length} items converted to expenses with proper double-entry accounting`]
         });
         
         await request.save();
+        console.log(`\n✅ Monthly request conversion completed: ${createdExpenses.length} expenses created with double-entry transactions`);
         
     } catch (error) {
         errors.push({
