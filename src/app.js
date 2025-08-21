@@ -23,7 +23,6 @@ if (process.env.NODE_ENV === 'production') {
 const authRoutes = require('./routes/auth');
 const publicApplicationRoutes = require('./routes/public/applicationRoutes');
 const reapplicationRoutes = require('./routes/public/reapplicationRoutes');
-const applicationRoutes = require('./routes/applicationRoutes');
 const publicResidenceRoutes = require('./routes/public/residenceRoutes');
 const residenceRoutes = require('./routes/residenceRoutes');
 const maintenanceRoutes = require('./routes/maintenanceRoutes');
@@ -216,9 +215,6 @@ app.use('/api/residences', publicResidenceRoutes);
 
 // Generic residence routes (for ID-based lookups)
 app.use('/api/residences', residenceRoutes);
-
-// General application routes (provides /api/applications/submit)
-app.use('/api/applications', applicationRoutes);
 
 // Alias routes for frontend compatibility
 app.use('/api/applications/public', publicApplicationRoutes);
