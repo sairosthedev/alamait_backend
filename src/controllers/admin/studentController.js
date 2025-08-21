@@ -943,6 +943,54 @@ exports.manualAddStudent = async (req, res) => {
             return res.status(400).json({ error: 'Room is at full capacity' });
         }
 
+        // Validate all required variables are defined
+        console.log('🔍 Validating required variables...');
+        console.log(`   residenceId: ${residenceId} (${typeof residenceId})`);
+        console.log(`   roomNumber: ${roomNumber} (${typeof roomNumber})`);
+        console.log(`   startDate: ${startDate} (${typeof startDate})`);
+        console.log(`   endDate: ${endDate} (${typeof endDate})`);
+        console.log(`   monthlyRent: ${monthlyRent} (${typeof monthlyRent})`);
+        console.log(`   req.user: ${req.user ? 'exists' : 'undefined'}`);
+        console.log(`   req.user._id: ${req.user?._id || 'undefined'}`);
+        
+        if (!residenceId || !roomNumber || !startDate || !endDate || !monthlyRent || !req.user?._id) {
+            const missingVars = [];
+            if (!residenceId) missingVars.push('residenceId');
+            if (!roomNumber) missingVars.push('roomNumber');
+            if (!startDate) missingVars.push('startDate');
+            if (!endDate) missingVars.push('endDate');
+            if (!monthlyRent) missingVars.push('monthlyRent');
+            if (!req.user?._id) missingVars.push('req.user._id');
+            
+            return res.status(400).json({ 
+                error: 'Missing required variables',
+                details: `Missing: ${missingVars.join(', ')}`
+            });
+        }
+        
+        // Parse and validate dates
+        let parsedStartDate, parsedEndDate;
+        try {
+            parsedStartDate = new Date(startDate);
+            parsedEndDate = new Date(endDate);
+            
+            if (isNaN(parsedStartDate.getTime())) {
+                return res.status(400).json({ error: 'Invalid start date format' });
+            }
+            if (isNaN(parsedEndDate.getTime())) {
+                return res.status(400).json({ error: 'Invalid end date format' });
+            }
+            if (parsedEndDate <= parsedStartDate) {
+                return res.status(400).json({ error: 'End date must be after start date' });
+            }
+        } catch (dateError) {
+            return res.status(400).json({ error: 'Date parsing error', details: dateError.message });
+        }
+        
+        console.log('✅ All variables validated successfully');
+        console.log(`   Parsed start date: ${parsedStartDate}`);
+        console.log(`   Parsed end date: ${parsedEndDate}`);
+
         // Generate temporary password
         const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
 
@@ -974,15 +1022,15 @@ exports.manualAddStudent = async (req, res) => {
             requestType: 'new',
             status: 'approved', // Directly approve the application
             paymentStatus: 'paid', // Mark as paid since admin is adding manually
-            startDate,
-            endDate,
+            startDate: parsedStartDate,
+            endDate: parsedEndDate,
             preferredRoom: roomNumber,
             allocatedRoom: roomNumber,
             residence: residenceId,
             applicationCode: applicationCode, // Set the generated application code
             applicationDate: new Date(),
             actionDate: new Date(),
-            actionBy: req.user.id
+            actionBy: req.user._id // Use _id consistently
         });
 
         await application.save();
@@ -995,6 +1043,20 @@ exports.manualAddStudent = async (req, res) => {
         let debtor = null;
         try {
             console.log(`🏗️  Creating debtor account for manually added student: ${student.email}`);
+            console.log(`   Debug - residenceId: ${residenceId} (type: ${typeof residenceId})`);
+            console.log(`   Debug - req.user: ${req.user ? 'exists' : 'undefined'}`);
+            console.log(`   Debug - req.user._id: ${req.user?._id || 'undefined'}`);
+            
+            // Validate required parameters before calling service
+            if (!residenceId) {
+                throw new Error('residenceId is required but was not provided');
+            }
+            if (!roomNumber) {
+                throw new Error('roomNumber is required but was not provided');
+            }
+            if (!req.user?._id) {
+                throw new Error('req.user._id is required but was not provided - authentication issue');
+            }
             
             debtor = await createDebtorForStudent(student, {
                 residenceId: residenceId,
@@ -1002,8 +1064,8 @@ exports.manualAddStudent = async (req, res) => {
                 createdBy: req.user._id,
                 application: application._id, // Link to the application
                 applicationCode: application.applicationCode, // Link application code
-                startDate: startDate,
-                endDate: endDate,
+                startDate: parsedStartDate,
+                endDate: parsedEndDate,
                 roomPrice: monthlyRent
             });
             
@@ -1043,8 +1105,8 @@ exports.manualAddStudent = async (req, res) => {
                 console.log(`   Application: ${application.applicationCode}`);
                 console.log(`   Residence: ${residenceId}`);
                 console.log(`   Room: ${roomNumber}`);
-                console.log(`   Start Date: ${startDate}`);
-                console.log(`   End Date: ${endDate}`);
+                console.log(`   Start Date: ${parsedStartDate}`);
+                console.log(`   End Date: ${parsedEndDate}`);
                 console.log(`   Room Price: ${monthlyRent}`);
                 
                 // CRITICAL: Fail the request if debtor creation fails
@@ -1059,8 +1121,8 @@ exports.manualAddStudent = async (req, res) => {
                 application: application.applicationCode,
                 residenceId,
                 roomNumber,
-                startDate,
-                endDate,
+                startDate: parsedStartDate,
+                endDate: parsedEndDate,
                 monthlyRent
             });
             
