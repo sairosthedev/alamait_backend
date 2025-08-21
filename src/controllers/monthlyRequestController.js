@@ -2461,13 +2461,21 @@ async function convertRequestToExpenses(request, user) {
                         totalEstimatedCost: item.estimatedCost,
                         isTemplate: false,
                         itemIndex: i,
-                        skipExpenseCreation: true
+                        skipExpenseCreation: true,
+                        disableDuplicateCheck: true
                     };
                     
                     const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
-                    
-                    // Link expense to transaction
-                    expense.transactionId = transactionResult.transaction._id;
+
+                    // Link expense to transaction robustly
+                    if (transactionResult && transactionResult.transaction && transactionResult.transaction._id) {
+                        expense.transactionId = transactionResult.transaction._id;
+                    } else if (transactionResult && transactionResult.transactionEntry) {
+                        const txn = await Transaction.findOne({ transactionId: transactionResult.transactionEntry.transactionId });
+                        if (txn) {
+                            expense.transactionId = txn._id;
+                        }
+                    }
                     await expense.save();
                     
                     console.log(`✅ Double-entry transaction created: ${transactionResult.transaction._id}`);
