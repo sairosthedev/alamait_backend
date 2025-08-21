@@ -1525,23 +1525,53 @@ exports.approveMonthlyRequest = async (req, res) => {
         if (approved) {
             try {
                 if (monthlyRequest.isTemplate) {
-                    // For templates, convert the specific monthly approval
+                    // For templates, create/reuse a real monthly request (isTemplate: false) for that month/year then convert it
+                    const targetMonth = parseInt(month);
+                    const targetYear = parseInt(year);
                     const monthlyApproval = monthlyRequest.monthlyApprovals.find(
-                        approval => approval.month === parseInt(month) && approval.year === parseInt(year)
+                        approval => approval.month === targetMonth && approval.year === targetYear
                     );
-                    
+
                     if (monthlyApproval) {
-                        // Create a temporary request object for conversion
-                        const tempRequest = {
-                            ...monthlyRequest.toObject(),
-                            items: monthlyApproval.items,
-                            totalEstimatedCost: monthlyApproval.totalCost,
-                            month: monthlyApproval.month,
-                            year: monthlyApproval.year,
-                            status: 'approved'
-                        };
-                        
-                        expenseConversionResult = await convertRequestToExpenses(tempRequest, user);
+                        let derivedMonthly = await MonthlyRequest.findOne({
+                            templateId: monthlyRequest._id,
+                            month: targetMonth,
+                            year: targetYear,
+                            isTemplate: false
+                        });
+
+                        if (!derivedMonthly) {
+                            const derivedData = {
+                                title: `${monthlyRequest.title} - ${targetMonth}/${targetYear}`,
+                                description: formatDescriptionWithMonth(monthlyRequest.description, targetMonth, targetYear),
+                                residence: monthlyRequest.residence,
+                                month: targetMonth,
+                                year: targetYear,
+                                items: monthlyApproval.items,
+                                totalEstimatedCost: monthlyApproval.totalCost,
+                                status: 'approved',
+                                submittedBy: user._id,
+                                approvedBy: user._id,
+                                approvedAt: new Date(),
+                                approvedByEmail: user.email,
+                                isTemplate: false,
+                                createdFromTemplate: true,
+                                templateId: monthlyRequest._id,
+                                notes: `Created from template approval: ${monthlyRequest.title}`
+                            };
+                            derivedMonthly = new MonthlyRequest(derivedData);
+                            await derivedMonthly.save();
+                        } else {
+                            // Ensure approved status
+                            derivedMonthly.status = 'approved';
+                            derivedMonthly.approvedBy = user._id;
+                            derivedMonthly.approvedAt = new Date();
+                            derivedMonthly.approvedByEmail = user.email;
+                            await derivedMonthly.save();
+                        }
+
+                        // Convert the derived monthly request (non-template) to expenses and entries
+                        expenseConversionResult = await convertRequestToExpenses(derivedMonthly, user);
                     }
                 } else {
                     // For regular requests, convert directly (ensure isTemplate false)
