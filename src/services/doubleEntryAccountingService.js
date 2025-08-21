@@ -957,6 +957,154 @@ class DoubleEntryAccountingService {
                     message: 'Transaction already exists for this payment'
                 };
             }
+
+            // 🆕 NEW: Check for existing advance payments for the same month
+            if (payment.paymentMonth && payment.paymentMonth.trim()) {
+                try {
+                    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                                       'july', 'august', 'september', 'october', 'november', 'december'];
+                    const monthAbbr = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 
+                                      'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+                    
+                    let month = -1;
+                    let year = new Date().getFullYear();
+                    
+                    const lowerPaymentMonth = payment.paymentMonth.toLowerCase();
+                    month = monthNames.findIndex(m => lowerPaymentMonth.includes(m));
+                    if (month === -1) {
+                        month = monthAbbr.findIndex(m => lowerPaymentMonth.includes(m));
+                    }
+                    
+                    const yearMatch = payment.paymentMonth.match(/\b(20\d{2})\b/);
+                    if (yearMatch) {
+                        year = parseInt(yearMatch[1]);
+                    }
+                    
+                    if (month !== -1) {
+                        // Check for existing advance payments for this month
+                        const existingAdvancePayments = await TransactionEntry.find({
+                            source: 'payment',
+                            'metadata.studentId': payment.student,
+                            'metadata.paymentMonth': payment.paymentMonth,
+                            'metadata.paymentYear': year,
+                            status: 'posted',
+                            $or: [
+                                { 'entries.accountCode': { $regex: /^4\d{3}$/ } }, // Income accounts
+                                { 'entries.accountCode': { $regex: /^2\d{3}$/ } }  // Liability accounts (deferred income)
+                            ]
+                        }).lean();
+
+                        if (existingAdvancePayments.length > 0) {
+                            console.log(`⚠️ Existing advance payments found for ${payment.paymentMonth} ${year}:`, existingAdvancePayments.length);
+                            
+                            // 🆕 ENHANCED: Check for specific payment components that have already been paid
+                            let totalRentAlreadyPaid = 0;
+                            let totalAdminAlreadyPaid = 0;
+                            let totalDepositAlreadyPaid = 0;
+                            
+                            for (const existing of existingAdvancePayments) {
+                                for (const entry of existing.entries) {
+                                    const description = (entry.description || '').toLowerCase();
+                                    const amount = entry.credit || 0;
+                                    
+                                    if (description.includes('rent') && !description.includes('deferred')) {
+                                        totalRentAlreadyPaid += amount;
+                                    } else if (description.includes('admin')) {
+                                        totalAdminAlreadyPaid += amount;
+                                    } else if (description.includes('deposit')) {
+                                        totalDepositAlreadyPaid += amount;
+                                    }
+                                }
+                            }
+                            
+                            console.log(`📊 Existing payments for ${payment.paymentMonth} ${year}:`);
+                            console.log(`   Rent: $${totalRentAlreadyPaid}`);
+                            console.log(`   Admin: $${totalAdminAlreadyPaid}`);
+                            console.log(`   Deposit: $${totalDepositAlreadyPaid}`);
+                            
+                            // 🆕 ENHANCED: For advance payments, we allow multiple payments to increase deferred income
+                            if (isAdvancePayment) {
+                                console.log(`💰 Advance payment for ${payment.paymentMonth} ${year} - allowing additional payments to increase deferred income`);
+                                console.log(`   Current deferred amounts: Rent $${totalRentAlreadyPaid}, Admin $${totalAdminAlreadyPaid}, Deposit $${totalDepositAlreadyPaid}`);
+                                console.log(`   New payment amounts: Rent $${rentAmount}, Admin $${adminAmount}, Deposit $${depositAmount}`);
+                                
+                                // For advance payments, we continue to create the transaction
+                                // This will increase the deferred income for the month
+                            } else {
+                                // For current/past due payments, check for duplicates
+                                let hasDuplicateComponents = false;
+                                let duplicateMessage = '';
+                                
+                                if (rentAmount > 0 && totalRentAlreadyPaid >= rentAmount) {
+                                    hasDuplicateComponents = true;
+                                    duplicateMessage += `Rent for ${payment.paymentMonth} ${year} has already been paid ($${totalRentAlreadyPaid}). `;
+                                }
+                                
+                                if (adminAmount > 0 && totalAdminAlreadyPaid >= adminAmount) {
+                                    hasDuplicateComponents = true;
+                                    duplicateMessage += `Admin fee for ${payment.paymentMonth} ${year} has already been paid ($${totalAdminAlreadyPaid}). `;
+                                }
+                                
+                                if (depositAmount > 0 && totalDepositAlreadyPaid >= depositAmount) {
+                                    hasDuplicateComponents = true;
+                                    duplicateMessage += `Deposit for ${payment.paymentMonth} ${year} has already been paid ($${totalDepositAlreadyPaid}). `;
+                                }
+                                
+                                if (hasDuplicateComponents) {
+                                    console.log(`⚠️ Duplicate payment components detected for ${payment.paymentMonth} ${year}`);
+                                    console.log(`⚠️ Skipping duplicate payment transaction`);
+                                    
+                                    return {
+                                        transaction: null,
+                                        transactionEntry: null,
+                                        message: duplicateMessage.trim(),
+                                        duplicateMonth: true,
+                                        existingAmounts: {
+                                            rent: totalRentAlreadyPaid,
+                                            admin: totalAdminAlreadyPaid,
+                                            deposit: totalDepositAlreadyPaid
+                                        }
+                                    };
+                                }
+                            }
+                        }
+                        
+                        // 🆕 NEW: Check if this is the current month and we need to recognize deferred income
+                        if (paymentMonthDate && paymentMonthDate.getTime() === currentMonthDate.getTime()) {
+                            console.log(`📅 Current month detected: ${payment.paymentMonth} ${year}`);
+                            
+                            // Look for deferred income from previous months that should be recognized now
+                            const deferredIncomeToRecognize = await TransactionEntry.find({
+                                source: 'payment',
+                                'metadata.studentId': payment.student,
+                                'metadata.isAdvancePayment': true,
+                                status: 'posted',
+                                'entries.accountCode': { $regex: /^2\d{3}$/ }, // Liability accounts (deferred income)
+                                $or: [
+                                    { 'metadata.paymentMonth': { $ne: payment.paymentMonth } }, // Different month
+                                    { 'metadata.paymentYear': { $ne: year } } // Different year
+                                ]
+                            }).lean();
+                            
+                            if (deferredIncomeToRecognize.length > 0) {
+                                console.log(`💰 Found ${deferredIncomeToRecognize.length} deferred income entries to recognize for current month`);
+                                
+                                // Create a deferred income recognition transaction
+                                await this.recognizeDeferredIncomeForCurrentMonth(
+                                    payment.student, 
+                                    payment.paymentMonth, 
+                                    year, 
+                                    deferredIncomeToRecognize,
+                                    user,
+                                    residenceId
+                                );
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.log(`⚠️ Error checking for existing advance payments:`, error.message);
+                }
+            }
             
             // Get student details for better descriptions
             let studentName = 'Student';
@@ -1408,6 +1556,15 @@ class DoubleEntryAccountingService {
                 metadata: {
                     paymentType: paymentType,
                     paymentMonth: payment.paymentMonth,
+                    paymentYear: payment.paymentMonth ? (() => {
+                        try {
+                            const yearMatch = payment.paymentMonth.match(/\b(20\d{2})\b/);
+                            return yearMatch ? parseInt(yearMatch[1]) : new Date().getFullYear();
+                        } catch (e) {
+                            return new Date().getFullYear();
+                        }
+                    })() : new Date().getFullYear(),
+                    studentId: payment.student,
                     isAdvancePayment: isAdvancePayment,
                     isCurrentPeriodPayment: isCurrentPeriodPayment,
                     isPastDuePayment: isPastDuePayment,
@@ -2567,6 +2724,179 @@ class DoubleEntryAccountingService {
             return defaultResidence?._id || null;
         } catch (error) {
             console.error('Error getting default residence:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 🆕 NEW: Recognize deferred income when the month actually arrives
+     * This converts deferred income (liability) to actual income (revenue)
+     */
+    static async recognizeDeferredIncomeForCurrentMonth(studentId, paymentMonth, paymentYear, deferredIncomeEntries, user, residenceId) {
+        try {
+            console.log(`💰 Recognizing deferred income for ${paymentMonth} ${paymentYear} for student ${studentId}`);
+            
+            if (!deferredIncomeEntries || deferredIncomeEntries.length === 0) {
+                console.log('No deferred income entries to recognize');
+                return null;
+            }
+
+            // Get required accounts
+            const deferredIncomeAccount = await this.getDeferredIncomeAccount();
+            const rentIncomeAccount = await this.getRentIncomeAccount();
+            const adminIncomeAccount = await this.getAdminIncomeAccount();
+            const depositLiabilityAccount = await this.getDepositLiabilityAccount();
+
+            // Calculate total amounts to recognize
+            let totalRentToRecognize = 0;
+            let totalAdminToRecognize = 0;
+            let totalDepositToRecognize = 0;
+
+            for (const entry of deferredIncomeEntries) {
+                for (const transactionEntry of entry.entries) {
+                    const description = (transactionEntry.description || '').toLowerCase();
+                    const amount = transactionEntry.credit || 0;
+                    
+                    if (description.includes('rent') && description.includes('deferred')) {
+                        totalRentToRecognize += amount;
+                    } else if (description.includes('admin') && description.includes('deferred')) {
+                        totalAdminToRecognize += amount;
+                    } else if (description.includes('deposit') && description.includes('deferred')) {
+                        totalDepositToRecognize += amount;
+                    }
+                }
+            }
+
+            if (totalRentToRecognize === 0 && totalAdminToRecognize === 0 && totalDepositToRecognize === 0) {
+                console.log('No deferred income amounts to recognize');
+                return null;
+            }
+
+            console.log(`📊 Deferred income to recognize:`);
+            console.log(`   Rent: $${totalRentToRecognize}`);
+            console.log(`   Admin: $${totalAdminToRecognize}`);
+            console.log(`   Deposit: $${totalDepositToRecognize}`);
+
+            // Create recognition transaction
+            const transactionId = await this.generateTransactionId();
+            const transaction = new Transaction({
+                transactionId,
+                date: new Date(),
+                description: `Deferred income recognition for ${paymentMonth} ${paymentYear}`,
+                type: 'deferred_income_recognition',
+                reference: `DEFERRED-${studentId}-${paymentMonth}-${paymentYear}`,
+                residence: residenceId,
+                createdBy: user._id
+            });
+
+            await transaction.save();
+
+            // Create double-entry entries for recognition
+            const entries = [];
+
+            // 1. DEBIT: Deferred Income (Liability) - Reducing the liability
+            if (totalRentToRecognize > 0) {
+                entries.push({
+                    accountCode: deferredIncomeAccount,
+                    accountName: 'Deferred Income - Tenant Advances',
+                    accountType: 'Liability',
+                    debit: totalRentToRecognize,
+                    credit: 0,
+                    description: `Recognition of deferred rent income for ${paymentMonth} ${paymentYear}`
+                });
+            }
+
+            if (totalAdminToRecognize > 0) {
+                entries.push({
+                    accountCode: deferredIncomeAccount,
+                    accountName: 'Deferred Income - Tenant Advances',
+                    accountType: 'Liability',
+                    debit: totalAdminToRecognize,
+                    credit: 0,
+                    description: `Recognition of deferred admin fee income for ${paymentMonth} ${paymentYear}`
+                });
+            }
+
+            if (totalDepositToRecognize > 0) {
+                entries.push({
+                    accountCode: deferredIncomeAccount,
+                    accountName: 'Deferred Income - Tenant Advances',
+                    accountType: 'Liability',
+                    debit: totalDepositToRecognize,
+                    credit: 0,
+                    description: `Recognition of deferred deposit liability for ${paymentMonth} ${paymentYear}`
+                });
+            }
+
+            // 2. CREDIT: Actual Income (Revenue) - Recognizing the income
+            if (totalRentToRecognize > 0) {
+                entries.push({
+                    accountCode: rentIncomeAccount,
+                    accountName: 'Rental Income - Residential',
+                    accountType: 'Income',
+                    debit: 0,
+                    credit: totalRentToRecognize,
+                    description: `Rent income recognized for ${paymentMonth} ${paymentYear} (from deferred income)`
+                });
+            }
+
+            if (totalAdminToRecognize > 0) {
+                entries.push({
+                    accountCode: adminIncomeAccount,
+                    accountName: 'Administrative Income',
+                    accountType: 'Income',
+                    debit: 0,
+                    credit: totalAdminToRecognize,
+                    description: `Admin fee income recognized for ${paymentMonth} ${paymentYear} (from deferred income)`
+                });
+            }
+
+            if (totalDepositToRecognize > 0) {
+                entries.push({
+                    accountCode: depositLiabilityAccount,
+                    accountName: 'Security Deposits - Tenants',
+                    accountType: 'Liability',
+                    debit: 0,
+                    credit: totalDepositToRecognize,
+                    description: `Security deposit liability recognized for ${paymentMonth} ${paymentYear} (from deferred income)`
+                });
+            }
+
+            // Create transaction entry
+            const transactionEntry = new TransactionEntry({
+                transactionId: transaction.transactionId,
+                date: new Date(),
+                description: `Deferred income recognition for ${paymentMonth} ${paymentYear}`,
+                reference: `DEFERRED-${studentId}-${paymentMonth}-${paymentYear}`,
+                entries,
+                totalDebit: totalRentToRecognize + totalAdminToRecognize + totalDepositToRecognize,
+                totalCredit: totalRentToRecognize + totalAdminToRecognize + totalDepositToRecognize,
+                source: 'deferred_income_recognition',
+                sourceId: `DEFERRED-${studentId}-${paymentMonth}-${paymentYear}`,
+                sourceModel: 'DeferredIncomeRecognition',
+                residence: residenceId,
+                createdBy: user.email || 'system',
+                status: 'posted',
+                metadata: {
+                    studentId: studentId,
+                    paymentMonth: paymentMonth,
+                    paymentYear: paymentYear,
+                    recognitionType: 'deferred_income',
+                    amountsRecognized: {
+                        rent: totalRentToRecognize,
+                        admin: totalAdminToRecognize,
+                        deposit: totalDepositToRecognize
+                    }
+                }
+            });
+
+            await transactionEntry.save();
+            console.log(`✅ Deferred income recognition transaction created: ${transaction.transactionId}`);
+
+            return { transaction, transactionEntry };
+
+        } catch (error) {
+            console.error('❌ Error recognizing deferred income:', error);
             return null;
         }
     }
