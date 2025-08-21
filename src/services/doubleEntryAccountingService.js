@@ -1188,14 +1188,11 @@ class DoubleEntryAccountingService {
             console.log(`   Payment Analysis:`);
             console.log(`     Current Month: ${currentMonth + 1}/${currentYear}`);
             console.log(`     Payment Month: ${payment.paymentMonth}`);
-            console.log(`     Payment Month Date: ${paymentMonthDate}`);
-            console.log(`     Current Month Date: ${new Date(currentYear, currentMonth, 1)}`);
             console.log(`     Is Advance Payment: ${isAdvancePayment}`);
             console.log(`     Is Current Period: ${isCurrentPeriodPayment}`);
             console.log(`     Is Past Due: ${isPastDuePayment}`);
             console.log(`     Has Outstanding Debt: ${studentHasOutstandingDebt}`);
             console.log(`     Payment Breakdown: Rent $${rentAmount}, Admin $${adminAmount}, Deposit $${depositAmount}`);
-            console.log(`     Using Payment Breakdown: ${parsedPayments && parsedPayments.length > 0 ? 'YES' : 'NO (using fallback)'}`);
 
             const transactionId = await this.generateTransactionId();
             
@@ -1372,57 +1369,32 @@ class DoubleEntryAccountingService {
 
                     switch (paymentItem.type) {
                         case 'admin':
-                            if (isAdvancePayment) {
-                                // 🆕 FIXED: Admin fees for advance payments go to deferred income
-                                entries.push({
-                                    accountCode: deferredIncomeAccount,
-                                    accountName: 'Deferred Income - Tenant Advances',
-                                    accountType: 'Liability',
-                                    debit: 0,
-                                    credit: amount,
-                                    description: `Deferred admin fee income from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
-                                });
-                            } else {
-                                // Accrual basis: settle AR for admin fee (revenue was recognized at lease start)
-                                entries.push({
-                                    accountCode: studentAccount,
-                                    accountName: 'Accounts Receivable - Tenants',
-                                    accountType: 'Asset',
-                                    debit: 0,
-                                    credit: amount,
-                                    description: `Admin fee payment settles accrual for ${studentName} (${payment.paymentId})`
-                                });
-                            }
+                            // Accrual basis: settle AR for admin fee (revenue was recognized at lease start)
+                            entries.push({
+                                accountCode: studentAccount,
+                                accountName: 'Accounts Receivable - Tenants',
+                                accountType: 'Asset',
+                                debit: 0,
+                                credit: amount,
+                                description: `Admin fee payment settles accrual for ${studentName} (${payment.paymentId})`
+                            });
                             break;
                             
                         case 'deposit':
-                            if (isAdvancePayment) {
-                                // 🆕 FIXED: Deposits for advance payments go to deferred income
-                                entries.push({
-                                    accountCode: deferredIncomeAccount,
-                                    accountName: 'Deferred Income - Tenant Advances',
-                                    accountType: 'Liability',
-                                    debit: 0,
-                                    credit: amount,
-                                    description: `Deferred deposit liability from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
-                                });
-                            } else {
-                                // Accrual basis: settle AR for deposit (liability was recognized at lease start)
-                                entries.push({
-                                    accountCode: studentAccount,
-                                    accountName: 'Accounts Receivable - Tenants',
-                                    accountType: 'Asset',
-                                    debit: 0,
-                                    credit: amount,
-                                    description: `Security deposit payment settles accrual for ${studentName} (${payment.paymentId})`
-                                });
-                            }
+                            // Accrual basis: settle AR for deposit (liability was recognized at lease start)
+                            entries.push({
+                                accountCode: studentAccount,
+                                accountName: 'Accounts Receivable - Tenants',
+                                accountType: 'Asset',
+                                debit: 0,
+                                credit: amount,
+                                description: `Security deposit payment settles accrual for ${studentName} (${payment.paymentId})`
+                            });
                             break;
                             
-                        case 'rent':
+                        case 'rent': {
                             if (isAdvancePayment && deferredIncomeAccount) {
-                                // 🆕 FIXED: Entire rent is for future period - goes to deferred income
-                                console.log(`💰 CRITICAL: Advance rent payment detected - routing to deferred income`);
+                                // Entire rent is for future period
                                 entries.push({
                                     accountCode: deferredIncomeAccount,
                                     accountName: 'Deferred Income - Tenant Advances',
@@ -1461,29 +1433,18 @@ class DoubleEntryAccountingService {
                                 });
                             }
                             break;
+                        }
                             
                         default:
-                            // 🆕 FIXED: Handle unknown payment types based on advance status
-                            if (isAdvancePayment) {
-                                entries.push({
-                                    accountCode: deferredIncomeAccount,
-                                    accountName: 'Deferred Income - Tenant Advances',
-                                    accountType: 'Liability',
-                                    debit: 0,
-                                    credit: amount,
-                                    description: `Deferred ${paymentItem.type} income from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
-                                });
-                            } else {
-                                entries.push({
-                                    accountCode: rentAccount,
-                                    accountName: 'Rental Income - Residential',
-                                    accountType: 'Income',
-                                    debit: 0,
-                                    credit: amount,
-                                    description: `${paymentItem.type} payment from ${studentName} (${payment.paymentId})`
-                                });
-                            }
-                            break;
+                            // Fallback for unknown payment types
+                            entries.push({
+                                accountCode: rentAccount,
+                                accountName: 'Rental Income - Residential',
+                                accountType: 'Income',
+                                debit: 0,
+                                credit: amount,
+                                description: `${paymentItem.type} payment from ${studentName} (${payment.paymentId})`
+                            });
                     }
                 }
                 
@@ -1498,20 +1459,18 @@ class DoubleEntryAccountingService {
                 await transaction.save();
                 
             } else {
-                // 🚨 FALLBACK: Enhanced logic for payments without breakdown
-                console.log('⚠️ No payment breakdown found, using enhanced fallback logic');
+                // 🚨 FALLBACK: Old logic for payments without breakdown
+                console.log('⚠️ No payment breakdown found, using fallback logic');
                 
                 if (isAdvancePayment && deferredIncomeAccount) {
-                    // 🆕 FIXED: Advance payment goes to Deferred Income (Liability)
-                    console.log(`💰 Processing advance payment for ${payment.paymentMonth} - routing to deferred income`);
-                    
+                    // Advance payment goes to Deferred Income
                     entries.push({
                         accountCode: receivingAccount,
                         accountName: this.getPaymentAccountName(payment.method),
                         accountType: 'Asset',
                         debit: payment.totalAmount,
                         credit: 0,
-                        description: `Advance payment received from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
+                        description: `Advance payment received from ${studentName} (${payment.paymentId})`
                     });
                     
                     entries.push({
@@ -1541,45 +1500,24 @@ class DoubleEntryAccountingService {
                         credit: payment.totalAmount,
                         description: `Settlement of outstanding debt from ${studentName}`
                     });
-                } else if (isCurrentPeriodPayment) {
-                    // 🆕 FIXED: Current period payment goes to rental income
+                } else {
+                    // Current period payment
                     entries.push({
                         accountCode: receivingAccount,
                         accountName: this.getPaymentAccountName(payment.method),
                         accountType: 'Asset',
                         debit: payment.totalAmount,
                         credit: 0,
-                        description: `Current period payment received from ${studentName} (${payment.paymentId})`
+                        description: `Rent payment via ${payment.method}`
                     });
                     
                     entries.push({
                         accountCode: rentAccount,
-                        accountName: 'Rental Income - Residential',
+                        accountName: 'Rent Income',
                         accountType: 'Income',
                         debit: 0,
                         credit: payment.totalAmount,
                         description: `Rent income from ${studentName} for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
-                    });
-                } else {
-                    // 🆕 FIXED: Default to deferred income for future payments
-                    console.log(`💰 Defaulting to deferred income for payment month: ${payment.paymentMonth}`);
-                    
-                    entries.push({
-                        accountCode: receivingAccount,
-                        accountName: this.getPaymentAccountName(payment.method),
-                        accountType: 'Asset',
-                        debit: payment.totalAmount,
-                        credit: 0,
-                        description: `Payment received from ${studentName} for ${payment.paymentMonth || 'future period'} (${payment.paymentId})`
-                    });
-                    
-                    entries.push({
-                        accountCode: deferredIncomeAccount,
-                        accountName: 'Deferred Income - Tenant Advances',
-                        accountType: 'Liability',
-                        debit: 0,
-                        credit: payment.totalAmount,
-                        description: `Deferred income from ${studentName} for ${payment.paymentMonth || 'future period'} (${payment.paymentId})`
                     });
                 }
             }
