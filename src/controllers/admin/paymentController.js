@@ -784,7 +784,8 @@ const createPayment = async (req, res) => {
                 deposit: payment.deposit || 0
             };
             
-            const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(paymentForTransaction, req.user);
+            // Use the new advance balance handling method for better payment processing
+        const accountingResult = await DoubleEntryAccountingService.recordStudentRentPaymentWithAdvanceHandling(paymentForTransaction, req.user);
             
             if (accountingResult && accountingResult.transaction && accountingResult.transactionEntry) {
                 console.log('✅ Double-entry accounting transaction created for payment');
