@@ -208,11 +208,26 @@ class DoubleEntryAccountingService {
                 return { transaction: null, transactionEntry: existingTransaction };
             }
 
+            // ✅ NEW: Check if this expense was previously accrued
+            let wasAccrued = false;
+            let originalExpense = null;
+            
+            if (expenseId) {
+                const Expense = require('../models/finance/Expense');
+                originalExpense = await Expense.findById(expenseId);
+                if (originalExpense && originalExpense.transactionId) {
+                    wasAccrued = true;
+                    console.log(`🔍 Found accrued expense: ${expenseId} with transaction: ${originalExpense.transactionId}`);
+                }
+            }
+
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
                 transactionId,
                 date: new Date(),
-                description: `Petty cash expense: ${description}`,
+                description: wasAccrued ? 
+                    `Petty cash payment: ${description}` : 
+                    `Petty cash expense: ${description}`,
                 type: 'other', // Changed from 'expense' to 'other' since 'expense' is not in enum
                 reference: `PETTY-EXP-${userId}`,
                 residence: residence, // Always use validated residence
@@ -225,42 +240,82 @@ class DoubleEntryAccountingService {
             // Create double-entry entries
             const entries = [];
 
-            // Debit: Expense Account
-            const expenseAccountCode = await this.getExpenseAccountByCategory(expenseCategory);
-            console.log(`🔍 Creating expense entry with category: ${expenseCategory}, account code: ${expenseAccountCode}`);
-            
-            entries.push({
-                accountCode: expenseAccountCode,
-                accountName: `${expenseCategory} Expense`,
-                accountType: 'Expense',
-                debit: amount,
-                credit: 0,
-                description: `Petty cash expense: ${description} - ${residenceDoc.name}`,
-                residence: residence // Include residence in entry for better tracking
-            });
+            if (wasAccrued) {
+                // ✅ SETTLE ACCRUED LIABILITY: Dr. Accounts Payable, Cr. Petty Cash
+                console.log(`💰 Settling accrued liability for expense: ${expenseId}`);
+                
+                // Get Accounts Payable account
+                const apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                if (!apAccount) {
+                    throw new Error('Accounts Payable account not found for settling accrued liability');
+                }
+                
+                // Debit: Accounts Payable (reduce liability)
+                entries.push({
+                    accountCode: apAccount.code,
+                    accountName: apAccount.name,
+                    accountType: apAccount.type,
+                    debit: amount,
+                    credit: 0,
+                    description: `Petty cash payment: ${description} - settling accrued liability - ${residenceDoc.name}`,
+                    residence: residence
+                });
 
-            // Credit: User's Specific Petty Cash Account (Asset)
-            console.log(`🔍 Creating credit entry with petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
-            
-            entries.push({
-                accountCode: pettyCashAccount.code,
-                accountName: pettyCashAccount.name,
-                accountType: pettyCashAccount.type,
-                debit: 0,
-                credit: amount,
-                description: `${user.firstName} ${user.lastName} petty cash used for ${description} - ${residenceDoc.name}`,
-                residence: residence // Include residence in entry for better tracking
-            });
+                // Credit: User's Specific Petty Cash Account (Asset)
+                entries.push({
+                    accountCode: pettyCashAccount.code,
+                    accountName: pettyCashAccount.name,
+                    accountType: pettyCashAccount.type,
+                    debit: 0,
+                    credit: amount,
+                    description: `${user.firstName} ${user.lastName} petty cash used to settle ${description} - ${residenceDoc.name}`,
+                    residence: residence
+                });
+                
+                console.log(`✅ Created liability settlement entries: Dr. AP ${amount}, Cr. Petty Cash ${amount}`);
+            } else {
+                // ✅ NEW EXPENSE: Dr. Expense Account, Cr. Petty Cash
+                console.log(`💰 Creating new expense entry for petty cash payment`);
+                
+                // Debit: Expense Account
+                const expenseAccountCode = await this.getExpenseAccountByCategory(expenseCategory);
+                console.log(`🔍 Creating expense entry with category: ${expenseCategory}, account code: ${expenseAccountCode}`);
+                
+                entries.push({
+                    accountCode: expenseAccountCode,
+                    accountName: `${expenseCategory} Expense`,
+                    accountType: 'Expense',
+                    debit: amount,
+                    credit: 0,
+                    description: `Petty cash expense: ${description} - ${residenceDoc.name}`,
+                    residence: residence // Include residence in entry for better tracking
+                });
+
+                // Credit: User's Specific Petty Cash Account (Asset)
+                console.log(`🔍 Creating credit entry with petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
+                
+                entries.push({
+                    accountCode: pettyCashAccount.code,
+                    accountName: pettyCashAccount.name,
+                    accountType: pettyCashAccount.type,
+                    debit: 0,
+                    credit: amount,
+                    description: `${user.firstName} ${user.lastName} petty cash used for ${description} - ${residenceDoc.name}`,
+                    residence: residence // Include residence in entry for better tracking
+                });
+            }
 
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
                 date: new Date(),
-                description: `Petty cash expense: ${description}`,
+                description: wasAccrued ? 
+                    `Petty cash payment: ${description}` : 
+                    `Petty cash expense: ${description}`,
                 reference: `PETTY-EXP-${userId}`,
                 entries,
                 totalDebit: amount,
                 totalCredit: amount,
-                source: 'manual',
+                source: wasAccrued ? 'petty_cash_payment' : 'manual',
                 sourceId: userId,
                 sourceModel: 'Request',
                 createdBy: approvedBy.email,
@@ -273,12 +328,14 @@ class DoubleEntryAccountingService {
                     expenseCategory,
                     expenseDescription: description,
                     expenseAmount: amount,
-                    transactionType: 'petty_cash_expense',
+                    transactionType: wasAccrued ? 'petty_cash_payment' : 'petty_cash_expense',
                     residenceId: residence,
                     residenceName: residenceDoc.name,
                     expenseId: expenseId, // Link to original expense
                     paymentMethod: 'Petty Cash',
-                    paymentReference: `PC-${Date.now()}`
+                    paymentReference: `PC-${Date.now()}`,
+                    wasAccrued: wasAccrued, // Track if this was settling an accrued liability
+                    originalTransactionId: wasAccrued ? originalExpense.transactionId : null
                 }
             });
 
@@ -287,11 +344,11 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log(`✅ Petty cash expense recorded successfully for ${user.firstName} ${user.lastName} (${user.role}) at residence: ${residenceDoc.name}`);
+            console.log(`✅ Petty cash ${wasAccrued ? 'payment' : 'expense'} recorded successfully for ${user.firstName} ${user.lastName} (${user.role}) at residence: ${residenceDoc.name}`);
             if (expenseId) {
-                console.log(`🔗 Linked to expense: ${expenseId}`);
+                console.log(`🔗 Linked to expense: ${expenseId}${wasAccrued ? ' (settling accrued liability)' : ''}`);
             }
-            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc, expenseId };
+            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc, expenseId, wasAccrued };
 
         } catch (error) {
             console.error('❌ Error recording petty cash expense:', error);
