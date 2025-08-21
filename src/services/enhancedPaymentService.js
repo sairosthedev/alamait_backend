@@ -365,8 +365,10 @@ class EnhancedPaymentService {
             const debtor = await Debtor.findOne({ user: payment.student });
             const studentName = `${student.firstName} ${student.lastName}`;
             
-            // Parse payment breakdown
+            // Parse payment breakdown - handle both payment.payments array and direct fields
             let rentAmount = 0, adminAmount = 0, depositAmount = 0;
+            
+            // First try to get from payments array (new structure)
             if (payment.payments && Array.isArray(payment.payments)) {
                 payment.payments.forEach(p => {
                     switch (p.type) {
@@ -383,7 +385,32 @@ class EnhancedPaymentService {
                 });
             }
             
+            // Fallback to direct fields (legacy structure)
+            if (rentAmount === 0 && payment.rentAmount) {
+                rentAmount = payment.rentAmount;
+            }
+            if (adminAmount === 0 && payment.adminFee) {
+                adminAmount = payment.adminFee;
+            }
+            if (depositAmount === 0 && payment.deposit) {
+                depositAmount = payment.deposit;
+            }
+            
+            // Additional fallback for total amount if no breakdown
+            if (rentAmount === 0 && adminAmount === 0 && depositAmount === 0 && payment.totalAmount) {
+                // Assume it's all rent if no breakdown provided
+                rentAmount = payment.totalAmount;
+            }
+            
             console.log(`💰 Payment Breakdown: Rent $${rentAmount}, Admin $${adminAmount}, Deposit $${depositAmount}`);
+            console.log(`🔍 Payment object structure:`, {
+                hasPaymentsArray: !!payment.payments,
+                paymentsArrayLength: payment.payments?.length || 0,
+                rentAmount: payment.rentAmount,
+                adminFee: payment.adminFee,
+                deposit: payment.deposit,
+                totalAmount: payment.totalAmount
+            });
             
             // Get required accounts
             const accounts = await this.getRequiredAccounts();
@@ -549,6 +576,9 @@ class EnhancedPaymentService {
                     });
                 }
             }
+            
+            // Debug: Log entries before validation
+            console.log(`🔍 Created ${entries.length} double-entry entries:`, entries);
             
             // Validate double-entry balance
             const totalDebits = entries.reduce((sum, entry) => sum + (entry.debit || 0), 0);
