@@ -410,7 +410,11 @@ class BalanceSheetService {
     let total = 0;
     
     Object.entries(currentAssets).forEach(([code, asset]) => {
-      if (asset.name.toLowerCase().includes('cash') || asset.name.toLowerCase().includes('bank')) {
+      // Include accounts with 'cash' or 'bank' in name OR specific petty cash codes (1010-1014)
+      if (asset.name.toLowerCase().includes('cash') || 
+          asset.name.toLowerCase().includes('bank') ||
+          ['1010', '1011', '1012', '1013', '1014'].includes(code)) {
+        
         cashAndBank[code] = {
           accountCode: code,
           accountName: asset.name,
