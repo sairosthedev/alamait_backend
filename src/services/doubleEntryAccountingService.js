@@ -1004,21 +1004,34 @@ class DoubleEntryAccountingService {
                     let year = currentYear;
                     
                     const lowerPaymentMonth = payment.paymentMonth.toLowerCase();
-                    month = monthNames.findIndex(m => lowerPaymentMonth.includes(m));
-                    if (month === -1) {
-                        month = monthAbbr.findIndex(m => lowerPaymentMonth.includes(m));
+                    
+                    // 🆕 NEW: Handle "2025-09" format first (YYYY-MM)
+                    const yyyyMmMatch = payment.paymentMonth.match(/^(\d{4})-(\d{1,2})$/);
+                    if (yyyyMmMatch) {
+                        year = parseInt(yyyyMmMatch[1]);
+                        month = parseInt(yyyyMmMatch[2]) - 1; // Convert to 0-based index
+                        console.log(`📅 Parsed YYYY-MM format: Year ${year}, Month ${month + 1}`);
+                    } else {
+                        // 🆕 FALLBACK: Try month names and abbreviations
+                        month = monthNames.findIndex(m => lowerPaymentMonth.includes(m));
+                        if (month === -1) {
+                            month = monthAbbr.findIndex(m => lowerPaymentMonth.includes(m));
+                        }
+                        
+                        const yearMatch = payment.paymentMonth.match(/\b(20\d{2})\b/);
+                        if (yearMatch) {
+                            year = parseInt(yearMatch[1]);
+                        }
                     }
                     
-                    const yearMatch = payment.paymentMonth.match(/\b(20\d{2})\b/);
-                    if (yearMatch) {
-                        year = parseInt(yearMatch[1]);
-                    }
-                    
-                    if (month !== -1) {
+                    if (month !== -1 && month >= 0 && month <= 11) {
                         paymentMonthDate = new Date(year, month, 1);
                         const currentMonthDate = new Date(currentYear, currentMonth, 1);
                         
                         console.log(`📅 Payment Month Analysis:`);
+                        console.log(`   Payment Month: ${payment.paymentMonth}`);
+                        console.log(`   Parsed Month: ${month + 1} (${monthNames[month]})`);
+                        console.log(`   Parsed Year: ${year}`);
                         console.log(`   Payment Month Date: ${paymentMonthDate.toISOString()}`);
                         console.log(`   Current Month Date: ${currentMonthDate.toISOString()}`);
                         console.log(`   Payment Month > Current Month: ${paymentMonthDate > currentMonthDate}`);
@@ -1035,6 +1048,7 @@ class DoubleEntryAccountingService {
                         }
                     } else {
                         console.log(`⚠️ Could not identify month from: ${payment.paymentMonth}`);
+                        console.log(`   Month value: ${month}, Year value: ${year}`);
                     }
                 } catch (error) {
                     console.log(`⚠️ Error parsing payment month: ${payment.paymentMonth}`, error.message);

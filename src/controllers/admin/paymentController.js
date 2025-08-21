@@ -954,17 +954,25 @@ const createPayment = async (req, res) => {
                     let month = -1;
                     let year = currentYear;
                     
-                    // Check for month names or abbreviations
-                    const lowerPaymentMonth = payment.paymentMonth.toLowerCase();
-                    month = monthNames.findIndex(m => lowerPaymentMonth.includes(m));
-                    if (month === -1) {
-                        month = monthAbbr.findIndex(m => lowerPaymentMonth.includes(m));
-                    }
-                    
-                    // Check for year
-                    const yearMatch = payment.paymentMonth.match(/\b(20\d{2})\b/);
-                    if (yearMatch) {
-                        year = parseInt(yearMatch[1]);
+                    // 🆕 IMPROVED: Handle "2025-09" format first (YYYY-MM)
+                    const yyyyMmMatch = payment.paymentMonth.match(/^(\d{4})-(\d{1,2})$/);
+                    if (yyyyMmMatch) {
+                        year = parseInt(yyyyMmMatch[1]);
+                        month = parseInt(yyyyMmMatch[2]) - 1; // Convert to 0-based index
+                        console.log(`📅 Parsed YYYY-MM format: Year ${year}, Month ${month + 1}`);
+                    } else {
+                        // 🆕 FALLBACK: Try month names and abbreviations
+                        const lowerPaymentMonth = payment.paymentMonth.toLowerCase();
+                        month = monthNames.findIndex(m => lowerPaymentMonth.includes(m));
+                        if (month === -1) {
+                            month = monthAbbr.findIndex(m => lowerPaymentMonth.includes(m));
+                        }
+                        
+                        // Check for year
+                        const yearMatch = payment.paymentMonth.match(/\b(20\d{2})\b/);
+                        if (yearMatch) {
+                            year = parseInt(yearMatch[1]);
+                        }
                     }
                     
                     if (month !== -1) {
@@ -992,6 +1000,14 @@ const createPayment = async (req, res) => {
             // Determine if this is a debt settlement or current period payment
             const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
             const hasAccruedRentals = accruedRentals.length > 0;
+            
+            // 🆕 CRITICAL: Advance payments should NEVER be treated as debt settlement
+            // Even if student has outstanding debt, future month payments go to Deferred Income
+            if (isAdvancePayment && studentHasOutstandingDebt) {
+                console.log(`⚠️ Student has outstanding debt ($${debtor.currentBalance}) but payment is for future month`);
+                console.log(`   This payment will be routed to Deferred Income, NOT to settle existing debt`);
+                console.log(`   Outstanding debt should be settled with separate payments for past months`);
+            }
             
             // Create the main transaction
             const txn = await Transaction.create({
@@ -1061,9 +1077,10 @@ const createPayment = async (req, res) => {
                             break;
                             
                         case 'rent':
-                            // Rent handling depends on payment month logic
+                            // 🆕 CRITICAL: Rent handling depends on payment month logic
+                            // Advance payments take priority over debt settlement
                             if (isAdvancePayment && deferredIncomeAccount) {
-                                // Future rent - use Deferred Income
+                                // Future rent - use Deferred Income (highest priority)
                                 entries.push({
                                     transaction: txn._id,
                                     account: deferredIncomeAccount._id,
@@ -1073,7 +1090,7 @@ const createPayment = async (req, res) => {
                                     description: `Deferred rent income from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
                                 });
                                 console.log(`💰 ADVANCE RENT: $${amount.toFixed(2)} recorded as Deferred Income for ${payment.paymentMonth}`);
-                            } else if (isPastDuePayment || studentHasOutstandingDebt || hasAccruedRentals) {
+                            } else if (isPastDuePayment || (studentHasOutstandingDebt && !isAdvancePayment) || (hasAccruedRentals && !isAdvancePayment)) {
                                 // Past due rent - settle debt
                                 entries.push({
                                     transaction: txn._id,
