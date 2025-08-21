@@ -667,10 +667,34 @@ class EnhancedPaymentService {
             
             await transactionEntry.save();
             console.log(`✅ Transaction entry created: ${transactionEntry._id}`);
+            console.log(`📊 Entry details:`, {
+                transactionId: transactionEntry.transactionId,
+                totalDebit: transactionEntry.totalDebit,
+                totalCredit: transactionEntry.totalCredit,
+                entriesCount: transactionEntry.entries.length,
+                source: transactionEntry.source,
+                sourceId: transactionEntry.sourceId
+            });
+            console.log(`🔍 Individual entries:`, transactionEntry.entries.map(e => ({
+                account: e.accountName,
+                debit: e.debit,
+                credit: e.credit,
+                description: e.description
+            })));
             
             // Update transaction with entry reference
             transaction.entries = [transactionEntry._id];
             await transaction.save();
+            
+            // Also update the Transaction model's entries array to include the actual entry data
+            // This ensures the Transaction document shows the entries
+            await Transaction.findByIdAndUpdate(
+                transaction._id,
+                { 
+                    $push: { entries: transactionEntry._id },
+                    amount: payment.totalAmount // Set the transaction amount
+                }
+            );
             
             // Update debtor if exists
             if (debtor) {
