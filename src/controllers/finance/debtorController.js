@@ -413,7 +413,8 @@ exports.addPayment = async (req, res) => {
 			payments: [{ type: 'rent', amount }]
 		};
 
-		await DoubleEntryAccountingService.recordStudentRentPayment(pseudoPayment, req.user);
+		// Use the new advance balance handling method for better payment processing
+		await DoubleEntryAccountingService.recordStudentRentPaymentWithAdvanceHandling(pseudoPayment, req.user);
 
         await debtor.populate('user', 'firstName lastName email phone');
 
