@@ -2280,13 +2280,13 @@ class DoubleEntryAccountingService {
         }
 
         let account = await Account.findOne({ 
-            name: `Accounts Payable: ${vendor.name}`,
+            name: `Accounts Payable: ${vendor.businessName}`,
             type: 'Liability'
         });
         
         if (!account) {
             const code = await Account.getNextCode('Liability', 'Current Liabilities');
-            account = await this.getOrCreateAccount(code, `Accounts Payable: ${vendor.name}`, 'Liability');
+            account = await this.getOrCreateAccount(code, `Accounts Payable: ${vendor.businessName}`, 'Liability');
         }
         
         return account.code;

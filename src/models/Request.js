@@ -198,26 +198,52 @@ const requestItemSchema = new mongoose.Schema({
             action: {
                 type: String,
                 enum: ['selected', 'deselected'],
-                required: true
             },
             user: {
                 type: mongoose.Schema.Types.ObjectId,
-                ref: 'User',
-                required: true
-            },
-            userEmail: {
-                type: String,
-                required: true
+                ref: 'User'
             },
             timestamp: {
                 type: Date,
                 default: Date.now
             },
-            reason: {
-                type: String,
-                trim: true
-            }
-        }]
+            notes: String
+        }],
+        // Vendor integration fields
+        vendorId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Vendor'
+        },
+        vendorCode: {
+            type: String,
+            trim: true
+        },
+        vendorName: {
+            type: String,
+            trim: true
+        },
+        vendorType: {
+            type: String,
+            trim: true
+        },
+        vendorContact: {
+            firstName: String,
+            lastName: String,
+            email: String,
+            phone: String
+        },
+        expenseCategory: {
+            type: String,
+            trim: true
+        },
+        paymentMethod: {
+            type: String,
+            trim: true
+        },
+        hasBankDetails: {
+            type: Boolean,
+            default: false
+        }
     }]
 });
 
