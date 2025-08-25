@@ -51,7 +51,7 @@ const transactionEntrySchema = new mongoose.Schema({
   // Source
   source: {
     type: String,
-    enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment', 'expense_payment', 'rental_accrual', 'rental_accrual_reversal', 'expense_accrual', 'expense_accrual_reversal'],
+    enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment', 'expense_payment', 'rental_accrual', 'rental_accrual_reversal', 'expense_accrual', 'expense_accrual_reversal', 'petty_cash_payment', 'petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'],
     required: true
   },
   sourceId: {
@@ -60,7 +60,7 @@ const transactionEntrySchema = new mongoose.Schema({
   },
   sourceModel: {
     type: String,
-    enum: ['Payment', 'Invoice', 'Request', 'Vendor', 'Expense', 'Lease', 'TransactionEntry'],
+    enum: ['Payment', 'Invoice', 'Request', 'Vendor', 'Expense', 'Lease', 'TransactionEntry', 'User', 'PettyCash'],
     required: true
   },
   

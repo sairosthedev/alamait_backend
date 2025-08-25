@@ -163,16 +163,44 @@ exports.createStudent = async (req, res) => {
 
         // Automatically create debtor account for the new student
         try {
-            await createDebtorForStudent(student, {
+            // Get residence details for proper debtor creation
+            const residence = await Residence.findById(residenceId);
+            if (!residence) {
+                throw new Error('Residence not found for debtor creation');
+            }
+
+            // Find a default room to get pricing information
+            let defaultRoom = null;
+            let roomPrice = 0;
+            if (residence.rooms && residence.rooms.length > 0) {
+                defaultRoom = residence.rooms[0];
+                roomPrice = defaultRoom.price || 150; // Default price if not set
+            }
+
+            // Set default lease dates (6 months from now)
+            const startDate = new Date();
+            const endDate = new Date();
+            endDate.setMonth(endDate.getMonth() + 6);
+
+            const debtorOptions = {
                 residenceId: residenceId,
-                createdBy: req.user._id
-            });
+                roomNumber: defaultRoom ? defaultRoom.roomNumber : 'TBD',
+                createdBy: req.user._id,
+                startDate: startDate,
+                endDate: endDate,
+                roomPrice: roomPrice,
+                // Note: No application context since this is direct student creation
+                notes: 'Created directly by admin - no application context'
+            };
+
+            await createDebtorForStudent(student, debtorOptions);
             console.log(`✅ Debtor account created for student ${student.email}`);
         } catch (debtorError) {
             console.error('❌ Failed to create debtor account:', debtorError);
             // Continue with student creation even if debtor creation fails
             // But log this for monitoring
             console.log('⚠️ Student created but debtor creation failed. Manual intervention may be needed.');
+            console.log('   Error details:', debtorError.message);
         }
 
         await createAuditLog({
@@ -915,6 +943,54 @@ exports.manualAddStudent = async (req, res) => {
             return res.status(400).json({ error: 'Room is at full capacity' });
         }
 
+        // Validate all required variables are defined
+        console.log('🔍 Validating required variables...');
+        console.log(`   residenceId: ${residenceId} (${typeof residenceId})`);
+        console.log(`   roomNumber: ${roomNumber} (${typeof roomNumber})`);
+        console.log(`   startDate: ${startDate} (${typeof startDate})`);
+        console.log(`   endDate: ${endDate} (${typeof endDate})`);
+        console.log(`   monthlyRent: ${monthlyRent} (${typeof monthlyRent})`);
+        console.log(`   req.user: ${req.user ? 'exists' : 'undefined'}`);
+        console.log(`   req.user._id: ${req.user?._id || 'undefined'}`);
+        
+        if (!residenceId || !roomNumber || !startDate || !endDate || !monthlyRent || !req.user?._id) {
+            const missingVars = [];
+            if (!residenceId) missingVars.push('residenceId');
+            if (!roomNumber) missingVars.push('roomNumber');
+            if (!startDate) missingVars.push('startDate');
+            if (!endDate) missingVars.push('endDate');
+            if (!monthlyRent) missingVars.push('monthlyRent');
+            if (!req.user?._id) missingVars.push('req.user._id');
+            
+            return res.status(400).json({ 
+                error: 'Missing required variables',
+                details: `Missing: ${missingVars.join(', ')}`
+            });
+        }
+        
+        // Parse and validate dates
+        let parsedStartDate, parsedEndDate;
+        try {
+            parsedStartDate = new Date(startDate);
+            parsedEndDate = new Date(endDate);
+            
+            if (isNaN(parsedStartDate.getTime())) {
+                return res.status(400).json({ error: 'Invalid start date format' });
+            }
+            if (isNaN(parsedEndDate.getTime())) {
+                return res.status(400).json({ error: 'Invalid end date format' });
+            }
+            if (parsedEndDate <= parsedStartDate) {
+                return res.status(400).json({ error: 'End date must be after start date' });
+            }
+        } catch (dateError) {
+            return res.status(400).json({ error: 'Date parsing error', details: dateError.message });
+        }
+        
+        console.log('✅ All variables validated successfully');
+        console.log(`   Parsed start date: ${parsedStartDate}`);
+        console.log(`   Parsed end date: ${parsedEndDate}`);
+
         // Generate temporary password
         const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
 
@@ -946,15 +1022,15 @@ exports.manualAddStudent = async (req, res) => {
             requestType: 'new',
             status: 'approved', // Directly approve the application
             paymentStatus: 'paid', // Mark as paid since admin is adding manually
-            startDate,
-            endDate,
+            startDate: parsedStartDate,
+            endDate: parsedEndDate,
             preferredRoom: roomNumber,
             allocatedRoom: roomNumber,
             residence: residenceId,
             applicationCode: applicationCode, // Set the generated application code
             applicationDate: new Date(),
             actionDate: new Date(),
-            actionBy: req.user.id
+            actionBy: req.user._id // Use _id consistently
         });
 
         await application.save();
@@ -964,23 +1040,125 @@ exports.manualAddStudent = async (req, res) => {
         await student.save();
 
         // Automatically create debtor account for the new student with application link
+        let debtor = null;
         try {
-            await createDebtorForStudent(student, {
+            console.log(`🏗️  Creating debtor account for manually added student: ${student.email}`);
+            console.log(`   Debug - residenceId: ${residenceId} (type: ${typeof residenceId})`);
+            console.log(`   Debug - req.user: ${req.user ? 'exists' : 'undefined'}`);
+            console.log(`   Debug - req.user._id: ${req.user?._id || 'undefined'}`);
+            
+            // Validate required parameters before calling service
+            if (!residenceId) {
+                throw new Error('residenceId is required but was not provided');
+            }
+            if (!roomNumber) {
+                throw new Error('roomNumber is required but was not provided');
+            }
+            if (!req.user?._id) {
+                throw new Error('req.user._id is required but was not provided - authentication issue');
+            }
+            
+            debtor = await createDebtorForStudent(student, {
                 residenceId: residenceId,
                 roomNumber: roomNumber,
                 createdBy: req.user._id,
                 application: application._id, // Link to the application
                 applicationCode: application.applicationCode, // Link application code
-                startDate: startDate,
-                endDate: endDate,
+                startDate: parsedStartDate,
+                endDate: parsedEndDate,
                 roomPrice: monthlyRent
             });
-            console.log(`✅ Debtor account created for manually added student ${student.email}`);
-            console.log(`   Application Code: ${application.applicationCode}`);
+            
+            if (debtor) {
+                console.log(`✅ Debtor account created for manually added student ${student.email}`);
+                console.log(`   Application Code: ${application.applicationCode}`);
+                console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                
+                // Link the debtor back to the application
+                application.debtor = debtor._id;
+                await application.save();
+                console.log(`🔗 Linked debtor ${debtor._id} to application ${application._id}`);
+                
+                // 🆕 TRIGGER RENTAL ACCRUAL SERVICE - Lease starts now!
+                try {
+                    console.log(`🏠 Triggering rental accrual service for lease start...`);
+                    const RentalAccrualService = require('../../services/rentalAccrualService');
+                    
+                    const accrualResult = await RentalAccrualService.processLeaseStart(application);
+                    
+                    if (accrualResult && accrualResult.success) {
+                        console.log(`✅ Rental accrual service completed successfully`);
+                        console.log(`   - Initial accounting entries created`);
+                        console.log(`   - Prorated rent, admin fees, and deposits recorded`);
+                        console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
+                    } else {
+                        console.log(`⚠️  Rental accrual service completed with warnings:`, accrualResult?.error || 'Unknown issue');
+                    }
+                } catch (accrualError) {
+                    console.error(`❌ Error in rental accrual service:`, accrualError);
+                    // Don't fail the student creation if accrual fails
+                    console.log(`ℹ️  Student created successfully, but rental accrual failed. Manual intervention may be needed.`);
+                }
+            } else {
+                console.log(`⚠️  Debtor creation returned null - this indicates a problem`);
+                console.log(`   Student: ${student.email}`);
+                console.log(`   Application: ${application.applicationCode}`);
+                console.log(`   Residence: ${residenceId}`);
+                console.log(`   Room: ${roomNumber}`);
+                console.log(`   Start Date: ${parsedStartDate}`);
+                console.log(`   End Date: ${parsedEndDate}`);
+                console.log(`   Room Price: ${monthlyRent}`);
+                
+                // CRITICAL: Fail the request if debtor creation fails
+                throw new Error('Debtor creation failed - returned null. This is required for student functionality.');
+            }
         } catch (debtorError) {
-            console.error('❌ Failed to create debtor account:', debtorError);
-            // Continue with student creation even if debtor creation fails
-            console.log('⚠️ Student manually added but debtor creation failed. Manual intervention may be needed.');
+            console.error(`❌ Failed to create debtor account:`, debtorError);
+            console.error(`   Error details:`, debtorError.message);
+            console.error(`   Stack trace:`, debtorError.stack);
+            console.error(`   Input data:`, {
+                student: student.email,
+                application: application.applicationCode,
+                residenceId,
+                roomNumber,
+                startDate: parsedStartDate,
+                endDate: parsedEndDate,
+                monthlyRent
+            });
+            
+            // CRITICAL: Clean up created data and fail the request
+            console.log('🧹 Cleaning up created data due to debtor creation failure...');
+            
+            try {
+                // Remove the application
+                await Application.deleteOne({ _id: application._id });
+                console.log('✅ Application cleaned up');
+                
+                // Remove the student
+                await User.deleteOne({ _id: student._id });
+                console.log('✅ Student cleaned up');
+                
+                // Reset room occupancy
+                if (room) {
+                    room.currentOccupancy = Math.max(0, room.currentOccupancy - 1);
+                    if (room.currentOccupancy === 0) {
+                        room.status = 'available';
+                    } else if (room.currentOccupancy < room.capacity) {
+                        room.status = 'reserved';
+                    }
+                    await residence.save();
+                    console.log('✅ Room occupancy reset');
+                }
+            } catch (cleanupError) {
+                console.error('❌ Error during cleanup:', cleanupError.message);
+            }
+            
+            // Return error response
+            return res.status(500).json({ 
+                error: 'Failed to create student - debtor account creation failed',
+                details: debtorError.message,
+                message: 'Student creation failed because debtor account could not be created. This is required for proper functionality.'
+            });
         }
 
         // Update room occupancy and status (following existing logic)
@@ -1138,6 +1316,18 @@ exports.manualAddStudent = async (req, res) => {
                 startDate,
                 endDate,
                 applicationCode: application.applicationCode
+            },
+            debtor: debtor ? {
+                id: debtor._id,
+                debtorCode: debtor.debtorCode,
+                accountCode: debtor.accountCode,
+                status: debtor.status,
+                currentBalance: debtor.currentBalance,
+                totalOwed: debtor.totalOwed,
+                created: true
+            } : {
+                created: false,
+                error: 'Debtor creation failed - check server logs for details'
             },
             loginDetails: {
                 email,

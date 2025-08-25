@@ -75,6 +75,12 @@ router.get('/comprehensive-monthly-cash-flow', FinancialReportsController.genera
 router.get('/balance-sheet', FinancialReportsController.generateBalanceSheet);
 
 /**
+ * Balance Sheet Accounts (from Chart of Accounts)
+ * GET /api/financial-reports/balance-sheet-accounts?includeInactive=false
+ */
+router.get('/balance-sheet-accounts', FinancialReportsController.getBalanceSheetAccounts);
+
+/**
  * Cash Flow Statement
  * GET /api/financial-reports/cash-flow?period=2025&basis=cash
  */

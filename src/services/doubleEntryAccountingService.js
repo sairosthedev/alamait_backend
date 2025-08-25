@@ -208,11 +208,26 @@ class DoubleEntryAccountingService {
                 return { transaction: null, transactionEntry: existingTransaction };
             }
 
+            // ✅ NEW: Check if this expense was previously accrued
+            let wasAccrued = false;
+            let originalExpense = null;
+            
+            if (expenseId) {
+                const Expense = require('../models/finance/Expense');
+                originalExpense = await Expense.findById(expenseId);
+                if (originalExpense && originalExpense.transactionId) {
+                    wasAccrued = true;
+                    console.log(`🔍 Found accrued expense: ${expenseId} with transaction: ${originalExpense.transactionId}`);
+                }
+            }
+
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
                 transactionId,
                 date: new Date(),
-                description: `Petty cash expense: ${description}`,
+                description: wasAccrued ? 
+                    `Petty cash payment: ${description}` : 
+                    `Petty cash expense: ${description}`,
                 type: 'other', // Changed from 'expense' to 'other' since 'expense' is not in enum
                 reference: `PETTY-EXP-${userId}`,
                 residence: residence, // Always use validated residence
@@ -225,42 +240,82 @@ class DoubleEntryAccountingService {
             // Create double-entry entries
             const entries = [];
 
-            // Debit: Expense Account
-            const expenseAccountCode = await this.getExpenseAccountByCategory(expenseCategory);
-            console.log(`🔍 Creating expense entry with category: ${expenseCategory}, account code: ${expenseAccountCode}`);
-            
-            entries.push({
-                accountCode: expenseAccountCode,
-                accountName: `${expenseCategory} Expense`,
-                accountType: 'Expense',
-                debit: amount,
-                credit: 0,
-                description: `Petty cash expense: ${description} - ${residenceDoc.name}`,
-                residence: residence // Include residence in entry for better tracking
-            });
+            if (wasAccrued) {
+                // ✅ SETTLE ACCRUED LIABILITY: Dr. Accounts Payable, Cr. Petty Cash
+                console.log(`💰 Settling accrued liability for expense: ${expenseId}`);
+                
+                // Get Accounts Payable account
+                const apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                if (!apAccount) {
+                    throw new Error('Accounts Payable account not found for settling accrued liability');
+                }
+                
+                // Debit: Accounts Payable (reduce liability)
+                entries.push({
+                    accountCode: apAccount.code,
+                    accountName: apAccount.name,
+                    accountType: apAccount.type,
+                    debit: amount,
+                    credit: 0,
+                    description: `Petty cash payment: ${description} - settling accrued liability - ${residenceDoc.name}`,
+                    residence: residence
+                });
 
-            // Credit: User's Specific Petty Cash Account (Asset)
-            console.log(`🔍 Creating credit entry with petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
-            
-            entries.push({
-                accountCode: pettyCashAccount.code,
-                accountName: pettyCashAccount.name,
-                accountType: pettyCashAccount.type,
-                debit: 0,
-                credit: amount,
-                description: `${user.firstName} ${user.lastName} petty cash used for ${description} - ${residenceDoc.name}`,
-                residence: residence // Include residence in entry for better tracking
-            });
+                // Credit: User's Specific Petty Cash Account (Asset)
+                entries.push({
+                    accountCode: pettyCashAccount.code,
+                    accountName: pettyCashAccount.name,
+                    accountType: pettyCashAccount.type,
+                    debit: 0,
+                    credit: amount,
+                    description: `${user.firstName} ${user.lastName} petty cash used to settle ${description} - ${residenceDoc.name}`,
+                    residence: residence
+                });
+                
+                console.log(`✅ Created liability settlement entries: Dr. AP ${amount}, Cr. Petty Cash ${amount}`);
+            } else {
+                // ✅ NEW EXPENSE: Dr. Expense Account, Cr. Petty Cash
+                console.log(`💰 Creating new expense entry for petty cash payment`);
+                
+                // Debit: Expense Account
+                const expenseAccountCode = await this.getExpenseAccountByCategory(expenseCategory);
+                console.log(`🔍 Creating expense entry with category: ${expenseCategory}, account code: ${expenseAccountCode}`);
+                
+                entries.push({
+                    accountCode: expenseAccountCode,
+                    accountName: `${expenseCategory} Expense`,
+                    accountType: 'Expense',
+                    debit: amount,
+                    credit: 0,
+                    description: `Petty cash expense: ${description} - ${residenceDoc.name}`,
+                    residence: residence // Include residence in entry for better tracking
+                });
+
+                // Credit: User's Specific Petty Cash Account (Asset)
+                console.log(`🔍 Creating credit entry with petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
+                
+                entries.push({
+                    accountCode: pettyCashAccount.code,
+                    accountName: pettyCashAccount.name,
+                    accountType: pettyCashAccount.type,
+                    debit: 0,
+                    credit: amount,
+                    description: `${user.firstName} ${user.lastName} petty cash used for ${description} - ${residenceDoc.name}`,
+                    residence: residence // Include residence in entry for better tracking
+                });
+            }
 
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
                 date: new Date(),
-                description: `Petty cash expense: ${description}`,
+                description: wasAccrued ? 
+                    `Petty cash payment: ${description}` : 
+                    `Petty cash expense: ${description}`,
                 reference: `PETTY-EXP-${userId}`,
                 entries,
                 totalDebit: amount,
                 totalCredit: amount,
-                source: 'manual',
+                source: wasAccrued ? 'petty_cash_payment' : 'manual',
                 sourceId: userId,
                 sourceModel: 'Request',
                 createdBy: approvedBy.email,
@@ -273,12 +328,14 @@ class DoubleEntryAccountingService {
                     expenseCategory,
                     expenseDescription: description,
                     expenseAmount: amount,
-                    transactionType: 'petty_cash_expense',
+                    transactionType: wasAccrued ? 'petty_cash_payment' : 'petty_cash_expense',
                     residenceId: residence,
                     residenceName: residenceDoc.name,
                     expenseId: expenseId, // Link to original expense
                     paymentMethod: 'Petty Cash',
-                    paymentReference: `PC-${Date.now()}`
+                    paymentReference: `PC-${Date.now()}`,
+                    wasAccrued: wasAccrued, // Track if this was settling an accrued liability
+                    originalTransactionId: wasAccrued ? originalExpense.transactionId : null
                 }
             });
 
@@ -287,11 +344,11 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            console.log(`✅ Petty cash expense recorded successfully for ${user.firstName} ${user.lastName} (${user.role}) at residence: ${residenceDoc.name}`);
+            console.log(`✅ Petty cash ${wasAccrued ? 'payment' : 'expense'} recorded successfully for ${user.firstName} ${user.lastName} (${user.role}) at residence: ${residenceDoc.name}`);
             if (expenseId) {
-                console.log(`🔗 Linked to expense: ${expenseId}`);
+                console.log(`🔗 Linked to expense: ${expenseId}${wasAccrued ? ' (settling accrued liability)' : ''}`);
             }
-            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc, expenseId };
+            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc, expenseId, wasAccrued };
 
         } catch (error) {
             console.error('❌ Error recording petty cash expense:', error);
@@ -495,14 +552,18 @@ class DoubleEntryAccountingService {
     static async recordMaintenanceApproval(request, user) {
         try {
             console.log('🏗️ Recording maintenance approval (accrual basis)');
-            
-            // Check if transaction already exists to prevent duplicates
-            const existingTransaction = await TransactionEntry.findOne({
+
+            // Check if transaction already exists to prevent duplicates (per item via metadata)
+            const duplicateQuery = {
                 source: 'expense_accrual',
                 sourceId: request._id,
                 'metadata.requestType': 'maintenance',
                 createdAt: { $gte: new Date(Date.now() - 60000) } // Within last minute
-            });
+            };
+            if (request && request.itemIndex !== undefined) {
+                duplicateQuery['metadata.itemIndex'] = request.itemIndex;
+            }
+            const existingTransaction = await TransactionEntry.findOne(duplicateQuery);
 
             if (existingTransaction) {
                 console.log('⚠️ Duplicate maintenance approval detected, skipping');
@@ -636,7 +697,8 @@ class DoubleEntryAccountingService {
                 metadata: {
                     requestType: 'maintenance',
                     vendorName: request.vendorName,
-                    itemCount: request.items.length
+                    itemCount: request.items.length,
+                    ...(request && request.itemIndex !== undefined ? { itemIndex: request.itemIndex } : {})
                 }
             });
 
@@ -646,26 +708,31 @@ class DoubleEntryAccountingService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
 
-            // Create expense record for tracking
-            const { generateUniqueId } = require('../utils/idGenerator');
-            const expense = new Expense({
-                expenseId: await generateUniqueId('EXP'),
-                requestId: request._id,
-                residence: request.residence._id || request.residence,
-                category: 'Maintenance',
-                amount: totalAmount,
-                description: `Maintenance: ${request.title}`,
-                expenseDate: new Date(),
-                paymentStatus: 'Pending',
-                period: 'monthly',
-                createdBy: user._id,
-                transactionId: transaction._id
-            });
+            // Create expense record for tracking unless explicitly skipped by caller
+            let expense = null;
+            if (!request || !request.skipExpenseCreation) {
+                const { generateUniqueId } = require('../utils/idGenerator');
+                expense = new Expense({
+                    expenseId: await generateUniqueId('EXP'),
+                    requestId: request._id,
+                    residence: request.residence._id || request.residence,
+                    category: 'Maintenance',
+                    amount: totalAmount,
+                    description: `Maintenance: ${request.title}`,
+                    expenseDate: new Date(),
+                    paymentStatus: 'Pending',
+                    period: 'monthly',
+                    createdBy: user._id,
+                    transactionId: transaction._id
+                });
 
-            await expense.save();
+                await expense.save();
+                console.log(`   - Expense created: ${expense.expenseId}`);
+            } else {
+                console.log('ℹ️ Skipping internal expense creation (handled by caller)');
+            }
 
             console.log('✅ Maintenance approval recorded (accrual basis)');
-            console.log(`   - Expense created: ${expense.expenseId}`);
             console.log(`   - Transaction: ${transaction.transactionId}`);
             console.log(`   - Total amount: $${totalAmount}`);
             
@@ -916,7 +983,7 @@ class DoubleEntryAccountingService {
                 depositAmount = parsedPayments.find(p => p.type === 'deposit')?.amount || 0;
             }
 
-            // 🆕 NEW: Analyze payment month vs current month to determine payment type
+            // 🆕 IMPROVED: Analyze payment month vs current month to determine payment type
             const currentDate = new Date();
             const currentMonth = currentDate.getMonth(); // 0-11
             const currentYear = currentDate.getFullYear();
@@ -937,31 +1004,57 @@ class DoubleEntryAccountingService {
                     let year = currentYear;
                     
                     const lowerPaymentMonth = payment.paymentMonth.toLowerCase();
-                    month = monthNames.findIndex(m => lowerPaymentMonth.includes(m));
-                    if (month === -1) {
-                        month = monthAbbr.findIndex(m => lowerPaymentMonth.includes(m));
+                    
+                    // 🆕 NEW: Handle "2025-09" format first (YYYY-MM)
+                    const yyyyMmMatch = payment.paymentMonth.match(/^(\d{4})-(\d{1,2})$/);
+                    if (yyyyMmMatch) {
+                        year = parseInt(yyyyMmMatch[1]);
+                        month = parseInt(yyyyMmMatch[2]) - 1; // Convert to 0-based index
+                        console.log(`📅 Parsed YYYY-MM format: Year ${year}, Month ${month + 1}`);
+                    } else {
+                        // 🆕 FALLBACK: Try month names and abbreviations
+                        month = monthNames.findIndex(m => lowerPaymentMonth.includes(m));
+                        if (month === -1) {
+                            month = monthAbbr.findIndex(m => lowerPaymentMonth.includes(m));
+                        }
+                        
+                        const yearMatch = payment.paymentMonth.match(/\b(20\d{2})\b/);
+                        if (yearMatch) {
+                            year = parseInt(yearMatch[1]);
+                        }
                     }
                     
-                    const yearMatch = payment.paymentMonth.match(/\b(20\d{2})\b/);
-                    if (yearMatch) {
-                        year = parseInt(yearMatch[1]);
-                    }
-                    
-                    if (month !== -1) {
+                    if (month !== -1 && month >= 0 && month <= 11) {
                         paymentMonthDate = new Date(year, month, 1);
                         const currentMonthDate = new Date(currentYear, currentMonth, 1);
                         
+                        console.log(`📅 Payment Month Analysis:`);
+                        console.log(`   Payment Month: ${payment.paymentMonth}`);
+                        console.log(`   Parsed Month: ${month + 1} (${monthNames[month]})`);
+                        console.log(`   Parsed Year: ${year}`);
+                        console.log(`   Payment Month Date: ${paymentMonthDate.toISOString()}`);
+                        console.log(`   Current Month Date: ${currentMonthDate.toISOString()}`);
+                        console.log(`   Payment Month > Current Month: ${paymentMonthDate > currentMonthDate}`);
+                        
                         if (paymentMonthDate > currentMonthDate) {
                             isAdvancePayment = true;
+                            console.log(`✅ Identified as ADVANCE PAYMENT for future month`);
                         } else if (paymentMonthDate.getTime() === currentMonthDate.getTime()) {
                             isCurrentPeriodPayment = true;
+                            console.log(`✅ Identified as CURRENT PERIOD PAYMENT`);
                         } else {
                             isPastDuePayment = true;
+                            console.log(`✅ Identified as PAST DUE PAYMENT`);
                         }
+                    } else {
+                        console.log(`⚠️ Could not identify month from: ${payment.paymentMonth}`);
+                        console.log(`   Month value: ${month}, Year value: ${year}`);
                     }
                 } catch (error) {
-                    console.log(`⚠️ Could not parse payment month: ${payment.paymentMonth}`);
+                    console.log(`⚠️ Error parsing payment month: ${payment.paymentMonth}`, error.message);
                 }
+            } else {
+                console.log(`⚠️ No payment month specified, will use fallback logic`);
             }
 
             // Check if student has outstanding debt
@@ -969,6 +1062,14 @@ class DoubleEntryAccountingService {
             const debtor = await Debtor.findOne({ user: payment.student });
             const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
             const hasAccruedRentals = debtor && debtor.currentBalance > 0;
+            
+            // 🆕 CRITICAL: Advance payments should NEVER be treated as debt settlement
+            // Even if student has outstanding debt, future month payments go to Deferred Income
+            if (isAdvancePayment && studentHasOutstandingDebt) {
+                console.log(`⚠️ Student has outstanding debt ($${debtor.currentBalance}) but payment is for future month`);
+                console.log(`   This payment will be routed to Deferred Income, NOT to settle existing debt`);
+                console.log(`   Outstanding debt should be settled with separate payments for past months`);
+            }
 
             console.log(`   Payment Analysis:`);
             console.log(`     Current Month: ${currentMonth + 1}/${currentYear}`);
@@ -1233,13 +1334,25 @@ class DoubleEntryAccountingService {
                     }
                 }
                 
-                // Set transaction type based on processed items
+                // 🆕 FIXED: Set transaction type based on payment analysis (not debt status)
                 if (isAdvancePayment) {
                     transaction.type = 'advance_payment';
-                } else if (isPastDuePayment || studentHasOutstandingDebt) {
+                    console.log(`✅ Transaction type set to: advance_payment`);
+                } else if (isPastDuePayment) {
                     transaction.type = 'debt_settlement';
-                } else {
+                    console.log(`✅ Transaction type set to: debt_settlement`);
+                } else if (isCurrentPeriodPayment) {
                     transaction.type = 'current_payment';
+                    console.log(`✅ Transaction type set to: current_payment`);
+                } else {
+                    // 🆕 FALLBACK: Determine type based on payment month analysis
+                    if (paymentMonthDate && paymentMonthDate > new Date(currentYear, currentMonth, 1)) {
+                        transaction.type = 'advance_payment';
+                        console.log(`✅ Fallback: Transaction type set to: advance_payment (future month detected)`);
+                    } else {
+                        transaction.type = 'current_payment';
+                        console.log(`✅ Fallback: Transaction type set to: current_payment`);
+                    }
                 }
                 await transaction.save();
                 
@@ -1247,8 +1360,10 @@ class DoubleEntryAccountingService {
                 // 🚨 FALLBACK: Old logic for payments without breakdown
                 console.log('⚠️ No payment breakdown found, using fallback logic');
                 
+                // 🆕 FIXED: Prioritize advance payment logic over debt settlement
                 if (isAdvancePayment && deferredIncomeAccount) {
-                    // Advance payment goes to Deferred Income
+                    // Advance payment goes to Deferred Income (highest priority)
+                    console.log(`💰 Processing advance payment for ${payment.paymentMonth} - routing to Deferred Income`);
                     entries.push({
                         accountCode: receivingAccount,
                         accountName: this.getPaymentAccountName(payment.method),
@@ -1266,8 +1381,9 @@ class DoubleEntryAccountingService {
                         credit: payment.totalAmount,
                         description: `Deferred rent income from ${studentName} for ${payment.paymentMonth} (${payment.paymentId})`
                     });
-                } else if (studentHasOutstandingDebt || hasAccruedRentals) {
-                    // Payment settles existing debt
+                } else if (isPastDuePayment || (studentHasOutstandingDebt && !isAdvancePayment)) {
+                    // Payment settles existing debt (only if NOT an advance payment)
+                    console.log(`💰 Processing debt settlement payment - routing to Accounts Receivable`);
                     entries.push({
                         accountCode: receivingAccount,
                         accountName: this.getPaymentAccountName(payment.method),
@@ -1285,8 +1401,9 @@ class DoubleEntryAccountingService {
                         credit: payment.totalAmount,
                         description: `Settlement of outstanding debt from ${studentName}`
                     });
-                } else {
+                } else if (isCurrentPeriodPayment) {
                     // Current period payment
+                    console.log(`💰 Processing current period payment - routing to Rent Income`);
                     entries.push({
                         accountCode: receivingAccount,
                         accountName: this.getPaymentAccountName(payment.method),
@@ -1304,6 +1421,47 @@ class DoubleEntryAccountingService {
                         credit: payment.totalAmount,
                         description: `Rent income from ${studentName} for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
                     });
+                } else {
+                    // 🆕 FALLBACK: Default to advance payment if month is in the future
+                    console.log(`💰 No specific payment type determined, defaulting to advance payment routing`);
+                    if (deferredIncomeAccount) {
+                        entries.push({
+                            accountCode: receivingAccount,
+                            accountName: this.getPaymentAccountName(payment.method),
+                            accountType: 'Asset',
+                            debit: payment.totalAmount,
+                            credit: 0,
+                            description: `Advance payment received from ${studentName} (${payment.paymentId})`
+                        });
+                        
+                        entries.push({
+                            accountCode: deferredIncomeAccount,
+                            accountName: 'Deferred Income - Tenant Advances',
+                            accountType: 'Liability',
+                            debit: 0,
+                            credit: payment.totalAmount,
+                            description: `Deferred rent income from ${studentName} for ${payment.paymentMonth || 'future period'} (${payment.paymentId})`
+                        });
+                    } else {
+                        // Last resort: route to rent income
+                        entries.push({
+                            accountCode: receivingAccount,
+                            accountName: this.getPaymentAccountName(payment.method),
+                            accountType: 'Asset',
+                            debit: payment.totalAmount,
+                            credit: 0,
+                            description: `Rent payment via ${payment.method}`
+                        });
+                        
+                        entries.push({
+                            accountCode: rentAccount,
+                            accountName: 'Rent Income',
+                            accountType: 'Income',
+                            debit: 0,
+                            credit: payment.totalAmount,
+                            description: `Rent income from ${studentName} (${payment.paymentId})`
+                        });
+                    }
                 }
             }
 
@@ -1397,6 +1555,403 @@ class DoubleEntryAccountingService {
             console.error('   Error details:', error.message);
             console.error('   Stack trace:', error.stack);
             throw error;
+        }
+    }
+
+    /**
+     * NEW: Record student rent payment with proper advance balance handling
+     * This method implements the simple, logical approach for multiple advance payments:
+     * 1. Check existing advance balance
+     * 2. Calculate what's actually owed for the target month
+     * 3. Split payment between settling the target month and creating new advance for next month
+     * 
+     * Handles scenarios like:
+     * - August 1st: Pay ZWL 110.32 advance for September
+     * - August 25th: Pay ZWL 180 advance for September
+     * Result: September fully paid, ZWL 110.32 advance for October
+     */
+    static async recordStudentRentPaymentWithAdvanceHandling(payment, user) {
+        try {
+            console.log('💰 Recording student rent payment with advance balance handling');
+            console.log(`   Payment ID: ${payment.paymentId}`);
+            console.log(`   Student ID: ${payment.student}`);
+            console.log(`   Amount: $${payment.totalAmount}`);
+            console.log(`   Method: ${payment.method}`);
+            console.log(`   Date: ${payment.date}`);
+            console.log(`   Payment Month: ${payment.paymentMonth}`);
+            
+            // 🚨 DUPLICATE TRANSACTION PREVENTION
+            const existingTransaction = await TransactionEntry.findOne({
+                source: 'payment',
+                sourceId: payment._id
+            });
+
+            if (existingTransaction) {
+                console.log('⚠️ Duplicate student payment transaction detected, skipping');
+                return { 
+                    transaction: null, 
+                    transactionEntry: existingTransaction,
+                    message: 'Transaction already exists for this payment'
+                };
+            }
+
+            // Get student details
+            let studentName = 'Student';
+            try {
+                const User = require('../models/User');
+                const student = await User.findById(payment.student).select('firstName lastName');
+                if (student) {
+                    studentName = `${student.firstName} ${student.lastName}`;
+                }
+            } catch (error) {
+                console.log('⚠️ Could not fetch student details, using default name');
+            }
+
+            // Get debtor information to check existing advance balance
+            const Debtor = require('../models/Debtor');
+            const debtor = await Debtor.findOne({ user: payment.student });
+            
+            if (!debtor) {
+                throw new Error(`No debtor record found for student ${payment.student}`);
+            }
+
+            // Calculate existing advance balance (credit balance means they've overpaid)
+            const existingAdvanceBalance = Math.max(0, -debtor.currentBalance || 0);
+            console.log(`   Existing advance balance: $${existingAdvanceBalance}`);
+
+            // Parse payment breakdown
+            let rentAmount = 0, adminAmount = 0, depositAmount = 0;
+            let parsedPayments = payment.payments;
+            
+            if (parsedPayments) {
+                if (typeof parsedPayments === 'string') {
+                    parsedPayments = JSON.parse(parsedPayments);
+                }
+                rentAmount = parsedPayments.find(p => p.type === 'rent')?.amount || 0;
+                adminAmount = parsedPayments.find(p => p.type === 'admin')?.amount || 0;
+                depositAmount = parsedPayments.find(p => p.type === 'deposit')?.amount || 0;
+            }
+
+            // If no rent amount in breakdown, assume entire payment is for rent
+            if (rentAmount === 0) {
+                rentAmount = payment.totalAmount;
+            }
+
+            console.log(`   Payment breakdown: Rent $${rentAmount}, Admin $${adminAmount}, Deposit $${depositAmount}`);
+            console.log(`   Total rent amount to process: $${rentAmount}`);
+
+            // 🎯 THE KEY LOGIC: Calculate what's actually owed vs what becomes new advance
+            const monthlyRentExpected = Number(
+                (debtor.financialBreakdown?.monthlyRent) ||
+                (debtor.billingPeriod?.amount?.monthly) ||
+                debtor.roomPrice ||
+                0
+            ) || 0;
+
+            console.log(`   Expected monthly rent: $${monthlyRentExpected}`);
+
+            // Check if this payment is for a future month (advance payment)
+            const isAdvancePayment = payment.paymentMonth && 
+                payment.paymentMonth.toLowerCase() !== 'current' && 
+                payment.paymentMonth.toLowerCase() !== 'now';
+
+            // Declare variables that will be used throughout the method
+            let amountForCurrentMonth = 0;
+            let amountForNewAdvance = 0;
+            let remainingRentOwed = 0;
+
+            if (isAdvancePayment) {
+                console.log(`   📅 This is an advance payment for: ${payment.paymentMonth}`);
+                
+                // For advance payments, we need to check if we're completing a month or creating excess
+                const targetMonthAdvances = await this.getAdvanceBalanceForMonth(debtor.user, payment.paymentMonth);
+                const totalAdvancesForTargetMonth = targetMonthAdvances + existingAdvanceBalance;
+                
+                console.log(`   💰 Total advances for ${payment.paymentMonth}: $${totalAdvancesForTargetMonth}`);
+                
+                // Calculate how much completes the target month vs becomes excess
+                const amountToCompleteTargetMonth = Math.max(0, monthlyRentExpected - totalAdvancesForTargetMonth);
+                amountForCurrentMonth = Math.min(rentAmount, amountToCompleteTargetMonth);
+                amountForNewAdvance = Math.max(0, rentAmount - amountForCurrentMonth);
+                
+                console.log(`   🎯 Amount to complete ${payment.paymentMonth}: $${amountToCompleteTargetMonth}`);
+                console.log(`   🎯 Amount for ${payment.paymentMonth}: $${amountForCurrentMonth}`);
+                console.log(`   🎯 Amount for new advance: $${amountForNewAdvance}`);
+            } else {
+                // Regular payment logic for current month
+                console.log(`   📅 This is a payment for the current month`);
+                
+                // Calculate how much of the new payment actually settles the current month
+                remainingRentOwed = Math.max(0, monthlyRentExpected - existingAdvanceBalance);
+                amountForCurrentMonth = Math.min(rentAmount, remainingRentOwed);
+                amountForNewAdvance = Math.max(0, rentAmount - amountForCurrentMonth);
+                
+                console.log(`   🎯 Remaining rent owed for current month: $${remainingRentOwed}`);
+                console.log(`   🎯 Amount for current month: $${amountForCurrentMonth}`);
+                console.log(`   🎯 Amount for new advance: $${amountForNewAdvance}`);
+            }
+
+            console.log(`   Analysis:`);
+            if (isAdvancePayment) {
+                console.log(`     Amount for ${payment.paymentMonth}: $${amountForCurrentMonth}`);
+                console.log(`     Amount for new advance: $${amountForNewAdvance}`);
+            } else {
+                console.log(`     Remaining rent owed for current month: $${remainingRentOwed}`);
+                console.log(`     Amount from new payment for current month: $${amountForCurrentMonth}`);
+                console.log(`     Amount from new payment for new advance: $${amountForNewAdvance}`);
+            }
+
+            // Ensure we have a valid residence ID
+            const residenceId = payment.residence || debtor.residence;
+            if (!residenceId) {
+                throw new Error('Residence ID is required for transaction creation');
+            }
+
+            // Handle payment date
+            let transactionDate;
+            try {
+                if (payment.date instanceof Date) {
+                    transactionDate = payment.date;
+                } else if (typeof payment.date === 'string') {
+                    transactionDate = new Date(payment.date);
+                    if (isNaN(transactionDate.getTime())) {
+                        throw new Error('Invalid date string');
+                    }
+                } else {
+                    transactionDate = new Date();
+                }
+            } catch (error) {
+                console.log('⚠️ Invalid payment date, using current date');
+                transactionDate = new Date();
+            }
+
+            // Create transaction description
+            let transactionDescription;
+            if (amountForNewAdvance > 0) {
+                transactionDescription = `Payment from ${studentName}: $${amountForCurrentMonth} for current month, $${amountForNewAdvance} advance`;
+            } else {
+                transactionDescription = `Payment from ${studentName} for current month rent`;
+            }
+
+            const transactionId = await this.generateTransactionId();
+            const transaction = new Transaction({
+                transactionId,
+                date: transactionDate,
+                description: transactionDescription,
+                type: 'payment',
+                reference: payment._id.toString(),
+                residence: residenceId,
+                residenceName: payment.residence?.name || 'Unknown Residence',
+                createdBy: user._id
+            });
+
+            await transaction.save();
+            console.log(`✅ Transaction created: ${transaction.transactionId}`);
+
+            // Get required accounts
+            const receivingAccount = await this.getPaymentSourceAccount(payment.method);
+            const rentAccount = await this.getRentIncomeAccount();
+            const deferredIncomeAccount = await this.getDeferredIncomeAccount();
+            const adminFeeAccount = await this.getAdminIncomeAccount();
+            const depositAccount = await this.getDepositLiabilityAccount();
+            const studentAccount = await this.getAccountsReceivableAccount();
+
+            // Create double-entry entries
+            const entries = [];
+
+            // 1. DEBIT: Cash/Bank (Payment Method) - Money coming IN
+            entries.push({
+                accountCode: receivingAccount,
+                accountName: this.getPaymentAccountName(payment.method),
+                accountType: 'Asset',
+                debit: payment.totalAmount,
+                credit: 0,
+                description: `Payment received from ${studentName} (${payment.method}, ${payment.paymentId})`
+            });
+
+            // 2. Process each payment component
+            for (const paymentItem of parsedPayments) {
+                const amount = paymentItem.amount || 0;
+                if (amount <= 0) continue;
+
+                switch (paymentItem.type) {
+                    case 'admin':
+                        // Settle AR for admin fee
+                        entries.push({
+                            accountCode: studentAccount,
+                            accountName: 'Accounts Receivable - Tenants',
+                            accountType: 'Asset',
+                            debit: 0,
+                            credit: amount,
+                            description: `Admin fee payment settles accrual for ${studentName} (${payment.paymentId})`
+                        });
+                        break;
+                        
+                    case 'deposit':
+                        // Settle AR for deposit
+                        entries.push({
+                            accountCode: studentAccount,
+                            accountName: 'Accounts Receivable - Tenants',
+                            accountType: 'Asset',
+                            debit: 0,
+                            credit: amount,
+                            description: `Security deposit payment settles accrual for ${studentName} (${payment.paymentId})`
+                        });
+                        break;
+                        
+                    case 'rent': {
+                        // 🎯 THE KEY LOGIC: Split between current month and new advance
+                        if (amountForCurrentMonth > 0) {
+                            // Part of payment settles current month's rent
+                            const currentMonthAmount = Math.min(amount, amountForCurrentMonth);
+                            entries.push({
+                                accountCode: rentAccount,
+                                accountName: 'Rental Income - Residential',
+                                accountType: 'Income',
+                                debit: 0,
+                                credit: currentMonthAmount,
+                                description: `Rent income from ${studentName} for current month (${payment.paymentId})`
+                            });
+                        }
+
+                        if (amountForNewAdvance > 0 && deferredIncomeAccount) {
+                            // Remaining amount becomes new advance
+                            const advanceAmount = Math.min(amount, amountForNewAdvance);
+                            entries.push({
+                                accountCode: deferredIncomeAccount,
+                                accountName: 'Deferred Income - Tenant Advances',
+                                accountType: 'Liability',
+                                debit: 0,
+                                credit: advanceAmount,
+                                description: `Advance rent from ${studentName} for future periods (${payment.paymentId})`
+                            });
+                        }
+                        break;
+                    }
+                        
+                    default:
+                        // Fallback for unknown payment types
+                        entries.push({
+                            accountCode: rentAccount,
+                            accountName: 'Rental Income - Residential',
+                            accountType: 'Income',
+                            debit: 0,
+                            credit: amount,
+                            description: `${paymentItem.type} payment from ${studentName} (${payment.paymentId})`
+                        });
+                }
+            }
+
+            // Create transaction entry
+            const transactionEntry = new TransactionEntry({
+                transactionId: transaction.transactionId,
+                date: transactionDate,
+                description: transactionDescription,
+                reference: payment._id.toString(),
+                entries,
+                totalDebit: payment.totalAmount,
+                totalCredit: payment.totalAmount,
+                source: 'payment',
+                sourceId: payment._id,
+                sourceModel: 'Payment',
+                residence: residenceId,
+                createdBy: user.email || 'system',
+                status: 'posted',
+                metadata: {
+                    paymentType: 'advance_handling',
+                    paymentMonth: payment.paymentMonth,
+                    existingAdvanceBalance: existingAdvanceBalance,
+                    monthlyRentExpected: monthlyRentExpected,
+                    amountForCurrentMonth: amountForCurrentMonth,
+                    amountForNewAdvance: amountForNewAdvance,
+                    studentBalance: debtor.currentBalance || 0,
+                    paymentBreakdown: {
+                        rent: rentAmount,
+                        admin: adminAmount,
+                        deposit: depositAmount
+                    }
+                }
+            });
+
+            console.log('💾 Saving TransactionEntry to database...');
+            try {
+                await transactionEntry.save();
+                console.log(`✅ Transaction entry created and saved: ${transactionEntry._id}`);
+                console.log(`   Total Debit: $${transactionEntry.totalDebit}`);
+                console.log(`   Total Credit: $${transactionEntry.totalCredit}`);
+                console.log(`   Entries Count: ${transactionEntry.entries?.length || 0}`);
+            } catch (saveError) {
+                console.error('❌ Error saving TransactionEntry:', saveError);
+                throw saveError;
+            }
+            
+            // Update transaction with entry reference
+            transaction.entries = [transactionEntry._id];
+            await transaction.save();
+
+            console.log(`✅ Student payment recorded with advance balance handling`);
+            console.log(`   📊 Payment split: $${amountForCurrentMonth} for current month, $${amountForNewAdvance} for advance`);
+            console.log(`   💰 Proper double-entry: Cash ↑, Income ↑ (current month), Deferred Income ↑ (advance)`);
+            
+            return { transaction, transactionEntry };
+
+        } catch (error) {
+            console.error('❌ Error recording student rent payment with advance handling:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Helper method to get advance balance for a specific month
+     */
+    static async getAdvanceBalanceForMonth(userId, targetMonth) {
+        try {
+            // Parse target month
+            const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                               'july', 'august', 'september', 'october', 'november', 'december'];
+            const monthAbbr = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 
+                              'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+            
+            let month = -1;
+            let year = new Date().getFullYear();
+            
+            const lowerTargetMonth = targetMonth.toLowerCase();
+            month = monthNames.findIndex(m => lowerTargetMonth.includes(m));
+            if (month === -1) {
+                month = monthAbbr.findIndex(m => lowerTargetMonth.includes(m));
+            }
+            
+            const yearMatch = targetMonth.match(/\b(20\d{2})\b/);
+            if (yearMatch) {
+                year = parseInt(yearMatch[1]);
+            }
+            
+            if (month === -1) {
+                console.log(`⚠️ Could not parse target month: ${targetMonth}`);
+                return 0;
+            }
+            
+            // Look for advance payments for this specific month
+            const advancePayments = await TransactionEntry.find({
+                source: 'payment',
+                'metadata.paymentMonth': targetMonth,
+                'metadata.paymentType': 'advance_handling',
+                status: 'posted'
+            }).lean();
+            
+            let totalAdvanceForMonth = 0;
+            for (const payment of advancePayments) {
+                if (payment.metadata?.amountForNewAdvance) {
+                    totalAdvanceForMonth += Number(payment.metadata.amountForNewAdvance) || 0;
+                }
+            }
+            
+            console.log(`   💰 Found $${totalAdvanceForMonth} in advance payments for ${targetMonth}`);
+            return totalAdvanceForMonth;
+            
+        } catch (error) {
+            console.log(`⚠️ Error getting advance balance for month ${targetMonth}:`, error.message);
+            return 0;
         }
     }
 

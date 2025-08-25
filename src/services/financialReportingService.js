@@ -2327,7 +2327,7 @@ class FinancialReportingService {
      * Check if account is current asset
      */
     static isCurrentAsset(accountName) {
-        const currentAssetKeywords = ['cash', 'bank', 'receivable', 'inventory', 'prepaid'];
+        const currentAssetKeywords = ['cash', 'bank', 'petty', 'receivable', 'inventory', 'prepaid'];
         return currentAssetKeywords.some(keyword => 
             accountName.toLowerCase().includes(keyword)
         );

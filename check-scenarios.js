@@ -3,19 +3,17 @@ const mongoose = require('mongoose');
 
 mongoose.connect(process.env.MONGODB_URI);
 
-async function checkTransactions() {
+async function checkScenarios() {
     try {
         await mongoose.connection.asPromise();
         const db = mongoose.connection.db;
-        
-        console.log('🔍 TRANSACTION STATUS CHECK\n');
         
         const transactions = await db.collection('transactions').find({}).toArray();
         console.log(`📊 Total Transactions: ${transactions.length}\n`);
         
         // Check each scenario
         const scenarios = {
-            'Student Payments': transactions.filter(t => t.metadata?.type === 'rent_payment'),
+            'Student Rent Payments': transactions.filter(t => t.metadata?.type === 'rent_payment'),
             'Admin Fee Payments': transactions.filter(t => t.metadata?.type === 'admin_fee_payment'),
             'Deposit Payments': transactions.filter(t => t.metadata?.type === 'deposit_payment'),
             'Petty Cash Allocations': transactions.filter(t => t.metadata?.type === 'petty_cash_allocation'),
@@ -32,22 +30,17 @@ async function checkTransactions() {
             }
         });
         
-        // Check double-entry compliance
+        // Check double-entry
         let balanced = 0;
-        let unbalanced = 0;
-        
         transactions.forEach(t => {
             if (t.entries && t.entries.length >= 2) {
                 const debits = t.entries.reduce((sum, e) => sum + (e.debit || 0), 0);
                 const credits = t.entries.reduce((sum, e) => sum + (e.credit || 0), 0);
                 if (Math.abs(debits - credits) < 0.01) balanced++;
-                else unbalanced++;
             }
         });
         
-        console.log(`\n🔍 Double-Entry Status:`);
-        console.log(`  Balanced: ${balanced}`);
-        console.log(`  Unbalanced: ${unbalanced}`);
+        console.log(`\n🔍 Double-Entry: ${balanced}/${transactions.length} balanced`);
         
     } catch (error) {
         console.error('Error:', error);
@@ -56,7 +49,7 @@ async function checkTransactions() {
     }
 }
 
-checkTransactions();
+checkScenarios();
 
 
 
