@@ -778,15 +778,69 @@ exports.getVendorTransactions = async (req, res) => {
 // Helper function to ensure chart of accounts entries exist
 async function ensureChartOfAccountsEntries(vendorCode, expenseCode, vendor) {
     try {
+        // Get the main Accounts Payable account (2000) to link vendor accounts
+        const mainAPAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+        
         // Check if vendor account exists
         let vendorAccount = await Account.findOne({ code: vendorCode });
         if (!vendorAccount) {
             vendorAccount = new Account({
                 code: vendorCode,
                 name: `Accounts Payable - ${vendor.businessName}`,
-                type: 'Liability'
+                type: 'Liability',
+                category: 'Current Liabilities',
+                subcategory: 'Accounts Payable',
+                description: `Payable account for ${vendor.businessName}`,
+                isActive: true,
+                level: 2, // Set as level 2 (child of main AP account)
+                parentAccount: mainAPAccount ? mainAPAccount._id : null, // Link to main AP account
+                metadata: {
+                    vendorId: vendor._id,
+                    vendorCode: vendor.vendorCode,
+                    vendorType: vendor.category,
+                    linkedToMainAP: true,
+                    linkedDate: new Date(),
+                    mainAPAccountCode: '2000'
+                }
             });
             await vendorAccount.save();
+            
+            // Update main AP account metadata if it exists
+            if (mainAPAccount) {
+                await Account.findByIdAndUpdate(mainAPAccount._id, {
+                    $set: {
+                        'metadata.hasChildren': true,
+                        'metadata.lastUpdated': new Date()
+                    },
+                    $inc: { 'metadata.childrenCount': 1 }
+                });
+            }
+            
+            console.log(`✅ Created vendor payable account: ${vendorCode} - ${vendor.businessName} (linked to 2000)`);
+        } else {
+            // If account exists but isn't linked, link it now
+            if (!vendorAccount.parentAccount && mainAPAccount) {
+                vendorAccount.parentAccount = mainAPAccount._id;
+                vendorAccount.level = 2;
+                vendorAccount.metadata = {
+                    ...vendorAccount.metadata,
+                    linkedToMainAP: true,
+                    linkedDate: new Date(),
+                    mainAPAccountCode: '2000'
+                };
+                await vendorAccount.save();
+                
+                // Update main AP account metadata
+                await Account.findByIdAndUpdate(mainAPAccount._id, {
+                    $set: {
+                        'metadata.hasChildren': true,
+                        'metadata.lastUpdated': new Date()
+                    },
+                    $inc: { 'metadata.childrenCount': 1 }
+                });
+                
+                console.log(`✅ Linked existing vendor account: ${vendorCode} - ${vendor.businessName} to 2000`);
+            }
         }
 
         // Check if expense account exists
@@ -795,9 +849,15 @@ async function ensureChartOfAccountsEntries(vendorCode, expenseCode, vendor) {
             expenseAccount = new Account({
                 code: expenseCode,
                 name: `${vendor.category.charAt(0).toUpperCase() + vendor.category.slice(1)} Expenses`,
-                type: 'Expense'
+                type: 'Expense',
+                category: 'Operating Expenses',
+                subcategory: 'Vendor Expenses',
+                description: `Expense account for ${vendor.businessName} ${vendor.category} services`,
+                isActive: true,
+                level: 1
             });
             await expenseAccount.save();
+            console.log(`✅ Created vendor expense account: ${expenseCode} - ${expenseAccount.name}`);
         }
 
     } catch (error) {

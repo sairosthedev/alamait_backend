@@ -12,10 +12,13 @@ class BalanceSheetService {
     try {
       console.log(`📊 Generating Balance Sheet as of ${asOfDate}`);
       
+      // Use month window: first day of month through asOfDate (last day of month)
+      const asOf = new Date(asOfDate);
+      const monthStart = new Date(asOf.getFullYear(), asOf.getMonth(), 1);
       const query = {
         date: { 
-          $gte: new Date('2025-01-01'), 
-          $lte: new Date(asOfDate) 
+          $gte: monthStart, 
+          $lte: asOf 
         },
         status: 'posted'
       };
@@ -217,6 +220,9 @@ class BalanceSheetService {
             break;
         }
       });
+      
+      // AGGREGATE PARENT ACCOUNTS WITH CHILDREN (e.g., Account 2000 + child accounts)
+      await this.aggregateParentChildAccounts(balanceSheet);
       
       // Debug: Show all accounts that were processed
       console.log('\n📊 BALANCE SHEET SUMMARY:');
@@ -822,7 +828,80 @@ class BalanceSheetService {
       return 'Other liabilities';
     }
   }
+
+  /**
+   * Aggregate parent accounts with their child accounts (e.g., Account 2000 + children)
+   */
+  static async aggregateParentChildAccounts(balanceSheet) {
+    try {
+      console.log('\n🔗 Aggregating parent-child accounts...');
+      
+      // Get the main Accounts Payable account (2000)
+      const Account = require('../models/Account');
+      const mainAPAccount = await Account.findOne({ code: '2000' });
+      
+      if (!mainAPAccount) {
+        console.log('⚠️ Main Accounts Payable account (2000) not found');
+        return;
+      }
+
+      // Get all child accounts linked to 2000
+      const childAccounts = await Account.find({ 
+        parentAccount: mainAPAccount._id,
+        isActive: true
+      });
+
+      if (childAccounts.length === 0) {
+        console.log('ℹ️ No child accounts found for account 2000');
+        return;
+      }
+
+      console.log(`📊 Found ${childAccounts.length} child accounts for account 2000:`);
+      
+      // Calculate total balance for account 2000 including children
+      let totalAPBalance = 0;
+      
+      // Add main account 2000 balance
+      if (balanceSheet.liabilities.current['2000']) {
+        totalAPBalance += balanceSheet.liabilities.current['2000'].balance;
+        console.log(`   Main account 2000: $${balanceSheet.liabilities.current['2000'].balance}`);
+      }
+      
+      // Add child account balances
+      for (const childAccount of childAccounts) {
+        if (balanceSheet.liabilities.current[childAccount.code]) {
+          const childBalance = balanceSheet.liabilities.current[childAccount.code].balance;
+          totalAPBalance += childBalance;
+          console.log(`   Child account ${childAccount.code}: $${childBalance}`);
+        }
+      }
+      
+      console.log(`   Total aggregated balance: $${totalAPBalance}`);
+      
+      // Update the main account 2000 with the aggregated total
+      if (balanceSheet.liabilities.current['2000']) {
+        balanceSheet.liabilities.current['2000'].balance = totalAPBalance;
+        balanceSheet.liabilities.current['2000'].aggregated = true;
+        balanceSheet.liabilities.current['2000'].childAccounts = childAccounts.map(c => c.code);
+        balanceSheet.liabilities.current['2000'].totalWithChildren = totalAPBalance;
+        
+        console.log(`✅ Updated account 2000 with aggregated balance: $${totalAPBalance}`);
+      }
+      
+      // Recalculate total current liabilities
+      balanceSheet.liabilities.totalCurrent = Object.values(balanceSheet.liabilities.current)
+        .reduce((total, liability) => total + liability.balance, 0);
+      
+      console.log(`✅ Recalculated total current liabilities: $${balanceSheet.liabilities.totalCurrent}`);
+      
+    } catch (error) {
+      console.error('❌ Error aggregating parent-child accounts:', error);
+      // Don't throw error as this is not critical for balance sheet generation
+    }
+  }
 }
+
+module.exports = BalanceSheetService;
 
 
 

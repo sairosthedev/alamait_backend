@@ -451,6 +451,9 @@ class CompleteMigrationScript {
             
             for (const vendor of vendors) {
                 try {
+                    // Get the main Accounts Payable account (2000) to link vendor accounts
+                    const mainAPAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                    
                     // Create vendor-specific payable account
                     const payableAccountName = `Accounts Payable: ${vendor.businessName}`;
                     const payableAccountCode = vendor.chartOfAccountsCode || `200${vendor.vendorCode.slice(-3)}`;
@@ -469,17 +472,58 @@ class CompleteMigrationScript {
                             subcategory: 'Accounts Payable',
                             description: `Payable account for ${vendor.businessName}`,
                             isActive: true,
-                            level: 1,
+                            level: 2, // Set as level 2 (child of main AP account)
                             sortOrder: 0,
+                            parentAccount: mainAPAccount ? mainAPAccount._id : null, // Link to main AP account
                             metadata: { 
                                 vendorId: vendor._id, 
                                 vendorCode: vendor.vendorCode, 
-                                vendorType: vendor.category 
+                                vendorType: vendor.category,
+                                linkedToMainAP: true,
+                                linkedDate: new Date(),
+                                mainAPAccountCode: '2000'
                             }
                         });
                         
                         await payableAccount.save();
+                        
+                        // Update main AP account metadata if it exists
+                        if (mainAPAccount) {
+                            await Account.findByIdAndUpdate(mainAPAccount._id, {
+                                $set: {
+                                    'metadata.hasChildren': true,
+                                    'metadata.lastUpdated': new Date()
+                                },
+                                $inc: { 'metadata.childrenCount': 1 }
+                            });
+                        }
+                        
                         this.stats.accountsCreated++;
+                        console.log(`✅ Created vendor payable account: ${payableAccountCode} - ${payableAccountName} (linked to 2000)`);
+                    } else {
+                        // If account exists but isn't linked, link it now
+                        if (!payableAccount.parentAccount && mainAPAccount) {
+                            payableAccount.parentAccount = mainAPAccount._id;
+                            payableAccount.level = 2;
+                            payableAccount.metadata = {
+                                ...payableAccount.metadata,
+                                linkedToMainAP: true,
+                                linkedDate: new Date(),
+                                mainAPAccountCode: '2000'
+                            };
+                            await payableAccount.save();
+                            
+                            // Update main AP account metadata
+                            await Account.findByIdAndUpdate(mainAPAccount._id, {
+                                $set: {
+                                    'metadata.hasChildren': true,
+                                    'metadata.lastUpdated': new Date()
+                                },
+                                $inc: { 'metadata.childrenCount': 1 }
+                            });
+                            
+                            console.log(`✅ Linked existing vendor account: ${payableAccountCode} - ${payableAccountName} to 2000`);
+                        }
                     }
                     
                     // Update vendor with account reference

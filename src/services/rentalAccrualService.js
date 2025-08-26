@@ -15,6 +15,39 @@ const mongoose = require('mongoose');
  * Supports both accrual and cash basis accounting
  */
 class RentalAccrualService {
+    /**
+     * Ensure a student-specific AR child account exists and return it
+     */
+    static async ensureStudentARAccount(studentId, studentName) {
+        const mainAR = await Account.findOne({ code: '1100' });
+        if (!mainAR) {
+            throw new Error('Main AR account (1100) not found');
+        }
+
+        const childCode = `1100-${studentId}`;
+        let child = await Account.findOne({ code: childCode });
+        if (child) return child;
+
+        child = new Account({
+            code: childCode,
+            name: `Accounts Receivable - ${studentName || studentId}`,
+            type: 'Asset',
+            category: 'Current Assets',
+            subcategory: 'Accounts Receivable',
+            description: 'Student-specific AR control account',
+            isActive: true,
+            parentAccount: mainAR._id,
+            level: 2,
+            sortOrder: 0,
+            metadata: new Map([
+                ['parent', '1100'],
+                ['hasParent', 'true'],
+                ['studentId', String(studentId)]
+            ])
+        });
+        await child.save();
+        return child;
+    }
     
     /**
      * 🆕 NEW: Process lease start with initial accounting entries
@@ -69,7 +102,10 @@ class RentalAccrualService {
             console.log(`   Security Deposit: $${securityDeposit}`);
             
             // Get required accounts
-            const accountsReceivable = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
+            const accountsReceivable = await this.ensureStudentARAccount(
+                application.student,
+                `${application.firstName} ${application.lastName}`
+            );
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             const adminIncome = await Account.findOne({ code: '4002' }); // Administrative Fees
             const depositLiability = await Account.findOne({ code: '2020' }); // Tenant Security Deposits
@@ -279,6 +315,89 @@ class RentalAccrualService {
             throw error;
         }
     }
+
+    /**
+     * Backfill missing monthly rent accruals from lease start up to current month
+     * - Excludes the lease start month (handled by lease_start)
+     * - Skips months that already have a monthly_rent_accrual entry
+     */
+    static async backfillMissingAccruals() {
+        try {
+            const now = new Date();
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+
+            console.log(`\n🧩 Backfilling missing monthly rent accruals up to ${currentMonth}/${currentYear}...`);
+
+            // Load approved applications (active leases at any time)
+            const approvedApplications = await mongoose.connection.db
+                .collection('applications')
+                .find({ status: 'approved', paymentStatus: { $ne: 'cancelled' } })
+                .toArray();
+
+            let totalCreated = 0;
+            let totalSkipped = 0;
+            let totalErrors = 0;
+            const errors = [];
+
+            for (const app of approvedApplications) {
+                const leaseStart = new Date(app.startDate);
+                const leaseEnd = new Date(app.endDate);
+                if (isNaN(leaseStart) || isNaN(leaseEnd)) {
+                    continue;
+                }
+
+                // Determine backfill window: from month AFTER lease start up to min(leaseEnd, now)
+                const windowEnd = new Date(Math.min(leaseEnd.getTime(), now.getTime()));
+
+                // Start from the first day of the month AFTER lease start month
+                const cursor = new Date(leaseStart.getFullYear(), leaseStart.getMonth() + 1, 1);
+
+                while (cursor <= windowEnd) {
+                    const month = cursor.getMonth() + 1;
+                    const year = cursor.getFullYear();
+
+                    try {
+                        // Skip if accrual already exists for this application/month/year
+                        const existingAccrual = await TransactionEntry.findOne({
+                            'metadata.applicationId': app._id.toString(),
+                            'metadata.accrualMonth': month,
+                            'metadata.accrualYear': year,
+                            'metadata.type': 'monthly_rent_accrual'
+                        });
+
+                        if (existingAccrual) {
+                            totalSkipped++;
+                        } else {
+                            const res = await this.createStudentRentAccrual(app, month, year);
+                            if (res && res.success) {
+                                totalCreated++;
+                            } else {
+                                totalErrors++;
+                                errors.push({ applicationId: app._id.toString(), month, year, error: res?.error || 'Unknown error' });
+                            }
+                        }
+                    } catch (err) {
+                        totalErrors++;
+                        errors.push({ applicationId: app._id.toString(), month, year, error: err.message });
+                    }
+
+                    // Move to next month
+                    cursor.setMonth(cursor.getMonth() + 1);
+                }
+            }
+
+            console.log(`✅ Backfill complete. Created: ${totalCreated}, Skipped existing: ${totalSkipped}, Errors: ${totalErrors}`);
+            if (errors.length > 0) {
+                console.log('⚠️ Backfill errors:', errors.slice(0, 10)); // print first few
+            }
+
+            return { success: true, created: totalCreated, skipped: totalSkipped, errors };
+        } catch (error) {
+            console.error('❌ Error backfilling monthly rent accruals:', error);
+            return { success: false, error: error.message };
+        }
+    }
     
     /**
      * 🆕 ENHANCED: Create rent accrual for a specific student
@@ -343,7 +462,10 @@ class RentalAccrualService {
             console.log(`   📅 Month end date: ${monthEnd.toISOString()}`);
             
             // Get required accounts
-            const accountsReceivable = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
+            const accountsReceivable = await this.ensureStudentARAccount(
+                student._id,
+                `${student.firstName} ${student.lastName}`
+            );
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             
             if (!accountsReceivable || !rentalIncome) {

@@ -101,7 +101,6 @@ class MonthlyAccrualCronService {
             
             // Create monthly accruals for all active students
             console.log(`🏠 Creating monthly rent accruals for ${month}/${year}...`);
-            
             const result = await RentalAccrualService.createMonthlyRentAccrual(month, year);
             
             if (result && result.success) {
@@ -120,6 +119,11 @@ class MonthlyAccrualCronService {
                 console.log(`   Error: ${result?.error || 'Unknown error'}`);
             }
             
+            // After attempting current month, backfill any missing prior months
+            console.log('🧩 Running backfill for missing monthly accruals...');
+            const backfill = await RentalAccrualService.backfillMissingAccruals();
+            console.log(`   Backfill -> created: ${backfill.created}, skipped: ${backfill.skipped}, errors: ${backfill.errors?.length || 0}`);
+
             this.lastRun = now;
             this.calculateNextRun();
             

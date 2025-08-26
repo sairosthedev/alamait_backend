@@ -712,18 +712,18 @@ class AccountingService {
             const financePettyCash = await this.getAccountBalance('1012', monthEnd, residenceId);
             const propertyMgrPettyCash = await this.getAccountBalance('1013', monthEnd, residenceId);
             const maintenancePettyCash = await this.getAccountBalance('1014', monthEnd, residenceId);
-            // Fix: Calculate Accounts Receivable correctly (Accruals - Payments)
-            const accountsReceivable = await this.getAccountsReceivableBalance(monthEnd, residenceId);
+            // Fix: Calculate Accounts Receivable correctly (Accruals - Payments) including child accounts
+            const accountsReceivable = await this.getAccountsReceivableWithChildren(monthEnd, residenceId);
             
             const totalCashAndBank = bankBalance + ecocashBalance + innbucksBalance + pettyCashBalance + cashBalance
                 + generalPettyCash + adminPettyCash + financePettyCash + propertyMgrPettyCash + maintenancePettyCash;
             const totalAssets = totalCashAndBank + accountsReceivable;
             
-            // Liabilities with account codes
-            const accountsPayable = await this.getAccountBalance('2000', monthEnd, residenceId);
-            const tenantDeposits = await this.getAccountBalance('2020', monthEnd, residenceId);
-            const deferredIncome = await this.getAccountBalance('1102', monthEnd, residenceId);
-            const totalLiabilities = Math.abs(accountsPayable) + Math.abs(tenantDeposits) + Math.abs(deferredIncome);
+                // Liabilities with account codes
+    const accountsPayable = await this.getAccountsPayableWithChildren(monthEnd, residenceId);
+    const tenantDeposits = await this.getAccountBalance('2020', monthEnd, residenceId);
+    const deferredIncome = await this.getAccountBalance('1102', monthEnd, residenceId);
+    const totalLiabilities = Math.abs(accountsPayable) + Math.abs(tenantDeposits) + Math.abs(deferredIncome);
             
             // Equity with account codes
             const retainedEarnings = await this.getRetainedEarnings(monthEnd, residenceId);
@@ -872,6 +872,48 @@ class AccountingService {
     }
 
     /**
+     * Get Accounts Payable balance including all child accounts (2000 + children)
+     */
+    static async getAccountsPayableWithChildren(asOfDate, residenceId = null) {
+        try {
+            // Get the main Accounts Payable account (2000)
+            const mainAPAccount = await Account.findOne({ code: '2000' });
+            if (!mainAPAccount) {
+                console.log('⚠️ Main Accounts Payable account (2000) not found');
+                return 0;
+            }
+
+            // Get all child accounts linked to 2000
+            const childAccounts = await Account.find({ 
+                parentAccount: mainAPAccount._id,
+                isActive: true
+            });
+
+            // Calculate main account 2000 balance
+            let totalBalance = await this.getAccountBalance('2000', asOfDate, residenceId);
+            
+            // Add balances from all child accounts (avoid double-counting main 2000)
+            for (const childAccount of childAccounts) {
+                if (childAccount.code === '2000' || childAccount._id.equals(mainAPAccount._id)) {
+                    // Skip if a data issue made 2000 its own child
+                    continue;
+                }
+                const childBalance = await this.getAccountBalance(childAccount.code, asOfDate, residenceId);
+                totalBalance += childBalance;
+                console.log(`📊 Child account ${childAccount.code} (${childAccount.name}): $${childBalance}`);
+            }
+
+            console.log(`📊 Total Accounts Payable (2000 + ${childAccounts.length} children): $${totalBalance}`);
+            return totalBalance;
+
+        } catch (error) {
+            console.error('❌ Error calculating Accounts Payable with children:', error);
+            // Fallback to just main account if there's an error
+            return await this.getAccountBalance('2000', asOfDate, residenceId);
+        }
+    }
+
+    /**
      * Get Accounts Receivable balance (Accruals - Payments)
      */
     static async getAccountsReceivableBalance(asOfDate, residenceId = null) {
@@ -905,6 +947,45 @@ class AccountingService {
         } catch (error) {
             console.error('❌ Error calculating Accounts Receivable:', error);
             return 0;
+        }
+    }
+
+    /**
+     * Get Accounts Receivable balance including all child accounts (1100 + children)
+     */
+    static async getAccountsReceivableWithChildren(asOfDate, residenceId = null) {
+        try {
+            // Get the main Accounts Receivable account (1100)
+            const mainARAccount = await Account.findOne({ code: '1100' });
+            if (!mainARAccount) {
+                console.log('⚠️ Main Accounts Receivable account (1100) not found');
+                return 0;
+            }
+
+            // Get only 1100-series child accounts linked to 1100
+            const childAccounts = await Account.find({ 
+                parentAccount: mainARAccount._id,
+                isActive: true,
+                code: { $regex: '^1100-' }
+            });
+
+            // Calculate main account 1100 balance
+            let totalBalance = await this.getAccountBalance('1100', asOfDate, residenceId);
+            
+            // Add balances from all child accounts
+            for (const childAccount of childAccounts) {
+                const childBalance = await this.getAccountBalance(childAccount.code, asOfDate, residenceId);
+                totalBalance += childBalance;
+                console.log(`📊 Child account ${childAccount.code} (${childAccount.name}): $${childBalance}`);
+            }
+
+            console.log(`📊 Total Accounts Receivable (1100 + ${childAccounts.length} children): $${totalBalance}`);
+            return totalBalance;
+
+        } catch (error) {
+            console.error('❌ Error calculating Accounts Receivable with children:', error);
+            // Fallback to just main account if there's an error
+            return await this.getAccountBalance('1100', asOfDate, residenceId);
         }
     }
 

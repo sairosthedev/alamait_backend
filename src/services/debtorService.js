@@ -4,6 +4,36 @@ const Residence = require('../models/Residence');
 const Application = require('../models/Application');
 const Lease = require('../models/Lease');
 const Payment = require('../models/Payment');
+const Account = require('../models/Account');
+
+async function ensureStudentARAccount(studentId, studentName) {
+    const mainAR = await Account.findOne({ code: '1100' });
+    if (!mainAR) {
+        throw new Error('Main AR account (1100) not found');
+    }
+    const code = `1100-${studentId}`;
+    let acc = await Account.findOne({ code });
+    if (acc) return acc;
+    acc = new Account({
+        code,
+        name: `Accounts Receivable - ${studentName || studentId}`,
+        type: 'Asset',
+        category: 'Current Assets',
+        subcategory: 'Accounts Receivable',
+        description: 'Student-specific AR control account',
+        isActive: true,
+        parentAccount: mainAR._id,
+        level: 2,
+        sortOrder: 0,
+        metadata: new Map([
+            ['parent', '1100'],
+            ['hasParent', 'true'],
+            ['studentId', String(studentId)]
+        ])
+    });
+    await acc.save();
+    return acc;
+}
 
 /**
  * Automatically create a debtor account for a new student with full financial data
@@ -178,6 +208,13 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         }
         
         const existingDebtor = await Debtor.findOne({ user: actualUser._id });
+
+        // Ensure student AR account exists asap
+        try {
+            await ensureStudentARAccount(actualUser._id, `${actualUser.firstName} ${actualUser.lastName}`);
+        } catch (e) {
+            console.error('Failed to ensure student AR account:', e.message);
+        }
         
         if (existingDebtor) {
             console.log(`ℹ️  Debtor account already exists for user: ${actualUser.email}`);
