@@ -242,6 +242,61 @@ class RentalAccrualService {
             console.log(`   Total Debit: $${totalDebit.toFixed(2)}`);
             console.log(`   Total Credit: $${totalCredit.toFixed(2)}`);
             
+            // 🆕 AUTO-BACKFILL: If lease started in the past, create missing monthly accruals
+            const now = new Date();
+            const leaseStartDate = new Date(application.startDate);
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+            const leaseStartMonth = leaseStartDate.getMonth() + 1;
+            const leaseStartYear = leaseStartDate.getFullYear();
+            
+            // Check if lease started in a past month (not current month)
+            if (leaseStartYear < currentYear || (leaseStartYear === currentYear && leaseStartMonth < currentMonth)) {
+                console.log(`🔄 Lease started in past month (${leaseStartMonth}/${leaseStartYear}), auto-creating missing monthly accruals...`);
+                
+                try {
+                    // Create missing monthly accruals from month AFTER lease start up to current month
+                    let month = leaseStartMonth + 1;
+                    let year = leaseStartYear;
+                    
+                    // Handle year boundary
+                    if (month > 12) {
+                        month = 1;
+                        year++;
+                    }
+                    
+                    let accrualsCreated = 0;
+                    while (year < currentYear || (year === currentYear && month <= currentMonth)) {
+                        const result = await this.createStudentRentAccrual(application, month, year);
+                        if (result.success) {
+                            accrualsCreated++;
+                            console.log(`   ✅ Created accrual for ${month}/${year}: $${result.amount}`);
+                        } else if (result.error && result.error.includes('already exists')) {
+                            console.log(`   ⚠️ Accrual already exists for ${month}/${year}`);
+                        } else {
+                            console.log(`   ❌ Failed to create accrual for ${month}/${year}: ${result.error}`);
+                        }
+                        
+                        // Move to next month
+                        month++;
+                        if (month > 12) {
+                            month = 1;
+                            year++;
+                        }
+                    }
+                    
+                    if (accrualsCreated > 0) {
+                        console.log(`✅ Auto-backfill completed: ${accrualsCreated} monthly accruals created`);
+                    }
+                    
+                } catch (error) {
+                    console.error(`⚠️ Auto-backfill failed: ${error.message}`);
+                    // Don't fail the lease start process if backfill fails
+                }
+            } else {
+                console.log(`ℹ️ Lease started in current month (${leaseStartMonth}/${leaseStartYear}), no backfill needed`);
+            }
+            
             return {
                 success: true,
                 transactionId: transaction.transactionId,
@@ -347,14 +402,25 @@ class RentalAccrualService {
                     continue;
                 }
 
-                // Determine backfill window: from month AFTER lease start up to min(leaseEnd, now)
+                // Determine backfill window: from month AFTER lease start up to current month
+                // Future months will be created by the monthly cron job on the 1st of each month
                 const windowEnd = new Date(Math.min(leaseEnd.getTime(), now.getTime()));
 
                 // Start from the first day of the month AFTER lease start month
-                const cursor = new Date(leaseStart.getFullYear(), leaseStart.getMonth() + 1, 1);
+                // The lease start month is handled by lease_start (prorated), not monthly accrual
+                let startMonth = leaseStart.getMonth() + 1; // Convert to 1-based month
+                let startYear = leaseStart.getFullYear();
+                
+                // Move to next month
+                if (startMonth > 12) {
+                    startMonth = 1;
+                    startYear++;
+                }
+                
+                const cursor = new Date(startYear, startMonth - 1, 1); // Convert back to 0-based for Date constructor
 
                 while (cursor <= windowEnd) {
-                    const month = cursor.getMonth() + 1;
+                    const month = cursor.getMonth() + 1; // Convert 0-based to 1-based month
                     const year = cursor.getFullYear();
 
                     try {
@@ -409,22 +475,14 @@ class RentalAccrualService {
             const monthEnd = new Date(year, month, 0);
             
             // Skip creating a monthly accrual for the lease start month
-            // The lease start month is already handled by the lease start (prorated/full) entry
+            // The lease start month is always handled by lease_start (prorated), not monthly accrual
             if (student && (student.startDate || student.leaseStartDate)) {
                 const leaseStartDate = new Date(student.startDate || student.leaseStartDate);
                 if (!isNaN(leaseStartDate)) {
                     const leaseStartMonth = leaseStartDate.getMonth() + 1;
                     const leaseStartYear = leaseStartDate.getFullYear();
                     if (leaseStartMonth === month && leaseStartYear === year) {
-                        // Extra safety: if a lease_start entry exists for this application and start date, skip
-                        const existingLeaseStart = await TransactionEntry.findOne({
-                            'metadata.applicationId': student._id.toString(),
-                            'metadata.type': 'lease_start',
-                            'metadata.leaseStartDate': student.startDate || leaseStartDate
-                        });
-                        if (existingLeaseStart) {
-                            return { success: false, error: 'Lease start month is already accrued (prorated). Skipping monthly accrual.' };
-                        }
+                        return { success: false, error: 'Lease start month is always handled by lease_start (prorated). Skipping monthly accrual.' };
                     }
                 }
             }
