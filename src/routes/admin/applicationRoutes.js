@@ -4,7 +4,9 @@ const { auth, checkAdminOrFinance } = require('../../middleware/auth');
 const { check } = require('express-validator');
 const {
     getApplications,
+    getApplicationById,
     updateApplicationStatus,
+    testUpdateApplicationStatus,
     updatePaymentStatus,
     deleteApplication,
     updateRoomValidity,
@@ -20,11 +22,17 @@ const updateStatusValidation = [
 // Get all applications with room status
 router.get('/', auth, checkAdminOrFinance, getApplications);
 
+// Get application by ID
+router.get('/:id', auth, checkAdminOrFinance, getApplicationById);
+
 // Get expired students
 router.get('/expired', auth, checkAdminOrFinance, getExpiredStudents);
 
 // Update application status (approve/reject/waitlist)
 router.put('/:applicationId', auth, checkAdminOrFinance, updateApplicationStatus);
+
+// Test route to see if the route is being hit
+router.put('/:applicationId/test', auth, checkAdminOrFinance, testUpdateApplicationStatus);
 
 // Update payment status
 router.put('/:applicationId/payment', auth, checkAdminOrFinance, updatePaymentStatus);

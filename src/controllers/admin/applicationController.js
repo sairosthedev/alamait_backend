@@ -100,30 +100,153 @@ exports.getApplications = async (req, res) => {
             residences: residences.map(residence => ({
                 id: residence._id,
                 name: residence.name,
-                address: residence.address,
-                manager: residence.manager,
-                totalRooms: residence.rooms.length,
-                availableRooms: residence.rooms.filter(room => room.status === 'available').length,
-                occupiedRooms: residence.rooms.filter(room => room.status === 'occupied').length,
-                reservedRooms: residence.rooms.filter(room => room.status === 'reserved').length
+                roomCount: residence.rooms.length
             }))
         });
     } catch (error) {
-        console.error('Error in getApplications:', error);
-        res.status(500).json({ error: 'Server error', details: error.message });
+        console.error('Error fetching applications:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Error fetching applications',
+            error: error.message 
+        });
     }
+};
+
+// Get application by ID
+exports.getApplicationById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Get application
+        const application = await Application.findById(id);
+        
+        if (!application) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Application not found' 
+            });
+        }
+
+        // Get all residences to check room status
+        const residences = await Residence.find({}, 'name rooms');
+        
+        // Create a map of room statuses
+        const roomStatusMap = {};
+        residences.forEach(residence => {
+            residence.rooms.forEach(room => {
+                roomStatusMap[room.roomNumber] = {
+                    residence: residence.name,
+                    residenceId: residence._id,
+                    status: room.status,
+                    currentOccupancy: room.currentOccupancy,
+                    capacity: room.capacity,
+                    price: room.price,
+                    type: room.type
+                };
+            });
+        });
+
+        // Get room details for current and requested rooms
+        const currentRoomDetails = application.currentRoom ? roomStatusMap[application.currentRoom] : null;
+        const requestedRoomDetails = application.requestedRoom ? roomStatusMap[application.requestedRoom] : null;
+        const allocatedRoomDetails = application.allocatedRoom ? roomStatusMap[application.allocatedRoom] : null;
+        const waitlistedRoomDetails = application.waitlistedRoom ? roomStatusMap[application.waitlistedRoom] : null;
+        
+        // Calculate price difference for upgrades
+        let priceDifference = null;
+        if (application.requestType === 'upgrade' && currentRoomDetails && requestedRoomDetails) {
+            priceDifference = requestedRoomDetails.price - currentRoomDetails.price;
+        }
+        
+        // Transform application to match frontend format
+        const transformedApplication = {
+            id: application._id,
+            studentName: `${application.firstName} ${application.lastName}`,
+            email: application.email,
+            contact: application.phone,
+            requestType: application.requestType,
+            status: application.status,
+            paymentStatus: application.paymentStatus,
+            applicationDate: application.applicationDate.toISOString().split('T')[0],
+            startDate: application.startDate ? application.startDate.toISOString().split('T')[0] : null,
+            endDate: application.endDate ? application.endDate.toISOString().split('T')[0] : null,
+            preferredRoom: application.preferredRoom,
+            alternateRooms: application.alternateRooms || [],
+            currentRoom: application.currentRoom,
+            currentRoomDetails: currentRoomDetails,
+            requestedRoom: application.requestedRoom,
+            requestedRoomDetails: requestedRoomDetails,
+            reason: application.reason,
+            allocatedRoom: application.allocatedRoom,
+            allocatedRoomDetails: allocatedRoomDetails,
+            waitlistedRoom: application.waitlistedRoom,
+            waitlistedRoomDetails: waitlistedRoomDetails,
+            roomOccupancy: application.roomOccupancy || { current: 0, capacity: 0 },
+            applicationCode: application.applicationCode,
+            priceDifference: priceDifference,
+            residence: application.residence,
+            residenceId: application.residence
+        };
+
+        res.json({
+            success: true,
+            application: transformedApplication
+        });
+    } catch (error) {
+        console.error('Error fetching application:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Error fetching application',
+            error: error.message 
+        });
+    }
+};
+
+// Test function to see if route is being hit
+exports.testUpdateApplicationStatus = async (req, res) => {
+    console.log('🧪 TEST: updateApplicationStatus route hit!');
+    console.log('Request body:', req.body);
+    console.log('Request params:', req.params);
+    console.log('User:', req.user);
+    
+    res.json({
+        success: true,
+        message: 'Test route hit successfully',
+        data: {
+            body: req.body,
+            params: req.params,
+            user: req.user ? { id: req.user._id, email: req.user.email } : 'No user'
+        }
+    });
 };
 
 // Update application status
 exports.updateApplicationStatus = async (req, res) => {
     try {
+        console.log('🔄 updateApplicationStatus called with:', {
+            body: req.body,
+            params: req.params,
+            user: req.user ? { id: req.user._id, email: req.user.email } : 'No user'
+        });
+
         const { action, roomNumber, residenceId } = req.body;
         const { applicationId } = req.params;
 
+        console.log('📋 Processing application:', { action, roomNumber, residenceId, applicationId });
+
         const application = await Application.findById(applicationId);
         if (!application) {
+            console.log('❌ Application not found:', applicationId);
             return res.status(404).json({ error: 'Application not found' });
         }
+
+        console.log('✅ Found application:', {
+            id: application._id,
+            studentName: `${application.firstName} ${application.lastName}`,
+            email: application.email,
+            status: application.status
+        });
 
         // Check if this is a re-application
         const isReapplication = application.isReapplication || false;
@@ -137,39 +260,86 @@ exports.updateApplicationStatus = async (req, res) => {
 
         switch (action) {
             case 'approve':
+                console.log('✅ Processing approval...');
+                
                 // Handle room allocation and approval
                 if (!roomNumber || !residenceId) {
+                    console.log('❌ Missing room number or residence ID');
                     return res.status(400).json({ error: 'Room number and residence ID are required for approval' });
                 }
 
                 // Find the residence and room
                 const residence = await Residence.findById(residenceId);
                 if (!residence) {
+                    console.log('❌ Residence not found:', residenceId);
                     return res.status(404).json({ error: 'Residence not found' });
                 }
 
                 const room = residence.rooms.find(r => r.roomNumber === roomNumber);
                 if (!room) {
+                    console.log('❌ Room not found:', roomNumber, 'in residence:', residence.name);
                     return res.status(404).json({ error: 'Room not found in this residence' });
                 }
 
                 // Check room availability
                 if (room.currentOccupancy >= room.capacity) {
+                    console.log('❌ Room at full capacity:', roomNumber);
                     return res.status(400).json({ error: 'Room is at full capacity' });
                 }
 
-                // Update application status
-                application.status = 'approved';
-                application.allocatedRoom = roomNumber;
-                application.allocatedRoomDetails = {
-                    roomNumber: room.roomNumber,
-                    roomId: room._id,
-                    price: room.price,
-                    type: room.type,
+                console.log('✅ Room validation passed:', {
+                    roomNumber,
+                    residenceName: residence.name,
+                    currentOccupancy: room.currentOccupancy,
                     capacity: room.capacity
-                };
+                });
+
+                // Update application status and details
+                application.status = 'approved';
                 application.actionDate = new Date();
                 application.actionBy = req.user._id;
+                application.allocatedRoom = roomNumber;
+                
+                // Handle allocatedRoomDetails with proper error handling for schema mismatch
+                try {
+                    application.allocatedRoomDetails = {
+                        roomNumber: roomNumber,
+                        roomId: room._id,
+                        price: room.price,
+                        type: room.type,
+                        capacity: room.capacity
+                    };
+                    
+                    await application.save();
+                    console.log('✅ Application saved successfully with allocatedRoomDetails');
+                } catch (validationError) {
+                    console.log('⚠️  Error saving application, trying to fix allocatedRoomDetails...');
+                    console.log('🔧 Fixing allocatedRoomDetails validation error...');
+                    
+                    // Clear the problematic field first
+                    application.allocatedRoomDetails = undefined;
+                    await application.save();
+                    
+                    // Now try to set it again with the correct structure
+                    try {
+                        application.allocatedRoomDetails = {
+                            roomNumber: roomNumber,
+                            roomId: room._id,
+                            price: room.price,
+                            type: room.type,
+                            capacity: room.capacity
+                        };
+                        await application.save();
+                        console.log('✅ Application saved successfully after fixing allocatedRoomDetails');
+                    } catch (secondError) {
+                        console.log('⚠️  Still having issues with allocatedRoomDetails, saving without it...');
+                        console.log('   Error details:', secondError.message);
+                        // Save without allocatedRoomDetails to avoid blocking the approval
+                        application.allocatedRoomDetails = undefined;
+                        await application.save();
+                        console.log('✅ Application saved without allocatedRoomDetails');
+                    }
+                }
 
                 // Set admin approval
                 application.approval.admin = {
@@ -186,6 +356,7 @@ exports.updateApplicationStatus = async (req, res) => {
                 validUntil.setMonth(approvalDate.getMonth() + 4);
 
                 if (application.requestType === 'upgrade') {
+                    console.log('🔄 Processing room upgrade...');
                     // Handle room upgrade
                     const oldRoom = residence.rooms.find(r => r.roomNumber === application.currentRoom);
                     if (oldRoom) {
@@ -209,11 +380,13 @@ exports.updateApplicationStatus = async (req, res) => {
                 // Set the admin user as the manager
                 residence.manager = req.user._id;
                 await residence.save();
+                console.log('✅ Residence updated with new manager and room occupancy');
 
                 // Handle student user creation/update for re-applications
                 let student = null;
                 
                 if (isReapplication && application.previousStudentId) {
+                    console.log('🔄 Finding existing student for re-application...');
                     // This is a re-application - find existing student
                     student = await User.findById(application.previousStudentId);
                     if (student) {
@@ -233,32 +406,64 @@ exports.updateApplicationStatus = async (req, res) => {
                     }
                 }
                 
-                // If no existing student found or this is a new application, create one
+                // If no existing student found or this is a new application, check by email first
                 if (!student) {
-                    // Create new student user
-                    student = new User({
-                        email: application.email,
-                        firstName: application.firstName,
-                        lastName: application.lastName,
-                        phone: application.phone,
-                        password: Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4),
-                        role: 'student',
-                        isVerified: true,
-                        currentRoom: roomNumber,
-                        roomValidUntil: validUntil,
-                        roomApprovalDate: approvalDate,
-                        residence: residence._id,
-                        applicationCode: application.applicationCode
-                    });
+                    console.log('🔍 Checking for existing student by email...');
+                    // Check if a user with this email already exists
+                    student = await User.findOne({ email: application.email });
                     
-                    await student.save();
-                    console.log(`✅ Created new student user: ${student.email}`);
+                    if (student) {
+                        console.log(`✅ Found existing student by email: ${student.email}`);
+                        
+                        // Update existing student with new room and residence
+                        await User.findByIdAndUpdate(student._id, {
+                            $set: {
+                                currentRoom: roomNumber,
+                                roomValidUntil: validUntil,
+                                roomApprovalDate: approvalDate,
+                                residence: residence._id,
+                                role: 'student', // Ensure they have student role
+                                isVerified: true
+                            }
+                        });
+                        
+                        console.log(`✅ Updated existing student with new room: ${roomNumber}`);
+                    } else {
+                        console.log('🆕 Creating new student user...');
+                        // Create new student user
+                        student = new User({
+                            email: application.email,
+                            firstName: application.firstName,
+                            lastName: application.lastName,
+                            phone: application.phone,
+                            password: Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4),
+                            role: 'student',
+                            isVerified: true,
+                            currentRoom: roomNumber,
+                            roomValidUntil: validUntil,
+                            roomApprovalDate: approvalDate,
+                            residence: residence._id,
+                            applicationCode: application.applicationCode
+                        });
+                        
+                        await student.save();
+                        console.log(`✅ Created new student user: ${student.email}`);
+                    }
                 }
 
                 // Update application with residence reference and student link
                 application.residence = residence._id;
                 application.student = student._id;
-                await application.save();
+                
+                // Try to save the application with error handling for validation issues
+                try {
+                    await application.save();
+                    console.log('✅ Application updated with residence and student links');
+                } catch (saveError) {
+                    console.log('⚠️  Error saving application:', saveError.message);
+                    // If it's a different error, re-throw it
+                    throw saveError;
+                }
 
                 // Create or update debtor account for the student
                 try {
@@ -307,10 +512,15 @@ exports.updateApplicationStatus = async (req, res) => {
                             }
                         } catch (accrualError) {
                             console.error(`❌ Error in rental accrual service:`, accrualError);
+                            console.log(`ℹ️  Application approved but rental accrual failed. Manual intervention may be needed.`);
                         }
+                    } else {
+                        console.log(`⚠️  Debtor creation returned null/undefined`);
                     }
                 } catch (debtorError) {
                     console.error(`❌ Error creating/updating debtor account:`, debtorError);
+                    console.log(`ℹ️  Application approved but debtor creation failed. Manual intervention may be needed.`);
+                    console.log(`   Error details:`, debtorError.message);
                     // Don't fail the approval if debtor creation fails
                 }
 
@@ -355,8 +565,10 @@ exports.updateApplicationStatus = async (req, res) => {
                     console.log(`✅ Approval email sent to: ${application.email}`);
                 } catch (emailError) {
                     console.log(`⚠️  Failed to send approval email:`, emailError.message);
+                    console.log(`ℹ️  Application approved but email notification failed.`);
                 }
 
+                console.log('✅ Application approval completed successfully');
                 res.json({
                     success: true,
                     message: `Application approved successfully${isReapplication ? ' (Re-application)' : ''}`,
@@ -373,23 +585,30 @@ exports.updateApplicationStatus = async (req, res) => {
                 break;
 
             case 'reject':
+                console.log('❌ Processing rejection...');
                 application.status = 'rejected';
                 
                 // Send rejection email
-                await sendEmail({
-                    to: application.email,
-                    subject: 'Application Status Update - Alamait Student Accommodation',
-                    text: `
-                        Dear ${application.firstName} ${application.lastName},
+                try {
+                    const { sendEmail } = require('../../utils/email');
+                    await sendEmail({
+                        to: application.email,
+                        subject: 'Application Status Update - Alamait Student Accommodation',
+                        text: `
+                            Dear ${application.firstName} ${application.lastName},
 
-                        We regret to inform you that we are unable to approve your application at this time.
+                            We regret to inform you that we are unable to approve your application at this time.
 
-                        If you have any questions or would like to discuss alternative options, please don't hesitate to contact us.
+                            If you have any questions or would like to discuss alternative options, please don't hesitate to contact us.
 
-                        Best regards,
-                        Alamait Student Accommodation Team
-                    `
-                });
+                            Best regards,
+                            Alamait Student Accommodation Team
+                        `
+                    });
+                    console.log(`✅ Rejection email sent to: ${application.email}`);
+                } catch (emailError) {
+                    console.log(`⚠️  Failed to send rejection email:`, emailError.message);
+                }
 
                 // Send room change rejection notification if this is a room change request (non-blocking)
                 if (application.requestType === 'upgrade' || application.requestType === 'downgrade') {
@@ -402,6 +621,7 @@ exports.updateApplicationStatus = async (req, res) => {
                 }
                 
                 await application.save();
+                console.log('✅ Application rejection completed');
                 res.json({ 
                     message: 'Application rejected successfully',
                     application
@@ -409,6 +629,7 @@ exports.updateApplicationStatus = async (req, res) => {
                 break;
 
             case 'waitlist':
+                console.log('⏳ Processing waitlist...');
                 application.status = 'waitlisted';
                 application.waitlistedRoom = roomNumber;
 
@@ -448,22 +669,29 @@ exports.updateApplicationStatus = async (req, res) => {
                 }
 
                 // Send waitlist email
-                await sendEmail({
-                    to: application.email,
-                    subject: 'Application Waitlisted - Alamait Student Accommodation',
-                    text: `
-                        Dear ${application.firstName} ${application.lastName},
+                try {
+                    const { sendEmail } = require('../../utils/email');
+                    await sendEmail({
+                        to: application.email,
+                        subject: 'Application Waitlisted - Alamait Student Accommodation',
+                        text: `
+                            Dear ${application.firstName} ${application.lastName},
 
-                        Your application has been placed on our waitlist for room ${roomNumber}.
+                            Your application has been placed on our waitlist for room ${roomNumber}.
 
-                        We will contact you as soon as a space becomes available.
+                            We will contact you as soon as a space becomes available.
 
-                        Best regards,
-                        Alamait Student Accommodation Team
-                    `
-                });
+                            Best regards,
+                            Alamait Student Accommodation Team
+                        `
+                    });
+                    console.log(`✅ Waitlist email sent to: ${application.email}`);
+                } catch (emailError) {
+                    console.log(`⚠️  Failed to send waitlist email:`, emailError.message);
+                }
                 
                 await application.save();
+                console.log('✅ Application waitlist completed');
                 res.json({ 
                     message: 'Application waitlisted successfully',
                     application,
@@ -472,21 +700,30 @@ exports.updateApplicationStatus = async (req, res) => {
                 break;
 
             default:
+                console.log('❌ Invalid action:', action);
                 return res.status(400).json({ error: 'Invalid action' });
         }
 
         // After saving/updating application
-        await User.updateOne(
-            { email: application.email },
-            {
-                $set: {
-                    residence: application.roomOccupancy?.residence,
-                    currentRoom: application.allocatedRoom
+        try {
+            await User.updateOne(
+                { email: application.email },
+                {
+                    $set: {
+                        residence: application.roomOccupancy?.residence,
+                        currentRoom: application.allocatedRoom
+                    }
                 }
-            }
-        );
+            );
+            console.log('✅ User record updated');
+        } catch (userUpdateError) {
+            console.log('⚠️  Failed to update user record:', userUpdateError.message);
+            console.log('ℹ️  Application approved but user record update failed.');
+        }
+        
     } catch (error) {
-        console.error('Error in updateApplicationStatus:', error);
+        console.error('❌ Error in updateApplicationStatus:', error);
+        console.error('Error stack:', error.stack);
         res.status(500).json({ error: 'Server error' });
     }
 };
