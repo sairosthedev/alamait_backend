@@ -148,7 +148,67 @@ router.delete('/maintenance/maintenance_staff/:staffId', removeMaintenanceStaff)
 // Payment routes
 router.get('/payments', getPayments);
 router.put('/payments/:paymentId', updatePaymentStatus);
-router.post('/payments', paymentValidation, createPayment);
+router.post('/payments', async (req, res) => {
+    try {
+        console.log('🚀 Admin: Creating payment with Smart FIFO allocation (via adminRoutes)...');
+        
+        const PaymentService = require('../../services/paymentService');
+        
+        // Validate required fields for Smart FIFO system
+        const { totalAmount, payments, student, residence, method, date } = req.body;
+        
+        if (!totalAmount || !payments || !payments.length || !student || !residence) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields for Smart FIFO payment',
+                required: ['totalAmount', 'payments', 'student', 'residence']
+            });
+        }
+        
+        // Validate payment breakdown
+        const totalPaymentAmount = payments.reduce((sum, p) => sum + p.amount, 0);
+        if (Math.abs(totalPaymentAmount - totalAmount) > 0.01) {
+            return res.status(400).json({
+                success: false,
+                message: 'Payment breakdown total does not match totalAmount',
+                breakdownTotal: totalPaymentAmount,
+                totalAmount: totalAmount
+            });
+        }
+        
+        // Create payment using Smart FIFO system
+        const payment = await PaymentService.createPaymentWithSmartAllocation({
+            totalAmount,
+            payments,
+            student,
+            residence,
+            method: method || 'Cash',
+            date: date ? new Date(date) : new Date()
+        }, req.user._id);
+        
+        console.log('✅ Admin: Smart FIFO payment created successfully (via adminRoutes):', payment.paymentId);
+        
+        res.status(201).json({
+            success: true,
+            message: 'Payment created successfully with Smart FIFO allocation',
+            payment: {
+                paymentId: payment.paymentId,
+                totalAmount: payment.totalAmount,
+                status: payment.status,
+                allocation: payment.allocation ? 'Completed' : 'Pending',
+                createdAt: payment.createdAt
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Admin: Error creating Smart FIFO payment (via adminRoutes):', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create payment',
+            error: error.message
+        });
+    }
+});
 router.post('/send-receipt-email', sendReceiptEmail);
 router.post('/upload-receipt', uploadReceipt);
 

@@ -1335,10 +1335,40 @@ class FinancialReportingService {
                 const monthName = monthNames[i];
                 const monthEndDate = new Date(`${period}-${String(i + 1).padStart(2, '0')}-${new Date(period, i + 1, 0).getDate()}`);
                 
-                // Get all transactions up to month end
-                const entries = await TransactionEntry.find({
-                    date: { $lte: monthEndDate }
-                }).populate('entries');
+                // Get all transactions up to month end, but use monthSettled for payments
+                const monthKey = `${period}-${String(i + 1).padStart(2, '0')}`;
+                
+                // For balance sheet, we need to include:
+                // 1. All accruals up to month end (these create the obligations)
+                // 2. All payments with monthSettled <= current month (these settle the obligations)
+                // 3. All other transactions up to month end (non-payment transactions)
+                
+                const accrualQuery = {
+                    source: 'rental_accrual',
+                    date: { $lte: monthEndDate },
+                    status: 'posted'
+                };
+                
+                const paymentQuery = {
+                    source: 'payment',
+                    'metadata.monthSettled': { $lte: monthKey },
+                    status: 'posted'
+                };
+                
+                const otherQuery = {
+                    source: { $nin: ['rental_accrual', 'payment'] },
+                    date: { $lte: monthEndDate },
+                    status: 'posted'
+                };
+                
+                // Get all relevant transactions
+                const [accrualEntries, paymentEntries, otherEntries] = await Promise.all([
+                    TransactionEntry.find(accrualQuery).populate('entries'),
+                    TransactionEntry.find(paymentQuery).populate('entries'),
+                    TransactionEntry.find(otherQuery).populate('entries')
+                ]);
+                
+                const entries = [...accrualEntries, ...paymentEntries, ...otherEntries];
                 
                 // Calculate account balances
                 const accountBalances = {};
@@ -1376,7 +1406,57 @@ class FinancialReportingService {
                     });
                 });
                 
-                // Organize by balance sheet sections
+                // 🆕 FIX: Calculate monthSettled-based balances from the already filtered transactions
+                try {
+                    // Calculate AR balance from the filtered transactions
+                    let arDebits = 0;
+                    let arCredits = 0;
+                    let cashByMonth = 0;
+                    let depositsTotal = 0;
+                    let deferredTotal = 0;
+                    
+                    // Process accrual entries (AR debits)
+                    accrualEntries.forEach(tx => {
+                        tx.entries.forEach(line => {
+                            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
+                                arDebits += Number(line.debit || 0);
+                            }
+                        });
+                    });
+                    
+                    // Process payment entries (AR credits, cash, deposits, deferred)
+                    paymentEntries.forEach(tx => {
+                        tx.entries.forEach(line => {
+                            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
+                                arCredits += Number(line.credit || 0);
+                            } else if (line.accountCode && line.accountCode.match(/^100[0-9]/)) {
+                                // Cash accounts - only include if monthSettled = current month
+                                if (tx.metadata?.monthSettled === monthKey) {
+                                    cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+                                }
+                            } else if (line.accountCode && line.accountCode.startsWith('2020')) {
+                                // Deposit accounts
+                                depositsTotal += (line.credit || 0) - (line.debit || 0);
+                            } else if (line.accountCode && line.accountCode.startsWith('2200')) {
+                                // Deferred income accounts
+                                deferredTotal += (line.credit || 0) - (line.debit || 0);
+                            }
+                        });
+                    });
+                    
+                    const arByMonthOutstanding = arDebits - arCredits;
+                } catch (error) {
+                    console.error('Error reclassifying by monthSettled:', error.message);
+                    // Fallback to cumulative balances
+                    const sumBy = (predicate) => Object.values(accountBalances)
+                        .filter(a => predicate(a))
+                        .reduce((sum, a) => sum + (a.balance || 0), 0);
+                    arByMonthOutstanding = sumBy(a => a.code && a.code.startsWith('1100'));
+                    depositsTotal = sumBy(a => a.code && a.code.startsWith('2020'));
+                    deferredTotal = sumBy(a => a.code && a.code.startsWith('2200'));
+                }
+                
+                // Organize by balance sheet sections with monthSettled overrides
                 Object.values(accountBalances).forEach(account => {
                     if (account.accountType === 'Asset' || account.accountType === 'asset') {
                         const isCurrent = this.isCurrentAsset(account.accountName);
@@ -1385,8 +1465,14 @@ class FinancialReportingService {
                         if (!monthlyBalanceSheet[monthName].assets[section][account.accountName]) {
                             monthlyBalanceSheet[monthName].assets[section][account.accountName] = 0;
                         }
-                        monthlyBalanceSheet[monthName].assets[section][account.accountName] = account.balance;
-                        monthlyBalanceSheet[monthName].assets.total += account.balance;
+                        
+                        // 🆕 FIX: Override cash accounts with monthSettled-based calculation
+                        if (account.code && account.code.match(/^100[0-9]/)) {
+                            monthlyBalanceSheet[monthName].assets[section][account.accountName] = cashByMonth;
+                        } else {
+                            monthlyBalanceSheet[monthName].assets[section][account.accountName] = account.balance;
+                        }
+                        monthlyBalanceSheet[monthName].assets.total += monthlyBalanceSheet[monthName].assets[section][account.accountName];
                     } else if (account.accountType === 'Liability' || account.accountType === 'liability') {
                         const isCurrent = this.isCurrentLiability(account.accountName);
                         const section = isCurrent ? 'current' : 'non_current';
@@ -1401,6 +1487,13 @@ class FinancialReportingService {
                         monthlyBalanceSheet[monthName].equity.total += account.balance;
                     }
                 });
+
+                // Override standardized lines with monthSettled rollups
+                if (!monthlyBalanceSheet[monthName].assets.current) monthlyBalanceSheet[monthName].assets.current = {};
+                if (!monthlyBalanceSheet[monthName].liabilities.current) monthlyBalanceSheet[monthName].liabilities.current = {};
+                monthlyBalanceSheet[monthName].assets.current['Accounts Receivable - Tenants (1100)'] = arByMonthOutstanding;
+                monthlyBalanceSheet[monthName].liabilities.current['Tenant Deposits Held (2020)'] = depositsTotal;
+                monthlyBalanceSheet[monthName].liabilities.current['Deferred Income - Tenant Advances (2200)'] = deferredTotal;
                 
                 // Calculate net worth
                 monthlyBalanceSheet[monthName].total_assets = monthlyBalanceSheet[monthName].assets.total;

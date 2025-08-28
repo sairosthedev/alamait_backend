@@ -39,7 +39,7 @@ class AccountingService {
             for (const student of activeStudents) {
                 // Check if accrual already exists
                 const existingAccrual = await TransactionEntry.findOne({
-                    'metadata.type': 'rent_accrual',
+                    'metadata.type': 'monthly_rent_accrual',
                     'metadata.studentId': student._id,
                     'metadata.accrualMonth': month,
                     'metadata.accrualYear': year,
@@ -90,7 +90,7 @@ class AccountingService {
                 
                 // Create accrual transaction
                 const transaction = new Transaction({
-                    transactionId: `ACC-${year}${month.toString().padStart(2, '0')}-${student._id.toString().slice(-6)}`,
+                    transactionId: `ACC-${year}${month.toString().padStart(2, '0')}-${student.student.toString().slice(-6)}`,
                     date: new Date(year, month - 1, 1),
                     description: `Monthly Rent & Admin Accrual - ${student.firstName} ${student.lastName} - ${month}/${year}`,
                     type: 'accrual',
@@ -98,8 +98,8 @@ class AccountingService {
                     createdBy: new mongoose.Types.ObjectId(),
                     amount: totalAccrued,
                     metadata: {
-                        type: 'rent_accrual',
-                        studentId: student._id,
+                        type: 'monthly_rent_accrual',
+                        studentId: student.student,
                         studentName: `${student.firstName} ${student.lastName}`,
                         accrualMonth: month,
                         accrualYear: year,
@@ -125,24 +125,24 @@ class AccountingService {
                     residence: student.residence,
                     entries: [
                         {
-                            accountCode: '1100',
-                            accountName: 'Accounts Receivable - Tenants',
+                            accountCode: `1100-${student.student}`,
+                            accountName: `Accounts Receivable - ${student.firstName} ${student.lastName}`,
                             accountType: 'Asset',
                             debit: totalAccrued,
                             credit: 0,
                             description: `Rent & Admin Accrued - ${student.firstName} ${student.lastName}`
                         },
                         {
-                            accountCode: '4000',
-                            accountName: 'Rental Income',
+                            accountCode: '4001',
+                            accountName: 'Student Accommodation Rent',
                             accountType: 'Income',
                             debit: 0,
                             credit: monthlyRent,
                             description: `Monthly Rent Accrued - ${student.firstName} ${student.lastName}`
                         },
                         {
-                            accountCode: '4100',
-                            accountName: 'Administrative Income',
+                            accountCode: '4002',
+                            accountName: 'Administrative Fees',
                             accountType: 'Income',
                             debit: 0,
                             credit: monthlyAdminFee,
@@ -150,8 +150,8 @@ class AccountingService {
                         }
                     ],
                     metadata: {
-                        type: 'rent_accrual',
-                        studentId: student._id,
+                        type: 'monthly_rent_accrual',
+                        studentId: student.student,
                         studentName: `${student.firstName} ${student.lastName}`,
                         accrualMonth: month,
                         accrualYear: year,
@@ -241,8 +241,8 @@ class AccountingService {
                         description: `Rent payment received - ${studentName}`
                     },
                     {
-                        accountCode: '1100',
-                        accountName: 'Accounts Receivable - Tenants',
+                        accountCode: `1100-${studentId}`,
+                        accountName: `Accounts Receivable - ${studentName}`,
                         accountType: 'Asset',
                         debit: 0,
                         credit: paymentAmount,
@@ -701,11 +701,12 @@ class AccountingService {
             const monthEnd = new Date(year, month, 0);
             
             // Assets with account codes (include user petty cash accounts 1010-1014)
+            const cashBalance = await this.getAccountBalance('1000', monthEnd, residenceId); // Main cash account
             const bankBalance = await this.getAccountBalance('1001', monthEnd, residenceId);
             const ecocashBalance = await this.getAccountBalance('1002', monthEnd, residenceId);
             const innbucksBalance = await this.getAccountBalance('1003', monthEnd, residenceId);
             const pettyCashBalance = await this.getAccountBalance('1004', monthEnd, residenceId);
-            const cashBalance = await this.getAccountBalance('1005', monthEnd, residenceId);
+            const cashOnHandBalance = await this.getAccountBalance('1005', monthEnd, residenceId);
             // User/role petty cash accounts
             const generalPettyCash = await this.getAccountBalance('1010', monthEnd, residenceId);
             const adminPettyCash = await this.getAccountBalance('1011', monthEnd, residenceId);
@@ -715,14 +716,14 @@ class AccountingService {
             // Fix: Calculate Accounts Receivable correctly (Accruals - Payments) including child accounts
             const accountsReceivable = await this.getAccountsReceivableWithChildren(monthEnd, residenceId);
             
-            const totalCashAndBank = bankBalance + ecocashBalance + innbucksBalance + pettyCashBalance + cashBalance
+            const totalCashAndBank = cashBalance + bankBalance + ecocashBalance + innbucksBalance + pettyCashBalance + cashOnHandBalance
                 + generalPettyCash + adminPettyCash + financePettyCash + propertyMgrPettyCash + maintenancePettyCash;
             const totalAssets = totalCashAndBank + accountsReceivable;
             
                 // Liabilities with account codes
     const accountsPayable = await this.getAccountsPayableWithChildren(monthEnd, residenceId);
     const tenantDeposits = await this.getAccountBalance('2020', monthEnd, residenceId);
-    const deferredIncome = await this.getAccountBalance('1102', monthEnd, residenceId);
+    const deferredIncome = await this.getAccountBalance('2200', monthEnd, residenceId);
     const totalLiabilities = Math.abs(accountsPayable) + Math.abs(tenantDeposits) + Math.abs(deferredIncome);
             
             // Equity with account codes
@@ -740,11 +741,12 @@ class AccountingService {
                 assets: {
                     current: {
                         cashAndBank: {
+                            cash: { amount: cashBalance, accountCode: '1000', accountName: 'Cash' },
                             bank: { amount: bankBalance, accountCode: '1001', accountName: 'Bank Account' },
                             ecocash: { amount: ecocashBalance, accountCode: '1002', accountName: 'Ecocash' },
                             innbucks: { amount: innbucksBalance, accountCode: '1003', accountName: 'Innbucks' },
                             pettyCash: { amount: pettyCashBalance, accountCode: '1004', accountName: 'Petty Cash' },
-                            cash: { amount: cashBalance, accountCode: '1005', accountName: 'Cash on Hand' },
+                            cashOnHand: { amount: cashOnHandBalance, accountCode: '1005', accountName: 'Cash on Hand' },
                             // User petty cash accounts breakdown
                             generalPettyCash: { amount: generalPettyCash, accountCode: '1010', accountName: 'General Petty Cash' },
                             adminPettyCash: { amount: adminPettyCash, accountCode: '1011', accountName: 'Admin Petty Cash' },
@@ -761,7 +763,7 @@ class AccountingService {
                     current: {
                         accountsPayable: { amount: Math.abs(accountsPayable), accountCode: '2000', accountName: 'Accounts Payable' },
                         tenantDeposits: { amount: Math.abs(tenantDeposits), accountCode: '2020', accountName: 'Tenant Deposits Held' },
-                        deferredIncome: { amount: Math.abs(deferredIncome), accountCode: '1102', accountName: 'Deferred Income - Tenant Advances' }
+                        deferredIncome: { amount: Math.abs(deferredIncome), accountCode: '2200', accountName: 'Advance Payment Liability' }
                     },
                     total: totalLiabilities
                 },
@@ -839,7 +841,31 @@ class AccountingService {
     
     // Helper methods
     static async getAccountBalance(accountCode, asOfDate, residenceId = null) {
-        let query = {
+        const asOfMonth = asOfDate.getMonth() + 1;
+        const asOfYear = asOfDate.getFullYear();
+        const monthKey = `${asOfYear}-${String(asOfMonth).padStart(2, '0')}`;
+        
+        // For balance sheet, we need to include:
+        // 1. All accruals up to asOf date (these create the obligations)
+        // 2. All payments with monthSettled <= current month (these settle the obligations)
+        // 3. All other transactions up to asOf date (non-payment transactions)
+        
+        const accrualQuery = {
+            source: 'rental_accrual',
+            'entries.accountCode': accountCode,
+            date: { $lte: asOfDate },
+            status: 'posted'
+        };
+        
+        const paymentQuery = {
+            source: 'payment',
+            'entries.accountCode': accountCode,
+            'metadata.monthSettled': { $lte: monthKey },
+            status: 'posted'
+        };
+        
+        const otherQuery = {
+            source: { $nin: ['rental_accrual', 'payment'] },
             'entries.accountCode': accountCode,
             date: { $lte: asOfDate },
             status: 'posted'
@@ -847,10 +873,19 @@ class AccountingService {
         
         // Add residence filtering if specified
         if (residenceId) {
-            query['residence'] = residenceId;
+            accrualQuery['residence'] = residenceId;
+            paymentQuery['residence'] = residenceId;
+            otherQuery['residence'] = residenceId;
         }
         
-        const entries = await TransactionEntry.find(query);
+        // Get all relevant transactions
+        const [accrualEntries, paymentEntries, otherEntries] = await Promise.all([
+            TransactionEntry.find(accrualQuery),
+            TransactionEntry.find(paymentQuery),
+            TransactionEntry.find(otherQuery)
+        ]);
+        
+        const entries = [...accrualEntries, ...paymentEntries, ...otherEntries];
         
         let balance = 0;
         for (const entry of entries) {

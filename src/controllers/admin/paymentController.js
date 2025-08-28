@@ -752,74 +752,54 @@ const createPayment = async (req, res) => {
             // This is a warning, not an error - payment was created successfully
         }
 
-        // Record double-entry accounting transaction
+        // 🎯 Use Smart FIFO allocation service for proper payment allocation
         try {
-            const DoubleEntryAccountingService = require('../../services/doubleEntryAccountingService');
+            const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
             
-            console.log('💰 Creating double-entry accounting transaction...');
+            console.log('🎯 Starting Smart FIFO allocation for payment...');
             console.log(`   Payment ID: ${payment.paymentId}`);
             console.log(`   Student: ${payment.student}`);
-            console.log(`   User ID: ${payment.user}`);  // ← NEW: Log user ID
+            console.log(`   User ID: ${payment.user}`);
             console.log(`   Residence: ${payment.residence}`);
             console.log(`   Amount: $${payment.totalAmount}`);
             console.log(`   Method: ${payment.method}`);
             console.log(`   Date: ${payment.date}`);
-            console.log(`   Date Type: ${typeof payment.date}`);
-            console.log(`   Date Valid: ${payment.date instanceof Date ? 'Yes' : 'No'}`);
             
-            // Ensure payment has all required fields for transaction creation
-            const paymentForTransaction = {
-                ...payment.toObject(),
-                _id: payment._id,
-                paymentId: payment.paymentId,
-                student: payment.student,
-                user: payment.user,
-                residence: payment.residence,
-                method: payment.method,
+            // Prepare data for Smart FIFO allocation
+            const allocationData = {
+                paymentId: payment._id.toString(),
+                studentId: payment.student,
                 totalAmount: payment.totalAmount,
-                date: payment.date,
+                payments: payment.payments || [],
+                residence: payment.residence,
                 paymentMonth: payment.paymentMonth,
                 rentAmount: payment.rentAmount || 0,
                 adminFee: payment.adminFee || 0,
-                deposit: payment.deposit || 0
+                deposit: payment.deposit || 0,
+                method: payment.method,
+                date: payment.date
             };
             
-            const accountingResult = await DoubleEntryAccountingService.recordStudentRentPayment(paymentForTransaction, req.user);
+            const allocationResult = await EnhancedPaymentAllocationService.smartFIFOAllocation(allocationData);
             
-            if (accountingResult && accountingResult.transaction && accountingResult.transactionEntry) {
-                console.log('✅ Double-entry accounting transaction created for payment');
-                console.log(`   Transaction ID: ${accountingResult.transaction.transactionId}`);
-                console.log(`   Transaction Entry ID: ${accountingResult.transactionEntry._id}`);
-                console.log(`   Amount: $${accountingResult.transactionEntry.totalDebit}`);
+            if (allocationResult.success) {
+                console.log('✅ Smart FIFO allocation completed successfully');
+                console.log('📊 Allocation summary:', allocationResult.allocation.summary);
                 
-                // Verify transaction entry was created
-                const TransactionEntry = require('../../models/TransactionEntry');
-                const createdEntry = await TransactionEntry.findById(accountingResult.transactionEntry._id);
-                if (createdEntry) {
-                    console.log(`   ✅ Transaction entry verified in database`);
-                    console.log(`   Total Debit: $${createdEntry.totalDebit}`);
-                    console.log(`   Total Credit: $${createdEntry.totalCredit}`);
-                    console.log(`   Entries Count: ${createdEntry.entries?.length || 0}`);
-                } else {
-                    console.log(`   ⚠️ Transaction entry not found in database after creation`);
-                }
+                // Update payment with allocation results
+                payment.allocation = allocationResult.allocation;
+                await payment.save();
+                
+                console.log('✅ Payment updated with allocation breakdown');
             } else {
-                console.log(`   ⚠️ Accounting service returned incomplete result`);
+                console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
+                // Don't fail payment creation, but log the allocation error
             }
-        } catch (accountingError) {
-            console.error('❌ Error creating accounting transaction:', accountingError);
-            console.error('   Error details:', accountingError.message);
-            console.error('   Stack trace:', accountingError.stack);
-            console.error('   Payment data:', {
-                paymentId: payment.paymentId,
-                student: payment.student,
-                residence: payment.residence,
-                totalAmount: payment.totalAmount,
-                method: payment.method,
-                date: payment.date,
-                dateType: typeof payment.date
-            });
-            // Don't fail the payment creation, but log the error
+        } catch (allocationError) {
+            console.error('❌ Error in Smart FIFO allocation:', allocationError);
+            console.error('   Error details:', allocationError.message);
+            console.error('   Stack trace:', allocationError.stack);
+            // Don't fail the payment creation, but log the allocation error
         }
 
         // Audit log
@@ -1022,7 +1002,7 @@ const createPayment = async (req, res) => {
             let transactionType = 'current_payment';
 
             // Get Deferred Income account for advance payments
-            const deferredIncomeAccount = await Account.findOne({ code: '2030' }); // Deferred Income - Tenant Advances
+            const deferredIncomeAccount = await Account.findOne({ code: '2200' }); // Advance Payment Liability
             const adminFeeAccount = await Account.findOne({ code: '4100' }); // Administrative Income
             const depositAccount = await Account.findOne({ code: '2020' }); // Tenant Deposits Held
             

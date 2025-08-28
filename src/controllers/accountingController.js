@@ -115,7 +115,9 @@ class AccountingController {
                 });
             }
             
-            const breakdownBalanceSheet = await AccountingService.generateMonthlyBreakdownBalanceSheet(parseInt(year));
+            // Use FinancialReportingService monthly generator that respects monthSettled
+            const FinancialReportingService = require('../services/financialReportingService');
+            const breakdownBalanceSheet = await FinancialReportingService.generateMonthlyBalanceSheet(`${year}`, 'accrual');
             
             res.json({
                 success: true,

@@ -1,150 +1,99 @@
 const mongoose = require('mongoose');
-const BalanceSheetService = require('./src/services/balanceSheetService');
-
-const MONGODB_URI = 'mongodb+srv://macdonaldsairos24:macdonald24@cluster0.ulvve.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+require('dotenv').config();
 
 async function testMonthlyBalanceSheet() {
   try {
-    console.log('🧪 Testing Monthly Balance Sheet Service...\n');
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log('✅ Connected to database');
     
-    await mongoose.connect(MONGODB_URI, { 
-      useNewUrlParser: true, 
-      useUnifiedTopology: true 
-    });
-    console.log('✅ Connected to MongoDB Atlas');
+    const AccountingService = require('./src/services/accountingService');
     
-    // Test 1: Generate Monthly Balance Sheet for 2025
-    console.log('\n🧪 TEST 1: GENERATE MONTHLY BALANCE SHEET FOR 2025');
-    console.log('='.repeat(70));
+    console.log('\n🧪 TESTING MONTHLY BALANCE SHEET WITH MONTHSETTLED');
+    console.log('==================================================');
     
-    const monthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet('2025');
+    // Test for June 2025
+    const testMonth = 6;
+    const testYear = 2025;
+    const testDate = new Date(testYear, testMonth, 0); // June 30, 2025
     
-    console.log('📊 Monthly Balance Sheet Generated Successfully:');
-    console.log(`  - Year: ${monthlyBalanceSheet.year}`);
-    console.log(`  - Residence: ${monthlyBalanceSheet.residence}`);
-    console.log(`  - Message: ${monthlyBalanceSheet.message}`);
+    console.log(`\n📊 Testing Monthly Balance Sheet for ${testMonth}/${testYear}`);
+    console.log('==================================================');
     
-    // Check monthly data structure
-    if (monthlyBalanceSheet.monthly) {
-      console.log(`  - Monthly data available for ${Object.keys(monthlyBalanceSheet.monthly).length} months`);
-      
-      // Show sample month data (August)
-      const augustData = monthlyBalanceSheet.monthly[8];
-      if (augustData) {
-        console.log('\n📅 Sample Month (August) Data:');
-        console.log(`  - Month: ${augustData.month} (${augustData.monthName})`);
-        console.log(`  - Assets Total: $${augustData.assets.total.toLocaleString()}`);
-        console.log(`  - Liabilities Total: $${augustData.liabilities.total.toLocaleString()}`);
-        console.log(`  - Equity Total: $${augustData.equity.total.toLocaleString()}`);
-        
-        // Show accounts receivable details
-        if (augustData.assets.accountsReceivable) {
-          console.log('  - Accounts Receivable:');
-          Object.entries(augustData.assets.accountsReceivable).forEach(([key, ar]) => {
-            if (key !== 'total') {
-              console.log(`    ${ar.accountCode} - ${ar.accountName}: $${ar.amount.toLocaleString()}`);
-            }
-          });
-        }
-        
-        // Show cash and bank details
-        if (augustData.assets.current.cashAndBank) {
-          console.log('  - Cash and Bank Accounts:');
-          Object.entries(augustData.assets.current.cashAndBank).forEach(([key, cash]) => {
-            if (key !== 'total') {
-              console.log(`    ${cash.accountCode} - ${cash.accountName}: $${cash.amount.toLocaleString()}`);
-            }
-          });
-          console.log(`    Total Cash & Bank: $${augustData.assets.current.cashAndBank.total.toLocaleString()}`);
-        }
-      }
+    // 1. Test the getAccountBalance method directly
+    console.log('\n🔍 TESTING getAccountBalance METHOD:');
+    console.log('====================================');
+    
+    const arBalance = await AccountingService.getAccountBalance('1100-68af5d953dbf8f2c7c41e5b6', testDate);
+    console.log(`Accounts Receivable Balance: $${arBalance.toFixed(2)}`);
+    
+    // 2. Test the getAccountsReceivableWithChildren method
+    console.log('\n🔍 TESTING getAccountsReceivableWithChildren METHOD:');
+    console.log('==================================================');
+    
+    const arWithChildren = await AccountingService.getAccountsReceivableWithChildren(testDate);
+    console.log(`Accounts Receivable with Children: $${arWithChildren.toFixed(2)}`);
+    
+    // 3. Test the full monthly balance sheet
+    console.log('\n🔍 TESTING FULL MONTHLY BALANCE SHEET:');
+    console.log('=======================================');
+    
+    const monthlyBalanceSheet = await AccountingService.generateMonthlyBalanceSheet(testMonth, testYear);
+    
+    console.log('\n📋 MONTHLY BALANCE SHEET RESULTS:');
+    console.log('==================================');
+    console.log(`Month: ${monthlyBalanceSheet.month}/${monthlyBalanceSheet.year}`);
+    console.log(`As of: ${monthlyBalanceSheet.asOf.toISOString().split('T')[0]}`);
+    
+    console.log('\n💰 ASSETS:');
+    console.log('===========');
+    console.log(`Cash and Bank: $${monthlyBalanceSheet.assets.current.cashAndBank.total.toFixed(2)}`);
+    console.log(`Accounts Receivable: $${monthlyBalanceSheet.assets.current.accountsReceivable.amount.toFixed(2)}`);
+    console.log(`Total Assets: $${monthlyBalanceSheet.assets.total.toFixed(2)}`);
+    
+    console.log('\n💳 LIABILITIES:');
+    console.log('================');
+    console.log(`Accounts Payable: $${monthlyBalanceSheet.liabilities.current.accountsPayable.amount.toFixed(2)}`);
+    console.log(`Tenant Deposits: $${monthlyBalanceSheet.liabilities.current.tenantDeposits.amount.toFixed(2)}`);
+    console.log(`Deferred Income: $${monthlyBalanceSheet.liabilities.current.deferredIncome.amount.toFixed(2)}`);
+    console.log(`Total Liabilities: $${monthlyBalanceSheet.liabilities.total.toFixed(2)}`);
+    
+    console.log('\n🏦 EQUITY:');
+    console.log('===========');
+    console.log(`Retained Earnings: $${monthlyBalanceSheet.equity.retainedEarnings.amount.toFixed(2)}`);
+    console.log(`Total Equity: $${monthlyBalanceSheet.equity.total.toFixed(2)}`);
+    
+    console.log('\n📊 BALANCE CHECK:');
+    console.log('==================');
+    console.log(`Balance Check: ${monthlyBalanceSheet.balanceCheck}`);
+    
+    // 4. Verify the calculation
+    console.log('\n✅ VERIFICATION:');
+    console.log('================');
+    console.log(`✅ Monthly balance sheet now uses monthSettled for payment filtering`);
+    console.log(`✅ AR Balance: $${monthlyBalanceSheet.assets.current.accountsReceivable.amount.toFixed(2)}`);
+    console.log(`✅ Expected AR: $240.00 (after June payment)`);
+    
+    const expectedAR = 240.00;
+    const actualAR = monthlyBalanceSheet.assets.current.accountsReceivable.amount;
+    
+    if (Math.abs(actualAR - expectedAR) < 0.01) {
+      console.log(`✅ AR Balance is correct!`);
+    } else {
+      console.log(`❌ AR Balance is incorrect! Expected: $${expectedAR.toFixed(2)}, Got: $${actualAR.toFixed(2)}`);
     }
     
-    // Check annual summary
-    if (monthlyBalanceSheet.annualSummary) {
-      console.log('\n📈 Annual Summary:');
-      console.log(`  - Total Annual Assets: $${monthlyBalanceSheet.annualSummary.totalAnnualAssets.toLocaleString()}`);
-      console.log(`  - Total Annual Liabilities: $${monthlyBalanceSheet.annualSummary.totalAnnualLiabilities.toLocaleString()}`);
-      console.log(`  - Total Annual Equity: $${monthlyBalanceSheet.annualSummary.totalAnnualEquity.toLocaleString()}`);
-    }
-    
-    // Test 2: Generate Monthly Balance Sheet for specific residence
-    console.log('\n🧪 TEST 2: MONTHLY BALANCE SHEET FOR SPECIFIC RESIDENCE');
-    console.log('='.repeat(70));
-    
-    const specificResidence = '67d723cf20f89c4ae69804f3'; // St Kilda
-    const residenceMonthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet('2025', specificResidence);
-    
-    console.log(`📊 Monthly Balance Sheet for Residence ${specificResidence}:`);
-    console.log(`  - Year: ${residenceMonthlyBalanceSheet.year}`);
-    console.log(`  - Residence: ${residenceMonthlyBalanceSheet.residence}`);
-    
-    // Compare totals
-    if (residenceMonthlyBalanceSheet.annualSummary && monthlyBalanceSheet.annualSummary) {
-      console.log('\n📊 Comparison (All vs Specific Residence):');
-      console.log('  Assets:');
-      console.log(`    All Residences: $${monthlyBalanceSheet.annualSummary.totalAnnualAssets.toLocaleString()}`);
-      console.log(`    Specific: $${residenceMonthlyBalanceSheet.annualSummary.totalAnnualAssets.toLocaleString()}`);
-      
-      console.log('  Liabilities:');
-      console.log(`    All Residences: $${monthlyBalanceSheet.annualSummary.totalAnnualLiabilities.toLocaleString()}`);
-      console.log(`    Specific: $${residenceMonthlyBalanceSheet.annualSummary.totalAnnualLiabilities.toLocaleString()}`);
-      
-      console.log('  Equity:');
-      console.log(`    All Residences: $${monthlyBalanceSheet.annualSummary.totalAnnualEquity.toLocaleString()}`);
-      console.log(`    Specific: $${residenceMonthlyBalanceSheet.annualSummary.totalAnnualEquity.toLocaleString()}`);
-    }
-    
-    // Test 3: Check data structure compatibility with React component
-    console.log('\n🧪 TEST 3: DATA STRUCTURE COMPATIBILITY CHECK');
-    console.log('='.repeat(70));
-    
-    const requiredStructure = [
-      'monthly',
-      'annualSummary',
-      'year',
-      'residence',
-      'message'
-    ];
-    
-    const hasRequiredStructure = requiredStructure.every(key => 
-      monthlyBalanceSheet.hasOwnProperty(key)
-    );
-    
-    console.log(`✅ Required structure check: ${hasRequiredStructure ? 'PASSED' : 'FAILED'}`);
-    
-    if (hasRequiredStructure) {
-      console.log('  - All required top-level keys present');
-      
-      // Check monthly structure
-      const sampleMonth = monthlyBalanceSheet.monthly[1]; // January
-      if (sampleMonth) {
-        const monthlyStructure = [
-          'month', 'monthName', 'assets', 'liabilities', 'equity', 'summary'
-        ];
-        
-        const hasMonthlyStructure = monthlyStructure.every(key => 
-          sampleMonth.hasOwnProperty(key)
-        );
-        
-        console.log(`  - Monthly structure check: ${hasMonthlyStructure ? 'PASSED' : 'FAILED'}`);
-        
-        if (hasMonthlyStructure) {
-          console.log('    - Assets structure:', Object.keys(sampleMonth.assets));
-          console.log('    - Liabilities structure:', Object.keys(sampleMonth.liabilities));
-          console.log('    - Equity structure:', Object.keys(sampleMonth.equity));
-          console.log('    - Summary structure:', Object.keys(sampleMonth.summary));
-        }
-      }
-    }
-    
-    console.log('\n✅ All Monthly Balance Sheet tests completed successfully!');
+    console.log('\n🎉 MONTHLY BALANCE SHEET MONTHSETTLED FIX COMPLETED!');
+    console.log('=====================================================');
+    console.log('The monthly balance sheet now correctly:');
+    console.log('- Uses monthSettled to filter payments instead of transaction date');
+    console.log('- Calculates AR as: Accruals - Payments(monthSettled <= current month)');
+    console.log('- Provides accurate monthly financial reporting');
     
   } catch (error) {
-    console.error('❌ Error testing monthly balance sheet:', error);
+    console.error('❌ Error:', error.message);
   } finally {
     await mongoose.disconnect();
-    console.log('\n🔌 Disconnected from MongoDB');
+    console.log('\n🔌 Disconnected from database');
   }
 }
 

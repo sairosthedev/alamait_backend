@@ -207,18 +207,19 @@ class RentalAccrualService {
                 transactionId: transaction.transactionId,
                 date: startDate,
                 description: `Lease start accounting entries: ${application.firstName} ${application.lastName}`,
-                reference: application._id.toString(),
+                reference: application.student.toString(), // Use student ID, not application ID
                 entries,
                 totalDebit,
                 totalCredit,
                 source: 'rental_accrual',
-                sourceId: application._id,
+                sourceId: application.student, // Use student ID, not application ID
                 sourceModel: 'Lease',
                 residence: application.residence,
                 createdBy: 'system',
                 status: 'posted',
                 metadata: {
                     applicationId: application._id.toString(),
+                    studentId: application.student.toString(), // Add correct student ID
                     studentName: `${application.firstName} ${application.lastName}`,
                     residence: application.residence,
                     room: application.allocatedRoom,
@@ -489,7 +490,7 @@ class RentalAccrualService {
 
             // Check if accrual already exists for this month
             const existingAccrual = await TransactionEntry.findOne({
-                'metadata.applicationId': student._id.toString(),
+                'metadata.studentId': student.student.toString(),
                 'metadata.accrualMonth': month,
                 'metadata.accrualYear': year,
                 'metadata.type': 'monthly_rent_accrual'
@@ -521,7 +522,7 @@ class RentalAccrualService {
             
             // Get required accounts
             const accountsReceivable = await this.ensureStudentARAccount(
-                student._id,
+                student.student, // Use student ID, not application ID
                 `${student.firstName} ${student.lastName}`
             );
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
@@ -539,7 +540,7 @@ class RentalAccrualService {
                 residence: student.residence,
                 createdBy: 'system',
                 metadata: {
-                    applicationId: student._id.toString(),
+                    studentId: student.student.toString(), // Use student ID, not application ID
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
                     room: student.allocatedRoom,
@@ -578,18 +579,18 @@ class RentalAccrualService {
                 transactionId: transaction.transactionId,
                 date: monthStart, // This should be 1st of the month
                 description: `Monthly rent accrual: ${student.firstName} ${student.lastName} - ${month}/${year}`,
-                reference: student._id.toString(),
+                reference: student.student.toString(),
                 entries,
                 totalDebit: rentAmount,
                 totalCredit: rentAmount,
                 source: 'rental_accrual',
-                sourceId: student._id,
+                sourceId: student.student, // Use student ID, not application ID
                 sourceModel: 'Lease',
                 residence: student.residence,
                 createdBy: 'system',
                 status: 'posted',
                 metadata: {
-                    applicationId: student._id.toString(),
+                    studentId: student.student.toString(), // Use student ID, not application ID
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
                     room: student.allocatedRoom,

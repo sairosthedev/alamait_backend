@@ -311,34 +311,172 @@ class PaymentAllocationService {
   /**
    * Get student's lease information from the system
    * @param {string} studentId - Student ID
-   * @param {string} residence - Residence name
-   * @param {string} room - Room number
    * @returns {Object} Lease information
    */
-  static async getStudentLeaseInfo(studentId, residence, room) {
+  static async getStudentLeaseInfo(studentId) {
     try {
-      // This would typically query your applications/leases collection
-      // For now, returning mock data - you'll need to implement this based on your data structure
+      // Get the student's approved application/lease
+      const Application = require('../models/Application');
+      const application = await Application.findOne({ 
+        student: studentId,
+        status: 'approved',
+        paymentStatus: { $ne: 'cancelled' }
+      });
       
-      // Example implementation:
-      // const application = await Application.findOne({ 
-      //   studentId, 
-      //   'allocatedRoomDetails.residence': residence,
-      //   'allocatedRoom': room,
-      //   status: 'approved'
-      // });
+      if (!application) {
+        throw new Error('No approved lease found for student');
+      }
       
-      // Mock data for demonstration
+      // Get residence details for pricing
+      const Residence = require('../models/Residence');
+      const residence = await Residence.findById(application.residence);
+      if (!residence) {
+        throw new Error('Residence not found');
+      }
+      
+      // Find room price
+      const room = residence.rooms.find(r => r.roomNumber === application.allocatedRoom);
+      if (!room || !room.price) {
+        throw new Error('Room price not found');
+      }
+      
       return {
-        startDate: '2025-05-10',
-        endDate: '2025-09-30',
-        monthlyRent: 180,
-        adminFee: 20
+        startDate: application.startDate,
+        endDate: application.endDate,
+        monthlyRent: room.price,
+        adminFee: residence.name.toLowerCase().includes('st kilda') ? 20 : 0,
+        residence: application.residence,
+        room: application.allocatedRoom
       };
       
     } catch (error) {
       console.error('Error getting lease info:', error);
       return null;
+    }
+  }
+
+  /**
+   * 🆕 ENHANCED: Get detailed outstanding balances by month and payment type
+   * Tracks rent, admin fees, and deposits separately for proper FIFO allocation
+   * @param {string} studentId - Student ID
+   * @returns {Array} Array of outstanding balance objects sorted by date (oldest first)
+   */
+  static async getDetailedOutstandingBalances(studentId) {
+    try {
+      console.log(`🔍 Getting detailed outstanding balances for student: ${studentId}`);
+      
+      // Get all transactions for this student
+      const allStudentTransactions = await TransactionEntry.find({
+        'entries.accountCode': { $regex: `^1100-${studentId}` }
+      }).sort({ 'entries.date': 1 });
+      
+      console.log(`📊 Found ${allStudentTransactions.length} total transactions for student ${studentId}`);
+      
+      // Separate different types of transactions
+      const accruals = allStudentTransactions.filter(tx => 
+        tx.source === 'rental_accrual' || 
+        (tx.source === 'lease_start' && tx.metadata?.proratedRent > 0)
+      );
+      
+      const payments = allStudentTransactions.filter(tx => 
+        tx.source === 'payment'
+      );
+      
+      // Track outstanding balances by month and type
+      const monthlyOutstanding = {};
+      
+      // Process accruals to build debt structure
+      accruals.forEach(accrual => {
+        const accrualDate = new Date(accrual.date);
+        const monthKey = `${accrualDate.getFullYear()}-${String(accrualDate.getMonth() + 1).padStart(2, '0')}`;
+        
+        if (!monthlyOutstanding[monthKey]) {
+          monthlyOutstanding[monthKey] = {
+            monthKey,
+            year: accrualDate.getFullYear(),
+            month: accrualDate.getMonth() + 1,
+            monthName: accrualDate.toLocaleString('default', { month: 'long' }),
+            date: accrualDate,
+            rent: { owed: 0, paid: 0, outstanding: 0 },
+            adminFee: { owed: 0, paid: 0, outstanding: 0 },
+            deposit: { owed: 0, paid: 0, outstanding: 0 },
+            totalOutstanding: 0,
+            transactionId: accrual._id,
+            source: accrual.source,
+            metadata: accrual.metadata
+          };
+        }
+        
+        // Categorize the debt by type
+        accrual.entries.forEach(entry => {
+          if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0) {
+            const description = entry.description.toLowerCase();
+            
+            if (description.includes('admin fee') || description.includes('administrative')) {
+              monthlyOutstanding[monthKey].adminFee.owed += entry.debit;
+            } else if (description.includes('security deposit') || description.includes('deposit')) {
+              monthlyOutstanding[monthKey].deposit.owed += entry.debit;
+            } else {
+              // Default to rent
+              monthlyOutstanding[monthKey].rent.owed += entry.debit;
+            }
+          }
+        });
+      });
+      
+      // Process payments to calculate what's been paid
+      payments.forEach(payment => {
+        const paymentMonth = payment.metadata?.paymentMonth;
+        if (paymentMonth && monthlyOutstanding[paymentMonth]) {
+          // This payment was allocated to a specific month
+          payment.entries.forEach(entry => {
+            if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.credit > 0) {
+              // Determine what type of payment this is
+              const description = entry.description.toLowerCase();
+              
+              if (description.includes('admin fee') || description.includes('administrative')) {
+                monthlyOutstanding[paymentMonth].adminFee.paid += entry.credit;
+              } else if (description.includes('security deposit') || description.includes('deposit')) {
+                monthlyOutstanding[paymentMonth].deposit.paid += entry.credit;
+              } else {
+                // Default to rent
+                monthlyOutstanding[paymentMonth].rent.paid += entry.credit;
+              }
+            }
+          });
+        }
+      });
+      
+      // Calculate outstanding amounts and convert to array
+      const outstandingArray = Object.values(monthlyOutstanding).map(month => {
+        // Calculate outstanding for each type
+        month.rent.outstanding = Math.max(0, month.rent.owed - month.rent.paid);
+        month.adminFee.outstanding = Math.max(0, month.adminFee.owed - month.adminFee.paid);
+        month.deposit.outstanding = Math.max(0, month.deposit.owed - month.deposit.paid);
+        
+        // Calculate total outstanding for this month
+        month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding;
+        
+        return month;
+      }).filter(month => month.totalOutstanding > 0); // Only return months with outstanding balances
+      
+      // Sort by date (oldest first - FIFO principle)
+      outstandingArray.sort((a, b) => new Date(a.date) - new Date(b.date));
+      
+      console.log(`📅 Detailed outstanding balances for student ${studentId} (FIFO order):`);
+      outstandingArray.forEach(month => {
+        console.log(`  ${month.monthKey} (${month.monthName}):`);
+        if (month.rent.outstanding > 0) console.log(`    Rent: $${month.rent.outstanding.toFixed(2)}`);
+        if (month.adminFee.outstanding > 0) console.log(`    Admin Fee: $${month.adminFee.outstanding.toFixed(2)}`);
+        if (month.deposit.outstanding > 0) console.log(`    Deposit: $${month.deposit.outstanding.toFixed(2)}`);
+        console.log(`    Total Outstanding: $${month.totalOutstanding.toFixed(2)}`);
+      });
+      
+      return outstandingArray;
+      
+    } catch (error) {
+      console.error(`❌ Error getting detailed outstanding balances for student ${studentId}:`, error);
+      throw error;
     }
   }
 
@@ -570,6 +708,57 @@ class PaymentAllocationService {
     } catch (error) {
       console.error('Error getting payment coverage:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Extract payment month from transaction data
+   * @param {Object} paymentData - Payment data object
+   * @param {Array} arBalances - AR balances for the student
+   * @returns {string} The correct payment month in YYYY-MM format
+   */
+  static extractPaymentMonthFromTransaction(paymentData, arBalances) {
+    try {
+      console.log(`🔍 Extracting payment month from transaction data...`);
+      
+      // Method 1: Check if payment has metadata with paymentMonth
+      if (paymentData.metadata?.paymentMonth) {
+        console.log(`✅ Found payment month in metadata: ${paymentData.metadata.paymentMonth}`);
+        return paymentData.metadata.paymentMonth;
+      }
+      
+      // Method 2: Check if payment has a specific paymentMonth field
+      if (paymentData.paymentMonth) {
+        console.log(`✅ Found payment month in payment data: ${paymentData.paymentMonth}`);
+        return paymentData.paymentMonth;
+      }
+      
+      // Method 3: Extract from transaction date (fallback)
+      if (paymentData.date) {
+        const paymentDate = new Date(paymentData.date);
+        const extractedMonth = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
+        console.log(`✅ Extracted payment month from date: ${extractedMonth}`);
+        return extractedMonth;
+      }
+      
+      // Method 4: Use oldest AR month as default (FIFO principle)
+      if (arBalances && arBalances.length > 0) {
+        const oldestMonth = arBalances[0].monthKey;
+        console.log(`✅ Using oldest AR month as payment month: ${oldestMonth}`);
+        return oldestMonth;
+      }
+      
+      // Method 5: Use current month as last resort
+      const currentDate = new Date();
+      const currentMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+      console.log(`⚠️  Using current month as fallback: ${currentMonth}`);
+      return currentMonth;
+      
+    } catch (error) {
+      console.error(`❌ Error extracting payment month:`, error);
+      // Return current month as fallback
+      const currentDate = new Date();
+      return `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
     }
   }
 

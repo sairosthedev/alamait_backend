@@ -1,0 +1,1091 @@
+[{
+  "_id": {
+    "$oid": "68acd868e046466064ffe99d"
+  },
+  "transactionId": "TXN1756158056825MAK4X",
+  "date": {
+    "$date": "2025-08-25T21:40:56.929Z"
+  },
+  "description": "Maintenance approval: TEST_WITH_VENDOR_WITHOUT_QUOTATION_STKILDA",
+  "reference": "68acd868e046466064ffe98b",
+  "entries": [
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 150,
+      "credit": 0,
+      "description": "Property Maintenance: Install new light fixtures at St Kilda",
+      "_id": {
+        "$oid": "68acd868e046466064ffe99e"
+      }
+    },
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 150,
+      "description": "General payable for Install new light fixtures at St Kilda",
+      "_id": {
+        "$oid": "68acd868e046466064ffe99f"
+      }
+    }
+  ],
+  "totalDebit": 150,
+  "totalCredit": 150,
+  "source": "expense_accrual",
+  "sourceId": {
+    "$oid": "68acd868e046466064ffe98b"
+  },
+  "sourceModel": "Request",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "createdBy": "macdonaldsairos01@gmail.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "requestType": "maintenance",
+    "itemCount": 1
+  },
+  "createdAt": {
+    "$date": "2025-08-25T21:40:56.931Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-25T21:40:56.931Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68acd869e046466064ffe9c3"
+  },
+  "transactionId": "TXN17561580576605VV4G",
+  "date": {
+    "$date": "2025-08-25T21:40:57.757Z"
+  },
+  "description": "Maintenance approval: TEST_WITHOUT_VENDOR_WITHOUT_QUOTATION_1ACP",
+  "reference": "68acd869e046466064ffe9bb",
+  "entries": [
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 100,
+      "credit": 0,
+      "description": "Property Maintenance: General maintenance tasks at 1ACP",
+      "_id": {
+        "$oid": "68acd869e046466064ffe9c4"
+      }
+    },
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 100,
+      "description": "General payable for General maintenance tasks at 1ACP",
+      "_id": {
+        "$oid": "68acd869e046466064ffe9c5"
+      }
+    }
+  ],
+  "totalDebit": 100,
+  "totalCredit": 100,
+  "source": "expense_accrual",
+  "sourceId": {
+    "$oid": "68acd869e046466064ffe9bb"
+  },
+  "sourceModel": "Request",
+  "residence": {
+    "$oid": "6848258b1149b66fc94a261d"
+  },
+  "createdBy": "macdonaldsairos01@gmail.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "requestType": "maintenance",
+    "itemCount": 1
+  },
+  "createdAt": {
+    "$date": "2025-08-25T21:40:57.758Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-25T21:40:57.758Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68acd86be046466064ffea06"
+  },
+  "transactionId": "TXN1756158058959RWFSP",
+  "date": {
+    "$date": "2025-08-25T21:40:59.150Z"
+  },
+  "description": "Maintenance approval: TEST_MULTIPLE_SMALL_ITEMS_NEWLANDS",
+  "reference": "68acd86ae046466064ffe9fa",
+  "entries": [
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 25,
+      "credit": 0,
+      "description": "Property Maintenance: Replace all light bulbs at Newlands",
+      "_id": {
+        "$oid": "68acd86be046466064ffea07"
+      }
+    },
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 25,
+      "description": "General payable for Replace all light bulbs at Newlands",
+      "_id": {
+        "$oid": "68acd86be046466064ffea08"
+      }
+    },
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 35,
+      "credit": 0,
+      "description": "Property Maintenance: Touch up paint in common areas",
+      "_id": {
+        "$oid": "68acd86be046466064ffea09"
+      }
+    },
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 35,
+      "description": "General payable for Touch up paint in common areas",
+      "_id": {
+        "$oid": "68acd86be046466064ffea0a"
+      }
+    },
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 15,
+      "credit": 0,
+      "description": "Property Maintenance: Fix loose door handles",
+      "_id": {
+        "$oid": "68acd86be046466064ffea0b"
+      }
+    },
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 15,
+      "description": "General payable for Fix loose door handles",
+      "_id": {
+        "$oid": "68acd86be046466064ffea0c"
+      }
+    }
+  ],
+  "totalDebit": 75,
+  "totalCredit": 75,
+  "source": "expense_accrual",
+  "sourceId": {
+    "$oid": "68acd86ae046466064ffe9fa"
+  },
+  "sourceModel": "Request",
+  "residence": {
+    "$oid": "6847f562e536db246e853f91"
+  },
+  "createdBy": "macdonaldsairos01@gmail.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "requestType": "maintenance",
+    "itemCount": 3
+  },
+  "createdAt": {
+    "$date": "2025-08-25T21:40:59.154Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-25T21:40:59.154Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68acf647609939ce051ce81b"
+  },
+  "transactionId": "TXN1756165702614J745C",
+  "date": {
+    "$date": "2025-08-25T23:48:23.378Z"
+  },
+  "description": "Maintenance approval: TEST_SIMPLE_QUOTATION",
+  "reference": "68acf644609939ce051ce7de",
+  "entries": [
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 100,
+      "credit": 0,
+      "description": "Property Maintenance: Test plumbing repair",
+      "_id": {
+        "$oid": "68acf647609939ce051ce81c"
+      }
+    },
+    {
+      "accountCode": "20041",
+      "accountName": "Accounts Payable: Gift Plumber",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 100,
+      "description": "Payable to Gift Plumber",
+      "_id": {
+        "$oid": "68acf647609939ce051ce81d"
+      }
+    }
+  ],
+  "totalDebit": 100,
+  "totalCredit": 100,
+  "source": "expense_accrual",
+  "sourceId": {
+    "$oid": "68acf644609939ce051ce7de"
+  },
+  "sourceModel": "Request",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "createdBy": "test@alamait.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "requestType": "maintenance",
+    "itemCount": 1
+  },
+  "createdAt": {
+    "$date": "2025-08-25T23:48:23.380Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-25T23:48:23.380Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68acf7ef09d78cb21c5f88cc"
+  },
+  "transactionId": "TXN17561661269171YJKS",
+  "date": {
+    "$date": "2025-08-25T23:55:27.121Z"
+  },
+  "description": "Maintenance approval: TEST_QUOTATION_SINGLE_ITEM_BELVEDERE",
+  "reference": "68acf7ee09d78cb21c5f88b1",
+  "entries": [
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 200,
+      "credit": 0,
+      "description": "Property Maintenance: Fix leaking pipe in bathroom at Belvedere",
+      "_id": {
+        "$oid": "68acf7ef09d78cb21c5f88cd"
+      }
+    },
+    {
+      "accountCode": "20041",
+      "accountName": "Accounts Payable: Gift Plumber",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 200,
+      "description": "Payable to Gift Plumber",
+      "_id": {
+        "$oid": "68acf7ef09d78cb21c5f88ce"
+      }
+    }
+  ],
+  "totalDebit": 200,
+  "totalCredit": 200,
+  "source": "expense_accrual",
+  "sourceId": {
+    "$oid": "68acf7ee09d78cb21c5f88b1"
+  },
+  "sourceModel": "Request",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "createdBy": "macdonaldsairos01@gmail.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "requestType": "maintenance",
+    "itemCount": 1
+  },
+  "createdAt": {
+    "$date": "2025-08-25T23:55:27.123Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-25T23:55:27.123Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68acf7ef09d78cb21c5f88f1"
+  },
+  "transactionId": "TXN1756166127487VQAAC",
+  "date": {
+    "$date": "2025-08-25T23:55:27.971Z"
+  },
+  "description": "Maintenance approval: TEST_QUOTATION_MULTIPLE_QUOTATIONS_STKILDA",
+  "reference": "68acf7ef09d78cb21c5f88de",
+  "entries": [
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 300,
+      "credit": 0,
+      "description": "Property Maintenance: Fix bathroom issues at St Kilda",
+      "_id": {
+        "$oid": "68acf7ef09d78cb21c5f88f2"
+      }
+    },
+    {
+      "accountCode": "20041",
+      "accountName": "Accounts Payable: Gift Plumber",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 300,
+      "description": "Payable to Gift Plumber",
+      "_id": {
+        "$oid": "68acf7ef09d78cb21c5f88f3"
+      }
+    },
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 250,
+      "credit": 0,
+      "description": "Property Maintenance: Install new outlets at St Kilda",
+      "_id": {
+        "$oid": "68acf7ef09d78cb21c5f88f4"
+      }
+    },
+    {
+      "accountCode": "20041",
+      "accountName": "Accounts Payable: ABC Electric",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 250,
+      "description": "Payable to ABC Electric",
+      "_id": {
+        "$oid": "68acf7ef09d78cb21c5f88f5"
+      }
+    }
+  ],
+  "totalDebit": 550,
+  "totalCredit": 550,
+  "source": "expense_accrual",
+  "sourceId": {
+    "$oid": "68acf7ef09d78cb21c5f88de"
+  },
+  "sourceModel": "Request",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "createdBy": "macdonaldsairos01@gmail.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "requestType": "maintenance",
+    "itemCount": 2
+  },
+  "createdAt": {
+    "$date": "2025-08-25T23:55:27.972Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-25T23:55:27.972Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68acf7f009d78cb21c5f890f"
+  },
+  "transactionId": "TXN1756166128317HS5TW",
+  "date": {
+    "$date": "2025-08-25T23:55:28.620Z"
+  },
+  "description": "Maintenance approval: TEST_QUOTATION_HIGH_VALUE_NEWLANDS",
+  "reference": "68acf7f009d78cb21c5f8902",
+  "entries": [
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 1500,
+      "credit": 0,
+      "description": "Property Maintenance: Repair air conditioning system at Newlands",
+      "_id": {
+        "$oid": "68acf7f009d78cb21c5f8910"
+      }
+    },
+    {
+      "accountCode": "20041",
+      "accountName": "Accounts Payable: Climate Control Solutions",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 1500,
+      "description": "Payable to Climate Control Solutions",
+      "_id": {
+        "$oid": "68acf7f009d78cb21c5f8911"
+      }
+    }
+  ],
+  "totalDebit": 1500,
+  "totalCredit": 1500,
+  "source": "expense_accrual",
+  "sourceId": {
+    "$oid": "68acf7f009d78cb21c5f8902"
+  },
+  "sourceModel": "Request",
+  "residence": {
+    "$oid": "6847f562e536db246e853f91"
+  },
+  "createdBy": "macdonaldsairos01@gmail.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "requestType": "maintenance",
+    "itemCount": 1
+  },
+  "createdAt": {
+    "$date": "2025-08-25T23:55:28.621Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-25T23:55:28.621Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68acf7f109d78cb21c5f8929"
+  },
+  "transactionId": "TXN17561661289650V9I4",
+  "date": {
+    "$date": "2025-08-25T23:55:29.246Z"
+  },
+  "description": "Maintenance approval: TEST_QUOTATION_MIXED_ITEMS_BELVEDERE",
+  "reference": "68acf7f009d78cb21c5f891c",
+  "entries": [
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 200,
+      "credit": 0,
+      "description": "Property Maintenance: Fix leaking pipe at Belvedere",
+      "_id": {
+        "$oid": "68acf7f109d78cb21c5f892a"
+      }
+    },
+    {
+      "accountCode": "20041",
+      "accountName": "Accounts Payable: Gift Plumber",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 200,
+      "description": "Payable to Gift Plumber",
+      "_id": {
+        "$oid": "68acf7f109d78cb21c5f892b"
+      }
+    },
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 50,
+      "credit": 0,
+      "description": "Property Maintenance: Purchase general supplies for Belvedere",
+      "_id": {
+        "$oid": "68acf7f109d78cb21c5f892c"
+      }
+    },
+    {
+      "accountCode": "2000",
+      "accountName": "Accounts Payable",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 50,
+      "description": "General payable for Purchase general supplies for Belvedere",
+      "_id": {
+        "$oid": "68acf7f109d78cb21c5f892d"
+      }
+    }
+  ],
+  "totalDebit": 250,
+  "totalCredit": 250,
+  "source": "expense_accrual",
+  "sourceId": {
+    "$oid": "68acf7f009d78cb21c5f891c"
+  },
+  "sourceModel": "Request",
+  "residence": {
+    "$oid": "67c13eb8425a2e078f61d00e"
+  },
+  "createdBy": "macdonaldsairos01@gmail.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "requestType": "maintenance",
+    "itemCount": 2
+  },
+  "createdAt": {
+    "$date": "2025-08-25T23:55:29.248Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-25T23:55:29.248Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68acf7f109d78cb21c5f8949"
+  },
+  "transactionId": "TXN17561661295972I6JZ",
+  "date": {
+    "$date": "2025-08-25T23:55:29.913Z"
+  },
+  "description": "Maintenance approval: TEST_QUOTATION_MULTIPLE_QUOTATIONS_SELECTED",
+  "reference": "68acf7f109d78cb21c5f893b",
+  "entries": [
+    {
+      "accountCode": "5007",
+      "accountName": "Property Maintenance",
+      "accountType": "Expense",
+      "debit": 800,
+      "credit": 0,
+      "description": "Property Maintenance: Fix roof leak at St Kilda",
+      "_id": {
+        "$oid": "68acf7f109d78cb21c5f894a"
+      }
+    },
+    {
+      "accountCode": "2004",
+      "accountName": "Accounts Payable: Roof Masters Zimbabwe",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 800,
+      "description": "Payable to Roof Masters",
+      "_id": {
+        "$oid": "68acf7f109d78cb21c5f894b"
+      }
+    }
+  ],
+  "totalDebit": 800,
+  "totalCredit": 800,
+  "source": "expense_accrual",
+  "sourceId": {
+    "$oid": "68acf7f109d78cb21c5f893b"
+  },
+  "sourceModel": "Request",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "createdBy": "macdonaldsairos01@gmail.com",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "requestType": "maintenance",
+    "itemCount": 1,
+    "accountFixed": true,
+    "fixedBy": "system",
+    "fixedDate": {
+      "$date": "2025-08-26T10:48:51.647Z"
+    },
+    "newAccountCode": "2004",
+    "oldAccountCode": "20041"
+  },
+  "createdAt": {
+    "$date": "2025-08-25T23:55:29.914Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-26T10:48:51.651Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68aeaf7c8d70befd6ad29b77"
+  },
+  "transactionId": "TXN1756278652637YPVJD",
+  "date": {
+    "$date": "2025-05-13T00:00:00.000Z"
+  },
+  "description": "Lease start accounting entries: Cindy Gwekwerere",
+  "reference": "68aeaf7b8d70befd6ad29b1a",
+  "entries": [
+    {
+      "accountCode": "1100-68aeaf7a8d70befd6ad29b18",
+      "accountName": "Accounts Receivable - Cindy Gwekwerere",
+      "accountType": "Asset",
+      "debit": 110.3225806451613,
+      "credit": 0,
+      "description": "Prorated rent due from Cindy Gwekwerere - 13/5/2025 to month end",
+      "_id": {
+        "$oid": "68aeaf7c8d70befd6ad29b78"
+      }
+    },
+    {
+      "accountCode": "4001",
+      "accountName": "Student Accommodation Rent",
+      "accountType": "Income",
+      "debit": 0,
+      "credit": 110.3225806451613,
+      "description": "Prorated rental income accrued - Cindy Gwekwerere",
+      "_id": {
+        "$oid": "68aeaf7c8d70befd6ad29b79"
+      }
+    },
+    {
+      "accountCode": "1100-68aeaf7a8d70befd6ad29b18",
+      "accountName": "Accounts Receivable - Cindy Gwekwerere",
+      "accountType": "Asset",
+      "debit": 20,
+      "credit": 0,
+      "description": "Admin fee due from Cindy Gwekwerere",
+      "_id": {
+        "$oid": "68aeaf7c8d70befd6ad29b7a"
+      }
+    },
+    {
+      "accountCode": "4002",
+      "accountName": "Administrative Fees",
+      "accountType": "Income",
+      "debit": 0,
+      "credit": 20,
+      "description": "Administrative income accrued - Cindy Gwekwerere",
+      "_id": {
+        "$oid": "68aeaf7c8d70befd6ad29b7b"
+      }
+    },
+    {
+      "accountCode": "1100-68aeaf7a8d70befd6ad29b18",
+      "accountName": "Accounts Receivable - Cindy Gwekwerere",
+      "accountType": "Asset",
+      "debit": 180,
+      "credit": 0,
+      "description": "Security deposit due from Cindy Gwekwerere",
+      "_id": {
+        "$oid": "68aeaf7c8d70befd6ad29b7c"
+      }
+    },
+    {
+      "accountCode": "2020",
+      "accountName": "Tenant Security Deposits",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 180,
+      "description": "Security deposit liability created - Cindy Gwekwerere",
+      "_id": {
+        "$oid": "68aeaf7c8d70befd6ad29b7d"
+      }
+    }
+  ],
+  "totalDebit": 310.3225806451613,
+  "totalCredit": 310.3225806451613,
+  "source": "rental_accrual",
+  "sourceId": {
+    "$oid": "68aeaf7b8d70befd6ad29b1a"
+  },
+  "sourceModel": "Lease",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "createdBy": "system",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "applicationId": "68aeaf7b8d70befd6ad29b1a",
+    "studentName": "Cindy Gwekwerere",
+    "residence": {
+      "$oid": "67d723cf20f89c4ae69804f3"
+    },
+    "room": "M1",
+    "type": "lease_start",
+    "leaseStartDate": {
+      "$date": "2025-05-13T00:00:00.000Z"
+    },
+    "proratedRent": 110.3225806451613,
+    "adminFee": 20,
+    "securityDeposit": 180,
+    "totalDebit": 310.3225806451613,
+    "totalCredit": 310.3225806451613
+  },
+  "createdAt": {
+    "$date": "2025-08-27T07:10:52.698Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-27T07:10:52.698Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68aeaf7d8d70befd6ad29bab"
+  },
+  "transactionId": "TXN17562786531887UR4F",
+  "date": {
+    "$date": "2025-05-31T22:00:00.000Z"
+  },
+  "description": "Monthly rent accrual: Cindy Gwekwerere - 6/2025",
+  "reference": "68aeaf7b8d70befd6ad29b1a",
+  "entries": [
+    {
+      "accountCode": "1100-68aeaf7b8d70befd6ad29b1a",
+      "accountName": "Accounts Receivable - Cindy Gwekwerere",
+      "accountType": "Asset",
+      "debit": 180,
+      "credit": 0,
+      "description": "Monthly rent due from Cindy Gwekwerere - 6/2025",
+      "_id": {
+        "$oid": "68aeaf7d8d70befd6ad29bac"
+      }
+    },
+    {
+      "accountCode": "4001",
+      "accountName": "Student Accommodation Rent",
+      "accountType": "Income",
+      "debit": 0,
+      "credit": 180,
+      "description": "Monthly rental income accrued - Cindy Gwekwerere - 6/2025",
+      "_id": {
+        "$oid": "68aeaf7d8d70befd6ad29bad"
+      }
+    }
+  ],
+  "totalDebit": 180,
+  "totalCredit": 180,
+  "source": "rental_accrual",
+  "sourceId": {
+    "$oid": "68aeaf7b8d70befd6ad29b1a"
+  },
+  "sourceModel": "Lease",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "createdBy": "system",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "applicationId": "68aeaf7b8d70befd6ad29b1a",
+    "studentName": "Cindy Gwekwerere",
+    "residence": {
+      "$oid": "67d723cf20f89c4ae69804f3"
+    },
+    "room": "M1",
+    "accrualMonth": 6,
+    "accrualYear": 2025,
+    "type": "monthly_rent_accrual",
+    "rentAmount": 180,
+    "totalAmount": 180
+  },
+  "createdAt": {
+    "$date": "2025-08-27T07:10:53.237Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-27T07:10:53.237Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68aeaf7d8d70befd6ad29bd9"
+  },
+  "transactionId": "TXN1756278653598QH8XH",
+  "date": {
+    "$date": "2025-06-30T22:00:00.000Z"
+  },
+  "description": "Monthly rent accrual: Cindy Gwekwerere - 7/2025",
+  "reference": "68aeaf7b8d70befd6ad29b1a",
+  "entries": [
+    {
+      "accountCode": "1100-68aeaf7b8d70befd6ad29b1a",
+      "accountName": "Accounts Receivable - Cindy Gwekwerere",
+      "accountType": "Asset",
+      "debit": 180,
+      "credit": 0,
+      "description": "Monthly rent due from Cindy Gwekwerere - 7/2025",
+      "_id": {
+        "$oid": "68aeaf7d8d70befd6ad29bda"
+      }
+    },
+    {
+      "accountCode": "4001",
+      "accountName": "Student Accommodation Rent",
+      "accountType": "Income",
+      "debit": 0,
+      "credit": 180,
+      "description": "Monthly rental income accrued - Cindy Gwekwerere - 7/2025",
+      "_id": {
+        "$oid": "68aeaf7d8d70befd6ad29bdb"
+      }
+    }
+  ],
+  "totalDebit": 180,
+  "totalCredit": 180,
+  "source": "rental_accrual",
+  "sourceId": {
+    "$oid": "68aeaf7b8d70befd6ad29b1a"
+  },
+  "sourceModel": "Lease",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "createdBy": "system",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "applicationId": "68aeaf7b8d70befd6ad29b1a",
+    "studentName": "Cindy Gwekwerere",
+    "residence": {
+      "$oid": "67d723cf20f89c4ae69804f3"
+    },
+    "room": "M1",
+    "accrualMonth": 7,
+    "accrualYear": 2025,
+    "type": "monthly_rent_accrual",
+    "rentAmount": 180,
+    "totalAmount": 180
+  },
+  "createdAt": {
+    "$date": "2025-08-27T07:10:53.663Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-27T07:10:53.663Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68aeaf7e8d70befd6ad29c07"
+  },
+  "transactionId": "TXN1756278654049XV95W",
+  "date": {
+    "$date": "2025-07-31T22:00:00.000Z"
+  },
+  "description": "Monthly rent accrual: Cindy Gwekwerere - 8/2025",
+  "reference": "68aeaf7b8d70befd6ad29b1a",
+  "entries": [
+    {
+      "accountCode": "1100-68aeaf7b8d70befd6ad29b1a",
+      "accountName": "Accounts Receivable - Cindy Gwekwerere",
+      "accountType": "Asset",
+      "debit": 180,
+      "credit": 0,
+      "description": "Monthly rent due from Cindy Gwekwerere - 8/2025",
+      "_id": {
+        "$oid": "68aeaf7e8d70befd6ad29c08"
+      }
+    },
+    {
+      "accountCode": "4001",
+      "accountName": "Student Accommodation Rent",
+      "accountType": "Income",
+      "debit": 0,
+      "credit": 180,
+      "description": "Monthly rental income accrued - Cindy Gwekwerere - 8/2025",
+      "_id": {
+        "$oid": "68aeaf7e8d70befd6ad29c09"
+      }
+    }
+  ],
+  "totalDebit": 180,
+  "totalCredit": 180,
+  "source": "rental_accrual",
+  "sourceId": {
+    "$oid": "68aeaf7b8d70befd6ad29b1a"
+  },
+  "sourceModel": "Lease",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "createdBy": "system",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "applicationId": "68aeaf7b8d70befd6ad29b1a",
+    "studentName": "Cindy Gwekwerere",
+    "residence": {
+      "$oid": "67d723cf20f89c4ae69804f3"
+    },
+    "room": "M1",
+    "accrualMonth": 8,
+    "accrualYear": 2025,
+    "type": "monthly_rent_accrual",
+    "rentAmount": 180,
+    "totalAmount": 180
+  },
+  "createdAt": {
+    "$date": "2025-08-27T07:10:54.107Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-27T07:10:54.107Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68af0cdf81525178c4f81f1f"
+  },
+  "transactionId": "TXN1756302559753ELP7K",
+  "date": {
+    "$date": "2025-08-27T13:49:19.753Z"
+  },
+  "description": "Payment allocation: $110.3225806451613 rent for 2025-05",
+  "reference": "68af0cdf81525178c4f81ef3",
+  "entries": [
+    {
+      "accountCode": "1100-68aeaf7a8d70befd6ad29b18",
+      "accountName": "Accounts Receivable - Student",
+      "accountType": "Asset",
+      "debit": 0,
+      "credit": 110.3225806451613,
+      "description": "Payment received - 68af0cdf81525178c4f81ef3",
+      "_id": {
+        "$oid": "68af0cdf81525178c4f81f20"
+      }
+    },
+    {
+      "accountCode": "1000",
+      "accountName": "Cash",
+      "accountType": "Asset",
+      "debit": 110.3225806451613,
+      "credit": 0,
+      "description": "Payment received - 68af0cdf81525178c4f81ef3",
+      "_id": {
+        "$oid": "68af0cdf81525178c4f81f21"
+      }
+    }
+  ],
+  "totalDebit": 110.3225806451613,
+  "totalCredit": 110.3225806451613,
+  "source": "payment",
+  "sourceId": {
+    "$oid": "68af0cdf81525178c4f81ef3"
+  },
+  "sourceModel": "Payment",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "createdBy": "system",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "paymentId": "68af0cdf81525178c4f81ef3",
+    "studentId": "68aeaf7a8d70befd6ad29b18",
+    "amount": 110.3225806451613,
+    "allocationType": "payment_allocation",
+    "originalARTransaction": {
+      "$oid": "68aeaf7c8d70befd6ad29b77"
+    },
+    "monthSettled": "2025-05",
+    "paymentType": "rent"
+  },
+  "createdAt": {
+    "$date": "2025-08-27T13:49:19.761Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-27T13:49:19.761Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "68af0ce081525178c4f81f31"
+  },
+  "transactionId": "TXN17563025601307GW5N",
+  "date": {
+    "$date": "2025-08-27T13:49:20.130Z"
+  },
+  "description": "Deposit received (liability)",
+  "reference": "68af0cdf81525178c4f81ef3",
+  "entries": [
+    {
+      "accountCode": "2020",
+      "accountName": "Tenant Security Deposits",
+      "accountType": "Liability",
+      "debit": 0,
+      "credit": 180,
+      "description": "Deposit received from 68af0cdf81525178c4f81ef3",
+      "_id": {
+        "$oid": "68af0ce081525178c4f81f32"
+      }
+    },
+    {
+      "accountCode": "1000",
+      "accountName": "Cash",
+      "accountType": "Asset",
+      "debit": 180,
+      "credit": 0,
+      "description": "Deposit payment received",
+      "_id": {
+        "$oid": "68af0ce081525178c4f81f33"
+      }
+    }
+  ],
+  "totalDebit": 180,
+  "totalCredit": 180,
+  "source": "advance_payment",
+  "sourceId": {
+    "$oid": "68af0cdf81525178c4f81ef3"
+  },
+  "sourceModel": "AdvancePayment",
+  "residence": {
+    "$oid": "67d723cf20f89c4ae69804f3"
+  },
+  "createdBy": "system",
+  "approvedBy": null,
+  "approvedAt": null,
+  "status": "posted",
+  "metadata": {
+    "paymentId": "68af0cdf81525178c4f81ef3",
+    "studentId": "68aeaf7a8d70befd6ad29b18",
+    "amount": 180,
+    "paymentType": "deposit",
+    "advanceType": "future_payment",
+    "description": "Deposit received (liability)",
+    "monthSettled": null
+  },
+  "createdAt": {
+    "$date": "2025-08-27T13:49:20.136Z"
+  },
+  "updatedAt": {
+    "$date": "2025-08-27T13:49:20.136Z"
+  },
+  "__v": 0
+}]

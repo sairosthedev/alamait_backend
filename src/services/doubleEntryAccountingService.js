@@ -1115,6 +1115,13 @@ class DoubleEntryAccountingService {
                 }
             }
 
+            // 🆕 SHORT-CIRCUIT: Smart FIFO now posts per-allocation transactions (Cash ↔ AR/Deferred).
+            // Avoid creating an umbrella "Debt settlement" entry that double-posts Cash/AR.
+            if (payment && Array.isArray(payment.payments) && payment.payments.length > 0) {
+                console.log('⚠️ Skipping umbrella payment TransactionEntry - handled by Smart FIFO allocation per month.');
+                return { transaction: null, transactionEntry: null, message: 'Handled by Smart FIFO allocation' };
+            }
+
             // 🆕 NEW: Determine transaction description based on payment analysis
             let transactionDescription;
             let paymentType;
@@ -2236,14 +2243,11 @@ class DoubleEntryAccountingService {
 
     static async getDeferredIncomeAccount() {
         let account = await Account.findOne({ 
-            name: 'Deferred Income - Tenant Advances',
-            type: 'Liability'
+            code: '2200'
         });
-        
         if (!account) {
-            account = await this.getOrCreateAccount('1102', 'Deferred Income - Tenant Advances', 'Liability');
+            account = await this.getOrCreateAccount('2200', 'Advance Payment Liability', 'Liability');
         }
-        
         return account.code;
     }
 

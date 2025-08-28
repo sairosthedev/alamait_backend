@@ -1,173 +1,159 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
-const PaymentService = require('./src/services/paymentService');
 
 async function testPaymentCreation() {
     try {
-        console.log('🔌 Connecting to MongoDB...');
-        await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/alamait');
-        console.log('✅ Connected to MongoDB');
-        console.log('=' .repeat(60));
-
-        console.log('🧪 Testing New Payment Creation System...');
-        console.log('========================================');
-
-        // Test 1: Create payment with automatic user ID mapping
-        console.log('\n🔍 Test 1: Creating payment with automatic user ID mapping');
-        console.log('==========================================================');
-        
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log('✅ Connected to database');
+    
+    const PaymentService = require('./src/services/paymentService');
+    const TransactionEntry = require('./src/models/TransactionEntry');
+    
+    const studentId = '68af33e9aef6b0dcc8e8f14b'; // Cindy's ID
+    
+    console.log('\n🧪 TESTING PAYMENT CREATION');
+    console.log('============================');
+    
+    // 1. Check current transactions before payment
+    console.log('\n1️⃣ TRANSACTIONS BEFORE PAYMENT:');
+    const beforeTransactions = await TransactionEntry.find({
+      $or: [
+        { 'entries.accountCode': { $regex: `^1100-${studentId}` } },
+        { source: 'payment' }
+      ]
+    }).sort({ date: 1 });
+    
+    console.log(`Found ${beforeTransactions.length} transactions before payment`);
+    
+    // 2. Create a test payment
+    console.log('\n2️⃣ CREATING TEST PAYMENT:');
         const testPaymentData = {
-            paymentId: `TEST-${Date.now()}`,
-            student: '686e7a60913b15e1760d7d58', // Shamiso's user ID
-            residence: '67d723cf20f89c4ae69804f3', // St Kilda Student House
-            room: 'M3',
-            roomType: 'Standard',
-            totalAmount: 200,
-            paymentMonth: '2025-01',
-            date: new Date(),
-            method: 'Bank Transfer',
-            status: 'Confirmed',
-            description: 'Test payment for automatic user ID mapping',
-            rentAmount: 180,
-            adminFee: 20,
-            deposit: 0
-        };
-
-        try {
-            const result = await PaymentService.createPaymentWithUserMapping(testPaymentData, '686e7a60913b15e1760d7d58');
-            
-            console.log('✅ Test 1 PASSED: Payment created successfully with automatic user ID mapping');
-            console.log(`   Payment ID: ${result.payment.paymentId}`);
-            console.log(`   User ID: ${result.userId}`);
-            console.log(`   Debtor Code: ${result.debtor.debtorCode}`);
-            console.log(`   Room Number: ${result.debtor.roomNumber}`);
-            
-            // Clean up test payment
-            await mongoose.connection.db.collection('payments').deleteOne({ _id: result.payment._id });
-            console.log('🧹 Test payment cleaned up');
-            
-        } catch (error) {
-            console.log('❌ Test 1 FAILED:', error.message);
-        }
-
-        // Test 2: Validate payment mapping
-        console.log('\n🔍 Test 2: Validating payment mapping');
-        console.log('=====================================');
-        
-        try {
-            // Get an existing payment to test validation
-            const existingPayment = await mongoose.connection.db.collection('payments').findOne({ user: { $exists: true } });
-            
-            if (existingPayment) {
-                const Payment = require('./src/models/Payment');
-                const payment = new Payment(existingPayment);
-                
-                const validation = await PaymentService.validatePaymentMapping(payment);
-                
-                console.log('✅ Test 2 PASSED: Payment mapping validation successful');
-                console.log(`   Debtor Code: ${validation.debtorCode}`);
-                console.log(`   Room Number: ${validation.roomNumber}`);
-                console.log(`   Residence: ${validation.residence}`);
-            } else {
-                console.log('⚠️  Test 2 SKIPPED: No payments with user ID found to test validation');
+      totalAmount: 380,
+      payments: [
+        { type: 'rent', amount: 180 },
+        { type: 'admin', amount: 20 },
+        { type: 'deposit', amount: 180 }
+      ],
+      student: studentId,
+      residence: '67d723cf20f89c4ae69804f3', // Cindy's residence
+      method: 'Cash',
+      date: new Date()
+    };
+    
+    console.log('Payment data:', JSON.stringify(testPaymentData, null, 2));
+    
+    try {
+      const payment = await PaymentService.createPaymentWithSmartAllocation(
+        testPaymentData,
+        'test-user-id'
+      );
+      
+      console.log('✅ Payment created successfully');
+      console.log(`Payment ID: ${payment.paymentId}`);
+      console.log(`Allocation: ${payment.allocation ? 'Completed' : 'Pending'}`);
+      
+      if (payment.allocation) {
+        console.log('Allocation details:', JSON.stringify(payment.allocation, null, 2));
             }
             
         } catch (error) {
-            console.log('❌ Test 2 FAILED:', error.message);
+      console.error('❌ Payment creation failed:', error.message);
+      return;
+    }
+    
+    // 3. Check transactions after payment
+    console.log('\n3️⃣ TRANSACTIONS AFTER PAYMENT:');
+    const afterTransactions = await TransactionEntry.find({
+      $or: [
+        { 'entries.accountCode': { $regex: `^1100-${studentId}` } },
+        { source: 'payment' }
+      ]
+    }).sort({ date: 1 });
+    
+    console.log(`Found ${afterTransactions.length} transactions after payment`);
+    
+    // 4. Show new transactions
+    const newTransactions = afterTransactions.filter(tx => 
+      !beforeTransactions.some(beforeTx => beforeTx._id.toString() === tx._id.toString())
+    );
+    
+    console.log(`\n4️⃣ NEW TRANSACTIONS CREATED: ${newTransactions.length}`);
+    
+    newTransactions.forEach((tx, index) => {
+      console.log(`\n  New Transaction ${index + 1}:`);
+      console.log(`    ID: ${tx._id}`);
+      console.log(`    Date: ${tx.date.toLocaleDateString()}`);
+      console.log(`    Description: ${tx.description}`);
+      console.log(`    Source: ${tx.source}`);
+      console.log(`    Total: $${tx.totalDebit.toFixed(2)}`);
+      
+      if (tx.metadata) {
+        console.log(`    Payment Type: ${tx.metadata.paymentType || 'N/A'}`);
+        console.log(`    Month Settled: ${tx.metadata.monthSettled || 'N/A'}`);
+        console.log(`    Allocation Type: ${tx.metadata.allocationType || 'N/A'}`);
+      }
+      
+      console.log(`    Entries:`);
+      tx.entries.forEach((entry, entryIndex) => {
+        console.log(`      ${entryIndex + 1}. ${entry.accountCode} - ${entry.accountName}`);
+        console.log(`         Debit: $${entry.debit}, Credit: $${entry.credit}`);
+        console.log(`         Description: ${entry.description}`);
+      });
+    });
+    
+    // 5. Check balance sheet impact
+    console.log('\n5️⃣ BALANCE SHEET IMPACT:');
+    
+    // Calculate AR balance
+    let arBalance = 0;
+    afterTransactions.forEach(tx => {
+      tx.entries.forEach(entry => {
+        if (entry.accountCode.startsWith('1100-')) {
+          arBalance += entry.debit - entry.credit;
         }
-
-        // Test 3: Get user ID for payment
-        console.log('\n🔍 Test 3: Getting user ID for payment');
-        console.log('======================================');
-        
-        try {
-            const userIdResult = await PaymentService.getUserIdForPayment(
-                '686e7a60913b15e1760d7d58', // Shamiso's user ID
-                '67d723cf20f89c4ae69804f3'  // St Kilda Student House
-            );
-            
-            console.log('✅ Test 3 PASSED: User ID retrieved successfully');
-            console.log(`   User ID: ${userIdResult.userId}`);
-            console.log(`   Debtor Code: ${userIdResult.debtor.debtorCode}`);
-            console.log(`   Is New Debtor: ${userIdResult.isNewDebtor}`);
-            
-        } catch (error) {
-            console.log('❌ Test 3 FAILED:', error.message);
+      });
+    });
+    
+    // Calculate cash balance
+    let cashBalance = 0;
+    afterTransactions.forEach(tx => {
+      tx.entries.forEach(entry => {
+        if (entry.accountCode.startsWith('100')) {
+          cashBalance += entry.debit - entry.credit;
         }
-
-        // Test 4: Check current payment status
-        console.log('\n🔍 Test 4: Current Payment Status');
-        console.log('==================================');
-        
-        const allPayments = await mongoose.connection.db.collection('payments').find({}).toArray();
-        const paymentsWithUser = allPayments.filter(p => p.user);
-        const paymentsWithoutUser = allPayments.filter(p => !p.user);
-        
-        console.log(`📊 Total Payments: ${allPayments.length}`);
-        console.log(`✅ Payments with User ID: ${paymentsWithUser.length}`);
-        console.log(`❌ Payments without User ID: ${paymentsWithoutUser.length}`);
-        
-        if (paymentsWithoutUser.length > 0) {
-            console.log(`\n⚠️  Payments still without User ID:`);
-            paymentsWithoutUser.forEach((payment, index) => {
-                console.log(`   ${index + 1}. Payment ID: ${payment.paymentId}`);
-                console.log(`      Student ID: ${payment.student || 'N/A'}`);
-                console.log(`      Room: ${payment.room || 'N/A'}`);
-                console.log(`      Amount: $${payment.totalAmount || 'N/A'}`);
-            });
+      });
+    });
+    
+    // Calculate deposit liability
+    let depositLiability = 0;
+    afterTransactions.forEach(tx => {
+      tx.entries.forEach(entry => {
+        if (entry.accountCode === '2020') {
+          depositLiability += entry.credit - entry.debit;
         }
-
-        // Test 5: Test payment model pre-save middleware
-        console.log('\n🔍 Test 5: Testing Payment Model Pre-save Middleware');
-        console.log('====================================================');
-        
-        try {
-            const Payment = require('./src/models/Payment');
-            
-            // Test payment without user field (should auto-set from student)
-            const testPayment = new Payment({
-                paymentId: `MIDDLEWARE-TEST-${Date.now()}`,
-                student: '686e7a60913b15e1760d7d58',
-                residence: '67d723cf20f89c4ae69804f3',
-                totalAmount: 100,
-                paymentMonth: '2025-01',
-                date: new Date(),
-                method: 'Cash',
-                status: 'Confirmed',
-                description: 'Test middleware',
-                createdBy: '686e7a60913b15e1760d7d58'
-            });
-            
-            await testPayment.save();
-            
-            console.log('✅ Test 5 PASSED: Pre-save middleware working correctly');
-            console.log(`   User ID auto-set: ${testPayment.user}`);
-            console.log(`   Student ID: ${testPayment.student}`);
-            
-            // Clean up test payment
-            await mongoose.connection.db.collection('payments').deleteOne({ _id: testPayment._id });
-            console.log('🧹 Test payment cleaned up');
-            
-        } catch (error) {
-            console.log('❌ Test 5 FAILED:', error.message);
-        }
-
-        console.log('\n🎉 Testing Complete!');
-        console.log('===================');
-        console.log('✅ New payment creation system is working correctly');
-        console.log('✅ User ID is automatically fetched and included');
-        console.log('✅ Payment-to-debtor mapping is 100% reliable');
-        console.log('✅ Pre-save middleware ensures data integrity');
-
+      });
+    });
+    
+    console.log(`Accounts Receivable: $${arBalance.toFixed(2)}`);
+    console.log(`Cash: $${cashBalance.toFixed(2)}`);
+    console.log(`Security Deposits Liability: $${depositLiability.toFixed(2)}`);
+    
+    // 6. Summary
+    console.log('\n6️⃣ SUMMARY:');
+    if (newTransactions.length > 0) {
+      console.log('✅ Double-entry transactions were created');
+      console.log(`   Created ${newTransactions.length} new transaction(s)`);
+    } else {
+      console.log('❌ No double-entry transactions were created');
+      console.log('   This means the payment was recorded but no accounting entries were made');
+    }
+    
     } catch (error) {
-        console.error('❌ Test Error:', error.message);
+    console.error('❌ Error:', error.message);
     } finally {
-        if (mongoose.connection.readyState === 1) {
             await mongoose.disconnect();
-            console.log('\n🔌 Disconnected from MongoDB');
-        }
+    console.log('\n🔌 Disconnected from database');
     }
 }
 
-console.log('🧪 Starting Payment Creation System Tests...');
 testPaymentCreation();

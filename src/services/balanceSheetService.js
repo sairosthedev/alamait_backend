@@ -12,22 +12,49 @@ class BalanceSheetService {
     try {
       console.log(`📊 Generating Balance Sheet as of ${asOfDate}`);
       
-      // Use month window: first day of month through asOfDate (last day of month)
+      // Use all transactions up to asOfDate (balance sheet should include all historical transactions)
       const asOf = new Date(asOfDate);
-      const monthStart = new Date(asOf.getFullYear(), asOf.getMonth(), 1);
-      const query = {
-        date: { 
-          $gte: monthStart, 
-          $lte: asOf 
-        },
+      const asOfMonth = asOf.getMonth() + 1;
+      const asOfYear = asOf.getFullYear();
+      const monthKey = `${asOfYear}-${String(asOfMonth).padStart(2, '0')}`;
+      
+      // For balance sheet, we need to include:
+      // 1. All accruals up to asOf date (these create the obligations)
+      // 2. All payments with monthSettled <= current month (these settle the obligations)
+      // 3. All other transactions up to asOf date (non-payment transactions)
+      
+      const accrualQuery = {
+        source: 'rental_accrual',
+        date: { $lte: asOf },
+        status: 'posted'
+      };
+      
+      const paymentQuery = {
+        source: 'payment',
+        'metadata.monthSettled': { $lte: monthKey },
+        status: 'posted'
+      };
+      
+      const otherQuery = {
+        source: { $nin: ['rental_accrual', 'payment'] },
+        date: { $lte: asOf },
         status: 'posted'
       };
       
       if (residence) {
-        query.residence = residence;
+        accrualQuery.residence = residence;
+        paymentQuery.residence = residence;
+        otherQuery.residence = residence;
       }
       
-      const allEntries = await TransactionEntry.find(query).sort({ date: 1 });
+      // Get all relevant transactions
+      const [accrualEntries, paymentEntries, otherEntries] = await Promise.all([
+        TransactionEntry.find(accrualQuery).sort({ date: 1 }),
+        TransactionEntry.find(paymentQuery).sort({ date: 1 }),
+        TransactionEntry.find(otherQuery).sort({ date: 1 })
+      ]);
+      
+      const allEntries = [...accrualEntries, ...paymentEntries, ...otherEntries];
       
       // Initialize balance sheet with proper structure
       const balanceSheet = {
@@ -122,6 +149,81 @@ class BalanceSheetService {
       });
       
       console.log(`🔍 Account balances after processing transactions:`, Object.keys(accountBalances).length);
+      
+      // 🆕 FIX: Calculate monthSettled-based balances from the already filtered transactions
+      try {
+        // Calculate AR balance from the filtered transactions
+        let arDebits = 0;
+        let arCredits = 0;
+        let cashByMonth = 0;
+        let depositsTotal = 0;
+        let deferredTotal = 0;
+        
+        // Process accrual entries (AR debits)
+        accrualEntries.forEach(tx => {
+          tx.entries.forEach(line => {
+            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
+              arDebits += Number(line.debit || 0);
+            }
+          });
+        });
+        
+        // Process payment entries (AR credits, cash, deposits, deferred)
+        paymentEntries.forEach(tx => {
+          tx.entries.forEach(line => {
+            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
+              arCredits += Number(line.credit || 0);
+            } else if (line.accountCode && line.accountCode.match(/^100[0-9]/)) {
+              // Cash accounts - only include if monthSettled = current month
+              if (tx.metadata?.monthSettled === monthKey) {
+                cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+              }
+            } else if (line.accountCode === '1000') {
+              // Main cash account - only include if monthSettled = current month
+              if (tx.metadata?.monthSettled === monthKey) {
+                cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+              }
+            } else if (line.accountCode && line.accountCode.startsWith('2020')) {
+              // Deposit accounts
+              depositsTotal += (line.credit || 0) - (line.debit || 0);
+            } else if (line.accountCode && line.accountCode.startsWith('2200')) {
+              // Deferred income accounts
+              deferredTotal += (line.credit || 0) - (line.debit || 0);
+            }
+          });
+        });
+        
+        const arByMonthOutstanding = arDebits - arCredits;
+        
+        // Override account balances with monthSettled values
+        Object.values(accountBalances).forEach(account => {
+          if (account.code && (account.code.startsWith('1100-') || account.code === '1100')) {
+            // Override AR accounts with monthSettled calculation
+            account.balance = arByMonthOutstanding;
+            account.debitTotal = arDebits;
+            account.creditTotal = arCredits;
+          } else if (account.code && account.code.match(/^100[0-9]/)) {
+            // Override cash accounts with monthSettled calculation
+            account.balance = cashByMonth;
+            account.debitTotal = cashByMonth;
+            account.creditTotal = 0;
+          } else if (account.code && account.code.startsWith('2020')) {
+            // Override deposit accounts with monthSettled calculation
+            account.balance = depositsTotal;
+            account.debitTotal = 0;
+            account.creditTotal = depositsTotal;
+          } else if (account.code && account.code.startsWith('2200')) {
+            // Override deferred income accounts with monthSettled calculation
+            account.balance = deferredTotal;
+            account.debitTotal = 0;
+            account.creditTotal = deferredTotal;
+          }
+        });
+        
+        console.log(`🆕 MonthSettled reclassification for ${monthKey}: AR=${arByMonthOutstanding}, Cash=${cashByMonth}, Deposits=${depositsTotal}, Deferred=${deferredTotal}`);
+      } catch (error) {
+        console.error('Error reclassifying by monthSettled:', error.message);
+      }
       
       // Calculate net balance for each account
       Object.values(accountBalances).forEach(account => {
@@ -513,7 +615,8 @@ class BalanceSheetService {
     const accountsReceivable = {};
     
     Object.entries(currentAssets).forEach(([code, asset]) => {
-      if (asset.name.toLowerCase().includes('receivable')) {
+      // Look for any account that is an AR account (student-specific or generic)
+      if (asset.name.toLowerCase().includes('receivable') || code.startsWith('1100')) {
         accountsReceivable[code] = {
           accountCode: code,
           accountName: asset.name,

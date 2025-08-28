@@ -278,6 +278,36 @@ const debtorSchema = new mongoose.Schema({
     }
   },
   
+  // 🆕 NEW: Once-Off Charge Payment Flags
+  onceOffCharges: {
+    adminFee: {
+      isPaid: {
+        type: Boolean,
+        default: false
+      },
+      paidDate: Date,
+      paidAmount: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      paymentId: String
+    },
+    deposit: {
+      isPaid: {
+        type: Boolean,
+        default: false
+      },
+      paidDate: Date,
+      paidAmount: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      paymentId: String
+    }
+  },
+
   // ENHANCED: Comprehensive Payment Tracking with Month Allocation
   paymentHistory: [{
     // Payment Reference
@@ -375,6 +405,38 @@ const debtorSchema = new mongoose.Schema({
     }
   }],
   
+  // 🆕 NEW: Deferred Income for Prepayments
+  deferredIncome: {
+    totalAmount: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    prepayments: [{
+      paymentId: String,
+      amount: {
+        type: Number,
+        required: true,
+        min: 0
+      },
+      paymentType: {
+        type: String,
+        enum: ['rent', 'admin', 'deposit'],
+        required: true
+      },
+      paymentDate: {
+        type: Date,
+        required: true
+      },
+      allocatedMonth: String, // When this prepayment gets allocated
+      status: {
+        type: String,
+        enum: ['pending', 'allocated', 'refunded'],
+        default: 'pending'
+      }
+    }]
+  },
+
   // ENHANCED: Monthly Payment Summary
   monthlyPayments: [{
     // Month (YYYY-MM format)
