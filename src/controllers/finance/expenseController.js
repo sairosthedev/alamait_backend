@@ -1,4 +1,5 @@
 const Expense = require('../../models/finance/Expense');
+const Vendor = require('../../models/Vendor');
 const { generateUniqueId } = require('../../utils/idGenerator');
 const { validateMongoId } = require('../../utils/validators');
 const { createAuditLog } = require('../../utils/auditLogger');
@@ -555,11 +556,27 @@ exports.approveExpense = async (req, res) => {
                 throw new Error(`Expense account not found for category: ${updatedExpense.category}. Please ensure you have a suitable expense account in your chart of accounts.`);
             }
             
-            // Get or create general Accounts Payable account
-            let apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+            // Get or create vendor-specific Accounts Payable account
+            let apAccount;
+            if (updatedExpense.vendorId) {
+                const vendor = await Vendor.findById(updatedExpense.vendorId);
+                if (vendor) {
+                    // Use the FinancialService to get or create vendor-specific account
+                    const FinancialService = require('../../services/financialService');
+                    apAccount = await FinancialService.getOrCreateVendorAccount(updatedExpense.vendorId);
+                    console.log(`[AP] Using vendor-specific account: ${apAccount.code} for ${vendor.businessName}`);
+                } else {
+                    console.warn(`[AP] Vendor not found: ${updatedExpense.vendorId}, using general accounts payable`);
+                    apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                }
+            } else {
+                // No vendor specified, use general accounts payable
+                apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+            }
+            
             if (!apAccount) {
-                console.error('[AP] General Accounts Payable account not found');
-                throw new Error('General Accounts Payable account not found');
+                console.error('[AP] Accounts Payable account not found');
+                throw new Error('Accounts Payable account not found');
             }
             
             // Create transaction for approval (creates AP liability)

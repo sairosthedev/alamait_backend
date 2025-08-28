@@ -1654,6 +1654,7 @@ async function createItemizedExpensesForRequest(request, user) {
     try {
         const Expense = require('../models/finance/Expense');
         const Vendor = require('../models/Vendor');
+        const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
         
         // Delete any existing expenses for this request
         await Expense.deleteMany({ requestId: request._id });
@@ -1710,8 +1711,39 @@ async function createItemizedExpensesForRequest(request, user) {
                 
                 const newExpense = new Expense(expenseData);
                 await newExpense.save();
-                createdExpenses.push(newExpense);
                 
+                // ✅ CREATE DOUBLE-ENTRY TRANSACTION FOR ITEM WITH QUOTATION
+                try {
+                    console.log(`💰 Creating double-entry transaction for item ${i} with quotation`);
+                    
+                    // Create a temp request object for the accounting service
+                    const tempRequest = {
+                        _id: request._id,
+                        title: request.title,
+                        residence: request.residence,
+                        items: [item], // Only this item
+                        totalEstimatedCost: selectedQuotation.amount,
+                        isTemplate: false,
+                        itemIndex: i,
+                        skipExpenseCreation: true, // Skip expense creation since we already created it
+                        disableDuplicateCheck: true
+                    };
+
+                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+
+                    // Link expense to transaction
+                    if (transactionResult && transactionResult.transaction) {
+                        newExpense.transactionId = transactionResult.transaction._id;
+                        await newExpense.save();
+                        console.log(`✅ Linked expense to transaction: ${transactionResult.transaction._id}`);
+                    }
+                    
+                } catch (transactionError) {
+                    console.error(`❌ Error creating double-entry transaction for item ${i}:`, transactionError);
+                    // Don't fail the expense creation if transaction fails
+                }
+                
+                createdExpenses.push(newExpense);
                 console.log(`✅ Expense created for item ${i} with selected quotation: ${expenseId} (Payment: ${paymentMethod})`);
                 
             } else {
@@ -1721,7 +1753,6 @@ async function createItemizedExpensesForRequest(request, user) {
                 // Enhanced account resolution using DoubleEntryAccountingService
                 let expenseAccountCode = '5007'; // Default to Property Maintenance
                 try {
-                    const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
                     expenseAccountCode = await DoubleEntryAccountingService.resolveExpenseAccount(item, request);
                 } catch (error) {
                     console.warn('Error resolving expense account, using default:', error.message);
@@ -1766,8 +1797,39 @@ async function createItemizedExpensesForRequest(request, user) {
                 
                 const newExpense = new Expense(expenseData);
                 await newExpense.save();
-                createdExpenses.push(newExpense);
                 
+                // ✅ CREATE DOUBLE-ENTRY TRANSACTION FOR ITEM WITHOUT QUOTATION
+                try {
+                    console.log(`💰 Creating double-entry transaction for item ${i} without quotation`);
+                    
+                    // Create a temp request object for the accounting service
+                    const tempRequest = {
+                        _id: request._id,
+                        title: request.title,
+                        residence: request.residence,
+                        items: [item], // Only this item
+                        totalEstimatedCost: item.estimatedCost || item.totalCost || 0,
+                        isTemplate: false,
+                        itemIndex: i,
+                        skipExpenseCreation: true, // Skip expense creation since we already created it
+                        disableDuplicateCheck: true
+                    };
+
+                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+
+                    // Link expense to transaction
+                    if (transactionResult && transactionResult.transaction) {
+                        newExpense.transactionId = transactionResult.transaction._id;
+                        await newExpense.save();
+                        console.log(`✅ Linked expense to transaction: ${transactionResult.transaction._id}`);
+                    }
+                    
+                } catch (transactionError) {
+                    console.error(`❌ Error creating double-entry transaction for item ${i}:`, transactionError);
+                    // Don't fail the expense creation if transaction fails
+                }
+                
+                createdExpenses.push(newExpense);
                 console.log(`✅ Expense created for item ${i} without quotation: ${expenseId} (Payment: Cash)`);
             }
         }

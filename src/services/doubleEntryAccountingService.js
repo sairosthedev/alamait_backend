@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Transaction = require('../models/Transaction');
 const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
@@ -608,7 +609,7 @@ class DoubleEntryAccountingService {
 
                     // Credit: Accounts Payable (Vendor)
                     entries.push({
-                        accountCode: await this.getOrCreateVendorPayableAccount(selectedQuotation.vendorId),
+                        accountCode: await this.getOrCreateVendorPayableAccount(selectedQuotation.vendorId, selectedQuotation.provider),
                         accountName: `Accounts Payable: ${selectedQuotation.provider}`,
                         accountType: 'Liability',
                         debit: 0,
@@ -634,7 +635,7 @@ class DoubleEntryAccountingService {
 
                     // Credit: Accounts Payable: Provider
                     entries.push({
-                        accountCode: await this.getOrCreateVendorPayableAccount(provider),
+                        accountCode: await this.getOrCreateVendorPayableAccount(null, provider),
                         accountName: `Accounts Payable: ${provider}`,
                         accountType: 'Liability',
                         debit: 0,
@@ -789,7 +790,7 @@ class DoubleEntryAccountingService {
                 if (item.paymentStatus === 'Paid') {
                     // Debit: Accounts Payable (Vendor)
                     entries.push({
-                        accountCode: await this.getOrCreateVendorPayableAccount(expense.vendorId),
+                        accountCode: await this.getOrCreateVendorPayableAccount(expense.vendorId, expense.vendorName),
                         accountName: `Accounts Payable: ${expense.vendorName}`,
                         accountType: 'Liability',
                         debit: item.totalCost,
@@ -887,7 +888,7 @@ class DoubleEntryAccountingService {
 
                     // Credit: Accounts Payable (Vendor)
                     entries.push({
-                        accountCode: await this.getOrCreateVendorPayableAccount(selectedQuotation.vendorId),
+                        accountCode: await this.getOrCreateVendorPayableAccount(selectedQuotation.vendorId, selectedQuotation.provider),
                         accountName: `Accounts Payable: ${selectedQuotation.provider}`,
                         accountType: 'Liability',
                         debit: 0,
@@ -2277,20 +2278,68 @@ class DoubleEntryAccountingService {
         return account.code;
     }
 
-    static async getOrCreateVendorPayableAccount(vendorId) {
-        const vendor = await Vendor.findById(vendorId);
+    static async getOrCreateVendorPayableAccount(vendorId, providerName = null) {
+        let vendor = null;
+        
+        // If vendorId is provided and valid, try to find vendor by ID
+        if (vendorId && mongoose.Types.ObjectId.isValid(vendorId)) {
+            vendor = await Vendor.findById(vendorId);
+        }
+        
+        // If vendor not found by ID but providerName is provided, try to find by business name
+        if (!vendor && providerName) {
+            console.log(`🔍 Looking up vendor by provider name: ${providerName}`);
+            vendor = await Vendor.findOne({ 
+                businessName: { $regex: new RegExp(providerName, 'i') } 
+            });
+            
+            if (vendor) {
+                console.log(`✅ Found vendor by provider name: ${vendor.businessName} (${vendor._id})`);
+            }
+        }
+        
+        // If still no vendor found, use general accounts payable
         if (!vendor) {
-            throw new Error('Vendor not found');
+            if (vendorId) {
+                console.warn(`⚠️ Vendor not found by ID: ${vendorId}, using general accounts payable`);
+            } else if (providerName) {
+                console.warn(`⚠️ Vendor not found by provider name: ${providerName}, using general accounts payable`);
+            } else {
+                console.warn(`⚠️ No vendorId or providerName provided, using general accounts payable`);
+            }
+            return '2000'; // General Accounts Payable
         }
 
+        // First, try to find account by vendor's chartOfAccountsCode
         let account = await Account.findOne({ 
-            name: `Accounts Payable: ${vendor.name}`,
+            code: vendor.chartOfAccountsCode,
             type: 'Liability'
         });
         
+        // If not found by code, try by name
         if (!account) {
-            const code = await Account.getNextCode('Liability', 'Current Liabilities');
-            account = await this.getOrCreateAccount(code, `Accounts Payable: ${vendor.name}`, 'Liability');
+            account = await Account.findOne({ 
+                name: `Accounts Payable - ${vendor.businessName}`,
+                type: 'Liability'
+            });
+        }
+        
+        // If still not found, create a new vendor-specific account
+        if (!account) {
+            // Generate a unique account code for this vendor
+            const vendorCode = vendor.chartOfAccountsCode || `200${vendor.vendorCode.slice(-3)}`;
+            
+            account = await this.getOrCreateAccount(
+                vendorCode, 
+                `Accounts Payable - ${vendor.businessName}`, 
+                'Liability'
+            );
+            
+            // Update vendor with the new account code
+            vendor.chartOfAccountsCode = vendorCode;
+            await vendor.save();
+            
+            console.log(`✅ Created vendor-specific accounts payable account: ${vendorCode} for ${vendor.businessName}`);
         }
         
         return account.code;

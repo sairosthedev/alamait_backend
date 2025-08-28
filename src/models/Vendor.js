@@ -237,10 +237,72 @@ vendorSchema.pre('save', async function(next) {
             this.chartOfAccountsCode = `200${(vendorCount + 1).toString().padStart(3, '0')}`;
         }
         
+        // Mark this as a new document for post-save middleware
+        this._isNewDocument = this.isNew;
+        
         next();
     } catch (error) {
         console.error('Error in vendor pre-save middleware:', error);
         next(error);
+    }
+});
+
+// Post-save middleware to create vendor accounts payable account
+vendorSchema.post('save', async function(doc) {
+    try {
+        // Only create account if this is a new vendor (not an update)
+        if (this._isNewDocument) {
+            const Account = mongoose.model('Account');
+            
+            // Check if vendor account already exists
+            let vendorAccount = await Account.findOne({ 
+                code: doc.chartOfAccountsCode,
+                type: 'Liability'
+            });
+            
+            if (!vendorAccount) {
+                // Get the main Accounts Payable account (2000) to link vendor accounts
+                const mainAPAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                
+                // Create vendor-specific accounts payable account
+                vendorAccount = new Account({
+                    code: doc.chartOfAccountsCode,
+                    name: `Accounts Payable - ${doc.businessName}`,
+                    type: 'Liability',
+                    category: 'Current Liabilities',
+                    subcategory: 'Accounts Payable',
+                    description: `Payable account for ${doc.businessName}`,
+                    isActive: true,
+                    level: 2, // Set as level 2 (child of main AP account)
+                    parentAccount: mainAPAccount ? mainAPAccount._id : null, // Link to main AP account
+                    metadata: {
+                        vendorId: doc._id,
+                        vendorCode: doc.vendorCode,
+                        vendorType: doc.category,
+                        linkedToMainAP: true,
+                        linkedDate: new Date(),
+                        mainAPAccountCode: '2000'
+                    }
+                });
+                
+                await vendorAccount.save();
+                
+                // Update main AP account metadata if it exists
+                if (mainAPAccount) {
+                    await Account.findByIdAndUpdate(mainAPAccount._id, {
+                        $set: {
+                            'metadata.hasChildren': true,
+                            'metadata.lastUpdated': new Date()
+                        }
+                    });
+                }
+                
+                console.log(`✅ Auto-created vendor accounts payable account: ${doc.chartOfAccountsCode} for ${doc.businessName}`);
+            }
+        }
+    } catch (error) {
+        console.error('Error creating vendor accounts payable account:', error);
+        // Don't throw error as this is not critical for vendor creation
     }
 });
 
