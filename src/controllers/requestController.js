@@ -742,10 +742,47 @@ exports.createRequest = async (req, res) => {
                         // Auto-create vendor if provider name is provided and no vendorId exists
                         if (quotation.provider && !quotation.vendorId) {
                             try {
+<<<<<<< Updated upstream
                                 const vendorData = await autoCreateVendor(quotation.provider, user, requestData.type || 'other');
                                 if (vendorData) {
                                     quotation.vendorId = vendorData._id;
                                     quotation.vendorName = vendorData.businessName || vendorData.tradingName;
+=======
+                                console.log(`🔍 Processing vendor for provider: ${quotation.provider}`);
+                                
+                                // First, try to find existing vendor
+                                const vendor = await Vendor.findOne({ businessName: quotation.provider });
+                                
+                                if (vendor) {
+                                    console.log(`✅ Found existing vendor for request creation: ${quotation.provider} (${vendor._id})`);
+                                    
+                                    // Add vendor details directly to the quotation object
+                                    quotation.vendorId = vendor._id;
+                                    quotation.vendorCode = vendor.chartOfAccountsCode;
+                                    quotation.vendorName = vendor.businessName;
+                                    quotation.vendorType = vendor.vendorType;
+                                    quotation.expenseCategory = vendor.expenseCategory;
+                                    quotation.paymentMethod = 'Cash';
+                                    quotation.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
+                                    
+                                    console.log(`✅ Added vendor details to quotation: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
+                                } else {
+                                    // Vendor doesn't exist, create new one
+                                    console.log(`🆕 Vendor not found, creating new vendor: ${quotation.provider}`);
+                                const vendorData = await autoCreateVendor(quotation.provider, user, type || 'other');
+                                if (vendorData) {
+                                        // Add vendor details directly to the quotation object
+                                        quotation.vendorId = vendorData._id;
+                                        quotation.vendorCode = vendorData.chartOfAccountsCode;
+                                        quotation.vendorName = vendorData.businessName;
+                                        quotation.vendorType = vendorData.vendorType;
+                                        quotation.expenseCategory = vendorData.expenseCategory;
+                                        quotation.paymentMethod = 'Cash';
+                                        quotation.hasBankDetails = !!(vendorData.bankDetails && vendorData.bankDetails.bankName);
+                                        
+                                        console.log(`✅ Created and added vendor details to quotation: ${vendorData.businessName} (${vendorData.chartOfAccountsCode})`);
+                                    }
+>>>>>>> Stashed changes
                                 }
                             } catch (vendorError) {
                                 console.warn('Error auto-creating vendor:', vendorError.message);

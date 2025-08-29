@@ -167,6 +167,47 @@ const requestItemSchema = new mongoose.Schema({
         approvedAt: {
             type: Date
         },
+        // Vendor information (for linking to vendor records)
+        vendorId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Vendor',
+            required: false
+        },
+        vendorCode: {
+            type: String,
+            trim: true,
+            required: false
+        },
+        vendorName: {
+            type: String,
+            trim: true,
+            required: false
+        },
+        vendorType: {
+            type: String,
+            trim: true,
+            required: false
+        },
+        vendorContact: {
+            firstName: String,
+            lastName: String,
+            email: String,
+            phone: String
+        },
+        expenseCategory: {
+            type: String,
+            trim: true,
+            required: false
+        },
+        paymentMethod: {
+            type: String,
+            trim: true,
+            required: false
+        },
+        hasBankDetails: {
+            type: Boolean,
+            default: false
+        },
         // Quotation selection tracking
         isSelected: {
             type: Boolean,
