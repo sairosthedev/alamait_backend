@@ -649,6 +649,18 @@ class FinancialService {
             });
             await account.save();
         }
+        
+        // If this is an Accounts Payable account (code starts with 2000 but not exactly 2000),
+        // ensure it's properly linked to the parent account 2000
+        if (type === 'Liability' && code.match(/^2000/) && code !== '2000') {
+            const AccountsPayableLinkingService = require('./accountsPayableLinkingService');
+            try {
+                await AccountsPayableLinkingService.ensureAccountsPayableLink(code, name);
+            } catch (error) {
+                console.warn(`⚠️ Could not link AP account ${code}: ${error.message}`);
+            }
+        }
+        
         return account;
     }
 

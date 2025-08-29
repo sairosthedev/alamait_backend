@@ -30,14 +30,24 @@ router.post('/:id/payment', debtorController.addPayment);
 // Get debtor balance and history
 router.get('/:id/balance', debtorController.getDebtorBalance);
 
+// Get all debtors with comprehensive data mapping
+router.get('/comprehensive/all', debtorController.getAllDebtorsComprehensive);
+
+// Get debtors collection report with AR linkage
+router.get('/collection/report', debtorController.getDebtorsCollectionReport);
+
+// Get debtor collection summary
+router.get('/collection/summary', debtorController.getDebtorCollectionSummary);
+
+// Sync debtor with AR data
+router.post('/sync-ar/:id', debtorController.syncDebtorWithAR);
+router.post('/sync-ar', debtorController.syncDebtorWithAR);
+
 // Get comprehensive debtor data with all related collections
 router.get('/:id/comprehensive', debtorController.getDebtorComprehensiveData);
 
 // Get debtor payment history with detailed mapping
 router.get('/:id/payment-history', debtorController.getDebtorPaymentHistory);
-
-// Get all debtors with comprehensive data mapping
-router.get('/comprehensive/all', debtorController.getAllDebtorsComprehensive);
 
 // Create debtor for existing student
 router.post('/student/:userId', debtorController.createDebtorForExistingStudent);

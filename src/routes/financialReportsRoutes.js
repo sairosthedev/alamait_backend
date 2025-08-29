@@ -38,6 +38,12 @@ router.get('/monthly-breakdown', FinancialReportsController.generateMonthlyBreak
 router.get('/comprehensive-monthly-income', FinancialReportsController.generateComprehensiveMonthlyIncomeStatement);
 
 /**
+ * Comprehensive Monthly Balance Sheet (Detailed monthly breakdown)
+ * GET /api/financial-reports/comprehensive-monthly-balance-sheet?period=2025&basis=cash
+ */
+router.get('/comprehensive-monthly-balance-sheet', FinancialReportsController.generateComprehensiveMonthlyBalanceSheet);
+
+/**
  * Monthly Expenses
  * GET /api/financial-reports/monthly-expenses?period=2025&basis=cash
  */

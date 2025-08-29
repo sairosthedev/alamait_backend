@@ -352,7 +352,7 @@ class FinancialReportsController {
      */
     static async generateMonthlyBalanceSheet(req, res) {
         try {
-            const { period, basis = 'accrual', residence } = req.query;
+            const { period, basis = 'accrual', residence, type = 'monthly' } = req.query;
             
             if (!period) {
                 return res.status(400).json({
@@ -368,12 +368,19 @@ class FinancialReportsController {
                 });
             }
             
-            const monthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet(period, residence);
+            if (!['cumulative', 'monthly'].includes(type)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Type must be either "monthly" (monthly activity/change) or "cumulative" (balance as of month end)'
+                });
+            }
+            
+            const monthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet(period, residence, type);
             
             res.json({
                 success: true,
                 data: monthlyBalanceSheet,
-                message: `Monthly balance sheet generated for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
+                message: `Monthly balance sheet breakdown generated for ${period} (${basis} basis, ${type} type)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
             });
             
         } catch (error) {
@@ -809,6 +816,61 @@ class FinancialReportsController {
     }
 
     /**
+     * Generate Detailed Cash Flow Statement with specific income and expense breakdowns
+     * GET /api/finance/reports/detailed-cash-flow
+     */
+    static async generateDetailedCashFlowStatement(req, res) {
+        try {
+            const { period, basis = 'cash', residence } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2024)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            let detailedCashFlowStatement;
+            if (residence) {
+                // For now, use the detailed method but filter by residence
+                // TODO: Create residence-filtered detailed cash flow method
+                detailedCashFlowStatement = await FinancialReportingService.generateDetailedCashFlowStatement(period, basis);
+                // Filter by residence in the response
+                if (detailedCashFlowStatement.detailed_breakdown) {
+                    detailedCashFlowStatement.detailed_breakdown.transactions = 
+                        detailedCashFlowStatement.detailed_breakdown.transactions.filter(t => 
+                            t.residence && t.residence.toString() === residence
+                        );
+                }
+            } else {
+                // Use detailed method
+                detailedCashFlowStatement = await FinancialReportingService.generateDetailedCashFlowStatement(period, basis);
+            }
+            
+            res.json({
+                success: true,
+                data: detailedCashFlowStatement,
+                message: `Detailed cash flow statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating detailed cash flow statement:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating detailed cash flow statement',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Generate Residence-Filtered Cash Flow Statement
      * GET /api/financial-reports/cash-flow/residences
      */
@@ -1227,6 +1289,108 @@ class FinancialReportsController {
             res.status(500).json({
                 success: false,
                 message: 'Error generating comprehensive monthly cash flow statement',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Generate Comprehensive Monthly Balance Sheet
+     * GET /api/finance/reports/comprehensive-monthly-balance-sheet
+     */
+    static async generateComprehensiveMonthlyBalanceSheet(req, res) {
+        try {
+            const { period, basis = 'cash', residence } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2024)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            const monthlyBalanceSheet = await FinancialReportingService.generateComprehensiveMonthlyBalanceSheet(period, basis, residence);
+            
+            // Add cache-busting headers to prevent 304 responses
+            res.set({
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            });
+            
+            res.json({
+                success: true,
+                data: monthlyBalanceSheet,
+                message: `Comprehensive monthly balance sheet generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating comprehensive monthly balance sheet:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating comprehensive monthly balance sheet',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Generate Detailed Cash Flow Statement with specific income and expense breakdowns
+     * GET /api/finance/reports/detailed-cash-flow
+     */
+    static async generateDetailedCashFlowStatement(req, res) {
+        try {
+            const { period, basis = 'cash', residence } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2024)'
+                });
+            }
+            
+            if (!['cash', 'accrual'].includes(basis)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Basis must be either "cash" or "accrual"'
+                });
+            }
+            
+            let detailedCashFlowStatement;
+            if (residence) {
+                // For now, use the detailed method but filter by residence
+                // TODO: Create residence-filtered detailed cash flow method
+                detailedCashFlowStatement = await FinancialReportingService.generateDetailedCashFlowStatement(period, basis);
+                // Filter by residence in the response
+                if (detailedCashFlowStatement.detailed_breakdown) {
+                    detailedCashFlowStatement.detailed_breakdown.transactions = 
+                        detailedCashFlowStatement.detailed_breakdown.transactions.filter(t => 
+                            t.residence && t.residence.toString() === residence
+                        );
+                }
+            } else {
+                // Use detailed method
+                detailedCashFlowStatement = await FinancialReportingService.generateDetailedCashFlowStatement(period, basis);
+            }
+            
+            res.json({
+                success: true,
+                data: detailedCashFlowStatement,
+                message: `Detailed cash flow statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating detailed cash flow statement:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating detailed cash flow statement',
                 error: error.message
             });
         }

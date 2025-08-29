@@ -713,6 +713,34 @@ class DoubleEntryAccountingService {
             let expense = null;
             if (!request || !request.skipExpenseCreation) {
                 const { generateUniqueId } = require('../utils/idGenerator');
+                
+                // Find vendor information from selected quotations
+                let vendorId = null;
+                let vendorSpecificAccount = null;
+                
+                // Check for selected quotations in items
+                for (const item of request.items) {
+                    const selectedQuotation = item.quotations?.find(q => q.isSelected || q.isApproved);
+                    if (selectedQuotation) {
+                        // Use vendor information from the quotation if available
+                        if (selectedQuotation.vendorId && selectedQuotation.vendorCode) {
+                            vendorId = selectedQuotation.vendorId;
+                            vendorSpecificAccount = selectedQuotation.vendorCode;
+                            console.log(`   - Found vendor from quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode})`);
+                            break;
+                        } else if (selectedQuotation.provider) {
+                            // Fallback: Try to find vendor by business name
+                            const vendor = await Vendor.findOne({ businessName: selectedQuotation.provider });
+                            if (vendor) {
+                                vendorId = vendor._id;
+                                vendorSpecificAccount = vendor.chartOfAccountsCode;
+                                console.log(`   - Found vendor: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
                 expense = new Expense({
                     expenseId: await generateUniqueId('EXP'),
                     requestId: request._id,
@@ -724,11 +752,16 @@ class DoubleEntryAccountingService {
                     paymentStatus: 'Pending',
                     period: 'monthly',
                     createdBy: user._id,
-                    transactionId: transaction._id
+                    transactionId: transaction._id,
+                    vendorId: vendorId, // Link the vendor
+                    vendorSpecificAccount: vendorSpecificAccount // Store the vendor account code
                 });
 
                 await expense.save();
                 console.log(`   - Expense created: ${expense.expenseId}`);
+                if (vendorId) {
+                    console.log(`   - Linked to vendor: ${vendorId} (${vendorSpecificAccount})`);
+                }
             } else {
                 console.log('ℹ️ Skipping internal expense creation (handled by caller)');
             }
@@ -2327,7 +2360,16 @@ class DoubleEntryAccountingService {
         // If still not found, create a new vendor-specific account
         if (!account) {
             // Generate a unique account code for this vendor
-            const vendorCode = vendor.chartOfAccountsCode || `200${vendor.vendorCode.slice(-3)}`;
+            // Ensure vendor codes follow 200xxx format to avoid conflicts
+            let vendorCode;
+            if (vendor.chartOfAccountsCode && vendor.chartOfAccountsCode.match(/^200[0-9]{3}$/)) {
+                // Already in correct format
+                vendorCode = vendor.chartOfAccountsCode;
+            } else {
+                // Generate new code in 200xxx format
+                const vendorNumber = vendor.vendorCode ? parseInt(vendor.vendorCode.slice(-3)) : Math.floor(Math.random() * 999) + 1;
+                vendorCode = `200${vendorNumber.toString().padStart(3, '0')}`;
+            }
             
             account = await this.getOrCreateAccount(
                 vendorCode, 

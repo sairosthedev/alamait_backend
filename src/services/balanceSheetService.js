@@ -419,9 +419,9 @@ class BalanceSheetService {
    * Generate Monthly Balance Sheet for React Component
    * This method provides the data structure expected by the React component
    */
-  static async generateMonthlyBalanceSheet(year, residence = null) {
+  static async generateMonthlyBalanceSheet(year, residence = null, type = 'monthly') {
     try {
-      console.log(`📊 Generating Monthly Balance Sheet for ${year}${residence ? ` for residence: ${residence}` : ' (all residences)'}`);
+      console.log(`📊 Generating Monthly Balance Sheet for ${year}${residence ? ` for residence: ${residence}` : ' (all residences)'} - Type: ${type}`);
       
       const monthlyData = {};
       const annualSummary = {
@@ -440,7 +440,15 @@ class BalanceSheetService {
         const monthKey = month;
         
         try {
-          const monthBalanceSheet = await this.generateBalanceSheet(monthEndDate, residence);
+          let monthBalanceSheet;
+          
+          if (type === 'monthly') {
+            // Calculate monthly activity (change from previous month)
+            monthBalanceSheet = await this.generateMonthlyActivityBalanceSheet(year, month, residence);
+          } else {
+            // Calculate cumulative balance as of month end (default behavior)
+            monthBalanceSheet = await this.generateBalanceSheet(monthEndDate, residence);
+          }
           
           // Structure the data as expected by the React component with enhanced structure
           monthlyData[monthKey] = {
@@ -575,6 +583,240 @@ class BalanceSheetService {
       
     } catch (error) {
       console.error('❌ Error generating monthly balance sheet:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate Monthly Activity Balance Sheet (shows monthly changes, not cumulative balances)
+   * This method calculates the change in balances for a specific month
+   */
+  static async generateMonthlyActivityBalanceSheet(year, month, residence = null) {
+    try {
+      console.log(`📊 Generating Monthly Activity Balance Sheet for ${year}-${month}${residence ? ` for residence: ${residence}` : ' (all residences)'}`);
+      
+      const monthStartDate = new Date(year, month - 1, 1); // First day of the month
+      const monthEndDate = new Date(year, month, 0); // Last day of the month
+      const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+      
+      // Get transactions that occurred ONLY in this specific month
+      const monthQuery = {
+        date: { 
+          $gte: monthStartDate, 
+          $lte: monthEndDate 
+        },
+        status: 'posted'
+      };
+      
+      if (residence) {
+        monthQuery.residence = residence;
+      }
+      
+      // Get all transactions for this month
+      const monthTransactions = await TransactionEntry.find(monthQuery).sort({ date: 1 });
+      
+      console.log(`🔍 Found ${monthTransactions.length} transactions for ${monthKey}`);
+      
+      // Initialize balance sheet structure for monthly activity
+      const balanceSheet = {
+        asOfDate: monthEndDate,
+        residence: residence || 'all',
+        assets: { 
+          current: {}, 
+          nonCurrent: {}, 
+          totalCurrent: 0, 
+          totalNonCurrent: 0, 
+          totalAssets: 0,
+          accumulatedDepreciation: 0
+        },
+        liabilities: { 
+          current: {}, 
+          nonCurrent: {}, 
+          totalCurrent: 0, 
+          totalNonCurrent: 0, 
+          totalLiabilities: 0 
+        },
+        equity: { 
+          capital: 0, 
+          retainedEarnings: 0, 
+          otherEquity: 0,
+          totalEquity: 0 
+        },
+        workingCapital: 0,
+        currentRatio: 0,
+        debtToEquity: 0,
+        message: 'Monthly activity balance sheet generated successfully'
+      };
+      
+      // Get ALL accounts from the database to ensure none are missing
+      const Account = require('../models/Account');
+      const allAccounts = await Account.find().sort({ code: 1 });
+      
+      // Initialize account balances for monthly activity
+      const accountBalances = {};
+      
+      // Initialize ALL accounts with zero balances first
+      allAccounts.forEach(account => {
+        accountBalances[account.code] = {
+          code: account.code,
+          name: account.name,
+          type: account.type,
+          debitTotal: 0,
+          creditTotal: 0,
+          balance: 0,
+          description: account.description || '',
+          category: account.category || 'Other'
+        };
+      });
+      
+      // Process ONLY the transactions that occurred in this month
+      monthTransactions.forEach(entry => {
+        if (entry.entries && Array.isArray(entry.entries)) {
+          entry.entries.forEach(lineItem => {
+            const accountCode = lineItem.accountCode;
+            const accountName = lineItem.accountName;
+            const accountType = lineItem.accountType;
+            const debit = lineItem.debit || 0;
+            const credit = lineItem.credit || 0;
+            
+            if (accountBalances[accountCode]) {
+              accountBalances[accountCode].debitTotal += debit;
+              accountBalances[accountCode].creditTotal += credit;
+              // Update name and type from transaction if more recent
+              if (accountName) accountBalances[accountCode].name = accountName;
+              if (accountType) accountBalances[accountCode].type = accountType;
+            } else {
+              // Create account if not found in database (fallback)
+              accountBalances[accountCode] = {
+                code: accountCode,
+                name: accountName || `Account ${accountCode}`,
+                type: accountType || 'Asset',
+                debitTotal: debit,
+                creditTotal: credit,
+                balance: 0,
+                description: '',
+                category: 'Other'
+              };
+            }
+          });
+        }
+      });
+      
+      // Calculate net balance for each account (monthly activity)
+      Object.values(accountBalances).forEach(account => {
+        switch (account.type) {
+          case 'Asset':
+            account.balance = account.debitTotal - account.creditTotal;
+            break;
+          case 'Liability':
+            account.balance = account.creditTotal - account.debitTotal;
+            break;
+          case 'Equity':
+            account.balance = account.creditTotal - account.debitTotal;
+            break;
+          case 'Income':
+            // Income should be positive (credit > debit means income earned)
+            account.balance = Math.max(0, account.creditTotal - account.debitTotal);
+            break;
+          case 'Expense':
+            // Expense should be positive (debit > credit means expense incurred)
+            account.balance = Math.max(0, account.debitTotal - account.creditTotal);
+            break;
+        }
+      });
+      
+      // Categorize into balance sheet sections
+      Object.values(accountBalances).forEach(account => {
+        const balance = account.balance;
+        
+        // Use comprehensive category mapping to ensure all accounts are properly categorized
+        const mappedCategory = this.mapAccountToCategory(account.code, account.name, account.type);
+        
+        switch (account.type) {
+          case 'Asset':
+            if (this.isCurrentAsset(account.code, account.name)) {
+              balanceSheet.assets.current[account.code] = {
+                name: account.name,
+                balance: Math.max(0, balance),
+                description: this.getAssetDescription(account.code, account.name),
+                category: mappedCategory
+              };
+              balanceSheet.assets.totalCurrent += Math.max(0, balance);
+            } else {
+              balanceSheet.assets.nonCurrent[account.code] = {
+                name: account.name,
+                balance: Math.max(0, balance),
+                description: this.getAssetDescription(account.code, account.name),
+                category: mappedCategory
+              };
+              balanceSheet.assets.totalNonCurrent += Math.max(0, balance);
+            }
+            break;
+            
+          case 'Liability':
+            if (this.isCurrentLiability(account.code, account.name)) {
+              balanceSheet.liabilities.current[account.code] = {
+                name: account.name,
+                balance: Math.abs(balance), // Use absolute value for liabilities
+                description: this.getLiabilityDescription(account.code, account.name),
+                category: 'Current Liability'
+              };
+              balanceSheet.liabilities.totalCurrent += Math.abs(balance);
+            } else {
+              balanceSheet.liabilities.nonCurrent[account.code] = {
+                name: account.name,
+                balance: Math.abs(balance), // Use absolute value for liabilities
+                description: this.getLiabilityDescription(account.code, account.name),
+                category: 'Non-Current Liability'
+              };
+              balanceSheet.liabilities.totalNonCurrent += Math.abs(balance);
+            }
+            break;
+            
+          case 'Equity':
+            if (account.code === '3000' || account.name.toLowerCase().includes('capital')) {
+              balanceSheet.equity.capital = Math.abs(balance); // Use absolute value for capital
+            } else if (account.name.toLowerCase().includes('retained') || account.name.toLowerCase().includes('earnings')) {
+              balanceSheet.equity.retainedEarnings += Math.abs(balance); // Use absolute value for retained earnings
+            } else {
+              balanceSheet.equity.otherEquity += Math.abs(balance); // Use absolute value for other equity
+            }
+            break;
+            
+          case 'Income':
+            // Income increases retained earnings
+            balanceSheet.equity.retainedEarnings += balance;
+            break;
+            
+          case 'Expense':
+            // Expenses decrease retained earnings
+            balanceSheet.equity.retainedEarnings -= balance;
+            break;
+        }
+      });
+      
+      // AGGREGATE PARENT ACCOUNTS WITH CHILDREN (e.g., Account 2000 + child accounts)
+      await this.aggregateParentChildAccounts(balanceSheet);
+      
+      // Calculate totals and ratios
+      balanceSheet.assets.totalAssets = balanceSheet.assets.totalCurrent + balanceSheet.assets.totalNonCurrent;
+      // Ensure liability totals are always positive
+      balanceSheet.liabilities.totalLiabilities = Math.abs(balanceSheet.liabilities.totalCurrent + balanceSheet.liabilities.totalNonCurrent);
+      // Ensure equity totals are always positive
+      balanceSheet.equity.totalEquity = balanceSheet.equity.capital + balanceSheet.equity.retainedEarnings + balanceSheet.equity.otherEquity;
+      
+      // Calculate key ratios
+      balanceSheet.workingCapital = balanceSheet.assets.totalCurrent - balanceSheet.liabilities.totalCurrent;
+      balanceSheet.currentRatio = balanceSheet.liabilities.totalCurrent > 0 ? 
+        balanceSheet.assets.totalCurrent / balanceSheet.liabilities.totalCurrent : 0;
+      balanceSheet.debtToEquity = balanceSheet.equity.totalEquity > 0 ? 
+        balanceSheet.liabilities.totalLiabilities / balanceSheet.equity.totalEquity : 0;
+      
+      console.log(`✅ Monthly Activity Balance Sheet generated for ${monthKey}`);
+      return balanceSheet;
+      
+    } catch (error) {
+      console.error('❌ Error generating monthly activity balance sheet:', error);
       throw error;
     }
   }

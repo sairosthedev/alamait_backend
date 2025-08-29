@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const TransactionEntry = require('../models/TransactionEntry');
 const Payment = require('../models/Payment');
+const AdvancePayment = require('../models/AdvancePayment');
 
 class EnhancedPaymentAllocationService {
   /**

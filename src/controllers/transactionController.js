@@ -1,6 +1,7 @@
 const TransactionEntry = require('../models/TransactionEntry');
 const Transaction = require('../models/Transaction');
 const Account = require('../models/Account');
+const AdvancePayment = require('../models/AdvancePayment');
 
 // Get all transactions with entries (for frontend compatibility)
 exports.getAllTransactions = async (req, res) => {
