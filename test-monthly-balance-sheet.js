@@ -1,151 +1,116 @@
 const mongoose = require('mongoose');
-const BalanceSheetService = require('./src/services/balanceSheetService');
+const FinancialReportingService = require('./src/services/financialReportingService');
 
+// 🔐 User's actual MongoDB Atlas credentials
 const MONGODB_URI = 'mongodb+srv://macdonaldsairos24:macdonald24@cluster0.ulvve.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
 
 async function testMonthlyBalanceSheet() {
   try {
-    console.log('🧪 Testing Monthly Balance Sheet Service...\n');
-    
-    await mongoose.connect(MONGODB_URI, { 
-      useNewUrlParser: true, 
-      useUnifiedTopology: true 
-    });
-    console.log('✅ Connected to MongoDB Atlas');
-    
-    // Test 1: Generate Monthly Balance Sheet for 2025
-    console.log('\n🧪 TEST 1: GENERATE MONTHLY BALANCE SHEET FOR 2025');
-    console.log('='.repeat(70));
-    
-    const monthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet('2025');
-    
-    console.log('📊 Monthly Balance Sheet Generated Successfully:');
-    console.log(`  - Year: ${monthlyBalanceSheet.year}`);
-    console.log(`  - Residence: ${monthlyBalanceSheet.residence}`);
-    console.log(`  - Message: ${monthlyBalanceSheet.message}`);
-    
-    // Check monthly data structure
-    if (monthlyBalanceSheet.monthly) {
-      console.log(`  - Monthly data available for ${Object.keys(monthlyBalanceSheet.monthly).length} months`);
-      
-      // Show sample month data (August)
-      const augustData = monthlyBalanceSheet.monthly[8];
-      if (augustData) {
-        console.log('\n📅 Sample Month (August) Data:');
-        console.log(`  - Month: ${augustData.month} (${augustData.monthName})`);
-        console.log(`  - Assets Total: $${augustData.assets.total.toLocaleString()}`);
-        console.log(`  - Liabilities Total: $${augustData.liabilities.total.toLocaleString()}`);
-        console.log(`  - Equity Total: $${augustData.equity.total.toLocaleString()}`);
+        console.log('🧪 Testing Monthly Balance Sheet Breakdown...\n');
         
-        // Show accounts receivable details
-        if (augustData.assets.accountsReceivable) {
-          console.log('  - Accounts Receivable:');
-          Object.entries(augustData.assets.accountsReceivable).forEach(([key, ar]) => {
-            if (key !== 'total') {
-              console.log(`    ${ar.accountCode} - ${ar.accountName}: $${ar.amount.toLocaleString()}`);
+        // Connect to your MongoDB Atlas cluster
+        await mongoose.connect(MONGODB_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true
+        });
+        
+        console.log('✅ Connected to your MongoDB Atlas cluster');
+        
+        const year = '2025';
+        
+        // Test 1: Cash Basis Monthly Balance Sheet
+        console.log('\n🧪 TEST 1: CASH BASIS MONTHLY BALANCE SHEET');
+        console.log('='.repeat(60));
+        const cashMonthlyBalanceSheet = await FinancialReportingService.generateComprehensiveMonthlyBalanceSheet(year, 'cash');
+        console.log('Cash Basis Monthly Balance Sheet:');
+        console.log(`  - Period: ${cashMonthlyBalanceSheet.period}`);
+        console.log(`  - Basis: ${cashMonthlyBalanceSheet.basis}`);
+        console.log(`  - Year-end Assets: $${cashMonthlyBalanceSheet.year_end_totals.total_assets.toFixed(2)}`);
+        console.log(`  - Year-end Liabilities: $${cashMonthlyBalanceSheet.year_end_totals.total_liabilities.toFixed(2)}`);
+        console.log(`  - Year-end Equity: $${cashMonthlyBalanceSheet.year_end_totals.total_equity.toFixed(2)}`);
+        console.log(`  - Balanced: ${cashMonthlyBalanceSheet.year_end_totals.accounting_equation_balanced ? '✅' : '❌'}`);
+        
+        // Show monthly breakdown
+        console.log('\n📊 Monthly Balance Sheet Breakdown:');
+        Object.entries(cashMonthlyBalanceSheet.monthly_breakdown).forEach(([index, monthData]) => {
+            console.log(`  ${monthData.month}:`);
+            console.log(`    Assets: $${monthData.total_assets.toFixed(2)}`);
+            console.log(`    Liabilities: $${monthData.total_liabilities.toFixed(2)}`);
+            console.log(`    Equity: $${monthData.total_equity.toFixed(2)}`);
+            console.log(`    Transactions: ${monthData.transaction_count}`);
+            console.log(`    Balanced: ${monthData.accounting_equation_balanced ? '✅' : '❌'}`);
+        });
+        
+        // Test 2: Accrual Basis Monthly Balance Sheet
+        console.log('\n🧪 TEST 2: ACCRUAL BASIS MONTHLY BALANCE SHEET');
+        console.log('='.repeat(60));
+        const accrualMonthlyBalanceSheet = await FinancialReportingService.generateComprehensiveMonthlyBalanceSheet(year, 'accrual');
+        console.log('Accrual Basis Monthly Balance Sheet:');
+        console.log(`  - Period: ${accrualMonthlyBalanceSheet.period}`);
+        console.log(`  - Basis: ${accrualMonthlyBalanceSheet.basis}`);
+        console.log(`  - Year-end Assets: $${accrualMonthlyBalanceSheet.year_end_totals.total_assets.toFixed(2)}`);
+        console.log(`  - Year-end Liabilities: $${accrualMonthlyBalanceSheet.year_end_totals.total_liabilities.toFixed(2)}`);
+        console.log(`  - Year-end Equity: $${accrualMonthlyBalanceSheet.year_end_totals.total_equity.toFixed(2)}`);
+        console.log(`  - Balanced: ${accrualMonthlyBalanceSheet.year_end_totals.accounting_equation_balanced ? '✅' : '❌'}`);
+        
+        // Test 3: Compare Monthly vs Regular Balance Sheet
+        console.log('\n🧪 TEST 3: MONTHLY VS REGULAR BALANCE SHEET COMPARISON');
+        console.log('='.repeat(60));
+        
+        const regularBalanceSheet = await FinancialReportingService.generateBalanceSheet('2025-12-31', 'cash');
+        
+        console.log('Comparison:');
+        console.log('  Cash Basis:');
+        console.log(`    - Regular Balance Sheet Assets: $${regularBalanceSheet.assets.total_assets || 0}`);
+        console.log(`    - Monthly Balance Sheet Assets: $${cashMonthlyBalanceSheet.year_end_totals.total_assets.toFixed(2)}`);
+        console.log(`    - Regular Balance Sheet Liabilities: $${regularBalanceSheet.liabilities.total_liabilities || 0}`);
+        console.log(`    - Monthly Balance Sheet Liabilities: $${cashMonthlyBalanceSheet.year_end_totals.total_liabilities.toFixed(2)}`);
+        console.log(`    - Regular Balance Sheet Equity: $${regularBalanceSheet.equity.total_equity || 0}`);
+        console.log(`    - Monthly Balance Sheet Equity: $${cashMonthlyBalanceSheet.year_end_totals.total_equity.toFixed(2)}`);
+        
+        // Test 4: Show detailed account breakdown for December
+        console.log('\n🧪 TEST 4: DECEMBER DETAILED ACCOUNT BREAKDOWN');
+        console.log('='.repeat(60));
+        
+        const decemberData = cashMonthlyBalanceSheet.monthly_breakdown[11]; // December (index 11)
+        console.log('December Balance Sheet Details:');
+        
+        console.log('  ASSETS:');
+        Object.entries(decemberData.assets).forEach(([key, account]) => {
+            console.log(`    ${key}: $${account.balance.toFixed(2)}`);
+        });
+        
+        console.log('  LIABILITIES:');
+        Object.entries(decemberData.liabilities).forEach(([key, account]) => {
+            console.log(`    ${key}: $${account.balance.toFixed(2)}`);
+        });
+        
+        console.log('  EQUITY:');
+        Object.entries(decemberData.equity).forEach(([key, account]) => {
+            if (key !== 'retained_earnings') {
+                console.log(`    ${key}: $${account.balance.toFixed(2)}`);
             }
-          });
-        }
+        });
+        console.log(`    Retained Earnings: $${decemberData.equity.retained_earnings.toFixed(2)}`);
         
-        // Show cash and bank details
-        if (augustData.assets.current.cashAndBank) {
-          console.log('  - Cash and Bank Accounts:');
-          Object.entries(augustData.assets.current.cashAndBank).forEach(([key, cash]) => {
-            if (key !== 'total') {
-              console.log(`    ${cash.accountCode} - ${cash.accountName}: $${cash.amount.toLocaleString()}`);
-            }
-          });
-          console.log(`    Total Cash & Bank: $${augustData.assets.current.cashAndBank.total.toLocaleString()}`);
-        }
-      }
-    }
-    
-    // Check annual summary
-    if (monthlyBalanceSheet.annualSummary) {
-      console.log('\n📈 Annual Summary:');
-      console.log(`  - Total Annual Assets: $${monthlyBalanceSheet.annualSummary.totalAnnualAssets.toLocaleString()}`);
-      console.log(`  - Total Annual Liabilities: $${monthlyBalanceSheet.annualSummary.totalAnnualLiabilities.toLocaleString()}`);
-      console.log(`  - Total Annual Equity: $${monthlyBalanceSheet.annualSummary.totalAnnualEquity.toLocaleString()}`);
-    }
-    
-    // Test 2: Generate Monthly Balance Sheet for specific residence
-    console.log('\n🧪 TEST 2: MONTHLY BALANCE SHEET FOR SPECIFIC RESIDENCE');
-    console.log('='.repeat(70));
-    
-    const specificResidence = '67d723cf20f89c4ae69804f3'; // St Kilda
-    const residenceMonthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet('2025', specificResidence);
-    
-    console.log(`📊 Monthly Balance Sheet for Residence ${specificResidence}:`);
-    console.log(`  - Year: ${residenceMonthlyBalanceSheet.year}`);
-    console.log(`  - Residence: ${residenceMonthlyBalanceSheet.residence}`);
-    
-    // Compare totals
-    if (residenceMonthlyBalanceSheet.annualSummary && monthlyBalanceSheet.annualSummary) {
-      console.log('\n📊 Comparison (All vs Specific Residence):');
-      console.log('  Assets:');
-      console.log(`    All Residences: $${monthlyBalanceSheet.annualSummary.totalAnnualAssets.toLocaleString()}`);
-      console.log(`    Specific: $${residenceMonthlyBalanceSheet.annualSummary.totalAnnualAssets.toLocaleString()}`);
-      
-      console.log('  Liabilities:');
-      console.log(`    All Residences: $${monthlyBalanceSheet.annualSummary.totalAnnualLiabilities.toLocaleString()}`);
-      console.log(`    Specific: $${residenceMonthlyBalanceSheet.annualSummary.totalAnnualLiabilities.toLocaleString()}`);
-      
-      console.log('  Equity:');
-      console.log(`    All Residences: $${monthlyBalanceSheet.annualSummary.totalAnnualEquity.toLocaleString()}`);
-      console.log(`    Specific: $${residenceMonthlyBalanceSheet.annualSummary.totalAnnualEquity.toLocaleString()}`);
-    }
-    
-    // Test 3: Check data structure compatibility with React component
-    console.log('\n🧪 TEST 3: DATA STRUCTURE COMPATIBILITY CHECK');
-    console.log('='.repeat(70));
-    
-    const requiredStructure = [
-      'monthly',
-      'annualSummary',
-      'year',
-      'residence',
-      'message'
-    ];
-    
-    const hasRequiredStructure = requiredStructure.every(key => 
-      monthlyBalanceSheet.hasOwnProperty(key)
-    );
-    
-    console.log(`✅ Required structure check: ${hasRequiredStructure ? 'PASSED' : 'FAILED'}`);
-    
-    if (hasRequiredStructure) {
-      console.log('  - All required top-level keys present');
-      
-      // Check monthly structure
-      const sampleMonth = monthlyBalanceSheet.monthly[1]; // January
-      if (sampleMonth) {
-        const monthlyStructure = [
-          'month', 'monthName', 'assets', 'liabilities', 'equity', 'summary'
-        ];
+        // Test 5: Show progression over months
+        console.log('\n🧪 TEST 5: BALANCE SHEET PROGRESSION OVER MONTHS');
+        console.log('='.repeat(60));
         
-        const hasMonthlyStructure = monthlyStructure.every(key => 
-          sampleMonth.hasOwnProperty(key)
-        );
-        
-        console.log(`  - Monthly structure check: ${hasMonthlyStructure ? 'PASSED' : 'FAILED'}`);
-        
-        if (hasMonthlyStructure) {
-          console.log('    - Assets structure:', Object.keys(sampleMonth.assets));
-          console.log('    - Liabilities structure:', Object.keys(sampleMonth.liabilities));
-          console.log('    - Equity structure:', Object.keys(sampleMonth.equity));
-          console.log('    - Summary structure:', Object.keys(sampleMonth.summary));
-        }
-      }
-    }
-    
-    console.log('\n✅ All Monthly Balance Sheet tests completed successfully!');
+        console.log('Month-by-Month Progression:');
+        Object.entries(cashMonthlyBalanceSheet.monthly_breakdown).forEach(([index, monthData]) => {
+            const monthNumber = parseInt(index) + 1;
+            console.log(`  ${monthNumber.toString().padStart(2, '0')}. ${monthData.month}:`);
+            console.log(`    Assets: $${monthData.total_assets.toFixed(2).padStart(10)} | Liabilities: $${monthData.total_liabilities.toFixed(2).padStart(10)} | Equity: $${monthData.total_equity.toFixed(2).padStart(10)}`);
+        });
     
   } catch (error) {
-    console.error('❌ Error testing monthly balance sheet:', error);
+        console.error('❌ Error testing monthly balance sheet:', error);
   } finally {
     await mongoose.disconnect();
-    console.log('\n🔌 Disconnected from MongoDB');
+        console.log('\n🔌 Disconnected from MongoDB');
   }
 }
 
+// Run the test
 testMonthlyBalanceSheet();

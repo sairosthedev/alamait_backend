@@ -1,4 +1,5 @@
 const Maintenance = require('../../models/Maintenance');
+const Vendor = require('../../models/Vendor');
 const { validationResult } = require('express-validator');
 const AuditLog = require('../../models/AuditLog');
 const Transaction = require('../../models/Transaction');
@@ -284,17 +285,32 @@ exports.approveMaintenance = async (req, res) => {
                 throw new Error('Maintenance expense account not found');
             }
             
-            // Get or create general Accounts Payable account (use provided account or default to 2000)
+            // Get or create vendor-specific Accounts Payable account
             let payableAccount;
             if (apAccount) {
                 payableAccount = await Account.findById(apAccount);
             } else {
-                payableAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                // Try to get vendor-specific account if maintenance has a vendor
+                if (updatedMaintenance.vendorId) {
+                    const vendor = await Vendor.findById(updatedMaintenance.vendorId);
+                    if (vendor) {
+                        // Use the FinancialService to get or create vendor-specific account
+                        const FinancialService = require('../../services/financialService');
+                        payableAccount = await FinancialService.getOrCreateVendorAccount(updatedMaintenance.vendorId);
+                        console.log(`[AP] Using vendor-specific account: ${payableAccount.code} for ${vendor.businessName}`);
+                    } else {
+                        console.warn(`[AP] Vendor not found: ${updatedMaintenance.vendorId}, using general accounts payable`);
+                        payableAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                    }
+                } else {
+                    // No vendor specified, use general accounts payable
+                    payableAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                }
             }
             
             if (!payableAccount) {
-                console.error('[AP] General Accounts Payable account not found');
-                throw new Error('General Accounts Payable account not found');
+                console.error('[AP] Accounts Payable account not found');
+                throw new Error('Accounts Payable account not found');
             }
 
             // Generate unique transaction ID

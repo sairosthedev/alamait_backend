@@ -1335,10 +1335,40 @@ class FinancialReportingService {
                 const monthName = monthNames[i];
                 const monthEndDate = new Date(`${period}-${String(i + 1).padStart(2, '0')}-${new Date(period, i + 1, 0).getDate()}`);
                 
-                // Get all transactions up to month end
-                const entries = await TransactionEntry.find({
-                    date: { $lte: monthEndDate }
-                }).populate('entries');
+                // Get all transactions up to month end, but use monthSettled for payments
+                const monthKey = `${period}-${String(i + 1).padStart(2, '0')}`;
+                
+                // For balance sheet, we need to include:
+                // 1. All accruals up to month end (these create the obligations)
+                // 2. All payments with monthSettled <= current month (these settle the obligations)
+                // 3. All other transactions up to month end (non-payment transactions)
+                
+                const accrualQuery = {
+                    source: 'rental_accrual',
+                    date: { $lte: monthEndDate },
+                    status: 'posted'
+                };
+                
+                const paymentQuery = {
+                    source: 'payment',
+                    'metadata.monthSettled': { $lte: monthKey },
+                    status: 'posted'
+                };
+                
+                const otherQuery = {
+                    source: { $nin: ['rental_accrual', 'payment'] },
+                    date: { $lte: monthEndDate },
+                    status: 'posted'
+                };
+                
+                // Get all relevant transactions
+                const [accrualEntries, paymentEntries, otherEntries] = await Promise.all([
+                    TransactionEntry.find(accrualQuery).populate('entries'),
+                    TransactionEntry.find(paymentQuery).populate('entries'),
+                    TransactionEntry.find(otherQuery).populate('entries')
+                ]);
+                
+                const entries = [...accrualEntries, ...paymentEntries, ...otherEntries];
                 
                 // Calculate account balances
                 const accountBalances = {};
@@ -1376,7 +1406,57 @@ class FinancialReportingService {
                     });
                 });
                 
-                // Organize by balance sheet sections
+                // 🆕 FIX: Calculate monthSettled-based balances from the already filtered transactions
+                try {
+                    // Calculate AR balance from the filtered transactions
+                    let arDebits = 0;
+                    let arCredits = 0;
+                    let cashByMonth = 0;
+                    let depositsTotal = 0;
+                    let deferredTotal = 0;
+                    
+                    // Process accrual entries (AR debits)
+                    accrualEntries.forEach(tx => {
+                        tx.entries.forEach(line => {
+                            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
+                                arDebits += Number(line.debit || 0);
+                            }
+                        });
+                    });
+                    
+                    // Process payment entries (AR credits, cash, deposits, deferred)
+                    paymentEntries.forEach(tx => {
+                        tx.entries.forEach(line => {
+                            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
+                                arCredits += Number(line.credit || 0);
+                            } else if (line.accountCode && line.accountCode.match(/^100[0-9]/)) {
+                                // Cash accounts - only include if monthSettled = current month
+                                if (tx.metadata?.monthSettled === monthKey) {
+                                    cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+                                }
+                            } else if (line.accountCode && line.accountCode.startsWith('2020')) {
+                                // Deposit accounts
+                                depositsTotal += (line.credit || 0) - (line.debit || 0);
+                            } else if (line.accountCode && line.accountCode.startsWith('2200')) {
+                                // Deferred income accounts
+                                deferredTotal += (line.credit || 0) - (line.debit || 0);
+                            }
+                        });
+                    });
+                    
+                    const arByMonthOutstanding = arDebits - arCredits;
+                } catch (error) {
+                    console.error('Error reclassifying by monthSettled:', error.message);
+                    // Fallback to cumulative balances
+                    const sumBy = (predicate) => Object.values(accountBalances)
+                        .filter(a => predicate(a))
+                        .reduce((sum, a) => sum + (a.balance || 0), 0);
+                    arByMonthOutstanding = sumBy(a => a.code && a.code.startsWith('1100'));
+                    depositsTotal = sumBy(a => a.code && a.code.startsWith('2020'));
+                    deferredTotal = sumBy(a => a.code && a.code.startsWith('2200'));
+                }
+                
+                // Organize by balance sheet sections with monthSettled overrides
                 Object.values(accountBalances).forEach(account => {
                     if (account.accountType === 'Asset' || account.accountType === 'asset') {
                         const isCurrent = this.isCurrentAsset(account.accountName);
@@ -1385,8 +1465,14 @@ class FinancialReportingService {
                         if (!monthlyBalanceSheet[monthName].assets[section][account.accountName]) {
                             monthlyBalanceSheet[monthName].assets[section][account.accountName] = 0;
                         }
-                        monthlyBalanceSheet[monthName].assets[section][account.accountName] = account.balance;
-                        monthlyBalanceSheet[monthName].assets.total += account.balance;
+                        
+                        // 🆕 FIX: Override cash accounts with monthSettled-based calculation
+                        if (account.code && account.code.match(/^100[0-9]/)) {
+                            monthlyBalanceSheet[monthName].assets[section][account.accountName] = cashByMonth;
+                        } else {
+                            monthlyBalanceSheet[monthName].assets[section][account.accountName] = account.balance;
+                        }
+                        monthlyBalanceSheet[monthName].assets.total += monthlyBalanceSheet[monthName].assets[section][account.accountName];
                     } else if (account.accountType === 'Liability' || account.accountType === 'liability') {
                         const isCurrent = this.isCurrentLiability(account.accountName);
                         const section = isCurrent ? 'current' : 'non_current';
@@ -1401,6 +1487,13 @@ class FinancialReportingService {
                         monthlyBalanceSheet[monthName].equity.total += account.balance;
                     }
                 });
+
+                // Override standardized lines with monthSettled rollups
+                if (!monthlyBalanceSheet[monthName].assets.current) monthlyBalanceSheet[monthName].assets.current = {};
+                if (!monthlyBalanceSheet[monthName].liabilities.current) monthlyBalanceSheet[monthName].liabilities.current = {};
+                monthlyBalanceSheet[monthName].assets.current['Accounts Receivable - Tenants (1100)'] = arByMonthOutstanding;
+                monthlyBalanceSheet[monthName].liabilities.current['Tenant Deposits Held (2020)'] = depositsTotal;
+                monthlyBalanceSheet[monthName].liabilities.current['Deferred Income - Tenant Advances (2200)'] = deferredTotal;
                 
                 // Calculate net worth
                 monthlyBalanceSheet[monthName].total_assets = monthlyBalanceSheet[monthName].assets.total;
@@ -2967,6 +3060,232 @@ class FinancialReportingService {
             
         } catch (error) {
             console.error('Error generating residence-filtered cash flow statement:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Comprehensive Monthly Balance Sheet
+     * 
+     * Similar to income statement, shows balance sheet data broken down by month
+     * Shows how assets, liabilities, and equity change month by month
+     */
+    static async generateComprehensiveMonthlyBalanceSheet(period, basis = 'cash', residence = null) {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating comprehensive monthly balance sheet for ${period} using ${basis.toUpperCase()} basis`);
+            
+            // Initialize monthly breakdown
+            const monthlyBreakdown = {};
+            const monthNames = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+            ];
+            
+            monthNames.forEach((month, index) => {
+                monthlyBreakdown[index] = {
+                    month,
+                    monthNumber: index + 1,
+                    assets: {},
+                    liabilities: {},
+                    equity: {},
+                    total_assets: 0,
+                    total_liabilities: 0,
+                    total_equity: 0,
+                    residences: [],
+                    transaction_count: 0,
+                    accounting_equation_balanced: false
+                };
+            });
+            
+            // Process each month to build monthly balance sheet (like income statement)
+            for (let monthIndex = 0; monthIndex < 12; monthIndex++) {
+                const monthStartDate = new Date(period, monthIndex, 1); // First day of the month
+                const monthEndDate = new Date(period, monthIndex + 1, 0); // Last day of the month
+                
+                console.log(`Processing balance sheet for ${monthNames[monthIndex]} (${monthStartDate.toLocaleDateString()} to ${monthEndDate.toLocaleDateString()})`);
+                
+                // Get transaction entries for THIS MONTH ONLY (like income statement)
+                // Use proper date range to avoid timezone issues
+                const query = {
+                    date: { 
+                        $gte: new Date(period, monthIndex, 1, 0, 0, 0, 0), // Start of month
+                        $lt: new Date(period, monthIndex + 1, 1, 0, 0, 0, 0) // Start of next month
+                    }
+                };
+                
+                if (residence) {
+                    query.residence = residence;
+                }
+                
+                const entries = await TransactionEntry.find(query).populate('residence');
+                
+                console.log(`Found ${entries.length} transaction entries up to ${monthNames[monthIndex]}`);
+                
+                // Calculate account balances for this month
+                const accountBalances = {};
+                const residences = new Set();
+                
+                entries.forEach(entry => {
+                    const residence = entry.residence;
+                    const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
+                    residences.add(residenceName);
+                    
+                    if (entry.entries && entry.entries.length > 0) {
+                        entry.entries.forEach(line => {
+                            const accountCode = line.accountCode;
+                            const accountName = line.accountName;
+                            const accountType = line.accountType;
+                            const debit = line.debit || 0;
+                            const credit = line.credit || 0;
+                            
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!accountBalances[key]) {
+                                accountBalances[key] = {
+                                    code: accountCode,
+                                    name: accountName,
+                                    type: accountType,
+                                    balance: 0,
+                                    debit_total: 0,
+                                    credit_total: 0
+                                };
+                            }
+                            
+                            // Track totals
+                            accountBalances[key].debit_total += debit;
+                            accountBalances[key].credit_total += credit;
+                            
+                            // Calculate balance based on account type
+                            if (accountType === 'Asset' || accountType === 'Expense') {
+                                accountBalances[key].balance += debit - credit;
+                            } else {
+                                accountBalances[key].balance += credit - debit;
+                            }
+                        });
+                    }
+                });
+                
+                // Group by account type for this month
+                const assets = {};
+                const liabilities = {};
+                const equity = {};
+                const income = {};
+                const expenses = {};
+                
+                Object.values(accountBalances).forEach(account => {
+                    const key = `${account.code} - ${account.name}`;
+                    switch (account.type) {
+                        case 'Asset':
+                            assets[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                            break;
+                        case 'Liability':
+                            liabilities[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                            break;
+                        case 'Equity':
+                            equity[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                            break;
+                        case 'Income':
+                            income[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                            break;
+                        case 'Expense':
+                            expenses[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                            break;
+                    }
+                });
+                
+                // Calculate monthly changes (not cumulative balances)
+                const monthlyAssetChanges = Object.values(assets).reduce((sum, account) => sum + account.balance, 0);
+                const monthlyLiabilityChanges = Object.values(liabilities).reduce((sum, account) => sum + account.balance, 0);
+                const monthlyEquityChanges = Object.values(equity).reduce((sum, account) => sum + account.balance, 0);
+                const monthlyIncome = Object.values(income).reduce((sum, account) => sum + account.balance, 0);
+                const monthlyExpenses = Object.values(expenses).reduce((sum, account) => sum + account.balance, 0);
+                
+                // Calculate monthly retained earnings change
+                const monthlyRetainedEarnings = monthlyIncome - monthlyExpenses;
+                
+                // Store monthly data (showing monthly changes, not cumulative balances)
+                monthlyBreakdown[monthIndex].assets = assets;
+                monthlyBreakdown[monthIndex].liabilities = liabilities;
+                monthlyBreakdown[monthIndex].equity = {
+                    ...equity,
+                    retained_earnings: monthlyRetainedEarnings
+                };
+                monthlyBreakdown[monthIndex].total_assets = monthlyAssetChanges;
+                monthlyBreakdown[monthIndex].total_liabilities = monthlyLiabilityChanges;
+                monthlyBreakdown[monthIndex].total_equity = monthlyEquityChanges + monthlyRetainedEarnings;
+                monthlyBreakdown[monthIndex].residences = Array.from(residences);
+                monthlyBreakdown[monthIndex].transaction_count = entries.length;
+                monthlyBreakdown[monthIndex].accounting_equation_balanced = 
+                    Math.abs((monthlyAssetChanges - (monthlyLiabilityChanges + monthlyEquityChanges + monthlyRetainedEarnings))) < 0.01;
+                
+                console.log(`  ${monthNames[monthIndex]} Balance Sheet Changes:`);
+                console.log(`    Asset Changes: $${monthlyAssetChanges.toFixed(2)}`);
+                console.log(`    Liability Changes: $${monthlyLiabilityChanges.toFixed(2)}`);
+                console.log(`    Equity Changes: $${(monthlyEquityChanges + monthlyRetainedEarnings).toFixed(2)}`);
+                console.log(`    Balanced: ${monthlyBreakdown[monthIndex].accounting_equation_balanced ? '✅' : '❌'}`);
+            }
+            
+            // Calculate year-end totals (sum of all monthly changes)
+            const yearEndTotals = {
+                total_assets: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_assets, 0),
+                total_liabilities: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_liabilities, 0),
+                total_equity: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_equity, 0),
+                total_transactions: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].transaction_count, 0),
+                accounting_equation_balanced: Math.abs((monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_assets, 0) - 
+                    (monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_liabilities, 0) + 
+                     monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_equity, 0)))) < 0.01
+            };
+            
+            return {
+                period,
+                basis,
+                monthly_breakdown: monthlyBreakdown,
+                year_end_totals: yearEndTotals,
+                month_names: monthNames,
+                residences_included: true,
+                data_sources: ['TransactionEntry'],
+                accounting_notes: {
+                    basis: `${basis.toUpperCase()} basis balance sheet`,
+                    includes_all_transactions: true,
+                    monthly_changes: true,
+                    note: "Shows monthly balance sheet changes (like income statement), not cumulative balances"
+                }
+            };
+            
+        } catch (error) {
+            console.error('Error generating comprehensive monthly balance sheet:', error);
             throw error;
         }
     }

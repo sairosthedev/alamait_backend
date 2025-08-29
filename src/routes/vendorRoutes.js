@@ -42,6 +42,28 @@ router.get('/:id/transactions',
     vendorController.getVendorTransactions
 );
 
+// 🆕 NEW: Get vendors collection report with AP data linkage
+router.get('/collection/report', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    vendorController.getVendorsCollectionReport
+);
+
+// 🆕 NEW: Sync vendor with AP data
+router.post('/sync-ap/:id', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    vendorController.syncVendorWithAP
+);
+router.post('/sync-ap', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    vendorController.syncVendorWithAP
+);
+
+// 🆕 NEW: Get vendor collection summary
+router.get('/collection/summary', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    vendorController.getVendorCollectionSummary
+);
+
 // Update vendor performance (Admin and Finance only)
 router.patch('/:id/performance', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 

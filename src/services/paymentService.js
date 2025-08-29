@@ -6,6 +6,83 @@ const Residence = require('../models/Residence');
 
 class PaymentService {
     /**
+     * 🆕 NEW: Create a payment using the enhanced Smart FIFO allocation system
+     * This replaces the old manual allocation with automatic FIFO allocation
+     */
+    static async createPaymentWithSmartAllocation(paymentData, createdBy) {
+        try {
+            console.log('🚀 Creating payment with Smart FIFO allocation...');
+            
+            // Validate required fields for new system
+            if (!paymentData.totalAmount || !paymentData.payments || !paymentData.payments.length) {
+                throw new Error('Missing required fields: totalAmount and payments array');
+            }
+
+            // Generate payment ID
+            const paymentId = `PAY-${Date.now()}`;
+            
+            // Create basic payment record
+            const payment = new Payment({
+                paymentId,
+                totalAmount: paymentData.totalAmount,
+                payments: paymentData.payments,
+                date: paymentData.date || new Date(),
+                method: paymentData.method || 'Cash',
+                status: 'Confirmed',
+                applicationStatus: 'approved',
+                createdBy: createdBy,
+                // Optional fields that can be added later
+                student: paymentData.student || null,
+                residence: paymentData.residence || null,
+                user: paymentData.user || null
+            });
+
+            await payment.save();
+            console.log(`✅ Payment created successfully: ${paymentId}`);
+
+            // 🎯 Use the enhanced allocation system
+            try {
+                const EnhancedPaymentAllocationService = require('./enhancedPaymentAllocationService');
+                
+                // Prepare data for allocation
+                const allocationData = {
+                    paymentId: payment._id.toString(),
+                    studentId: paymentData.student,
+                    totalAmount: paymentData.totalAmount,
+                    payments: paymentData.payments,
+                    residence: paymentData.residence || 'default'
+                };
+
+                console.log('🎯 Starting Smart FIFO allocation...');
+                const allocationResult = await EnhancedPaymentAllocationService.smartFIFOAllocation(allocationData);
+                
+                if (allocationResult.success) {
+                    console.log('✅ Smart FIFO allocation completed successfully');
+                    console.log('📊 Allocation summary:', allocationResult.allocation.summary);
+                    
+                    // Update payment with allocation results
+                    payment.allocation = allocationResult.allocation;
+                    await payment.save();
+                    
+                } else {
+                    console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
+                    // Don't fail payment creation, but log the allocation error
+                }
+                
+            } catch (allocationError) {
+                console.error('❌ Error in Smart FIFO allocation:', allocationError.message);
+                // Don't fail payment creation, but log the allocation error
+            }
+
+            return payment;
+
+        } catch (error) {
+            console.error('❌ Error creating payment with Smart FIFO allocation:', error);
+            throw error;
+        }
+    }
+
+    /**
      * Create a payment with automatic user ID mapping
      * This ensures 100% payment-to-debtor mapping success
      */

@@ -264,6 +264,11 @@ app.use('/api/admin/events', adminEventRoutes);
 app.use('/api/admin/requests', adminRequestRoutes);
 app.use('/api/admin/lease-templates', leaseTemplateRoutes);
 app.use('/api/admin/leases', adminLeaseRoutes);
+
+// Payment Allocation routes (FIFO-based payment allocation system)
+const adminPaymentAllocationRoutes = require('./routes/admin/paymentAllocationRoutes');
+app.use('/api/admin/payment-allocation', adminPaymentAllocationRoutes);
+
 // Generic admin routes last
 app.use('/api/admin', adminRoutes);
 

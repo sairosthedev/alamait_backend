@@ -1193,4 +1193,169 @@ const calculateTransactionStatistics = (transactions, months = 12) => {
         averageTransaction: recentTransactions.length > 0 ? 
             (totalDebit + totalCredit) / recentTransactions.length : 0
     };
+};
+
+// Sync debtor totals with AR data
+exports.syncDebtorWithAR = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { syncAll = false } = req.query;
+
+        const { syncDebtorTotalsWithAR } = require('../../services/debtorService');
+
+        let result;
+        if (syncAll === 'true') {
+            console.log('🔄 Syncing all debtors with AR data...');
+            result = await syncDebtorTotalsWithAR();
+        } else if (id) {
+            console.log(`🔄 Syncing debtor ${id} with AR data...`);
+            result = await syncDebtorTotalsWithAR(id);
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: 'Either debtor ID or syncAll=true is required'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: syncAll === 'true' ? 'All debtors synced with AR data' : 'Debtor synced with AR data',
+            data: result
+        });
+
+    } catch (error) {
+        console.error('Error syncing debtor with AR:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error syncing debtor with AR data',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * 🆕 NEW: Get debtors collection report with AR data linkage
+ * Provides paginated debtor reports with AR transaction data
+ */
+exports.getDebtorsCollectionReport = async (req, res) => {
+    try {
+        const { page = 1, limit = 10, status, search } = req.query;
+        const skip = (page - 1) * limit;
+
+        // Build query
+        const query = {};
+        if (status) query.status = status;
+        if (search) {
+            query.$or = [
+                { debtorCode: { $regex: search, $options: 'i' } },
+                { 'contactInfo.name': { $regex: search, $options: 'i' } },
+                { 'contactInfo.email': { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Get debtors with pagination
+        const debtors = await Debtor.find(query)
+            .populate('user', 'firstName lastName email phone')
+            .populate('residence', 'name address')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        // Get total count
+        const totalDebtors = await Debtor.countDocuments(query);
+
+        // Get AR data for each debtor
+        const debtorsWithARData = [];
+
+        for (const debtor of debtors) {
+            if (debtor.accountCode) {
+                // Get AR transactions for this debtor
+                const arTransactions = await TransactionEntry.find({
+                    'entries.accountCode': debtor.accountCode
+                }).sort({ date: 1 }).lean();
+
+                let totalExpected = 0;
+                let totalPaid = 0;
+
+                arTransactions.forEach(transaction => {
+                    transaction.entries.forEach(entry => {
+                        if (entry.accountCode === debtor.accountCode) {
+                            if (transaction.source === 'rental_accrual') {
+                                totalExpected += entry.debit || 0;
+                            } else if (transaction.source === 'payment') {
+                                totalPaid += entry.credit || 0;
+                            }
+                        }
+                    });
+                });
+
+                const currentBalance = totalExpected - totalPaid;
+
+                debtorsWithARData.push({
+                    ...debtor,
+                    totalExpected,
+                    totalPaid,
+                    currentBalance,
+                    paymentRate: totalExpected > 0 ? (totalPaid / totalExpected) * 100 : 0,
+                    arTransactionCount: arTransactions.length
+                });
+            } else {
+                debtorsWithARData.push({
+                    ...debtor,
+                    totalExpected: 0,
+                    totalPaid: 0,
+                    currentBalance: 0,
+                    paymentRate: 0,
+                    arTransactionCount: 0
+                });
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                debtors: debtorsWithARData,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalDebtors / limit),
+                    totalDebtors,
+                    hasNextPage: page * limit < totalDebtors,
+                    hasPrevPage: page > 1
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting debtors collection report:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving debtors collection report',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * 🆕 NEW: Get debtor collection summary
+ * Provides overall debtor collection statistics
+ */
+exports.getDebtorCollectionSummary = async (req, res) => {
+    try {
+        const { getDebtorCollectionSummary } = require('../../services/debtorService');
+        const summary = await getDebtorCollectionSummary();
+
+        res.status(200).json({
+            success: true,
+            data: summary
+        });
+
+    } catch (error) {
+        console.error('Error getting debtor collection summary:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving debtor collection summary',
+            error: error.message
+        });
+    }
 }; 

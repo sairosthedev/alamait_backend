@@ -451,6 +451,9 @@ class CompleteMigrationScript {
             
             for (const vendor of vendors) {
                 try {
+                    // Get the main Accounts Payable account (2000) to link vendor accounts
+                    const mainAPAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                    
                     // Create vendor-specific payable account
                     const payableAccountName = `Accounts Payable: ${vendor.businessName}`;
                     const payableAccountCode = vendor.chartOfAccountsCode || `200${vendor.vendorCode.slice(-3)}`;
@@ -469,17 +472,58 @@ class CompleteMigrationScript {
                             subcategory: 'Accounts Payable',
                             description: `Payable account for ${vendor.businessName}`,
                             isActive: true,
-                            level: 1,
+                            level: 2, // Set as level 2 (child of main AP account)
                             sortOrder: 0,
+                            parentAccount: mainAPAccount ? mainAPAccount._id : null, // Link to main AP account
                             metadata: { 
                                 vendorId: vendor._id, 
                                 vendorCode: vendor.vendorCode, 
-                                vendorType: vendor.category 
+                                vendorType: vendor.category,
+                                linkedToMainAP: true,
+                                linkedDate: new Date(),
+                                mainAPAccountCode: '2000'
                             }
                         });
                         
                         await payableAccount.save();
+                        
+                        // Update main AP account metadata if it exists
+                        if (mainAPAccount) {
+                            await Account.findByIdAndUpdate(mainAPAccount._id, {
+                                $set: {
+                                    'metadata.hasChildren': true,
+                                    'metadata.lastUpdated': new Date()
+                                },
+                                $inc: { 'metadata.childrenCount': 1 }
+                            });
+                        }
+                        
                         this.stats.accountsCreated++;
+                        console.log(`✅ Created vendor payable account: ${payableAccountCode} - ${payableAccountName} (linked to 2000)`);
+                    } else {
+                        // If account exists but isn't linked, link it now
+                        if (!payableAccount.parentAccount && mainAPAccount) {
+                            payableAccount.parentAccount = mainAPAccount._id;
+                            payableAccount.level = 2;
+                            payableAccount.metadata = {
+                                ...payableAccount.metadata,
+                                linkedToMainAP: true,
+                                linkedDate: new Date(),
+                                mainAPAccountCode: '2000'
+                            };
+                            await payableAccount.save();
+                            
+                            // Update main AP account metadata
+                            await Account.findByIdAndUpdate(mainAPAccount._id, {
+                                $set: {
+                                    'metadata.hasChildren': true,
+                                    'metadata.lastUpdated': new Date()
+                                },
+                                $inc: { 'metadata.childrenCount': 1 }
+                            });
+                            
+                            console.log(`✅ Linked existing vendor account: ${payableAccountCode} - ${payableAccountName} to 2000`);
+                        }
                     }
                     
                     // Update vendor with account reference
@@ -898,4 +942,903 @@ module.exports = { CompleteMigrationScript, runMigration };
 // Run if called directly
 if (require.main === module) {
     runMigration();
+} 
+            for (const vendor of vendors) {
+
+                try {
+
+                    // Create vendor-specific payable account
+
+                    const payableAccountName = `Accounts Payable: ${vendor.businessName}`;
+
+                    const payableAccountCode = vendor.chartOfAccountsCode || `200${vendor.vendorCode.slice(-3)}`;
+
+                    
+
+                    let payableAccount = await Account.findOne({ 
+
+                        name: payableAccountName, 
+
+                        type: 'Liability' 
+
+                    }).maxTimeMS(10000);
+
+                    
+
+                    if (!payableAccount) {
+
+                        payableAccount = new Account({
+
+                            code: payableAccountCode,
+
+                            name: payableAccountName,
+
+                            type: 'Liability',
+
+                            category: 'Current Liabilities',
+
+                            subcategory: 'Accounts Payable',
+
+                            description: `Payable account for ${vendor.businessName}`,
+
+                            isActive: true,
+
+                            level: 1,
+
+                            sortOrder: 0,
+
+                            metadata: { 
+
+                                vendorId: vendor._id, 
+
+                                vendorCode: vendor.vendorCode, 
+
+                                vendorType: vendor.category 
+
+                            }
+
+                        });
+
+                        
+
+                        await payableAccount.save();
+
+                        this.stats.accountsCreated++;
+
+                    }
+
+                    
+
+                    // Update vendor with account reference
+
+                    vendor.chartOfAccountsCode = payableAccount.code;
+
+                    await vendor.save();
+
+                    
+
+                    this.stats.vendorsProcessed++;
+
+                    
+
+                } catch (error) {
+
+                    console.error(`❌ Error processing vendor ${vendor.businessName}:`, error.message);
+
+                    this.stats.errors.push(`Vendor ${vendor.businessName}: ${error.message}`);
+
+                }
+
+            }
+
+            
+
+            console.log(`✅ Processed ${this.stats.vendorsProcessed} vendors`);
+
+            
+
+        } catch (error) {
+
+            console.error('❌ Error migrating vendor accounts:', error);
+
+            this.stats.errors.push(`Vendor migration: ${error.message}`);
+
+        }
+
+    }
+
+
+
+    /**
+
+     * Step 6: Create debtor accounts
+
+     */
+
+    async migrateDebtorAccounts() {
+
+        console.log('👥 Step 6: Creating debtor accounts...');
+
+        
+
+        try {
+
+            // Get all users who might be debtors (students/tenants)
+
+            const users = await User.find({ 
+
+                role: { $in: ['student', 'tenant'] } 
+
+            }).maxTimeMS(30000);
+
+            
+
+            console.log(`Found ${users.length} potential debtors`);
+
+            
+
+            for (const user of users) {
+
+                try {
+
+                    // Check if debtor already exists
+
+                    let debtor = await Debtor.findOne({ user: user._id }).maxTimeMS(10000);
+
+                    
+
+                    if (!debtor) {
+
+                        // Generate debtor code and account code
+
+                        const debtorCode = await Debtor.generateDebtorCode();
+
+                        const accountCode = await Debtor.generateAccountCode();
+
+                        
+
+                        // Create debtor record
+
+                        debtor = new Debtor({
+
+                            debtorCode,
+
+                            user: user._id,
+
+                            accountCode,
+
+                            status: 'active',
+
+                            currentBalance: 0,
+
+                            totalOwed: 0,
+
+                            totalPaid: 0,
+
+                            creditLimit: 0,
+
+                            paymentTerms: 'monthly',
+
+                            contactInfo: {
+
+                                name: `${user.firstName} ${user.lastName}`,
+
+                                email: user.email,
+
+                                phone: user.phone || ''
+
+                            },
+
+                            createdBy: new mongoose.Types.ObjectId('67f4ef0fcb87ffa3fb7e2d73')
+
+                        });
+
+                        
+
+                        await debtor.save();
+
+                        this.stats.debtorsCreated++;
+
+                        
+
+                        // Create debtor-specific receivable account
+
+                        const receivableAccountName = `Accounts Receivable: ${user.firstName} ${user.lastName}`;
+
+                        const receivableAccount = new Account({
+
+                            code: accountCode,
+
+                            name: receivableAccountName,
+
+                            type: 'Asset',
+
+                            category: 'Current Assets',
+
+                            subcategory: 'Accounts Receivable',
+
+                            description: `Receivable account for ${user.firstName} ${user.lastName}`,
+
+                            isActive: true,
+
+                            level: 1,
+
+                            sortOrder: 0,
+
+                            metadata: { 
+
+                                debtorId: debtor._id, 
+
+                                userId: user._id 
+
+                            }
+
+                        });
+
+                        
+
+                        await receivableAccount.save();
+
+                        this.stats.accountsCreated++;
+
+                    }
+
+                    
+
+                } catch (error) {
+
+                    console.error(`❌ Error processing debtor for user ${user.email}:`, error.message);
+
+                    this.stats.errors.push(`Debtor ${user.email}: ${error.message}`);
+
+                }
+
+            }
+
+            
+
+            console.log(`✅ Created ${this.stats.debtorsCreated} debtor accounts`);
+
+            
+
+        } catch (error) {
+
+            console.error('❌ Error migrating debtor accounts:', error);
+
+            this.stats.errors.push(`Debtor migration: ${error.message}`);
+
+        }
+
+    }
+
+
+
+    /**
+
+     * Step 7: Setup petty cash management
+
+     */
+
+    async setupPettyCashManagement() {
+
+        console.log('💰 Step 7: Setting up petty cash management...');
+
+        
+
+        try {
+
+            // Create petty cash accounts for different users
+
+            const pettyCashAccounts = [
+
+                { code: '1008', name: 'Petty Cash', type: 'Asset', category: 'Current Assets' },
+
+                { code: '1009', name: 'Admin Petty Cash', type: 'Asset', category: 'Current Assets' },
+
+                { code: '1010', name: 'Finance Petty Cash', type: 'Asset', category: 'Current Assets' },
+
+                { code: '1011', name: 'Manager Petty Cash', type: 'Asset', category: 'Current Assets' }
+
+            ];
+
+            
+
+            for (const accountData of pettyCashAccounts) {
+
+                try {
+
+                    const existingAccount = await Account.findOne({ code: accountData.code }).maxTimeMS(10000);
+
+                    
+
+                    if (!existingAccount) {
+
+                        const account = new Account({
+
+                            ...accountData,
+
+                            isActive: true,
+
+                            level: 1,
+
+                            sortOrder: 0,
+
+                            metadata: {
+
+                                pettyCash: true,
+
+                                accountType: accountData.name.toLowerCase().replace(' ', '_')
+
+                            }
+
+                        });
+
+                        
+
+                        await account.save();
+
+                        this.stats.pettyCashAccountsCreated++;
+
+                        console.log(`✅ Created petty cash account: ${accountData.code} - ${accountData.name}`);
+
+                    } else {
+
+                        console.log(`ℹ️ Petty cash account ${accountData.code} already exists`);
+
+                    }
+
+                } catch (error) {
+
+                    console.error(`❌ Error creating petty cash account ${accountData.code}:`, error.message);
+
+                    this.stats.errors.push(`Petty cash account ${accountData.code}: ${error.message}`);
+
+                }
+
+            }
+
+            
+
+            console.log(`✅ Created ${this.stats.pettyCashAccountsCreated} petty cash accounts`);
+
+            
+
+        } catch (error) {
+
+            console.error('❌ Error setting up petty cash management:', error);
+
+            this.stats.errors.push(`Petty cash setup: ${error.message}`);
+
+        }
+
+    }
+
+
+
+    /**
+
+     * Step 8: Create transactions for expenses
+
+     */
+
+    async migrateExpenses() {
+
+        console.log('💸 Step 8: Creating transactions for expenses...');
+
+        
+
+        try {
+
+            const expenses = await Expense.find({}).maxTimeMS(30000);
+
+            console.log(`Found ${expenses.length} expenses`);
+
+            
+
+            for (const expense of expenses) {
+
+                try {
+
+                    // Check if transaction already exists
+
+                    const existingTransaction = await Transaction.findOne({ 
+
+                        reference: expense.expenseId 
+
+                    }).maxTimeMS(10000);
+
+                    
+
+                    if (!existingTransaction) {
+
+                        const transactionId = await this.generateTransactionId();
+
+                        
+
+                        // Create transaction
+
+                        const transaction = new Transaction({
+
+                            transactionId,
+
+                            date: expense.expenseDate,
+
+                            description: `Expense: ${expense.description}`,
+
+                            type: expense.paymentStatus === 'Paid' ? 'payment' : 'approval',
+
+                            reference: expense.expenseId,
+
+                            residence: expense.residence,
+
+                            residenceName: 'Migrated Residence',
+
+                            amount: expense.amount,
+
+                            createdBy: expense.createdBy || new mongoose.Types.ObjectId('67f4ef0fcb87ffa3fb7e2d73'),
+
+                            metadata: {
+
+                                migrated: true,
+
+                                source: 'expense',
+
+                                category: expense.category
+
+                            }
+
+                        });
+
+                        
+
+                        await transaction.save();
+
+                        
+
+                        // Create transaction entries
+
+                        const entries = [];
+
+                        
+
+                        // Determine expense account based on category
+
+                        const expenseAccountCode = this.getExpenseAccountCode(expense.category);
+
+                        const expenseAccountName = `${expense.category} Expense`;
+
+                        
+
+                        // Debit: Expense account
+
+                        entries.push({
+
+                            accountCode: expenseAccountCode,
+
+                            accountName: expenseAccountName,
+
+                            accountType: 'Expense',
+
+                            debit: expense.amount,
+
+                            credit: 0,
+
+                            description: expense.description
+
+                        });
+
+                        
+
+                        // Credit: Payment method or payable account
+
+                        if (expense.paymentStatus === 'Paid') {
+
+                            // If paid, credit the payment method
+
+                            const paymentAccountCode = this.getPaymentAccountCode(expense.paymentMethod || 'Cash');
+
+                            const paymentAccountName = this.getPaymentAccountName(expense.paymentMethod || 'Cash');
+
+                            
+
+                            entries.push({
+
+                                accountCode: paymentAccountCode,
+
+                                accountName: paymentAccountName,
+
+                                accountType: 'Asset',
+
+                                debit: 0,
+
+                                credit: expense.amount,
+
+                                description: `Payment via ${expense.paymentMethod || 'Cash'}`
+
+                            });
+
+                        } else {
+
+                            // If not paid, credit accounts payable
+
+                            entries.push({
+
+                                accountCode: '2001',
+
+                                accountName: 'Accounts Payable',
+
+                                accountType: 'Liability',
+
+                                debit: 0,
+
+                                credit: expense.amount,
+
+                                description: `Payable for ${expense.description}`
+
+                            });
+
+                        }
+
+                        
+
+                        // Create transaction entry
+
+                        const transactionEntry = new TransactionEntry({
+
+                            transactionId: transaction.transactionId,
+
+                            date: expense.expenseDate,
+
+                            description: `Expense: ${expense.description}`,
+
+                            reference: expense.expenseId,
+
+                            entries,
+
+                            totalDebit: expense.amount,
+
+                            totalCredit: expense.amount,
+
+                            source: 'expense_payment',
+
+                            sourceId: expense._id,
+
+                            sourceModel: 'Expense',
+
+                            createdBy: 'system@migration.com',
+
+                            status: 'posted',
+
+                            metadata: {
+
+                                migrated: true,
+
+                                expenseCategory: expense.category,
+
+                                paymentStatus: expense.paymentStatus
+
+                            }
+
+                        });
+
+                        
+
+                        await transactionEntry.save();
+
+                        
+
+                        // Update transaction with entry reference
+
+                        transaction.entries = [transactionEntry._id];
+
+                        await transaction.save();
+
+                        
+
+                        this.stats.expensesProcessed++;
+
+                        this.stats.transactionEntriesCreated++;
+
+                    }
+
+                } catch (error) {
+
+                    console.error(`❌ Error processing expense ${expense.expenseId}:`, error.message);
+
+                    this.stats.errors.push(`Expense ${expense.expenseId}: ${error.message}`);
+
+                }
+
+            }
+
+            
+
+            console.log(`✅ Processed ${this.stats.expensesProcessed} expenses`);
+
+            
+
+        } catch (error) {
+
+            console.error('❌ Error migrating expenses:', error);
+
+            this.stats.errors.push(`Expense migration: ${error.message}`);
+
+        }
+
+    }
+
+
+
+    /**
+
+     * Step 9: Final validation and cleanup
+
+     */
+
+    async validateMigration() {
+
+        console.log('🔍 Step 9: Validating migration...');
+
+        
+
+        try {
+
+            // Check account balances
+
+            const accounts = await Account.find({ isActive: true }).maxTimeMS(30000);
+
+            console.log(`✅ Found ${accounts.length} active accounts`);
+
+            
+
+            // Check transactions
+
+            const transactions = await Transaction.find({}).maxTimeMS(30000);
+
+            console.log(`✅ Found ${transactions.length} transactions`);
+
+            
+
+            // Check transaction entries
+
+            const transactionEntries = await TransactionEntry.find({}).maxTimeMS(30000);
+
+            console.log(`✅ Found ${transactionEntries.length} transaction entries`);
+
+            
+
+            // Check debtors
+
+            const debtors = await Debtor.find({}).maxTimeMS(30000);
+
+            console.log(`✅ Found ${debtors.length} debtors`);
+
+            
+
+            // Check vendors
+
+            const vendors = await Vendor.find({}).maxTimeMS(30000);
+
+            console.log(`✅ Found ${vendors.length} vendors`);
+
+            
+
+            console.log('✅ Migration validation completed');
+
+            
+
+        } catch (error) {
+
+            console.error('❌ Error validating migration:', error);
+
+            this.stats.errors.push(`Validation: ${error.message}`);
+
+        }
+
+    }
+
+
+
+    // Helper methods
+
+    standardizeAccountType(type) {
+
+        const typeMap = {
+
+            'asset': 'Asset',
+
+            'liability': 'Liability',
+
+            'equity': 'Equity',
+
+            'income': 'Income',
+
+            'expense': 'Expense'
+
+        };
+
+        return typeMap[type.toLowerCase()] || type;
+
+    }
+
+
+
+    getCategoryForType(type) {
+
+        const categoryMap = {
+
+            'Asset': 'Current Assets',
+
+            'Liability': 'Current Liabilities',
+
+            'Equity': 'Owner Equity',
+
+            'Income': 'Operating Revenue',
+
+            'Expense': 'Operating Expenses'
+
+        };
+
+        return categoryMap[type] || 'Other Assets';
+
+    }
+
+
+
+    getPaymentAccountCode(method) {
+
+        const methodAccounts = {
+
+            'Bank Transfer': '1001',
+
+            'Cash': '1002',
+
+            'Ecocash': '1003',
+
+            'Innbucks': '1004'
+
+        };
+
+        return methodAccounts[method] || '1002';
+
+    }
+
+
+
+    getPaymentAccountName(method) {
+
+        const methodNames = {
+
+            'Bank Transfer': 'Bank Account',
+
+            'Cash': 'Cash on Hand',
+
+            'Ecocash': 'Ecocash Wallet',
+
+            'Innbucks': 'Innbucks Wallet'
+
+        };
+
+        return methodNames[method] || 'Cash on Hand';
+
+    }
+
+
+
+    getExpenseAccountCode(category) {
+
+        const categoryAccounts = {
+
+            'Maintenance': '5001',
+
+            'Supplies': '5002',
+
+            'Utilities': '5003',
+
+            'Cleaning': '5004',
+
+            'Transportation': '5005',
+
+            'Office': '5006',
+
+            'Miscellaneous': '5007'
+
+        };
+
+        return categoryAccounts[category] || '5007';
+
+    }
+
+
+
+    async generateTransactionId() {
+
+        const timestamp = Date.now();
+
+        const random = Math.random().toString(36).substr(2, 5).toUpperCase();
+
+        return `TXN${timestamp}${random}`;
+
+    }
+
+
+
+    printStats() {
+
+        console.log('\n📊 MIGRATION STATISTICS');
+
+        console.log('========================');
+
+        console.log(`✅ Accounts Created: ${this.stats.accountsCreated}`);
+
+        console.log(`✅ Accounts Updated: ${this.stats.accountsUpdated}`);
+
+        console.log(`✅ Transactions Created: ${this.stats.transactionsCreated}`);
+
+        console.log(`✅ Transaction Entries Created: ${this.stats.transactionEntriesCreated}`);
+
+        console.log(`✅ Debtors Created: ${this.stats.debtorsCreated}`);
+
+        console.log(`✅ Vendors Processed: ${this.stats.vendorsProcessed}`);
+
+        console.log(`✅ Payments Processed: ${this.stats.paymentsProcessed}`);
+
+        console.log(`✅ Expenses Processed: ${this.stats.expensesProcessed}`);
+
+        console.log(`✅ Petty Cash Accounts Created: ${this.stats.pettyCashAccountsCreated}`);
+
+        
+
+        if (this.stats.errors.length > 0) {
+
+            console.log(`❌ Errors: ${this.stats.errors.length}`);
+
+            this.stats.errors.forEach((error, index) => {
+
+                console.log(`   ${index + 1}. ${error}`);
+
+            });
+
+        }
+
+    }
+
+}
+
+
+
+// Run the migration
+
+async function runMigration() {
+
+    try {
+
+        const migration = new CompleteMigrationScript();
+
+        await migration.run();
+
+    } catch (error) {
+
+        console.error('❌ Migration failed:', error);
+
+        process.exit(1);
+
+    }
+
+}
+
+
+
+// Export for use in other scripts
+
+module.exports = { CompleteMigrationScript, runMigration };
+
+
+
+// Run if called directly
+
+if (require.main === module) {
+
+    runMigration();
+
 } 

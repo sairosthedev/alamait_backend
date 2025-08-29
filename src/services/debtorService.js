@@ -4,6 +4,36 @@ const Residence = require('../models/Residence');
 const Application = require('../models/Application');
 const Lease = require('../models/Lease');
 const Payment = require('../models/Payment');
+const Account = require('../models/Account');
+
+async function ensureStudentARAccount(studentId, studentName) {
+    const mainAR = await Account.findOne({ code: '1100' });
+    if (!mainAR) {
+        throw new Error('Main AR account (1100) not found');
+    }
+    const code = `1100-${studentId}`;
+    let acc = await Account.findOne({ code });
+    if (acc) return acc;
+    acc = new Account({
+        code,
+        name: `Accounts Receivable - ${studentName || studentId}`,
+        type: 'Asset',
+        category: 'Current Assets',
+        subcategory: 'Accounts Receivable',
+        description: 'Student-specific AR control account',
+        isActive: true,
+        parentAccount: mainAR._id,
+        level: 2,
+        sortOrder: 0,
+        metadata: new Map([
+            ['parent', '1100'],
+            ['hasParent', 'true'],
+            ['studentId', String(studentId)]
+        ])
+    });
+    await acc.save();
+    return acc;
+}
 
 /**
  * Automatically create a debtor account for a new student with full financial data
@@ -178,6 +208,13 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         }
         
         const existingDebtor = await Debtor.findOne({ user: actualUser._id });
+
+        // Ensure student AR account exists asap
+        try {
+            await ensureStudentARAccount(actualUser._id, `${actualUser.firstName} ${actualUser.lastName}`);
+        } catch (e) {
+            console.error('Failed to ensure student AR account:', e.message);
+        }
         
         if (existingDebtor) {
             console.log(`ℹ️  Debtor account already exists for user: ${actualUser.email}`);
@@ -865,86 +902,364 @@ exports.createDebtorsFromApprovedApplications = async () => {
 };
 
 /**
- * Create debtors from approved applications that don't have debtors yet
- * This is useful for migrating existing approved applications
- * @returns {Promise<Object>} Summary of created debtors
+ * 🆕 NEW: Real-time debtor update when AR transactions are created
+ * This method is called automatically by TransactionEntry post-save hook
+ * @param {string} studentId - The student/user ID
+ * @param {Object} transactionData - The transaction data that was just created
  */
-exports.createDebtorsFromApprovedApplications = async () => {
+exports.updateDebtorFromARTransaction = async (studentId, transactionData) => {
     try {
-        console.log('🔍 Finding approved applications without debtors...');
+        console.log(`🔄 Real-time update for debtor (User: ${studentId})`);
         
-        // Find all approved applications that don't have debtors
-        const applications = await Application.find({
-            status: 'approved',
-            $or: [
-                { debtor: { $exists: false } },
-                { debtor: null }
-            ]
-        }).populate('student', 'firstName lastName email phone')
-          .populate('residence', 'name rooms');
+        // Find debtor by user ID
+        const debtor = await Debtor.findOne({ user: studentId });
         
-        console.log(`📋 Found ${applications.length} approved applications without debtors`);
-        
-        const results = {
-            total: applications.length,
-            created: 0,
-            failed: 0,
-            errors: []
-        };
-        
-        for (const application of applications) {
-            try {
-                if (!application.student) {
-                    console.log(`⚠️  Application ${application._id} has no student - skipping`);
-                    results.failed++;
-                    continue;
-                }
-                
-                // Check if debtor already exists for this student
-                const existingDebtor = await Debtor.findOne({ user: application.student._id });
-                if (existingDebtor) {
-                    console.log(`ℹ️  Debtor already exists for student ${application.student.email} - linking to application`);
-                    
-                    // Link the existing debtor to the application
-                    application.debtor = existingDebtor._id;
-                    await application.save();
-                    console.log(`✅ Linked existing debtor ${existingDebtor._id} to application ${application._id}`);
-                    continue;
-                }
-                
-                // Create new debtor for this student
-                const debtor = await exports.createDebtorForStudent(application.student, {
-                    createdBy: 'system',
-                    residenceId: application.residence?._id,
-                    roomNumber: application.allocatedRoom || application.preferredRoom,
-                    startDate: application.startDate,
-                    endDate: application.endDate,
-                    application: application._id
-                });
-                
-                // Link the debtor to the application
-                application.debtor = debtor._id;
-                await application.save();
-                
-                console.log(`✅ Created debtor ${debtor._id} for student ${application.student.email}`);
-                results.created++;
-                
-            } catch (error) {
-                console.error(`❌ Failed to create debtor for application ${application._id}:`, error.message);
-                results.failed++;
-                results.errors.push({
-                    applicationId: application._id,
-                    studentEmail: application.student?.email || 'unknown',
-                    error: error.message
-                });
-            }
+        if (!debtor) {
+            console.log(`   ⚠️ No debtor found for user ID: ${studentId}`);
+            return { success: false, message: 'Debtor not found' };
         }
         
-        console.log(`📊 Debtor creation summary:`, results);
-        return results;
+        console.log(`   📊 Updating debtor: ${debtor.debtorCode}`);
+        
+        // Get AR transactions for this debtor
+        const TransactionEntry = require('../models/TransactionEntry');
+        const arTransactions = await TransactionEntry.find({
+            'entries.accountCode': debtor.accountCode
+        }).sort({ date: 1 });
+        
+        let totalExpectedFromAR = 0;
+        let totalPaidFromAR = 0;
+        let monthlyBreakdown = {};
+        
+        // Process all AR transactions
+        arTransactions.forEach(transaction => {
+            const transactionDate = new Date(transaction.date);
+            const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
+            
+            if (!monthlyBreakdown[monthKey]) {
+                monthlyBreakdown[monthKey] = {
+                    month: monthKey,
+                    expected: 0,
+                    paid: 0,
+                    outstanding: 0
+                };
+            }
+            
+            transaction.entries.forEach(entry => {
+                if (entry.accountCode === debtor.accountCode) {
+                    if (transaction.source === 'rental_accrual' || transaction.source === 'lease_start') {
+                        totalExpectedFromAR += entry.debit || 0;
+                        monthlyBreakdown[monthKey].expected += entry.debit || 0;
+                        monthlyBreakdown[monthKey].outstanding += entry.debit || 0;
+                    } else if (transaction.source === 'payment' || transaction.source === 'accounts_receivable_collection') {
+                        totalPaidFromAR += entry.credit || 0;
+                        monthlyBreakdown[monthKey].paid += entry.credit || 0;
+                        monthlyBreakdown[monthKey].outstanding -= entry.credit || 0;
+                    }
+                }
+            });
+        });
+        
+        const currentBalanceFromAR = totalExpectedFromAR - totalPaidFromAR;
+        
+        // Update debtor totals
+        debtor.totalOwed = totalExpectedFromAR;
+        debtor.totalPaid = totalPaidFromAR;
+        debtor.currentBalance = currentBalanceFromAR;
+        debtor.overdueAmount = currentBalanceFromAR > 0 ? currentBalanceFromAR : 0;
+        debtor.status = currentBalanceFromAR > 0 ? 'overdue' : 'current';
+        debtor.updatedAt = new Date();
+        
+        // Update monthly payments with proper validation handling
+        debtor.monthlyPayments = Object.values(monthlyBreakdown).map(month => {
+            // Ensure outstanding amount is not negative (handle overpayments)
+            const outstandingAmount = Math.max(0, month.outstanding);
+            
+            // Create payment months array only if there are actual payments
+            const paymentMonths = month.paid > 0 ? [{
+                paymentMonth: month.month,
+                paymentDate: new Date(), // Use current date as fallback
+                amount: month.paid,
+                paymentId: `AR-${month.month}-${Date.now()}`, // Generate a payment ID
+                status: 'Confirmed' // Use valid enum value
+            }] : [];
+            
+            return {
+                month: month.month,
+                expectedAmount: month.expected,
+                paidAmount: month.paid,
+                outstandingAmount: outstandingAmount, // Use non-negative value
+                status: outstandingAmount === 0 ? 'paid' : (month.paid > 0 ? 'partial' : 'unpaid'),
+                paymentMonths: paymentMonths
+            };
+        });
+        
+        await debtor.save();
+        
+        console.log(`   ✅ Real-time update completed for ${debtor.debtorCode}:`);
+        console.log(`      Expected: $${totalExpectedFromAR.toFixed(2)}`);
+        console.log(`      Paid: $${totalPaidFromAR.toFixed(2)}`);
+        console.log(`      Balance: $${currentBalanceFromAR.toFixed(2)}`);
+        
+        return {
+            success: true,
+            debtor: debtor.debtorCode,
+            totalExpected: totalExpectedFromAR,
+            totalPaid: totalPaidFromAR,
+            currentBalance: currentBalanceFromAR
+        };
         
     } catch (error) {
-        console.error('❌ Error in createDebtorsFromApprovedApplications:', error);
+        console.error(`❌ Error in real-time debtor update for user ${studentId}:`, error);
+        return { success: false, error: error.message };
+    }
+};
+
+/**
+ * Get debtor collection summary with AR data
+ * Returns a summary of all debtors with their AR-linked totals
+ */
+exports.getDebtorCollectionSummary = async () => {
+    try {
+        const TransactionEntry = require('../models/TransactionEntry');
+        const Account = require('../models/Account');
+
+        // Get all debtor accounts
+        const debtorAccounts = await Account.find({
+            type: 'Asset',
+            code: { $regex: '^1100-' } // Debtor AR accounts
+        });
+
+        let totalExpected = 0;
+        let totalPaid = 0;
+        let totalOutstanding = 0;
+        let debtorCount = 0;
+        let overdueCount = 0;
+
+        for (const account of debtorAccounts) {
+            // Get AR transactions for this account
+            const arTransactions = await TransactionEntry.find({
+                'entries.accountCode': account.code
+            }).lean();
+
+            let accountExpected = 0;
+            let accountPaid = 0;
+
+            arTransactions.forEach(transaction => {
+                transaction.entries.forEach(entry => {
+                    if (entry.accountCode === account.code) {
+                        if (transaction.source === 'rental_accrual' || transaction.source === 'lease_start') {
+                            accountExpected += entry.debit || 0;
+                        } else if (transaction.source === 'payment' || transaction.source === 'accounts_receivable_collection') {
+                            accountPaid += entry.credit || 0;
+                        }
+                    }
+                });
+            });
+
+            const accountOutstanding = accountExpected - accountPaid;
+
+            totalExpected += accountExpected;
+            totalPaid += accountPaid;
+            totalOutstanding += accountOutstanding;
+            debtorCount++;
+
+            if (accountOutstanding > 0) {
+                overdueCount++;
+            }
+        }
+
+        return {
+            totalExpected,
+            totalPaid,
+            totalOutstanding,
+            debtorCount,
+            overdueCount,
+            collectionRate: totalExpected > 0 ? (totalPaid / totalExpected) * 100 : 0
+        };
+
+    } catch (error) {
+        console.error('❌ Error in getDebtorCollectionSummary:', error);
+        throw error;
+    }
+};
+
+/**
+ * Sync debtor totals with AR data
+ * This ensures the debtors collection reflects the correct expected and paid amounts from the accounting system
+ */
+exports.syncDebtorTotalsWithAR = async (debtorId = null) => {
+    try {
+        const TransactionEntry = require('../models/TransactionEntry');
+        const Account = require('../models/Account');
+        
+        let debtorsToSync = [];
+        
+        if (debtorId) {
+            // Sync specific debtor
+            const debtor = await Debtor.findById(debtorId);
+            if (!debtor) {
+                throw new Error(`Debtor with ID ${debtorId} not found`);
+            }
+            debtorsToSync = [debtor];
+        } else {
+            // Sync all debtors
+            debtorsToSync = await Debtor.find({});
+        }
+
+        console.log(`🔄 Syncing ${debtorsToSync.length} debtor(s) with AR data...`);
+
+        let syncedCount = 0;
+        let errorCount = 0;
+
+        for (const debtor of debtorsToSync) {
+            try {
+                // Find the debtor's AR account
+                const debtorAccount = await Account.findOne({ 
+                    code: debtor.accountCode,
+                    type: 'Asset'
+                });
+
+                if (!debtorAccount) {
+                    console.warn(`⚠️ No AR account found for debtor ${debtor.debtorCode} (${debtor.accountCode})`);
+                    continue;
+                }
+                
+                // Get all AR transactions for this debtor
+                const arTransactions = await TransactionEntry.find({
+                    'entries.accountCode': debtor.accountCode
+                })
+                .sort({ date: 1 })
+                .lean();
+
+                let totalExpectedFromAR = 0;
+                let totalPaidFromAR = 0;
+                let monthlyBreakdown = {};
+
+                // Calculate totals from AR transactions
+                arTransactions.forEach(transaction => {
+                    const transactionDate = new Date(transaction.date);
+                    const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
+                    
+                    // Initialize month if not exists
+                    if (!monthlyBreakdown[monthKey]) {
+                        monthlyBreakdown[monthKey] = {
+                            month: monthKey,
+                            expected: 0,
+                            paid: 0,
+                            outstanding: 0
+                        };
+                    }
+
+                    // Process each entry in the transaction
+                    transaction.entries.forEach(entry => {
+                        if (entry.accountCode === debtor.accountCode) {
+                            if (transaction.source === 'rental_accrual' || transaction.source === 'lease_start') {
+                                // This is expected amount (accrual)
+                                totalExpectedFromAR += entry.debit || 0;
+                                monthlyBreakdown[monthKey].expected += entry.debit || 0;
+                                monthlyBreakdown[monthKey].outstanding += entry.debit || 0;
+                            } else if (transaction.source === 'payment' || transaction.source === 'accounts_receivable_collection') {
+                                // This is payment received
+                                totalPaidFromAR += entry.credit || 0;
+                                monthlyBreakdown[monthKey].paid += entry.credit || 0;
+                                monthlyBreakdown[monthKey].outstanding -= entry.credit || 0;
+                            }
+                        }
+                    });
+                });
+
+                // Calculate current balance from AR data
+                const currentBalanceFromAR = totalExpectedFromAR - totalPaidFromAR;
+
+                // Update debtor with AR data
+                const updateData = {
+                    totalOwed: totalExpectedFromAR,
+                    totalPaid: totalPaidFromAR,
+                    currentBalance: currentBalanceFromAR,
+                    overdueAmount: currentBalanceFromAR > 0 ? currentBalanceFromAR : 0,
+                    updatedAt: new Date()
+                };
+
+                // Update status based on balance
+                if (currentBalanceFromAR === 0) {
+                    updateData.status = 'paid';
+                } else if (currentBalanceFromAR > 0) {
+                    updateData.status = 'overdue';
+                } else {
+                    updateData.status = 'active';
+                }
+
+                // Update monthly payments if they don't exist or need updating
+                if (!debtor.monthlyPayments || debtor.monthlyPayments.length === 0) {
+                    updateData.monthlyPayments = Object.values(monthlyBreakdown).map(monthData => ({
+                        month: monthData.month,
+                        expectedAmount: monthData.expected,
+                        expectedComponents: {
+                            rent: monthData.expected,
+                            admin: 0,
+                            deposit: 0,
+                            utilities: 0,
+                            other: 0
+                        },
+                        paidAmount: monthData.paid,
+                        paidComponents: {
+                            rent: monthData.paid,
+                            admin: 0,
+                            deposit: 0,
+                            utilities: 0,
+                            other: 0
+                        },
+                        outstandingAmount: Math.max(0, monthData.outstanding), // Ensure non-negative
+                        outstandingComponents: {
+                            rent: Math.max(0, monthData.outstanding),
+                            admin: 0,
+                            deposit: 0,
+                            utilities: 0,
+                            other: 0
+                        },
+                        status: monthData.outstanding === 0 ? 'paid' : (monthData.paid > 0 ? 'partial' : 'unpaid'),
+                        paymentCount: 0,
+                        paymentIds: [],
+                        paymentMonths: monthData.paid > 0 ? [{
+                            paymentMonth: monthData.month,
+                            paymentDate: new Date(),
+                            amount: monthData.paid,
+                            paymentId: `AR-${monthData.month}-${Date.now()}`,
+                            status: 'Confirmed'
+                        }] : [],
+                        paymentMonthSummary: {
+                            totalPaymentMonths: 0,
+                            firstPaymentMonth: null,
+                            lastPaymentMonth: null,
+                            paymentMonthBreakdown: []
+                        },
+                        updatedAt: new Date()
+                    }));
+                }
+
+                await Debtor.findByIdAndUpdate(debtor._id, updateData);
+
+                console.log(`✅ Synced debtor ${debtor.debtorCode}: Expected $${totalExpectedFromAR.toFixed(2)}, Paid $${totalPaidFromAR.toFixed(2)}, Balance $${currentBalanceFromAR.toFixed(2)}`);
+                syncedCount++;
+                
+            } catch (error) {
+                console.error(`❌ Error syncing debtor ${debtor.debtorCode}:`, error.message);
+                errorCount++;
+            }
+        }
+
+        console.log(`🔄 Sync completed: ${syncedCount} synced, ${errorCount} errors`);
+
+        return {
+            success: true,
+            syncedCount,
+            errorCount,
+            totalProcessed: debtorsToSync.length
+        };
+        
+    } catch (error) {
+        console.error('❌ Error in syncDebtorTotalsWithAR:', error);
         throw error;
     }
 }; 

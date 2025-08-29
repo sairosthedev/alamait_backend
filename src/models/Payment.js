@@ -11,18 +11,18 @@ const paymentSchema = new mongoose.Schema({
     user: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,                    // ← REQUIRED for proper mapping
+        required: false,                    // ← Made optional for new allocation system
         index: true                        // ← Indexed for performance
     },
     student: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: false                    // ← Made optional for new allocation system
     },
     residence: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Residence',
-        required: true
+        required: false                    // ← Made optional for new allocation system
     },
     room: {
         type: String,
@@ -62,20 +62,20 @@ const paymentSchema = new mongoose.Schema({
     }],
     totalAmount: {
         type: Number,
-        required: true
+        required: false                    // ← Made optional for new allocation system
     },
     paymentMonth: {
         type: String, // Format: "YYYY-MM"
-        required: true
+        required: false                    // ← Made optional for new allocation system
     },
     date: {
         type: Date,
-        required: true
+        required: false                    // ← Made optional for new allocation system
     },
     method: {
         type: String,
         enum: ['Bank Transfer', 'Cash', 'Online Payment', 'Ecocash', 'Innbucks'],
-        required: true
+        required: false                    // ← Made optional for new allocation system
     },
     status: {
         type: String,
@@ -97,15 +97,12 @@ const paymentSchema = new mongoose.Schema({
             ref: 'User'
         },
         verificationDate: Date,
-        verificationNotes: String,
-        status: {
-            type: String,
-            enum: ['Under Review', 'Accepted', 'Rejected'],
-            default: 'Under Review'
-        },
-        studentComment: {
-            type: String
-        }
+        verificationNotes: String
+    },
+    // 🆕 NEW: Store Smart FIFO allocation results
+    allocation: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
     },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
@@ -198,11 +195,7 @@ paymentSchema.pre('save', function(next) {
         this.user = this.student;
     }
     
-    // Ensure user field is always present
-    if (!this.user) {
-        return next(new Error('User field is required for proper debtor mapping'));
-    }
-    
+    // User field is now optional for the new allocation system
     next();
 });
 

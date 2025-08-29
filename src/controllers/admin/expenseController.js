@@ -28,11 +28,11 @@ const CATEGORY_TO_ACCOUNT_CODE = {
 
 // Payment method to Account Code mapping (updated to match chart of accounts)
 const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
-  'Cash': '1002', // Cash on Hand
+  'Cash': '1000', // Cash (corrected from 1002)
   'Bank Transfer': '1001', // Bank Account
   'Ecocash': '1003', // Ecocash Wallet
   'Innbucks': '1004', // Innbucks Wallet
-  'Petty Cash': '1002', // Cash on Hand
+  'Petty Cash': '1000', // Cash (corrected from 1002)
   'Online Payment': '1001', // Bank Account
   'MasterCard': '1001', // Bank Account
   'Visa': '1001', // Bank Account

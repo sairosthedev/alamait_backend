@@ -15,6 +15,39 @@ const mongoose = require('mongoose');
  * Supports both accrual and cash basis accounting
  */
 class RentalAccrualService {
+    /**
+     * Ensure a student-specific AR child account exists and return it
+     */
+    static async ensureStudentARAccount(studentId, studentName) {
+        const mainAR = await Account.findOne({ code: '1100' });
+        if (!mainAR) {
+            throw new Error('Main AR account (1100) not found');
+        }
+
+        const childCode = `1100-${studentId}`;
+        let child = await Account.findOne({ code: childCode });
+        if (child) return child;
+
+        child = new Account({
+            code: childCode,
+            name: `Accounts Receivable - ${studentName || studentId}`,
+            type: 'Asset',
+            category: 'Current Assets',
+            subcategory: 'Accounts Receivable',
+            description: 'Student-specific AR control account',
+            isActive: true,
+            parentAccount: mainAR._id,
+            level: 2,
+            sortOrder: 0,
+            metadata: new Map([
+                ['parent', '1100'],
+                ['hasParent', 'true'],
+                ['studentId', String(studentId)]
+            ])
+        });
+        await child.save();
+        return child;
+    }
     
     /**
      * 🆕 NEW: Process lease start with initial accounting entries
@@ -69,7 +102,10 @@ class RentalAccrualService {
             console.log(`   Security Deposit: $${securityDeposit}`);
             
             // Get required accounts
-            const accountsReceivable = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
+            const accountsReceivable = await this.ensureStudentARAccount(
+                application.student,
+                `${application.firstName} ${application.lastName}`
+            );
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             const adminIncome = await Account.findOne({ code: '4002' }); // Administrative Fees
             const depositLiability = await Account.findOne({ code: '2020' }); // Tenant Security Deposits
@@ -171,18 +207,19 @@ class RentalAccrualService {
                 transactionId: transaction.transactionId,
                 date: startDate,
                 description: `Lease start accounting entries: ${application.firstName} ${application.lastName}`,
-                reference: application._id.toString(),
+                reference: application.student.toString(), // Use student ID, not application ID
                 entries,
                 totalDebit,
                 totalCredit,
                 source: 'rental_accrual',
-                sourceId: application._id,
+                sourceId: application.student, // Use student ID, not application ID
                 sourceModel: 'Lease',
                 residence: application.residence,
                 createdBy: 'system',
                 status: 'posted',
                 metadata: {
                     applicationId: application._id.toString(),
+                    studentId: application.student.toString(), // Add correct student ID
                     studentName: `${application.firstName} ${application.lastName}`,
                     residence: application.residence,
                     room: application.allocatedRoom,
@@ -205,6 +242,61 @@ class RentalAccrualService {
             console.log(`✅ Lease start accounting entries created for ${application.firstName} ${application.lastName}`);
             console.log(`   Total Debit: $${totalDebit.toFixed(2)}`);
             console.log(`   Total Credit: $${totalCredit.toFixed(2)}`);
+            
+            // 🆕 AUTO-BACKFILL: If lease started in the past, create missing monthly accruals
+            const now = new Date();
+            const leaseStartDate = new Date(application.startDate);
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+            const leaseStartMonth = leaseStartDate.getMonth() + 1;
+            const leaseStartYear = leaseStartDate.getFullYear();
+            
+            // Check if lease started in a past month (not current month)
+            if (leaseStartYear < currentYear || (leaseStartYear === currentYear && leaseStartMonth < currentMonth)) {
+                console.log(`🔄 Lease started in past month (${leaseStartMonth}/${leaseStartYear}), auto-creating missing monthly accruals...`);
+                
+                try {
+                    // Create missing monthly accruals from month AFTER lease start up to current month
+                    let month = leaseStartMonth + 1;
+                    let year = leaseStartYear;
+                    
+                    // Handle year boundary
+                    if (month > 12) {
+                        month = 1;
+                        year++;
+                    }
+                    
+                    let accrualsCreated = 0;
+                    while (year < currentYear || (year === currentYear && month <= currentMonth)) {
+                        const result = await this.createStudentRentAccrual(application, month, year);
+                        if (result.success) {
+                            accrualsCreated++;
+                            console.log(`   ✅ Created accrual for ${month}/${year}: $${result.amount}`);
+                        } else if (result.error && result.error.includes('already exists')) {
+                            console.log(`   ⚠️ Accrual already exists for ${month}/${year}`);
+                        } else {
+                            console.log(`   ❌ Failed to create accrual for ${month}/${year}: ${result.error}`);
+                        }
+                        
+                        // Move to next month
+                        month++;
+                        if (month > 12) {
+                            month = 1;
+                            year++;
+                        }
+                    }
+                    
+                    if (accrualsCreated > 0) {
+                        console.log(`✅ Auto-backfill completed: ${accrualsCreated} monthly accruals created`);
+                    }
+                    
+                } catch (error) {
+                    console.error(`⚠️ Auto-backfill failed: ${error.message}`);
+                    // Don't fail the lease start process if backfill fails
+                }
+            } else {
+                console.log(`ℹ️ Lease started in current month (${leaseStartMonth}/${leaseStartYear}), no backfill needed`);
+            }
             
             return {
                 success: true,
@@ -279,6 +371,100 @@ class RentalAccrualService {
             throw error;
         }
     }
+
+    /**
+     * Backfill missing monthly rent accruals from lease start up to current month
+     * - Excludes the lease start month (handled by lease_start)
+     * - Skips months that already have a monthly_rent_accrual entry
+     */
+    static async backfillMissingAccruals() {
+        try {
+            const now = new Date();
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+
+            console.log(`\n🧩 Backfilling missing monthly rent accruals up to ${currentMonth}/${currentYear}...`);
+
+            // Load approved applications (active leases at any time)
+            const approvedApplications = await mongoose.connection.db
+                .collection('applications')
+                .find({ status: 'approved', paymentStatus: { $ne: 'cancelled' } })
+                .toArray();
+
+            let totalCreated = 0;
+            let totalSkipped = 0;
+            let totalErrors = 0;
+            const errors = [];
+
+            for (const app of approvedApplications) {
+                const leaseStart = new Date(app.startDate);
+                const leaseEnd = new Date(app.endDate);
+                if (isNaN(leaseStart) || isNaN(leaseEnd)) {
+                    continue;
+                }
+
+                // Determine backfill window: from month AFTER lease start up to current month
+                // Future months will be created by the monthly cron job on the 1st of each month
+                const windowEnd = new Date(Math.min(leaseEnd.getTime(), now.getTime()));
+
+                // Start from the first day of the month AFTER lease start month
+                // The lease start month is handled by lease_start (prorated), not monthly accrual
+                let startMonth = leaseStart.getMonth() + 1; // Convert to 1-based month
+                let startYear = leaseStart.getFullYear();
+                
+                // Move to next month
+                if (startMonth > 12) {
+                    startMonth = 1;
+                    startYear++;
+                }
+                
+                const cursor = new Date(startYear, startMonth - 1, 1); // Convert back to 0-based for Date constructor
+
+                while (cursor <= windowEnd) {
+                    const month = cursor.getMonth() + 1; // Convert 0-based to 1-based month
+                    const year = cursor.getFullYear();
+
+                    try {
+                        // Skip if accrual already exists for this application/month/year
+                        const existingAccrual = await TransactionEntry.findOne({
+                            'metadata.applicationId': app._id.toString(),
+                            'metadata.accrualMonth': month,
+                            'metadata.accrualYear': year,
+                            'metadata.type': 'monthly_rent_accrual'
+                        });
+
+                        if (existingAccrual) {
+                            totalSkipped++;
+                        } else {
+                            const res = await this.createStudentRentAccrual(app, month, year);
+                            if (res && res.success) {
+                                totalCreated++;
+                            } else {
+                                totalErrors++;
+                                errors.push({ applicationId: app._id.toString(), month, year, error: res?.error || 'Unknown error' });
+                            }
+                        }
+                    } catch (err) {
+                        totalErrors++;
+                        errors.push({ applicationId: app._id.toString(), month, year, error: err.message });
+                    }
+
+                    // Move to next month
+                    cursor.setMonth(cursor.getMonth() + 1);
+                }
+            }
+
+            console.log(`✅ Backfill complete. Created: ${totalCreated}, Skipped existing: ${totalSkipped}, Errors: ${totalErrors}`);
+            if (errors.length > 0) {
+                console.log('⚠️ Backfill errors:', errors.slice(0, 10)); // print first few
+            }
+
+            return { success: true, created: totalCreated, skipped: totalSkipped, errors };
+        } catch (error) {
+            console.error('❌ Error backfilling monthly rent accruals:', error);
+            return { success: false, error: error.message };
+        }
+    }
     
     /**
      * 🆕 ENHANCED: Create rent accrual for a specific student
@@ -290,29 +476,21 @@ class RentalAccrualService {
             const monthEnd = new Date(year, month, 0);
             
             // Skip creating a monthly accrual for the lease start month
-            // The lease start month is already handled by the lease start (prorated/full) entry
+            // The lease start month is always handled by lease_start (prorated), not monthly accrual
             if (student && (student.startDate || student.leaseStartDate)) {
                 const leaseStartDate = new Date(student.startDate || student.leaseStartDate);
                 if (!isNaN(leaseStartDate)) {
                     const leaseStartMonth = leaseStartDate.getMonth() + 1;
                     const leaseStartYear = leaseStartDate.getFullYear();
                     if (leaseStartMonth === month && leaseStartYear === year) {
-                        // Extra safety: if a lease_start entry exists for this application and start date, skip
-                        const existingLeaseStart = await TransactionEntry.findOne({
-                            'metadata.applicationId': student._id.toString(),
-                            'metadata.type': 'lease_start',
-                            'metadata.leaseStartDate': student.startDate || leaseStartDate
-                        });
-                        if (existingLeaseStart) {
-                            return { success: false, error: 'Lease start month is already accrued (prorated). Skipping monthly accrual.' };
-                        }
+                        return { success: false, error: 'Lease start month is always handled by lease_start (prorated). Skipping monthly accrual.' };
                     }
                 }
             }
 
             // Check if accrual already exists for this month
             const existingAccrual = await TransactionEntry.findOne({
-                'metadata.applicationId': student._id.toString(),
+                'metadata.studentId': student.student.toString(),
                 'metadata.accrualMonth': month,
                 'metadata.accrualYear': year,
                 'metadata.type': 'monthly_rent_accrual'
@@ -343,7 +521,10 @@ class RentalAccrualService {
             console.log(`   📅 Month end date: ${monthEnd.toISOString()}`);
             
             // Get required accounts
-            const accountsReceivable = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
+            const accountsReceivable = await this.ensureStudentARAccount(
+                student.student, // Use student ID, not application ID
+                `${student.firstName} ${student.lastName}`
+            );
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             
             if (!accountsReceivable || !rentalIncome) {
@@ -359,7 +540,7 @@ class RentalAccrualService {
                 residence: student.residence,
                 createdBy: 'system',
                 metadata: {
-                    applicationId: student._id.toString(),
+                    studentId: student.student.toString(), // Use student ID, not application ID
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
                     room: student.allocatedRoom,
@@ -398,18 +579,18 @@ class RentalAccrualService {
                 transactionId: transaction.transactionId,
                 date: monthStart, // This should be 1st of the month
                 description: `Monthly rent accrual: ${student.firstName} ${student.lastName} - ${month}/${year}`,
-                reference: student._id.toString(),
+                reference: student.student.toString(),
                 entries,
                 totalDebit: rentAmount,
                 totalCredit: rentAmount,
                 source: 'rental_accrual',
-                sourceId: student._id,
+                sourceId: student.student, // Use student ID, not application ID
                 sourceModel: 'Lease',
                 residence: student.residence,
                 createdBy: 'system',
                 status: 'posted',
                 metadata: {
-                    applicationId: student._id.toString(),
+                    studentId: student.student.toString(), // Use student ID, not application ID
                     studentName: `${student.firstName} ${student.lastName}`,
                     residence: student.residence,
                     room: student.allocatedRoom,

@@ -739,15 +739,9 @@ exports.createRequest = async (req, res) => {
                         quotation.isApproved = quotation.isApproved === "true" || quotation.isApproved === true;
                         quotation.itemIndex = parseInt(quotation.itemIndex) || 0;
 
-                        // Auto-create vendor if provider name is provided and no vendorId exists
-                        if (quotation.provider && !quotation.vendorId) {
+                        // Find or create vendor for the provider
+                        if (quotation.provider) {
                             try {
-<<<<<<< Updated upstream
-                                const vendorData = await autoCreateVendor(quotation.provider, user, requestData.type || 'other');
-                                if (vendorData) {
-                                    quotation.vendorId = vendorData._id;
-                                    quotation.vendorName = vendorData.businessName || vendorData.tradingName;
-=======
                                 console.log(`🔍 Processing vendor for provider: ${quotation.provider}`);
                                 
                                 // First, try to find existing vendor
@@ -756,36 +750,47 @@ exports.createRequest = async (req, res) => {
                                 if (vendor) {
                                     console.log(`✅ Found existing vendor for request creation: ${quotation.provider} (${vendor._id})`);
                                     
-                                    // Add vendor details directly to the quotation object
-                                    quotation.vendorId = vendor._id;
-                                    quotation.vendorCode = vendor.chartOfAccountsCode;
-                                    quotation.vendorName = vendor.businessName;
-                                    quotation.vendorType = vendor.vendorType;
-                                    quotation.expenseCategory = vendor.expenseCategory;
-                                    quotation.paymentMethod = 'Cash';
-                                    quotation.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
+                                    // Create a new quotation object with vendor details
+                                    const quotationWithVendor = {
+                                        ...quotation,
+                                        vendorId: vendor._id,
+                                        vendorCode: vendor.chartOfAccountsCode,
+                                        vendorName: vendor.businessName,
+                                        vendorType: vendor.vendorType,
+                                        expenseCategory: vendor.expenseCategory,
+                                        paymentMethod: 'Cash',
+                                        hasBankDetails: !!(vendor.bankDetails && vendor.bankDetails.bankName)
+                                    };
+                                    
+                                    // Replace the quotation in the array
+                                    item.quotations[j] = quotationWithVendor;
                                     
                                     console.log(`✅ Added vendor details to quotation: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
                                 } else {
                                     // Vendor doesn't exist, create new one
                                     console.log(`🆕 Vendor not found, creating new vendor: ${quotation.provider}`);
-                                const vendorData = await autoCreateVendor(quotation.provider, user, type || 'other');
+                                const vendorData = await autoCreateVendor(quotation.provider, user, requestData.type || 'other');
                                 if (vendorData) {
-                                        // Add vendor details directly to the quotation object
-                                        quotation.vendorId = vendorData._id;
-                                        quotation.vendorCode = vendorData.chartOfAccountsCode;
-                                        quotation.vendorName = vendorData.businessName;
-                                        quotation.vendorType = vendorData.vendorType;
-                                        quotation.expenseCategory = vendorData.expenseCategory;
-                                        quotation.paymentMethod = 'Cash';
-                                        quotation.hasBankDetails = !!(vendorData.bankDetails && vendorData.bankDetails.bankName);
+                                        // Create a new quotation object with vendor details
+                                        const quotationWithVendor = {
+                                            ...quotation,
+                                            vendorId: vendorData._id,
+                                            vendorCode: vendorData.chartOfAccountsCode,
+                                            vendorName: vendorData.businessName,
+                                            vendorType: vendorData.vendorType,
+                                            expenseCategory: vendorData.expenseCategory,
+                                            paymentMethod: 'Cash',
+                                            hasBankDetails: !!(vendorData.bankDetails && vendorData.bankDetails.bankName)
+                                        };
+                                        
+                                        // Replace the quotation in the array
+                                        item.quotations[j] = quotationWithVendor;
                                         
                                         console.log(`✅ Created and added vendor details to quotation: ${vendorData.businessName} (${vendorData.chartOfAccountsCode})`);
                                     }
->>>>>>> Stashed changes
                                 }
                             } catch (vendorError) {
-                                console.warn('Error auto-creating vendor:', vendorError.message);
+                                console.error('❌ Error finding/creating vendor:', vendorError.message);
                                 // Continue with request creation even if vendor creation fails
                                 // The vendor can be created manually later
                             }
@@ -960,6 +965,32 @@ exports.createRequest = async (req, res) => {
             user: user._id,
             changes: ['Request submitted']
         });
+        
+        // Populate vendor details on the main request if any quotations have vendors
+        if (request.items && request.items.length > 0) {
+            for (const item of request.items) {
+                if (item.quotations && item.quotations.length > 0) {
+                    for (const quotation of item.quotations) {
+                        if (quotation.vendorId && !request.vendorId) {
+                            // Populate vendor details on the main request
+                            request.vendorId = quotation.vendorId;
+                            request.vendorCode = quotation.vendorCode;
+                            request.vendorName = quotation.vendorName;
+                            request.vendorType = quotation.vendorType;
+                            request.vendorContact = quotation.vendorContact;
+                            request.expenseCategory = quotation.expenseCategory;
+                            request.paymentMethod = quotation.paymentMethod;
+                            request.hasBankDetails = quotation.hasBankDetails;
+                            
+                            console.log(`✅ Added vendor details to main request from quotation: ${quotation.vendorName} (${quotation.vendorCode})`);
+                            break; // Only populate from the first vendor found
+                        }
+                    }
+                    if (request.vendorId) break; // Stop if we've found a vendor
+                }
+            }
+        }
+        
         await request.save();
         
         const populatedRequest = await Request.findById(request._id)
@@ -1655,6 +1686,128 @@ async function createSimpleExpenseForRequest(request, user) {
             totalAmount = request.items.reduce((sum, item) => sum + (item.totalCost || 0), 0);
         }
         
+        // Find vendor information from quotations
+        let vendorId = null;
+        let vendorSpecificAccount = null;
+        
+        // Check for regular quotations first
+        if (request.quotations && request.quotations.length > 0) {
+            const selectedQuotation = request.quotations.find(q => q.isSelected || q.isApproved);
+            if (selectedQuotation) {
+                // Use vendor information from the quotation if available
+                if (selectedQuotation.vendorId && selectedQuotation.vendorCode) {
+                    vendorId = selectedQuotation.vendorId;
+                    vendorSpecificAccount = selectedQuotation.vendorCode;
+                    
+                    // Also populate vendor details on the main request
+                    if (!request.vendorId) {
+                        request.vendorId = selectedQuotation.vendorId;
+                        request.vendorCode = selectedQuotation.vendorCode;
+                        request.vendorName = selectedQuotation.vendorName;
+                        request.vendorType = selectedQuotation.vendorType;
+                        request.vendorContact = selectedQuotation.vendorContact;
+                        request.expenseCategory = selectedQuotation.expenseCategory;
+                        request.paymentMethod = selectedQuotation.paymentMethod;
+                        request.hasBankDetails = selectedQuotation.hasBankDetails;
+                        
+                        console.log(`✅ Added vendor details to main request from selected quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode})`);
+                    }
+                    
+                    console.log(`Linked vendor from quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode}) to simple expense`);
+                } else if (selectedQuotation.provider) {
+                    // Fallback: Find vendor by business name
+                    const vendor = await Vendor.findOne({ businessName: selectedQuotation.provider });
+                    if (vendor) {
+                        vendorId = vendor._id;
+                        vendorSpecificAccount = vendor.chartOfAccountsCode;
+                        
+                        // Also populate vendor details on the main request
+                        if (!request.vendorId) {
+                            request.vendorId = vendor._id;
+                            request.vendorCode = vendor.chartOfAccountsCode;
+                            request.vendorName = vendor.businessName;
+                            request.vendorType = vendor.vendorType;
+                            request.vendorContact = {
+                                firstName: vendor.contactPerson?.firstName || '',
+                                lastName: vendor.contactPerson?.lastName || '',
+                                email: vendor.contactPerson?.email || '',
+                                phone: vendor.contactPerson?.phone || ''
+                            };
+                            request.expenseCategory = vendor.expenseCategory;
+                            request.paymentMethod = 'Cash';
+                            request.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
+                            
+                            console.log(`✅ Added vendor details to main request from found vendor: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
+                        }
+                        
+                        console.log(`Linked vendor ${vendor.businessName} (${vendor.chartOfAccountsCode}) to simple expense`);
+                    }
+                }
+            }
+        }
+        
+        // If no regular quotations, check itemized quotations
+        if (!vendorId && request.items && request.items.length > 0) {
+            for (const item of request.items) {
+                if (item.quotations && item.quotations.length > 0) {
+                    const selectedQuotation = item.quotations.find(q => q.isSelected || q.isApproved);
+                    if (selectedQuotation) {
+                        // Use vendor information from the quotation if available
+                                        if (selectedQuotation.vendorId && selectedQuotation.vendorCode) {
+                    vendorId = selectedQuotation.vendorId;
+                    vendorSpecificAccount = selectedQuotation.vendorCode;
+                    
+                    // Also populate vendor details on the main request
+                    if (!request.vendorId) {
+                        request.vendorId = selectedQuotation.vendorId;
+                        request.vendorCode = selectedQuotation.vendorCode;
+                        request.vendorName = selectedQuotation.vendorName;
+                        request.vendorType = selectedQuotation.vendorType;
+                        request.vendorContact = selectedQuotation.vendorContact;
+                        request.expenseCategory = selectedQuotation.expenseCategory;
+                        request.paymentMethod = selectedQuotation.paymentMethod;
+                        request.hasBankDetails = selectedQuotation.hasBankDetails;
+                        
+                        console.log(`✅ Added vendor details to main request from selected quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode})`);
+                    }
+                    
+                    console.log(`Linked vendor from quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode}) to simple expense from itemized request`);
+                    break;
+                        } else if (selectedQuotation.provider) {
+                            // Fallback: Find vendor by business name
+                            const vendor = await Vendor.findOne({ businessName: selectedQuotation.provider });
+                            if (vendor) {
+                                vendorId = vendor._id;
+                                vendorSpecificAccount = vendor.chartOfAccountsCode;
+                                
+                                // Also populate vendor details on the main request
+                                if (!request.vendorId) {
+                                    request.vendorId = vendor._id;
+                                    request.vendorCode = vendor.chartOfAccountsCode;
+                                    request.vendorName = vendor.businessName;
+                                    request.vendorType = vendor.vendorType;
+                                    request.vendorContact = {
+                                        firstName: vendor.contactPerson?.firstName || '',
+                                        lastName: vendor.contactPerson?.lastName || '',
+                                        email: vendor.contactPerson?.email || '',
+                                        phone: vendor.contactPerson?.phone || ''
+                                    };
+                                    request.expenseCategory = vendor.expenseCategory;
+                                    request.paymentMethod = 'Cash';
+                                    request.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
+                                    
+                                    console.log(`✅ Added vendor details to main request from found vendor: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
+                                }
+                                
+                                console.log(`Linked vendor ${vendor.businessName} (${vendor.chartOfAccountsCode}) to simple expense from itemized request`);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
         // Create expense data
         const expenseData = {
             expenseId,
@@ -1670,7 +1823,9 @@ async function createSimpleExpenseForRequest(request, user) {
             paymentMethod: 'Cash', // Default to cash for simple maintenance requests
             approvedBy: user._id,
             approvedAt: new Date(),
-            approvedByEmail: user.email
+            approvedByEmail: user.email,
+            vendorId: vendorId, // Link the vendor
+            vendorSpecificAccount: vendorSpecificAccount // Store the vendor account code
         };
         
         // Create the expense
@@ -1691,6 +1846,7 @@ async function createItemizedExpensesForRequest(request, user) {
     try {
         const Expense = require('../models/finance/Expense');
         const Vendor = require('../models/Vendor');
+        const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
         
         // Delete any existing expenses for this request
         await Expense.deleteMany({ requestId: request._id });
@@ -1742,13 +1898,45 @@ async function createItemizedExpensesForRequest(request, user) {
                     vendorCode: selectedQuotation.vendorCode,
                     vendorName: selectedQuotation.vendorName,
                     vendorType: selectedQuotation.vendorType,
+                    vendorSpecificAccount: selectedQuotation.vendorCode, // Use vendorCode as vendorSpecificAccount
                     notes: `Item: ${item.description} | Provider: ${selectedQuotation.provider} | Amount: $${selectedQuotation.amount} | Payment: ${paymentMethod}`
                 };
                 
                 const newExpense = new Expense(expenseData);
                 await newExpense.save();
-                createdExpenses.push(newExpense);
                 
+                // ✅ CREATE DOUBLE-ENTRY TRANSACTION FOR ITEM WITH QUOTATION
+                try {
+                    console.log(`💰 Creating double-entry transaction for item ${i} with quotation`);
+                    
+                    // Create a temp request object for the accounting service
+                    const tempRequest = {
+                        _id: request._id,
+                        title: request.title,
+                        residence: request.residence,
+                        items: [item], // Only this item
+                        totalEstimatedCost: selectedQuotation.amount,
+                        isTemplate: false,
+                        itemIndex: i,
+                        skipExpenseCreation: true, // Skip expense creation since we already created it
+                        disableDuplicateCheck: true
+                    };
+
+                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+
+                    // Link expense to transaction
+                    if (transactionResult && transactionResult.transaction) {
+                        newExpense.transactionId = transactionResult.transaction._id;
+                        await newExpense.save();
+                        console.log(`✅ Linked expense to transaction: ${transactionResult.transaction._id}`);
+                    }
+                    
+                } catch (transactionError) {
+                    console.error(`❌ Error creating double-entry transaction for item ${i}:`, transactionError);
+                    // Don't fail the expense creation if transaction fails
+                }
+                
+                createdExpenses.push(newExpense);
                 console.log(`✅ Expense created for item ${i} with selected quotation: ${expenseId} (Payment: ${paymentMethod})`);
                 
             } else {
@@ -1758,7 +1946,6 @@ async function createItemizedExpensesForRequest(request, user) {
                 // Enhanced account resolution using DoubleEntryAccountingService
                 let expenseAccountCode = '5007'; // Default to Property Maintenance
                 try {
-                    const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
                     expenseAccountCode = await DoubleEntryAccountingService.resolveExpenseAccount(item, request);
                 } catch (error) {
                     console.warn('Error resolving expense account, using default:', error.message);
@@ -1803,8 +1990,39 @@ async function createItemizedExpensesForRequest(request, user) {
                 
                 const newExpense = new Expense(expenseData);
                 await newExpense.save();
-                createdExpenses.push(newExpense);
                 
+                // ✅ CREATE DOUBLE-ENTRY TRANSACTION FOR ITEM WITHOUT QUOTATION
+                try {
+                    console.log(`💰 Creating double-entry transaction for item ${i} without quotation`);
+                    
+                    // Create a temp request object for the accounting service
+                    const tempRequest = {
+                        _id: request._id,
+                        title: request.title,
+                        residence: request.residence,
+                        items: [item], // Only this item
+                        totalEstimatedCost: item.estimatedCost || item.totalCost || 0,
+                        isTemplate: false,
+                        itemIndex: i,
+                        skipExpenseCreation: true, // Skip expense creation since we already created it
+                        disableDuplicateCheck: true
+                    };
+
+                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+
+                    // Link expense to transaction
+                    if (transactionResult && transactionResult.transaction) {
+                        newExpense.transactionId = transactionResult.transaction._id;
+                        await newExpense.save();
+                        console.log(`✅ Linked expense to transaction: ${transactionResult.transaction._id}`);
+                    }
+                    
+                } catch (transactionError) {
+                    console.error(`❌ Error creating double-entry transaction for item ${i}:`, transactionError);
+                    // Don't fail the expense creation if transaction fails
+                }
+                
+                createdExpenses.push(newExpense);
                 console.log(`✅ Expense created for item ${i} without quotation: ${expenseId} (Payment: Cash)`);
             }
         }
@@ -1858,6 +2076,86 @@ exports.ceoApproval = async (req, res) => {
             
             // Convert to expense if amount is specified
             if (request.amount > 0) {
+                // Find the approved quotation to get vendor information
+                let vendorId = null;
+                let vendorSpecificAccount = null;
+                
+                // Check for regular quotations first
+                if (request.quotations && request.quotations.length > 0) {
+                    const selectedQuotation = request.quotations.find(q => q.isSelected || q.isApproved);
+                    if (selectedQuotation && selectedQuotation.provider) {
+                        // Find or create vendor for the provider
+                        const vendor = await autoCreateVendor(selectedQuotation.provider, user, request.type || 'other');
+                        if (vendor) {
+                            vendorId = vendor._id;
+                            vendorSpecificAccount = vendor.chartOfAccountsCode;
+                            console.log(`Linked vendor ${vendor.businessName} (${vendor.chartOfAccountsCode}) to expense from maintenance request`);
+                        }
+                    }
+                }
+                
+                // If no regular quotations, check itemized quotations
+                if (!vendorId && request.items && request.items.length > 0) {
+                    for (const item of request.items) {
+                        if (item.quotations && item.quotations.length > 0) {
+                            const selectedQuotation = item.quotations.find(q => q.isSelected || q.isApproved);
+                            if (selectedQuotation) {
+                                // Use vendor information from the quotation if available
+                                if (selectedQuotation.vendorId && selectedQuotation.vendorCode) {
+                                    vendorId = selectedQuotation.vendorId;
+                                    vendorSpecificAccount = selectedQuotation.vendorCode;
+                                    
+                                    // Also populate vendor details on the main request
+                                    if (!request.vendorId) {
+                                        request.vendorId = selectedQuotation.vendorId;
+                                        request.vendorCode = selectedQuotation.vendorCode;
+                                        request.vendorName = selectedQuotation.vendorName;
+                                        request.vendorType = selectedQuotation.vendorType;
+                                        request.vendorContact = selectedQuotation.vendorContact;
+                                        request.expenseCategory = selectedQuotation.expenseCategory;
+                                        request.paymentMethod = selectedQuotation.paymentMethod;
+                                        request.hasBankDetails = selectedQuotation.hasBankDetails;
+                                        
+                                        console.log(`✅ Added vendor details to main request from selected quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode})`);
+                                    }
+                                    
+                                    console.log(`Linked vendor from quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode})`);
+                                    break;
+                                } else if (selectedQuotation.provider) {
+                                    // Fallback: Find or create vendor for the provider
+                                    const vendor = await autoCreateVendor(selectedQuotation.provider, user, request.type || 'other');
+                                    if (vendor) {
+                                        vendorId = vendor._id;
+                                        vendorSpecificAccount = vendor.chartOfAccountsCode;
+                                        
+                                        // Also populate vendor details on the main request
+                                        if (!request.vendorId) {
+                                            request.vendorId = vendor._id;
+                                            request.vendorCode = vendor.chartOfAccountsCode;
+                                            request.vendorName = vendor.businessName;
+                                            request.vendorType = vendor.vendorType;
+                                            request.vendorContact = {
+                                                firstName: vendor.contactPerson?.firstName || '',
+                                                lastName: vendor.contactPerson?.lastName || '',
+                                                email: vendor.contactPerson?.email || '',
+                                                phone: vendor.contactPerson?.phone || ''
+                                            };
+                                            request.expenseCategory = vendor.expenseCategory;
+                                            request.paymentMethod = 'Cash';
+                                            request.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
+                                            
+                                            console.log(`✅ Added vendor details to main request from auto-created vendor: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
+                                        }
+                                        
+                                        console.log(`Linked vendor ${vendor.businessName} (${vendor.chartOfAccountsCode}) to expense from itemized maintenance request`);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 const expense = new Expense({
                     expenseId: generateUniqueId('EXP'),
                     residence: request.residence,
@@ -1868,7 +2166,9 @@ exports.ceoApproval = async (req, res) => {
                     paymentStatus: 'Pending',
                     period: 'monthly',
                     createdBy: user._id,
-                    maintenanceRequestId: request._id
+                    maintenanceRequestId: request._id,
+                    vendorId: vendorId, // Link the vendor
+                    vendorSpecificAccount: vendorSpecificAccount // Store the vendor account code
                 });
                 
                 await expense.save();
@@ -2071,10 +2371,19 @@ exports.uploadQuotation = async (req, res) => {
             return res.status(400).json({ message: 'Maximum of 3 quotations allowed' });
         }
         
-        // Find or create vendor if provider name is provided and no vendorId exists
+        // Find or create vendor for the provider
         let vendor = null;
-        if (provider && !req.body.vendorId) {
+        if (provider) {
             try {
+                // First, try to find existing vendor
+                vendor = await Vendor.findOne({ businessName: provider });
+                
+                if (vendor) {
+                    console.log(`Found existing vendor for quotation: ${provider} (${vendor._id})`);
+                } else {
+                    // Vendor doesn't exist, create new one
+                    console.log(`Vendor not found, creating new vendor: ${provider}`);
+                    
                 // Determine category from request type or description
                 let vendorCategory = 'other';
                 if (request.type === 'maintenance') {
@@ -2094,9 +2403,10 @@ exports.uploadQuotation = async (req, res) => {
                     }
                 }
 
-                // Find existing vendor or auto-create new one
+                    // Auto-create vendor
                 vendor = await autoCreateVendor(provider, user, vendorCategory);
-                console.log(`Found/created vendor for quotation: ${provider} (${vendor._id})`);
+                    console.log(`Auto-created vendor for quotation: ${provider} (${vendor._id})`);
+                }
             } catch (vendorError) {
                 console.error('Error finding/creating vendor:', vendorError);
                 // Continue without vendor creation - don't fail the quotation upload
@@ -2130,6 +2440,25 @@ exports.uploadQuotation = async (req, res) => {
                 hasBankDetails: !!(vendor.bankDetails && vendor.bankDetails.bankName)
             })
         };
+        
+        // Also populate vendor details on the main request if vendor was created
+        if (vendor && !request.vendorId) {
+            request.vendorId = vendor._id;
+            request.vendorCode = vendor.chartOfAccountsCode;
+            request.vendorName = vendor.businessName;
+            request.vendorType = vendor.vendorType;
+            request.vendorContact = {
+                firstName: vendor.contactPerson?.firstName || '',
+                lastName: vendor.contactPerson?.lastName || '',
+                email: vendor.contactPerson?.email || '',
+                phone: vendor.contactPerson?.phone || ''
+            };
+            request.expenseCategory = vendor.expenseCategory;
+            request.paymentMethod = determinePaymentMethod(vendor);
+            request.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
+            
+            console.log(`✅ Added vendor details to main request: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
+        }
         
         request.quotations.push(quotation);
         
@@ -2429,10 +2758,19 @@ exports.addItemQuotation = async (req, res) => {
             });
         }
         
-        // Auto-create vendor if provider name is provided and no vendorId exists
+        // Find or create vendor for the provider
         let vendor = null;
-        if (provider && !req.body.vendorId) {
+        if (provider) {
             try {
+                // First, try to find existing vendor
+                vendor = await Vendor.findOne({ businessName: provider });
+                
+                if (vendor) {
+                    console.log(`Found existing vendor for item quotation: ${provider} (${vendor._id})`);
+                } else {
+                    // Vendor doesn't exist, create new one
+                    console.log(`Vendor not found, creating new vendor: ${provider}`);
+                    
                 // Determine category from request type or item description
                 let vendorCategory = 'other';
                 if (request.type === 'maintenance') {
@@ -2455,8 +2793,9 @@ exports.addItemQuotation = async (req, res) => {
                 // Auto-create vendor
                 vendor = await autoCreateVendor(provider, user, vendorCategory);
                 console.log(`Auto-created vendor for item quotation: ${provider} (${vendor._id})`);
+                }
             } catch (vendorError) {
-                console.error('Error auto-creating vendor:', vendorError);
+                console.error('Error finding/creating vendor:', vendorError);
                 // Continue without vendor creation - don't fail the quotation upload
             }
         }
@@ -2488,6 +2827,25 @@ exports.addItemQuotation = async (req, res) => {
                 hasBankDetails: !!(vendor.bankDetails && vendor.bankDetails.bankName)
             })
         };
+        
+        // Also populate vendor details on the main request if vendor was created
+        if (vendor && !request.vendorId) {
+            request.vendorId = vendor._id;
+            request.vendorCode = vendor.chartOfAccountsCode;
+            request.vendorName = vendor.businessName;
+            request.vendorType = vendor.vendorType;
+            request.vendorContact = {
+                firstName: vendor.contactPerson?.firstName || '',
+                lastName: vendor.contactPerson?.lastName || '',
+                email: vendor.contactPerson?.email || '',
+                phone: vendor.contactPerson?.phone || ''
+            };
+            request.expenseCategory = vendor.expenseCategory;
+            request.paymentMethod = determinePaymentMethod(vendor);
+            request.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
+            
+            console.log(`✅ Added vendor details to main request: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
+        }
         
         request.items[itemIndex].quotations.push(quotation);
         

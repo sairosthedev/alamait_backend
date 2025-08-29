@@ -1,119 +1,162 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
-
-mongoose.connect(process.env.MONGODB_URI);
+const TransactionEntry = require('./src/models/TransactionEntry');
 
 async function checkTransactionEntries() {
-    try {
-        await mongoose.connection.asPromise();
-        const db = mongoose.connection.db;
-        
-        console.log('🔍 CHECKING TRANSACTION ENTRIES COLLECTION\n');
-        
-        const transactionEntries = await db.collection('transactionentries').find({}).toArray();
-        console.log(`📊 Total Transaction Entries: ${transactionEntries.length}\n`);
-        
-        if (transactionEntries.length === 0) {
-            console.log('No transaction entries found');
-            return;
-        }
-        
-        // Look at first few entries
-        console.log('📋 FIRST 3 TRANSACTION ENTRIES:');
-        transactionEntries.slice(0, 3).forEach((entry, index) => {
-            console.log(`\nEntry ${index + 1}:`);
-            console.log(`  ID: ${entry._id}`);
-            console.log(`  Transaction ID: ${entry.transactionId}`);
-            console.log(`  Date: ${entry.date}`);
-            console.log(`  Description: ${entry.description}`);
-            console.log(`  Account: ${entry.account}`);
-            console.log(`  Type: ${entry.type}`);
-            console.log(`  Amount: $${entry.amount}`);
-            console.log(`  Residence: ${entry.residence || 'NO RESIDENCE'}`);
-            console.log(`  Reference: ${entry.reference}`);
-            
-            if (entry.metadata) {
-                console.log(`  Metadata:`, JSON.stringify(entry.metadata, null, 2));
-            }
-        });
-        
-        // Check what types exist
-        console.log('\n🔍 CHECKING ENTRY TYPES:');
-        const types = new Set();
-        transactionEntries.forEach(entry => {
-            if (entry.metadata && entry.metadata.type) {
-                types.add(entry.metadata.type);
-            }
-        });
-        
-        console.log(`Found types: ${Array.from(types).join(', ')}`);
-        
-        // Check for entries without metadata.type
-        const noType = transactionEntries.filter(entry => !entry.metadata || !entry.metadata.type);
-        console.log(`\nEntries without metadata.type: ${noType.length}`);
-        
-        // Check residence coverage
-        const withResidence = transactionEntries.filter(entry => entry.residence);
-        const withoutResidence = transactionEntries.filter(entry => !entry.residence);
-        
-        console.log(`\n🏠 RESIDENCE COVERAGE:`);
-        console.log(`  Entries WITH Residence: ${withResidence.length}`);
-        console.log(`  Entries WITHOUT Residence: ${withoutResidence.length}`);
-        
-        if (withoutResidence.length > 0) {
-            console.log('\n  ⚠️  Sample entries without residence:');
-            withoutResidence.slice(0, 3).forEach(entry => {
-                console.log(`    ${entry.account} - ${entry.metadata?.type || 'unknown'} - $${entry.amount}`);
-            });
-        }
-        
-        // Check double-entry compliance
-        console.log('\n🔍 DOUBLE-ENTRY COMPLIANCE:');
-        const byTransaction = {};
-        
-        transactionEntries.forEach(entry => {
-            if (!byTransaction[entry.transactionId]) {
-                byTransaction[entry.transactionId] = [];
-            }
-            byTransaction[entry.transactionId].push(entry);
-        });
-        
-        let balancedTransactions = 0;
-        let unbalancedTransactions = 0;
-        
-        Object.entries(byTransaction).forEach(([txId, entries]) => {
-            const totalDebits = entries.filter(e => e.type === 'debit').reduce((sum, e) => sum + (e.amount || 0), 0);
-            const totalCredits = entries.filter(e => e.type === 'credit').reduce((sum, e) => sum + (e.amount || 0), 0);
-            
-            if (Math.abs(totalDebits - totalCredits) < 0.01) {
-                balancedTransactions++;
-            } else {
-                unbalancedTransactions++;
-                console.log(`  ❌ Unbalanced Transaction ${txId}: Debits: $${totalDebits}, Credits: $${totalCredits}`);
-            }
-        });
-        
-        console.log(`  ✅ Balanced Transactions: ${balancedTransactions}`);
-        console.log(`  ❌ Unbalanced Transactions: ${unbalancedTransactions}`);
-        
-        // Check account codes used
-        console.log('\n💰 ACCOUNT CODES USED:');
-        const accountCodes = new Set();
-        transactionEntries.forEach(entry => {
-            if (entry.account) accountCodes.add(entry.account);
-        });
-        
-        console.log(`  Total Unique Account Codes: ${accountCodes.size}`);
-        console.log(`  Account Codes: ${Array.from(accountCodes).sort().join(', ')}`);
-        
-    } catch (error) {
-        console.error('Error:', error);
-    } finally {
-        mongoose.connection.close();
+  try {
+    await mongoose.connect('mongodb://localhost:27017/alamait', {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+
+    console.log('🔍 CHECKING TRANSACTION ENTRIES COLLECTION\n');
+
+    // 1. Get all transactions
+    console.log('📊 STEP 1: All Transactions in Database\n');
+    
+    const allTransactions = await TransactionEntry.find({
+      status: 'posted'
+    }).sort({ date: 1 });
+
+    console.log(`📋 Total transactions in database: ${allTransactions.length}`);
+
+    // 2. Group by source type
+    console.log('\n📊 STEP 2: Transactions by Source Type\n');
+    
+    const transactionsBySource = {};
+    allTransactions.forEach(tx => {
+      const source = tx.source || 'unknown';
+      if (!transactionsBySource[source]) {
+        transactionsBySource[source] = [];
+      }
+      transactionsBySource[source].push(tx);
+    });
+
+    Object.entries(transactionsBySource).forEach(([source, transactions]) => {
+      console.log(`\n📋 ${source.toUpperCase()} (${transactions.length} transactions):`);
+      transactions.forEach((tx, index) => {
+        const date = new Date(tx.date).toISOString().split('T')[0];
+        console.log(`   ${index + 1}. ${tx.description} (${date}) - $${tx.totalDebit}`);
+      });
+    });
+
+    // 3. Check for Cindy Gwekwerere transactions specifically
+    console.log('\n📊 STEP 3: Cindy Gwekwerere Transactions\n');
+    
+    const cindyTransactions = await TransactionEntry.find({
+      $or: [
+        { 'metadata.studentName': 'Cindy Gwekwerere' },
+        { description: { $regex: /Cindy Gwekwerere/i } }
+      ],
+      status: 'posted'
+    }).sort({ date: 1 });
+
+    console.log(`📋 Cindy Gwekwerere transactions found: ${cindyTransactions.length}`);
+    
+    if (cindyTransactions.length > 0) {
+      cindyTransactions.forEach((tx, index) => {
+        const date = new Date(tx.date).toISOString().split('T')[0];
+        console.log(`   ${index + 1}. ${tx.description} (${date})`);
+        console.log(`      Source: ${tx.source}, Amount: $${tx.totalDebit}`);
+        console.log(`      Month Settled: ${tx.metadata?.monthSettled || 'Not set'}`);
+      });
+    } else {
+      console.log('   ❌ No Cindy Gwekwerere transactions found!');
     }
+
+    // 4. Check AR transactions specifically
+    console.log('\n📊 STEP 4: AR Transactions (1100 accounts)\n');
+    
+    const arTransactions = await TransactionEntry.find({
+      'entries.accountCode': { $regex: /^1100/ },
+      status: 'posted'
+    }).sort({ date: 1 });
+
+    console.log(`📋 AR transactions found: ${arTransactions.length}`);
+    
+    if (arTransactions.length > 0) {
+      arTransactions.forEach((tx, index) => {
+        const date = new Date(tx.date).toISOString().split('T')[0];
+        console.log(`   ${index + 1}. ${tx.description} (${date})`);
+        console.log(`      Source: ${tx.source}, Amount: $${tx.totalDebit}`);
+        
+        // Show AR entries
+        tx.entries.forEach(entry => {
+          if (entry.accountCode.startsWith('1100')) {
+            console.log(`      AR Entry: ${entry.accountCode} - Debit: $${entry.debit || 0}, Credit: $${entry.credit || 0}`);
+          }
+        });
+      });
+    } else {
+      console.log('   ❌ No AR transactions found!');
+    }
+
+    // 5. Check payment transactions
+    console.log('\n📊 STEP 5: Payment Transactions\n');
+    
+    const paymentTransactions = await TransactionEntry.find({
+      source: 'payment',
+      status: 'posted'
+    }).sort({ date: 1 });
+
+    console.log(`📋 Payment transactions found: ${paymentTransactions.length}`);
+    
+    if (paymentTransactions.length > 0) {
+      paymentTransactions.forEach((tx, index) => {
+        const date = new Date(tx.date).toISOString().split('T')[0];
+        console.log(`   ${index + 1}. ${tx.description} (${date})`);
+        console.log(`      Amount: $${tx.totalDebit}, Month Settled: ${tx.metadata?.monthSettled || 'Not set'}`);
+        console.log(`      Student: ${tx.metadata?.studentName || 'Unknown'}`);
+      });
+    } else {
+      console.log('   ❌ No payment transactions found!');
+    }
+
+    // 6. Check rental accrual transactions
+    console.log('\n📊 STEP 6: Rental Accrual Transactions\n');
+    
+    const accrualTransactions = await TransactionEntry.find({
+      source: 'rental_accrual',
+      status: 'posted'
+    }).sort({ date: 1 });
+
+    console.log(`📋 Rental accrual transactions found: ${accrualTransactions.length}`);
+    
+    if (accrualTransactions.length > 0) {
+      accrualTransactions.forEach((tx, index) => {
+        const date = new Date(tx.date).toISOString().split('T')[0];
+        console.log(`   ${index + 1}. ${tx.description} (${date})`);
+        console.log(`      Amount: $${tx.totalDebit}, Student: ${tx.metadata?.studentName || 'Unknown'}`);
+      });
+    } else {
+      console.log('   ❌ No rental accrual transactions found!');
+    }
+
+    // 7. Summary
+    console.log('\n📊 STEP 7: Summary\n');
+    
+    console.log(`📋 Database Summary:`);
+    console.log(`   Total Transactions: ${allTransactions.length}`);
+    console.log(`   Cindy Gwekwerere Transactions: ${cindyTransactions.length}`);
+    console.log(`   AR Transactions: ${arTransactions.length}`);
+    console.log(`   Payment Transactions: ${paymentTransactions.length}`);
+    console.log(`   Rental Accrual Transactions: ${accrualTransactions.length}`);
+
+    if (cindyTransactions.length === 0) {
+      console.log('\n⚠️ WARNING: No Cindy Gwekwerere transactions found!');
+      console.log('   This suggests the real data may have been accidentally removed.');
+      console.log('   You may need to restore the original data from your JSON file.');
+    }
+
+    await mongoose.disconnect();
+  } catch (error) {
+    console.error('❌ Error:', error);
+    await mongoose.disconnect();
+  }
 }
 
 checkTransactionEntries();
+
 
 
 

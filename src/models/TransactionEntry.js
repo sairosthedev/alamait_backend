@@ -51,7 +51,7 @@ const transactionEntrySchema = new mongoose.Schema({
   // Source
   source: {
     type: String,
-    enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment', 'expense_payment', 'rental_accrual', 'rental_accrual_reversal', 'expense_accrual', 'expense_accrual_reversal', 'petty_cash_payment', 'petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment'],
+    enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment', 'expense_payment', 'rental_accrual', 'rental_accrual_reversal', 'expense_accrual', 'expense_accrual_reversal', 'petty_cash_payment', 'petty_cash_allocation', 'petty_cash_expense', 'petty_cash_replenishment', 'advance_payment'],
     required: true
   },
   sourceId: {
@@ -60,7 +60,7 @@ const transactionEntrySchema = new mongoose.Schema({
   },
   sourceModel: {
     type: String,
-    enum: ['Payment', 'Invoice', 'Request', 'Vendor', 'Expense', 'Lease', 'TransactionEntry', 'User', 'PettyCash'],
+    enum: ['Payment', 'Invoice', 'Request', 'Vendor', 'Expense', 'Lease', 'TransactionEntry', 'User', 'PettyCash', 'AdvancePayment', 'Debtor'],
     required: true
   },
   
@@ -126,6 +126,94 @@ transactionEntrySchema.pre('save', function(next) {
     this.transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
   }
   next();
+});
+
+// 🆕 NEW: Auto-update debtor totals when AR transactions are created
+transactionEntrySchema.post('save', async function(doc) {
+  try {
+    // Only process AR transactions (account codes starting with 1100-)
+    const arEntries = doc.entries.filter(entry => 
+      entry.accountCode && entry.accountCode.startsWith('1100-')
+    );
+    
+    // Only process AP transactions (account codes starting with 2000-)
+    const apEntries = doc.entries.filter(entry => 
+      entry.accountCode && entry.accountCode.startsWith('2000') && entry.accountCode !== '2000'
+    );
+    
+    if (arEntries.length === 0 && apEntries.length === 0) {
+      return; // Not an AR or AP transaction
+    }
+    
+    console.log(`🔄 Auto-updating totals for transaction: ${doc.transactionId}`);
+    
+    // Get the services
+    const debtorService = require('../services/debtorService');
+    const vendorService = require('../services/vendorService');
+    
+    // Process AR transactions (debtors)
+    if (arEntries.length > 0) {
+      // Extract student ID from AR account code (1100-{studentId})
+      const studentIds = new Set();
+      arEntries.forEach(entry => {
+        const accountCode = entry.accountCode;
+        if (accountCode.startsWith('1100-')) {
+          const studentId = accountCode.replace('1100-', '');
+          if (studentId) {
+            studentIds.add(studentId);
+          }
+        }
+      });
+      
+      // Update each affected debtor using the real-time update method
+      for (const studentId of studentIds) {
+        try {
+          // Use the new real-time update method
+          const result = await debtorService.updateDebtorFromARTransaction(studentId, doc);
+          
+          if (result.success) {
+            console.log(`   ✅ Real-time debtor update successful for user ${studentId}`);
+          } else {
+            console.log(`   ⚠️ Real-time debtor update failed for user ${studentId}: ${result.message}`);
+          }
+        } catch (error) {
+          console.error(`   ❌ Error in real-time debtor update for user ${studentId}:`, error.message);
+        }
+      }
+    }
+    
+    // Process AP transactions (vendors)
+    if (apEntries.length > 0) {
+      // Extract vendor account codes (2000{xxx})
+      const vendorAccountCodes = new Set();
+      apEntries.forEach(entry => {
+        const accountCode = entry.accountCode;
+        if (accountCode.startsWith('2000') && accountCode !== '2000') {
+          vendorAccountCodes.add(accountCode);
+        }
+      });
+      
+      // Update each affected vendor using the real-time update method
+      for (const accountCode of vendorAccountCodes) {
+        try {
+          // Use the new real-time update method
+          const result = await vendorService.updateVendorFromAPTransaction(accountCode, doc);
+          
+          if (result.success) {
+            console.log(`   ✅ Real-time vendor update successful for account ${accountCode}`);
+          } else {
+            console.log(`   ⚠️ Real-time vendor update failed for account ${accountCode}: ${result.message}`);
+          }
+        } catch (error) {
+          console.error(`   ❌ Error in real-time vendor update for account ${accountCode}:`, error.message);
+        }
+      }
+    }
+    
+  } catch (error) {
+    console.error('⚠️ Error in TransactionEntry post-save hook:', error.message);
+    // Don't throw error to avoid breaking the main transaction save
+  }
 });
 
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 

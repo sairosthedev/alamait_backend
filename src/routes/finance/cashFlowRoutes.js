@@ -14,6 +14,13 @@ router.get('/report/generate',
     FinancialReportsController.generateCashFlowStatement
 );
 
+// Generate detailed cash flow statement with specific income and expense breakdowns
+// GET /api/finance/cash-flow/detailed?period=2024&basis=cash
+router.get('/detailed', 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    FinancialReportsController.generateDetailedCashFlowStatement
+);
+
 // Get cash flow summary
 router.get('/summary', 
     checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),

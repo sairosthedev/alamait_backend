@@ -177,6 +177,10 @@ const expenseSchema = new mongoose.Schema({
         type: String,
         required: false
     },
+    vendorSpecificAccount: {
+        type: String,
+        required: false
+    },
     
     // Item and quotation tracking
     itemIndex: {

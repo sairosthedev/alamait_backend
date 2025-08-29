@@ -10,14 +10,14 @@ const DynamicAccountResolver = require('./dynamicAccountResolver');
 // Legacy mapping for backward compatibility (will be deprecated)
 const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
     'Bank Transfer': '1001',  // Bank Account
-    'Cash': '1002',           // Cash on Hand
+    'Cash': '1000',           // Cash (corrected from 1002)
     'Online Payment': '1001', // Bank Account
     'Ecocash': '1003',        // Ecocash Wallet
     'Innbucks': '1004',       // Innbucks Wallet
     'MasterCard': '1001',     // Bank Account
     'Visa': '1001',          // Bank Account
     'PayPal': '1001',        // Bank Account
-    'Petty Cash': '1002'     // Cash on Hand
+    'Petty Cash': '1000'     // Cash (corrected from 1002)
 };
 
 // Category to account code mapping (updated to match chart of accounts)

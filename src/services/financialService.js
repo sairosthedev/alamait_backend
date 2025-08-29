@@ -567,15 +567,49 @@ class FinancialService {
             return account;
         }
 
+        // First, try to find account by vendor's chartOfAccountsCode
         let account = await Account.findOne({ code: vendor.chartOfAccountsCode });
+        
+        // If not found by code, try by name
         if (!account) {
-            account = new Account({
-                code: vendor.chartOfAccountsCode,
+            account = await Account.findOne({ 
                 name: `Accounts Payable - ${vendor.businessName}`,
                 type: 'Liability'
             });
-            await account.save();
         }
+        
+        // If still not found, create a new vendor-specific account
+        if (!account) {
+            // Generate a unique account code for this vendor
+            const vendorCode = vendor.chartOfAccountsCode || `200${vendor.vendorCode.slice(-3)}`;
+            
+            account = new Account({
+                code: vendorCode,
+                name: `Accounts Payable - ${vendor.businessName}`,
+                type: 'Liability',
+                category: 'Current Liabilities',
+                subcategory: 'Accounts Payable',
+                description: `Payable account for ${vendor.businessName}`,
+                isActive: true,
+                level: 2, // Set as level 2 (child of main AP account)
+                metadata: {
+                    vendorId: vendor._id,
+                    vendorCode: vendor.vendorCode,
+                    vendorType: vendor.category,
+                    linkedToMainAP: true,
+                    linkedDate: new Date(),
+                    mainAPAccountCode: '2000'
+                }
+            });
+            await account.save();
+            
+            // Update vendor with the new account code
+            vendor.chartOfAccountsCode = vendorCode;
+            await vendor.save();
+            
+            console.log(`✅ Created vendor-specific accounts payable account: ${vendorCode} for ${vendor.businessName}`);
+        }
+        
         return account;
     }
 
@@ -615,6 +649,18 @@ class FinancialService {
             });
             await account.save();
         }
+        
+        // If this is an Accounts Payable account (code starts with 2000 but not exactly 2000),
+        // ensure it's properly linked to the parent account 2000
+        if (type === 'Liability' && code.match(/^2000/) && code !== '2000') {
+            const AccountsPayableLinkingService = require('./accountsPayableLinkingService');
+            try {
+                await AccountsPayableLinkingService.ensureAccountsPayableLink(code, name);
+            } catch (error) {
+                console.warn(`⚠️ Could not link AP account ${code}: ${error.message}`);
+            }
+        }
+        
         return account;
     }
 

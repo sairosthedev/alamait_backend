@@ -3,6 +3,9 @@ const router = express.Router();
 const transactionController = require('../controllers/transactionController');
 const { auth, checkRole } = require('../middleware/auth');
 
+// Root route for /api/transactions (for frontend compatibility)
+router.get('/', auth, transactionController.getAllTransactions);
+
 // Get all transactions with entries (for frontend compatibility)
 router.get('/all', auth, transactionController.getAllTransactions);
 

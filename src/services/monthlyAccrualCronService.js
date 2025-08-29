@@ -88,20 +88,14 @@ class MonthlyAccrualCronService {
             console.log(`   Month: ${month}/${year}`);
             console.log(`   Time: ${now.toLocaleTimeString('en-US', { timeZone: 'Africa/Harare' })}`);
             
-            // Check if accruals already exist for this month
+            // Even if some accruals exist, still attempt creation for missing students (per-student dedupe inside service)
             const existingAccruals = await this.checkExistingAccruals(month, year);
-            
             if (existingAccruals.length > 0) {
-                console.log(`⚠️ Accruals already exist for ${month}/${year} (${existingAccruals.length} entries)`);
-                console.log('   Skipping monthly accrual creation');
-                this.lastRun = now;
-                this.calculateNextRun();
-                return;
+                console.log(`ℹ️ Found ${existingAccruals.length} existing accrual entries for ${month}/${year}. Continuing to create for missing students...`);
             }
-            
-            // Create monthly accruals for all active students
+
+            // Create monthly accruals for all active students (service checks per student and skips existing)
             console.log(`🏠 Creating monthly rent accruals for ${month}/${year}...`);
-            
             const result = await RentalAccrualService.createMonthlyRentAccrual(month, year);
             
             if (result && result.success) {
@@ -120,6 +114,11 @@ class MonthlyAccrualCronService {
                 console.log(`   Error: ${result?.error || 'Unknown error'}`);
             }
             
+            // After attempting current month, backfill any missing prior months
+            console.log('🧩 Running backfill for missing monthly accruals...');
+            const backfill = await RentalAccrualService.backfillMissingAccruals();
+            console.log(`   Backfill -> created: ${backfill.created}, skipped: ${backfill.skipped}, errors: ${backfill.errors?.length || 0}`);
+
             this.lastRun = now;
             this.calculateNextRun();
             

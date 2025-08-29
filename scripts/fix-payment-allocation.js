@@ -22,91 +22,132 @@ function parseArgs(argv) {
 }
 
 (async () => {
-  try {
-    await connectDB();
-    const { paymentId, amount } = parseArgs(process.argv);
-    if (!paymentId || !amount || isNaN(amount)) {
-      console.error('Error: --paymentId and --amount are required');
-      process.exit(1);
-    }
-
-    const payment = await Payment.findOne({ paymentId });
-    if (!payment) {
-      console.log(JSON.stringify({ ok: false, error: 'payment_not_found', paymentId }, null, 2));
-      process.exit(0);
-    }
-
-    // Ensure accounts exist
-    let deferred = await Account.findOne({ name: 'Deferred Income - Tenant Advances' });
-    if (!deferred) deferred = await Account.findOne({ code: '1102' });
-    if (!deferred) {
-      deferred = new Account({ code: '1102', name: 'Deferred Income - Tenant Advances', type: 'Liability', category: 'Current Liabilities', isActive: true });
-      await deferred.save();
-    }
-
-    let ar = await Account.findOne({ name: 'Accounts Receivable - Tenants' });
-    if (!ar) ar = await Account.findOne({ code: '1100' });
-    if (!ar) ar = await Account.findOne({ name: 'Accounts Receivable' });
-    if (!ar) ar = await Account.findOne({ code: '1101' });
-    if (!ar) {
-      ar = new Account({ code: '1101', name: 'Accounts Receivable', type: 'Asset', category: 'Current Assets', isActive: true });
-      await ar.save();
-    }
-
-    const txnId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
-    const txn = new Transaction({
-      transactionId: txnId,
-      date: new Date(),
-      description: `Rent allocation correction for ${paymentId}`,
-      type: 'adjustment',
-      reference: payment._id.toString(),
-      residence: payment.residence,
-      createdBy: 'system'
-    });
-    await txn.save();
-
-    const fixedAmount = Number((amount).toFixed(2));
-    const entries = [
-      {
-        accountCode: deferred.code,
-        accountName: deferred.name,
-        accountType: deferred.type,
-        debit: fixedAmount,
-        credit: 0,
-        description: `Reclassify rent from Deferred Income for ${paymentId}`
-      },
-      {
-        accountCode: ar.code,
-        accountName: ar.name,
-        accountType: ar.type,
-        debit: 0,
-        credit: fixedAmount,
-        description: `Recognize AR settlement portion for ${paymentId}`
-      }
-    ];
-
-    const te = new TransactionEntry({
-      transactionId: txnId,
-      date: new Date(),
-      description: `Rent allocation fix for ${paymentId}`,
-      reference: payment._id.toString(),
-      entries,
-      totalDebit: fixedAmount,
-      totalCredit: fixedAmount,
-      source: 'payment',
-      sourceId: payment._id,
-      sourceModel: 'Payment',
-      residence: payment.residence,
-      createdBy: 'system',
-      status: 'posted',
-      metadata: { correction: true, correctionType: 'rent_allocation', accruedApplied: fixedAmount, paymentId }
-    });
-    await te.save();
-
-    console.log(JSON.stringify({ ok: true, payment: payment._id, transaction: txnId, entryId: te._id, amount: fixedAmount }, null, 2));
-    process.exit(0);
-  } catch (e) {
-    console.error(e);
+  const paymentId = process.argv[2];
+  if (!paymentId) {
+    console.error('Usage: node scripts/fix-payment-allocation.js <paymentId>');
     process.exit(1);
+  }
+
+  try {
+    await mongoose.connect(process.env.MONGODB_URI);
+    const Payment = require('../src/models/Payment');
+    const TransactionEntry = require('../src/models/TransactionEntry');
+
+    const payment = await Payment.findById(paymentId);
+    if (!payment) throw new Error(`Payment not found: ${paymentId}`);
+
+    const studentId = payment.student?.toString();
+    if (!studentId) throw new Error('Payment missing student');
+
+    // 1) Delete wrong advance entries for this payment
+    const del = await TransactionEntry.deleteMany({ source: 'advance_payment', sourceId: paymentId });
+    console.log(`Deleted ${del.deletedCount} advance_payment entries for ${paymentId}`);
+
+    // 2) Find lease_start accrual (May) OR fallback to earliest rental_accrual for this student
+    let accrual = await TransactionEntry.findOne({
+      source: 'rental_accrual',
+      'metadata.type': 'lease_start',
+      'entries.accountCode': { $regex: `^1100-${studentId}` }
+    }).sort({ date: 1 });
+
+    if (!accrual) {
+      accrual = await TransactionEntry.findOne({
+        source: 'rental_accrual',
+        'entries.accountCode': { $regex: `^1100-${studentId}` }
+      }).sort({ date: 1 });
+      if (!accrual) throw new Error('No rental_accrual entries found for student');
+      console.log('Fallback: using earliest rental_accrual to derive May amounts');
+    }
+
+    const accDate = new Date(accrual.date);
+    const mayMonthKey = `${accDate.getFullYear()}-${String(accDate.getMonth() + 1).padStart(2, '0')}`;
+
+    // Derive owed amounts from accrual AR debit lines
+    let proratedRent = 0, adminFee = 0, securityDeposit = 0;
+    (accrual.entries || []).forEach(line => {
+      if (line.accountCode && line.accountCode.startsWith(`1100-${studentId}`) && Number(line.debit || 0) > 0) {
+        const desc = (line.description || '').toLowerCase();
+        if (desc.includes('deposit')) securityDeposit += Number(line.debit || 0);
+        else if (desc.includes('admin')) adminFee += Number(line.debit || 0);
+        else proratedRent += Number(line.debit || 0);
+      }
+    });
+
+    // 3) Determine payment breakdown
+    let rentPortion = 0, adminPortion = 0, depositPortion = 0;
+    if (Array.isArray(payment.payments)) {
+      rentPortion = Number(payment.payments.find(p => p.type === 'rent')?.amount || 0);
+      adminPortion = Number(payment.payments.find(p => p.type === 'admin')?.amount || 0);
+      depositPortion = Number(payment.payments.find(p => p.type === 'deposit')?.amount || 0);
+    } else {
+      const total = Number(payment.totalAmount || 0);
+      adminPortion = adminFee;
+      depositPortion = securityDeposit;
+      rentPortion = Math.max(0, total - adminPortion - depositPortion);
+    }
+
+    // Clamp to owed caps for May
+    const mayRentAlloc = Math.min(rentPortion, proratedRent);
+    const mayAdminAlloc = Math.min(adminPortion, adminFee);
+    const mayDepositAlloc = Math.min(depositPortion, securityDeposit);
+
+    const remainingRent = Math.max(0, rentPortion - mayRentAlloc);
+
+    const cashAccount = '1000';
+    const arAccount = `1100-${studentId}`;
+
+    const makeEntry = async (amount, monthKey, type) => {
+      if (amount <= 0) return null;
+      const tx = new TransactionEntry({
+        transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2,5).toUpperCase()}`,
+        date: new Date(),
+        description: `Payment allocation: $${amount} ${type} for ${monthKey}`,
+        reference: paymentId,
+        entries: [
+          { accountCode: arAccount, accountName: 'Accounts Receivable - Student', accountType: 'Asset', debit: 0, credit: amount, description: `Payment received - ${paymentId}` },
+          { accountCode: cashAccount, accountName: 'Cash', accountType: 'Asset', debit: amount, credit: 0, description: `Payment received - ${paymentId}` }
+        ],
+        totalDebit: amount,
+        totalCredit: amount,
+        source: 'payment',
+        sourceId: paymentId,
+        sourceModel: 'Payment',
+        residence: payment.residence,
+        createdBy: 'system',
+        status: 'posted',
+        metadata: {
+          paymentId,
+          studentId,
+          amount,
+          allocationType: 'payment_allocation',
+          originalARTransaction: accrual._id,
+          monthSettled: monthKey,
+          paymentType: type
+        }
+      });
+      await tx.save();
+      console.log(`Created allocation: ${type} $${amount} for ${monthKey}`);
+      return tx;
+    };
+
+    // 4) Create May allocations
+    await makeEntry(mayRentAlloc, mayMonthKey, 'rent');
+    await makeEntry(mayAdminAlloc, mayMonthKey, 'admin');
+    await makeEntry(mayDepositAlloc, mayMonthKey, 'deposit');
+
+    // 5) Create June rent allocation (remaining rent)
+    if (remainingRent > 0) {
+      const juneDate = new Date(accDate.getFullYear(), accDate.getMonth() + 1, 1);
+      const juneMonthKey = `${juneDate.getFullYear()}-${String(juneDate.getMonth() + 1).padStart(2, '0')}`;
+      await makeEntry(remainingRent, juneMonthKey, 'rent');
+    }
+
+    console.log('✅ Fix complete');
+    process.exit(0);
+  } catch (err) {
+    console.error('❌ Error:', err.message);
+    process.exit(1);
+  } finally {
+    try { await mongoose.disconnect(); } catch {}
   }
 })();

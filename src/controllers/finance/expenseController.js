@@ -1,4 +1,5 @@
 const Expense = require('../../models/finance/Expense');
+const Vendor = require('../../models/Vendor');
 const { generateUniqueId } = require('../../utils/idGenerator');
 const { validateMongoId } = require('../../utils/validators');
 const { createAuditLog } = require('../../utils/auditLogger');
@@ -27,11 +28,11 @@ const CATEGORY_TO_ACCOUNT_CODE = {
 
 // Payment method to Account Code mapping (updated to match chart of accounts)
 const PAYMENT_METHOD_TO_ACCOUNT_CODE = {
-  'Cash': '1002', // Cash on Hand
+  'Cash': '1000', // Cash (corrected from 1002)
   'Bank Transfer': '1001', // Bank Account
   'Ecocash': '1003', // Ecocash Wallet
   'Innbucks': '1004', // Innbucks Wallet
-  'Petty Cash': '1002', // Cash on Hand
+  'Petty Cash': '1000', // Cash (corrected from 1002)
   'Online Payment': '1001', // Bank Account
   'MasterCard': '1001', // Bank Account
   'Visa': '1001', // Bank Account
@@ -555,11 +556,27 @@ exports.approveExpense = async (req, res) => {
                 throw new Error(`Expense account not found for category: ${updatedExpense.category}. Please ensure you have a suitable expense account in your chart of accounts.`);
             }
             
-            // Get or create general Accounts Payable account
-            let apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+            // Get or create vendor-specific Accounts Payable account
+            let apAccount;
+            if (updatedExpense.vendorId) {
+                const vendor = await Vendor.findById(updatedExpense.vendorId);
+                if (vendor) {
+                    // Use the FinancialService to get or create vendor-specific account
+                    const FinancialService = require('../../services/financialService');
+                    apAccount = await FinancialService.getOrCreateVendorAccount(updatedExpense.vendorId);
+                    console.log(`[AP] Using vendor-specific account: ${apAccount.code} for ${vendor.businessName}`);
+                } else {
+                    console.warn(`[AP] Vendor not found: ${updatedExpense.vendorId}, using general accounts payable`);
+                    apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                }
+            } else {
+                // No vendor specified, use general accounts payable
+                apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+            }
+            
             if (!apAccount) {
-                console.error('[AP] General Accounts Payable account not found');
-                throw new Error('General Accounts Payable account not found');
+                console.error('[AP] Accounts Payable account not found');
+                throw new Error('Accounts Payable account not found');
             }
             
             // Create transaction for approval (creates AP liability)
@@ -690,6 +707,19 @@ exports.markExpenseAsPaid = async (req, res) => {
             return res.status(400).json({ error: 'Expense is already marked as paid' });
         }
 
+        // Check if expense has vendorId but no vendorSpecificAccount
+        if (expense.vendorId && !expense.vendorSpecificAccount) {
+            console.log(`[Payment] Expense has vendorId but no vendorSpecificAccount, looking up vendor...`);
+            const vendor = await Vendor.findById(expense.vendorId);
+            if (vendor) {
+                console.log(`[Payment] Found vendor: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
+                // Update the expense with vendor-specific account
+                expense.vendorSpecificAccount = vendor.chartOfAccountsCode;
+                await expense.save();
+                console.log(`[Payment] Updated expense with vendor-specific account: ${vendor.chartOfAccountsCode}`);
+            }
+        }
+
         const before = expense.toObject();
 
         // Update expense status to Paid
@@ -798,12 +828,28 @@ exports.markExpenseAsPaid = async (req, res) => {
         
         if (wasAccrued) {
             // If expense was previously accrued, we're paying off the liability
-            // Debit: Accounts Payable (reduce liability)
+            // Debit: Accounts Payable (reduce liability) - use vendor-specific account if available
             // Credit: Source Account (reduce asset)
-            const apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
-            if (!apAccount) {
-                throw new Error('Accounts Payable account not found');
+            
+            let apAccount;
+            
+            // Check if expense has vendor-specific account
+            if (updatedExpense.vendorSpecificAccount) {
+                console.log(`[Payment] Using vendor-specific account: ${updatedExpense.vendorSpecificAccount}`);
+                apAccount = await Account.findOne({ code: updatedExpense.vendorSpecificAccount, type: 'Liability' });
+                if (!apAccount) {
+                    console.log(`⚠️ Vendor-specific account ${updatedExpense.vendorSpecificAccount} not found, falling back to general AP`);
+                }
             }
+            
+            // Fallback to general AP if vendor-specific account not found
+            if (!apAccount) {
+                apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                if (!apAccount) {
+                    throw new Error('Accounts Payable account not found');
+                }
+            }
+            
             debitAccount = apAccount;
             creditAccount = sourceAccount;
         } else {
@@ -963,7 +1009,11 @@ exports.recordExpensePayment = async (req, res) => {
         let vendorSpecificAccount = null;
         let expenseAccountCode = null;
         
-        if (expense.vendorId) {
+        // First check if vendorSpecificAccount is already stored on the expense
+        if (expense.vendorSpecificAccount) {
+            vendorSpecificAccount = expense.vendorSpecificAccount;
+            console.log(`Using stored vendor-specific account: ${vendorSpecificAccount} from expense`);
+        } else if (expense.vendorId) {
             const Vendor = require('../../models/Vendor');
             const vendor = await Vendor.findById(expense.vendorId);
             if (vendor && vendor.chartOfAccountsCode) {

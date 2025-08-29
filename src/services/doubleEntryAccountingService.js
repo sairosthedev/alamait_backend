@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Transaction = require('../models/Transaction');
 const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
@@ -387,6 +388,14 @@ class DoubleEntryAccountingService {
                 throw new Error(`Invalid residence ID: ${residence}`);
             }
             
+            // Get the appropriate petty cash account based on user role
+            const { getPettyCashAccountByRole } = require('../utils/pettyCashUtils');
+            const pettyCashAccount = await getPettyCashAccountByRole(user.role);
+            
+            if (!pettyCashAccount) {
+                throw new Error(`No petty cash account found for role: ${user.role}`);
+            }
+            
             console.log(`🔄 Replenishing ${user.role} petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
             
             const transactionId = await this.generateTransactionId();
@@ -608,7 +617,7 @@ class DoubleEntryAccountingService {
 
                     // Credit: Accounts Payable (Vendor)
                     entries.push({
-                        accountCode: await this.getOrCreateVendorPayableAccount(selectedQuotation.vendorId),
+                        accountCode: await this.getOrCreateVendorPayableAccount(selectedQuotation.vendorId, selectedQuotation.provider),
                         accountName: `Accounts Payable: ${selectedQuotation.provider}`,
                         accountType: 'Liability',
                         debit: 0,
@@ -634,7 +643,7 @@ class DoubleEntryAccountingService {
 
                     // Credit: Accounts Payable: Provider
                     entries.push({
-                        accountCode: await this.getOrCreateVendorPayableAccount(provider),
+                        accountCode: await this.getOrCreateVendorPayableAccount(null, provider),
                         accountName: `Accounts Payable: ${provider}`,
                         accountType: 'Liability',
                         debit: 0,
@@ -712,6 +721,34 @@ class DoubleEntryAccountingService {
             let expense = null;
             if (!request || !request.skipExpenseCreation) {
                 const { generateUniqueId } = require('../utils/idGenerator');
+                
+                // Find vendor information from selected quotations
+                let vendorId = null;
+                let vendorSpecificAccount = null;
+                
+                // Check for selected quotations in items
+                for (const item of request.items) {
+                    const selectedQuotation = item.quotations?.find(q => q.isSelected || q.isApproved);
+                    if (selectedQuotation) {
+                        // Use vendor information from the quotation if available
+                        if (selectedQuotation.vendorId && selectedQuotation.vendorCode) {
+                            vendorId = selectedQuotation.vendorId;
+                            vendorSpecificAccount = selectedQuotation.vendorCode;
+                            console.log(`   - Found vendor from quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode})`);
+                            break;
+                        } else if (selectedQuotation.provider) {
+                            // Fallback: Try to find vendor by business name
+                            const vendor = await Vendor.findOne({ businessName: selectedQuotation.provider });
+                            if (vendor) {
+                                vendorId = vendor._id;
+                                vendorSpecificAccount = vendor.chartOfAccountsCode;
+                                console.log(`   - Found vendor: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
                 expense = new Expense({
                     expenseId: await generateUniqueId('EXP'),
                     requestId: request._id,
@@ -723,11 +760,16 @@ class DoubleEntryAccountingService {
                     paymentStatus: 'Pending',
                     period: 'monthly',
                     createdBy: user._id,
-                    transactionId: transaction._id
+                    transactionId: transaction._id,
+                    vendorId: vendorId, // Link the vendor
+                    vendorSpecificAccount: vendorSpecificAccount // Store the vendor account code
                 });
 
                 await expense.save();
                 console.log(`   - Expense created: ${expense.expenseId}`);
+                if (vendorId) {
+                    console.log(`   - Linked to vendor: ${vendorId} (${vendorSpecificAccount})`);
+                }
             } else {
                 console.log('ℹ️ Skipping internal expense creation (handled by caller)');
             }
@@ -789,7 +831,7 @@ class DoubleEntryAccountingService {
                 if (item.paymentStatus === 'Paid') {
                     // Debit: Accounts Payable (Vendor)
                     entries.push({
-                        accountCode: await this.getOrCreateVendorPayableAccount(expense.vendorId),
+                        accountCode: await this.getOrCreateVendorPayableAccount(expense.vendorId, expense.vendorName),
                         accountName: `Accounts Payable: ${expense.vendorName}`,
                         accountType: 'Liability',
                         debit: item.totalCost,
@@ -887,7 +929,7 @@ class DoubleEntryAccountingService {
 
                     // Credit: Accounts Payable (Vendor)
                     entries.push({
-                        accountCode: await this.getOrCreateVendorPayableAccount(selectedQuotation.vendorId),
+                        accountCode: await this.getOrCreateVendorPayableAccount(selectedQuotation.vendorId, selectedQuotation.provider),
                         accountName: `Accounts Payable: ${selectedQuotation.provider}`,
                         accountType: 'Liability',
                         debit: 0,
@@ -1113,6 +1155,13 @@ class DoubleEntryAccountingService {
                 } catch (e) {
                     console.log('⚠️ Could not load debtor for payment allocation context');
                 }
+            }
+
+            // 🆕 SHORT-CIRCUIT: Smart FIFO now posts per-allocation transactions (Cash ↔ AR/Deferred).
+            // Avoid creating an umbrella "Debt settlement" entry that double-posts Cash/AR.
+            if (payment && Array.isArray(payment.payments) && payment.payments.length > 0) {
+                console.log('⚠️ Skipping umbrella payment TransactionEntry - handled by Smart FIFO allocation per month.');
+                return { transaction: null, transactionEntry: null, message: 'Handled by Smart FIFO allocation' };
             }
 
             // 🆕 NEW: Determine transaction description based on payment analysis
@@ -2236,14 +2285,11 @@ class DoubleEntryAccountingService {
 
     static async getDeferredIncomeAccount() {
         let account = await Account.findOne({ 
-            name: 'Deferred Income - Tenant Advances',
-            type: 'Liability'
+            code: '2200'
         });
-        
         if (!account) {
-            account = await this.getOrCreateAccount('1102', 'Deferred Income - Tenant Advances', 'Liability');
+            account = await this.getOrCreateAccount('2200', 'Advance Payment Liability', 'Liability');
         }
-        
         return account.code;
     }
 
@@ -2273,20 +2319,77 @@ class DoubleEntryAccountingService {
         return account.code;
     }
 
-    static async getOrCreateVendorPayableAccount(vendorId) {
-        const vendor = await Vendor.findById(vendorId);
+    static async getOrCreateVendorPayableAccount(vendorId, providerName = null) {
+        let vendor = null;
+        
+        // If vendorId is provided and valid, try to find vendor by ID
+        if (vendorId && mongoose.Types.ObjectId.isValid(vendorId)) {
+            vendor = await Vendor.findById(vendorId);
+        }
+        
+        // If vendor not found by ID but providerName is provided, try to find by business name
+        if (!vendor && providerName) {
+            console.log(`🔍 Looking up vendor by provider name: ${providerName}`);
+            vendor = await Vendor.findOne({ 
+                businessName: { $regex: new RegExp(providerName, 'i') } 
+            });
+            
+            if (vendor) {
+                console.log(`✅ Found vendor by provider name: ${vendor.businessName} (${vendor._id})`);
+            }
+        }
+        
+        // If still no vendor found, use general accounts payable
         if (!vendor) {
-            throw new Error('Vendor not found');
+            if (vendorId) {
+                console.warn(`⚠️ Vendor not found by ID: ${vendorId}, using general accounts payable`);
+            } else if (providerName) {
+                console.warn(`⚠️ Vendor not found by provider name: ${providerName}, using general accounts payable`);
+            } else {
+                console.warn(`⚠️ No vendorId or providerName provided, using general accounts payable`);
+            }
+            return '2000'; // General Accounts Payable
         }
 
+        // First, try to find account by vendor's chartOfAccountsCode
         let account = await Account.findOne({ 
-            name: `Accounts Payable: ${vendor.businessName}`,
+            code: vendor.chartOfAccountsCode,
             type: 'Liability'
         });
         
+        // If not found by code, try by name
         if (!account) {
-            const code = await Account.getNextCode('Liability', 'Current Liabilities');
-            account = await this.getOrCreateAccount(code, `Accounts Payable: ${vendor.businessName}`, 'Liability');
+            account = await Account.findOne({ 
+                name: `Accounts Payable - ${vendor.businessName}`,
+                type: 'Liability'
+            });
+        }
+        
+        // If still not found, create a new vendor-specific account
+        if (!account) {
+            // Generate a unique account code for this vendor
+            // Ensure vendor codes follow 200xxx format to avoid conflicts
+            let vendorCode;
+            if (vendor.chartOfAccountsCode && vendor.chartOfAccountsCode.match(/^200[0-9]{3}$/)) {
+                // Already in correct format
+                vendorCode = vendor.chartOfAccountsCode;
+            } else {
+                // Generate new code in 200xxx format
+                const vendorNumber = vendor.vendorCode ? parseInt(vendor.vendorCode.slice(-3)) : Math.floor(Math.random() * 999) + 1;
+                vendorCode = `200${vendorNumber.toString().padStart(3, '0')}`;
+            }
+            
+            account = await this.getOrCreateAccount(
+                vendorCode, 
+                `Accounts Payable - ${vendor.businessName}`, 
+                'Liability'
+            );
+            
+            // Update vendor with the new account code
+            vendor.chartOfAccountsCode = vendorCode;
+            await vendor.save();
+            
+            console.log(`✅ Created vendor-specific accounts payable account: ${vendorCode} for ${vendor.businessName}`);
         }
         
         return account.code;

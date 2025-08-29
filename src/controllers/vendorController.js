@@ -778,15 +778,69 @@ exports.getVendorTransactions = async (req, res) => {
 // Helper function to ensure chart of accounts entries exist
 async function ensureChartOfAccountsEntries(vendorCode, expenseCode, vendor) {
     try {
+        // Get the main Accounts Payable account (2000) to link vendor accounts
+        const mainAPAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+        
         // Check if vendor account exists
         let vendorAccount = await Account.findOne({ code: vendorCode });
         if (!vendorAccount) {
             vendorAccount = new Account({
                 code: vendorCode,
                 name: `Accounts Payable - ${vendor.businessName}`,
-                type: 'Liability'
+                type: 'Liability',
+                category: 'Current Liabilities',
+                subcategory: 'Accounts Payable',
+                description: `Payable account for ${vendor.businessName}`,
+                isActive: true,
+                level: 2, // Set as level 2 (child of main AP account)
+                parentAccount: mainAPAccount ? mainAPAccount._id : null, // Link to main AP account
+                metadata: {
+                    vendorId: vendor._id,
+                    vendorCode: vendor.vendorCode,
+                    vendorType: vendor.category,
+                    linkedToMainAP: true,
+                    linkedDate: new Date(),
+                    mainAPAccountCode: '2000'
+                }
             });
             await vendorAccount.save();
+            
+            // Update main AP account metadata if it exists
+            if (mainAPAccount) {
+                await Account.findByIdAndUpdate(mainAPAccount._id, {
+                    $set: {
+                        'metadata.hasChildren': true,
+                        'metadata.lastUpdated': new Date()
+                    },
+                    $inc: { 'metadata.childrenCount': 1 }
+                });
+            }
+            
+            console.log(`✅ Created vendor payable account: ${vendorCode} - ${vendor.businessName} (linked to 2000)`);
+        } else {
+            // If account exists but isn't linked, link it now
+            if (!vendorAccount.parentAccount && mainAPAccount) {
+                vendorAccount.parentAccount = mainAPAccount._id;
+                vendorAccount.level = 2;
+                vendorAccount.metadata = {
+                    ...vendorAccount.metadata,
+                    linkedToMainAP: true,
+                    linkedDate: new Date(),
+                    mainAPAccountCode: '2000'
+                };
+                await vendorAccount.save();
+                
+                // Update main AP account metadata
+                await Account.findByIdAndUpdate(mainAPAccount._id, {
+                    $set: {
+                        'metadata.hasChildren': true,
+                        'metadata.lastUpdated': new Date()
+                    },
+                    $inc: { 'metadata.childrenCount': 1 }
+                });
+                
+                console.log(`✅ Linked existing vendor account: ${vendorCode} - ${vendor.businessName} to 2000`);
+            }
         }
 
         // Check if expense account exists
@@ -795,9 +849,15 @@ async function ensureChartOfAccountsEntries(vendorCode, expenseCode, vendor) {
             expenseAccount = new Account({
                 code: expenseCode,
                 name: `${vendor.category.charAt(0).toUpperCase() + vendor.category.slice(1)} Expenses`,
-                type: 'Expense'
+                type: 'Expense',
+                category: 'Operating Expenses',
+                subcategory: 'Vendor Expenses',
+                description: `Expense account for ${vendor.businessName} ${vendor.category} services`,
+                isActive: true,
+                level: 1
             });
             await expenseAccount.save();
+            console.log(`✅ Created vendor expense account: ${expenseCode} - ${expenseAccount.name}`);
         }
 
     } catch (error) {
@@ -805,5 +865,171 @@ async function ensureChartOfAccountsEntries(vendorCode, expenseCode, vendor) {
         // Don't throw error as this is not critical for vendor creation
     }
 }
+
+/**
+ * 🆕 NEW: Get vendors collection report with AP data linkage
+ * Provides paginated vendor reports with AP transaction data
+ */
+exports.getVendorsCollectionReport = async (req, res) => {
+    try {
+        const { page = 1, limit = 10, status, category, search } = req.query;
+        const skip = (page - 1) * limit;
+
+        // Build query
+        const query = {};
+        if (status) query.status = status;
+        if (category) query.category = category;
+        if (search) {
+            query.$or = [
+                { businessName: { $regex: search, $options: 'i' } },
+                { vendorCode: { $regex: search, $options: 'i' } },
+                { 'contactPerson.email': { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Get vendors with pagination
+        const vendors = await Vendor.find(query)
+            .sort({ businessName: 1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        // Get total count
+        const totalVendors = await Vendor.countDocuments(query);
+
+        // Get AP data for each vendor
+        const vendorService = require('../services/vendorService');
+        const vendorsWithAPData = [];
+
+        for (const vendor of vendors) {
+            if (vendor.chartOfAccountsCode) {
+                // Get AP transactions for this vendor
+                const apTransactions = await TransactionEntry.find({
+                    'entries.accountCode': vendor.chartOfAccountsCode
+                }).sort({ date: 1 }).lean();
+
+                let totalOwed = 0;
+                let totalPaid = 0;
+
+                apTransactions.forEach(transaction => {
+                    transaction.entries.forEach(entry => {
+                        if (entry.accountCode === vendor.chartOfAccountsCode) {
+                            if (transaction.source === 'expense_payment' || transaction.source === 'vendor_payment' || transaction.source === 'maintenance_expense') {
+                                totalOwed += entry.credit || 0;
+                            } else if (transaction.source === 'payment' || transaction.source === 'vendor_payment_settlement') {
+                                totalPaid += entry.debit || 0;
+                            }
+                        }
+                    });
+                });
+
+                const currentBalance = totalOwed - totalPaid;
+
+                vendorsWithAPData.push({
+                    ...vendor,
+                    totalOwed,
+                    totalPaid,
+                    currentBalance,
+                    paymentRate: totalOwed > 0 ? (totalPaid / totalOwed) * 100 : 0,
+                    apTransactionCount: apTransactions.length
+                });
+            } else {
+                vendorsWithAPData.push({
+                    ...vendor,
+                    totalOwed: 0,
+                    totalPaid: 0,
+                    currentBalance: 0,
+                    paymentRate: 0,
+                    apTransactionCount: 0
+                });
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                vendors: vendorsWithAPData,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalVendors / limit),
+                    totalVendors,
+                    hasNextPage: page * limit < totalVendors,
+                    hasPrevPage: page > 1
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting vendors collection report:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving vendors collection report',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * 🆕 NEW: Sync vendor with AP data
+ * Manually trigger synchronization of vendor totals with AP transaction data
+ */
+exports.syncVendorWithAP = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { syncAll } = req.query;
+
+        const vendorService = require('../services/vendorService');
+
+        if (syncAll === 'true') {
+            // Sync all vendors
+            const result = await vendorService.syncVendorTotalsWithAP();
+            res.status(200).json({
+                success: true,
+                message: 'All vendors synced with AP data',
+                data: result
+            });
+        } else {
+            // Sync specific vendor
+            const result = await vendorService.syncVendorTotalsWithAP(id);
+            res.status(200).json({
+                success: true,
+                message: 'Vendor synced with AP data',
+                data: result
+            });
+        }
+
+    } catch (error) {
+        console.error('Error syncing vendor with AP:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error syncing vendor with AP data',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * 🆕 NEW: Get vendor collection summary
+ * Provides overall vendor collection statistics
+ */
+exports.getVendorCollectionSummary = async (req, res) => {
+    try {
+        const vendorService = require('../services/vendorService');
+        const summary = await vendorService.getVendorCollectionSummary();
+
+        res.status(200).json({
+            success: true,
+            data: summary
+        });
+
+    } catch (error) {
+        console.error('Error getting vendor collection summary:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving vendor collection summary',
+            error: error.message
+        });
+    }
+};
 
 module.exports = exports; 
