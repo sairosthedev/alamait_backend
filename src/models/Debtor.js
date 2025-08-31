@@ -308,6 +308,12 @@ const debtorSchema = new mongoose.Schema({
     }
   },
 
+  // 🆕 NEW: Store Smart FIFO allocation results (similar to Payment model)
+  allocation: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+
   // ENHANCED: Comprehensive Payment Tracking with Month Allocation
   paymentHistory: [{
     // Payment Reference
@@ -645,6 +651,137 @@ const debtorSchema = new mongoose.Schema({
     }
   }],
   
+  // 🆕 ENHANCED: Months Tracking for Accruals and Payments
+  monthsAccrued: [{
+    month: {
+      type: String,
+      required: true,
+      validate: {
+        validator: function(v) {
+          return /^\d{4}-\d{2}$/.test(v);
+        },
+        message: 'month must be in YYYY-MM format'
+      }
+    },
+    amount: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    transactionCount: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    isLeaseStartMonth: {
+      type: Boolean,
+      default: false
+    },
+    isProrated: {
+      type: Boolean,
+      default: false
+    },
+    transactions: [{
+      transactionId: {
+        type: String,
+        required: true
+      },
+      amount: {
+        type: Number,
+        required: true
+      },
+      date: {
+        type: Date,
+        required: true
+      },
+      type: {
+        type: String,
+        required: true
+      }
+    }]
+  }],
+  
+  monthsPaid: [{
+    month: {
+      type: String,
+      required: true,
+      validate: {
+        validator: function(v) {
+          return /^\d{4}-\d{2}$/.test(v);
+        },
+        message: 'month must be in YYYY-MM format'
+      }
+    },
+    amount: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    paymentCount: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    payments: [{
+      paymentId: {
+        type: String,
+        required: true
+      },
+      amount: {
+        type: Number,
+        required: true
+      },
+      date: {
+        type: Date,
+        required: true
+      },
+      status: {
+        type: String,
+        required: true
+      }
+    }]
+  }],
+  
+  monthsAccruedSummary: {
+    totalMonths: {
+      type: Number,
+      default: 0
+    },
+    totalAmount: {
+      type: Number,
+      default: 0
+    },
+    firstMonth: String,
+    lastMonth: String,
+    averageAmount: {
+      type: Number,
+      default: 0
+    },
+    leaseStartMonth: String,
+    leaseEndMonth: String,
+    expectedMonthsFromLease: {
+      type: Number,
+      default: 0
+    }
+  },
+  
+  monthsPaidSummary: {
+    totalMonths: {
+      type: Number,
+      default: 0
+    },
+    totalAmount: {
+      type: Number,
+      default: 0
+    },
+    firstMonth: String,
+    lastMonth: String,
+    averageAmount: {
+      type: Number,
+      default: 0
+    }
+  },
+
   // ENHANCED: Transaction Entries (Double-Entry Accounting)
   transactionEntries: [{
     // Transaction Reference
@@ -700,7 +837,7 @@ const debtorSchema = new mongoose.Schema({
     // Source
     source: {
       type: String,
-      enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment', 'expense_payment'],
+      enum: ['payment', 'invoice', 'manual', 'adjustment', 'vendor_payment', 'expense_payment', 'rental_accrual'],
       required: true
     },
     sourceId: {
@@ -708,7 +845,7 @@ const debtorSchema = new mongoose.Schema({
     },
     sourceModel: {
       type: String,
-      enum: ['Payment', 'Invoice', 'Request', 'Vendor', 'Expense']
+      enum: ['Payment', 'Invoice', 'Request', 'Vendor', 'Expense', 'Debtor', 'Lease']
     },
     
     // Status
@@ -1209,6 +1346,19 @@ debtorSchema.methods.addInvoice = async function(invoiceData) {
   
   await this.save();
   return this;
+};
+
+// 🆕 NEW: Method to update allocation results
+debtorSchema.methods.updateAllocation = async function(allocationData) {
+  try {
+    this.allocation = allocationData;
+    await this.save();
+    console.log(`✅ Allocation updated for debtor ${this.debtorCode}`);
+    return this;
+  } catch (error) {
+    console.error(`❌ Error updating allocation for debtor ${this.debtorCode}:`, error);
+    throw error;
+  }
 };
 
 // Instance method to get payment summary for a specific month

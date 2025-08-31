@@ -350,11 +350,22 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             return existingDebtor;
         }
 
-        // Generate debtor code and account code
+        // Generate debtor code
         const debtorCode = await Debtor.generateDebtorCode();
-        const accountCode = await Debtor.generateAccountCode();
         
-        console.log(`   🔢 Generated codes: ${debtorCode}, ${accountCode}`);
+        // Get the correct AR account code for this student
+        const arAccount = await Account.findOne({
+            code: `1100-${actualUser._id.toString()}`
+        });
+        
+        if (!arAccount) {
+            throw new Error(`AR account not found for student ${actualUser.email}. Account code should be: 1100-${actualUser._id.toString()}`);
+        }
+        
+        const accountCode = arAccount.code;
+        
+        console.log(`   🔢 Generated debtor code: ${debtorCode}`);
+        console.log(`   🔢 Using existing AR account code: ${accountCode}`);
 
         // Prepare contact info
         const contactInfo = {
@@ -586,6 +597,25 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         console.log(`   Status: ${status}`);
         console.log(`   Residence: ${residenceId || 'Not linked'}`);
         console.log(`   Room: ${roomNumber || 'Not set'}`);
+
+        // 🆕 INTEGRATED: Auto-backfill transactions for the new debtor
+        try {
+            const { backfillTransactionsForDebtor } = require('./transactionBackfillService');
+            console.log(`🔄 Auto-backfilling transactions for new debtor: ${debtorCode}`);
+            const backfillResult = await backfillTransactionsForDebtor(debtor);
+            
+            if (backfillResult.success) {
+                console.log(`✅ Auto-backfill completed for ${debtorCode}:`);
+                console.log(`   - Lease start created: ${backfillResult.leaseStartCreated}`);
+                console.log(`   - Monthly transactions created: ${backfillResult.monthlyTransactionsCreated}`);
+                console.log(`   - Duplicates removed: ${backfillResult.duplicatesRemoved}`);
+            } else {
+                console.error(`❌ Auto-backfill failed for ${debtorCode}: ${backfillResult.error}`);
+            }
+        } catch (backfillError) {
+            console.error(`❌ Failed to auto-backfill transactions for ${actualUser.email}:`, backfillError);
+            // Continue even if backfill fails - debtor is still created
+        }
 
         return debtor;
     } catch (error) {
@@ -921,96 +951,26 @@ exports.updateDebtorFromARTransaction = async (studentId, transactionData) => {
         
         console.log(`   📊 Updating debtor: ${debtor.debtorCode}`);
         
-        // Get AR transactions for this debtor
-        const TransactionEntry = require('../models/TransactionEntry');
-        const arTransactions = await TransactionEntry.find({
-            'entries.accountCode': debtor.accountCode
-        }).sort({ date: 1 });
-        
-        let totalExpectedFromAR = 0;
-        let totalPaidFromAR = 0;
-        let monthlyBreakdown = {};
-        
-        // Process all AR transactions
-        arTransactions.forEach(transaction => {
-            const transactionDate = new Date(transaction.date);
-            const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
-            
-            if (!monthlyBreakdown[monthKey]) {
-                monthlyBreakdown[monthKey] = {
-                    month: monthKey,
-                    expected: 0,
-                    paid: 0,
-                    outstanding: 0
-                };
-            }
-            
-            transaction.entries.forEach(entry => {
-                if (entry.accountCode === debtor.accountCode) {
-                    if (transaction.source === 'rental_accrual' || transaction.source === 'lease_start') {
-                        totalExpectedFromAR += entry.debit || 0;
-                        monthlyBreakdown[monthKey].expected += entry.debit || 0;
-                        monthlyBreakdown[monthKey].outstanding += entry.debit || 0;
-                    } else if (transaction.source === 'payment' || transaction.source === 'accounts_receivable_collection') {
-                        totalPaidFromAR += entry.credit || 0;
-                        monthlyBreakdown[monthKey].paid += entry.credit || 0;
-                        monthlyBreakdown[monthKey].outstanding -= entry.credit || 0;
-                    }
-                }
-            });
-        });
-        
-        const currentBalanceFromAR = totalExpectedFromAR - totalPaidFromAR;
-        
-        // Update debtor totals
-        debtor.totalOwed = totalExpectedFromAR;
-        debtor.totalPaid = totalPaidFromAR;
-        debtor.currentBalance = currentBalanceFromAR;
-        debtor.overdueAmount = currentBalanceFromAR > 0 ? currentBalanceFromAR : 0;
-        debtor.status = currentBalanceFromAR > 0 ? 'overdue' : 'current';
-        debtor.updatedAt = new Date();
-        
-        // Update monthly payments with proper validation handling
-        debtor.monthlyPayments = Object.values(monthlyBreakdown).map(month => {
-            // Ensure outstanding amount is not negative (handle overpayments)
-            const outstandingAmount = Math.max(0, month.outstanding);
-            
-            // Create payment months array only if there are actual payments
-            const paymentMonths = month.paid > 0 ? [{
-                paymentMonth: month.month,
-                paymentDate: new Date(), // Use current date as fallback
-                amount: month.paid,
-                paymentId: `AR-${month.month}-${Date.now()}`, // Generate a payment ID
-                status: 'Confirmed' // Use valid enum value
-            }] : [];
-            
-            return {
-                month: month.month,
-                expectedAmount: month.expected,
-                paidAmount: month.paid,
-                outstandingAmount: outstandingAmount, // Use non-negative value
-                status: outstandingAmount === 0 ? 'paid' : (month.paid > 0 ? 'partial' : 'unpaid'),
-                paymentMonths: paymentMonths
-            };
-        });
+        // Use the enhanced transaction-based calculation
+        const DebtorTransactionSyncService = require('./debtorTransactionSyncService');
+        const calculationResult = await DebtorTransactionSyncService.recalculateDebtorTotalsFromTransactionEntries(debtor, studentId);
         
         await debtor.save();
         
         console.log(`   ✅ Real-time update completed for ${debtor.debtorCode}:`);
-        console.log(`      Expected: $${totalExpectedFromAR.toFixed(2)}`);
-        console.log(`      Paid: $${totalPaidFromAR.toFixed(2)}`);
-        console.log(`      Balance: $${currentBalanceFromAR.toFixed(2)}`);
+        console.log(`      Expected: $${calculationResult.totalOwed.toFixed(2)}`);
+        console.log(`      Paid: $${calculationResult.totalPaid.toFixed(2)}`);
+        console.log(`      Balance: $${calculationResult.currentBalance.toFixed(2)}`);
+        console.log(`      Status: ${debtor.status}`);
         
         return {
             success: true,
-            debtor: debtor.debtorCode,
-            totalExpected: totalExpectedFromAR,
-            totalPaid: totalPaidFromAR,
-            currentBalance: currentBalanceFromAR
+            debtor: debtor,
+            calculationResult: calculationResult
         };
         
     } catch (error) {
-        console.error(`❌ Error in real-time debtor update for user ${studentId}:`, error);
+        console.error(`❌ Error in real-time debtor update:`, error);
         return { success: false, error: error.message };
     }
 };

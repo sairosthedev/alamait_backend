@@ -17,6 +17,10 @@ const AuditLog = require('../../models/AuditLog');
 const Lease = require('../../models/Lease');
 const bcrypt = require('bcryptjs');
 const { createDebtorForStudent } = require('../../services/debtorService');
+const DebtorTransactionSyncService = require('../../services/debtorTransactionSyncService');
+const DebtorDataSyncService = require('../../services/debtorDataSyncService');
+const { backfillTransactionsForDebtor } = require('../../services/transactionBackfillService');
+const ExcelJS = require('exceljs');
 
 // Helper function to safely format dates
 const safeDateFormat = (date) => {
@@ -61,7 +65,7 @@ const safeDateFormat = (date) => {
 };
 
 // Get all students with pagination and filters
-exports.getStudents = async (req, res) => {
+exports.getAllStudents = async (req, res) => {
     try {
         const { page = 1, limit = 10, search, status } = req.query;
         const query = { role: 'student' };
@@ -96,7 +100,121 @@ exports.getStudents = async (req, res) => {
             total
         });
     } catch (error) {
-        console.error('Error in getStudents:', error);
+        console.error('Error in getAllStudents:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Get student by ID
+exports.getStudentById = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        
+        const student = await User.findById(studentId)
+            .select('-password')
+            .populate('residence', 'name address')
+            .populate('currentBooking', 'totalAmount paymentStatus status');
+            
+        if (!student) {
+            return res.status(404).json({ error: 'Student not found' });
+        }
+        
+        res.json({ student });
+    } catch (error) {
+        console.error('Error in getStudentById:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Create new student
+exports.createStudent = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { email, firstName, lastName, phone, status, emergencyContact, residenceId } = req.body;
+
+        // Check if user already exists
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ error: 'Email already registered' });
+        }
+
+        // Generate temporary password
+        const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+
+        const student = new User({
+            email,
+            firstName,
+            lastName,
+            phone,
+            password: tempPassword,
+            status: status || 'active',
+            emergencyContact,
+            role: 'student',
+            isVerified: true,
+            residence: residenceId
+        });
+
+        await student.save();
+
+        res.status(201).json({
+            message: 'Student created successfully',
+            student: {
+                id: student._id,
+                email: student.email,
+                firstName: student.firstName,
+                lastName: student.lastName,
+                status: student.status
+            },
+            temporaryPassword: tempPassword
+        });
+    } catch (error) {
+        console.error('Error in createStudent:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Update student
+exports.updateStudent = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { studentId } = req.params;
+        const { firstName, lastName, phone, status, emergencyContact, residenceId } = req.body;
+
+        const student = await User.findById(studentId);
+        if (!student) {
+            return res.status(404).json({ error: 'Student not found' });
+        }
+
+        // Update fields
+        if (firstName) student.firstName = firstName;
+        if (lastName) student.lastName = lastName;
+        if (phone) student.phone = phone;
+        if (status) student.status = status;
+        if (emergencyContact) student.emergencyContact = emergencyContact;
+        if (residenceId) student.residence = residenceId;
+
+        await student.save();
+
+        res.json({
+            message: 'Student updated successfully',
+            student: {
+                id: student._id,
+                email: student.email,
+                firstName: student.firstName,
+                lastName: student.lastName,
+                status: student.status
+            }
+        });
+    } catch (error) {
+        console.error('Error in updateStudent:', error);
         res.status(500).json({ error: 'Server error' });
     }
 };
@@ -1368,4 +1486,1082 @@ function getLeaseTemplateFile(residenceName) {
         return 'Office_Lease_Agreement.docx';
     }
     return null;
-} 
+}
+
+/**
+ * Upload CSV and create multiple students
+ */
+exports.uploadCsvStudents = async (req, res) => {
+    try {
+        const { csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent } = req.body;
+        
+        console.log('📁 Processing CSV upload for students in residence:', residenceId);
+        
+        if (!csvData || !Array.isArray(csvData) || csvData.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'CSV data is required and must be an array'
+            });
+        }
+        
+        if (!residenceId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Residence ID is required for all students'
+            });
+        }
+        
+        // Validate residence exists
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+        
+        const results = {
+            successful: [],
+            failed: [],
+            summary: {
+                totalProcessed: csvData.length,
+                totalSuccessful: 0,
+                totalFailed: 0,
+                totalStudents: 0
+            }
+        };
+        
+        // Process each CSV row
+        for (let i = 0; i < csvData.length; i++) {
+            const row = csvData[i];
+            const rowNumber = i + 1;
+            
+            try {
+                // Validate required fields
+                if (!row.email || !row.firstName || !row.lastName) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Missing required fields: email, firstName, lastName',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                // Check if user already exists
+                const existingUser = await User.findOne({ email: row.email });
+                if (existingUser) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Email already registered',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                // Validate room if provided
+                let roomNumber = row.roomNumber || defaultRoomNumber;
+                let room = null;
+                
+                if (roomNumber) {
+                    room = residence.rooms.find(r => r.roomNumber === roomNumber);
+                    if (!room) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Room ${roomNumber} not found in residence`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                    
+                    // Check room availability
+                    if (room.currentOccupancy >= room.capacity) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Room ${roomNumber} is at full capacity`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                }
+                
+                // Parse dates
+                const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
+                const endDate = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
+                const monthlyRent = parseFloat(row.monthlyRent) || parseFloat(defaultMonthlyRent) || 0;
+                
+                if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Invalid date format',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                if (endDate <= startDate) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'End date must be after start date',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                // Generate temporary password
+                const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+                
+                // Create new student user
+                const student = new User({
+                    email: row.email,
+                    firstName: row.firstName,
+                    lastName: row.lastName,
+                    phone: row.phone || '',
+                    password: tempPassword,
+                    status: row.status || 'active',
+                    emergencyContact: row.emergencyContact || {},
+                    role: 'student',
+                    isVerified: true,
+                    residence: residenceId
+                });
+                
+                await student.save();
+                
+                // Generate application code
+                const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+                
+                // Create application record
+                const application = new Application({
+                    student: student._id,
+                    email: row.email,
+                    firstName: row.firstName,
+                    lastName: row.lastName,
+                    phone: row.phone || '',
+                    requestType: 'new',
+                    status: 'approved',
+                    paymentStatus: 'paid',
+                    startDate: startDate,
+                    endDate: endDate,
+                    preferredRoom: roomNumber,
+                    allocatedRoom: roomNumber,
+                    residence: residenceId,
+                    applicationCode: applicationCode,
+                    applicationDate: new Date(),
+                    actionDate: new Date(),
+                    actionBy: req.user._id
+                });
+                
+                await application.save();
+                
+                // Update student with application code
+                student.applicationCode = application.applicationCode;
+                await student.save();
+                
+                // Create debtor account
+                let debtor = null;
+                try {
+                    debtor = await createDebtorForStudent(student, {
+                        residenceId: residenceId,
+                        roomNumber: roomNumber,
+                        createdBy: req.user._id,
+                        application: application._id,
+                        applicationCode: application.applicationCode,
+                        startDate: startDate,
+                        endDate: endDate,
+                        roomPrice: monthlyRent
+                    });
+                    
+                    if (debtor) {
+                        application.debtor = debtor._id;
+                        await application.save();
+                    }
+                } catch (debtorError) {
+                    console.error(`❌ Failed to create debtor for CSV student ${row.email}:`, debtorError);
+                    // Continue with student creation even if debtor fails
+                }
+                
+                // Update room occupancy if room is assigned
+                if (room && roomNumber) {
+                    room.currentOccupancy = (room.currentOccupancy || 0) + 1;
+                    room.occupants = [...(room.occupants || []), student._id];
+                    
+                    if (room.currentOccupancy >= room.capacity) {
+                        room.status = 'occupied';
+                    } else if (room.currentOccupancy > 0) {
+                        room.status = 'reserved';
+                    }
+                    
+                    await residence.save();
+                }
+                
+                // Update student with room assignment
+                if (roomNumber) {
+                    student.currentRoom = roomNumber;
+                    student.roomValidUntil = endDate;
+                    student.roomApprovalDate = new Date();
+                    await student.save();
+                }
+                
+                // Create booking record
+                const booking = new Booking({
+                    student: student._id,
+                    residence: residenceId,
+                    room: room ? {
+                        roomNumber: roomNumber,
+                        type: room.type,
+                        price: room.price
+                    } : null,
+                    startDate: startDate,
+                    endDate: endDate,
+                    totalAmount: monthlyRent,
+                    paymentStatus: 'paid',
+                    status: 'confirmed',
+                    paidAmount: monthlyRent,
+                    payments: [{
+                        amount: monthlyRent,
+                        date: new Date(),
+                        method: 'admin_csv_upload',
+                        status: 'completed',
+                        transactionId: `CSV_${Date.now()}_${i}`
+                    }]
+                });
+                
+                await booking.save();
+                
+                // Update student with current booking
+                student.currentBooking = booking._id;
+                await student.save();
+                
+                results.successful.push({
+                    row: rowNumber,
+                    studentId: student._id,
+                    email: student.email,
+                    name: `${student.firstName} ${student.lastName}`,
+                    roomNumber: roomNumber,
+                    applicationCode: application.applicationCode,
+                    debtorCreated: !!debtor,
+                    temporaryPassword: tempPassword
+                });
+                
+                results.summary.totalSuccessful++;
+                results.summary.totalStudents++;
+                
+            } catch (error) {
+                results.failed.push({
+                    row: rowNumber,
+                    error: error.message,
+                    data: row
+                });
+                results.summary.totalFailed++;
+            }
+        }
+        
+        console.log(`✅ CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
+        
+        res.status(200).json({
+            success: true,
+            message: 'CSV upload processed successfully',
+            data: results
+        });
+        
+    } catch (error) {
+        console.error('Error processing CSV upload:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to process CSV upload',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get CSV template for student upload
+ */
+exports.getStudentCsvTemplate = async (req, res) => {
+    try {
+        const template = {
+            headers: [
+                'email',
+                'firstName',
+                'lastName',
+                'phone',
+                'status',
+                'roomNumber',
+                'startDate',
+                'endDate',
+                'monthlyRent',
+                'emergencyContact'
+            ],
+            sampleData: [
+                {
+                    email: 'john.doe@example.com',
+                    firstName: 'John',
+                    lastName: 'Doe',
+                    phone: '+1234567890',
+                    status: 'active',
+                    roomNumber: 'A101',
+                    startDate: '2025-01-15',
+                    endDate: '2025-07-15',
+                    monthlyRent: 500,
+                    emergencyContact: {
+                        name: 'Jane Doe',
+                        relationship: 'Parent',
+                        phone: '+1234567891'
+                    }
+                },
+                {
+                    email: 'jane.smith@example.com',
+                    firstName: 'Jane',
+                    lastName: 'Smith',
+                    phone: '+1234567892',
+                    status: 'active',
+                    roomNumber: 'A102',
+                    startDate: '2025-01-15',
+                    endDate: '2025-07-15',
+                    monthlyRent: 500,
+                    emergencyContact: {
+                        name: 'John Smith',
+                        relationship: 'Parent',
+                        phone: '+1234567893'
+                    }
+                }
+            ],
+            instructions: [
+                'Each row represents one student to be created',
+                'Required fields: email, firstName, lastName',
+                'Optional fields: phone, status, roomNumber, startDate, endDate, monthlyRent, emergencyContact',
+                'Date format: YYYY-MM-DD',
+                'Status options: active, inactive, pending',
+                'If roomNumber is not provided, default room will be used',
+                'If dates are not provided, default dates will be used',
+                'If monthlyRent is not provided, default rent will be used',
+                'Emergency contact should be a JSON object with name, relationship, and phone'
+            ]
+        };
+        
+        res.status(200).json({
+            success: true,
+            message: 'CSV template retrieved successfully',
+            data: template
+        });
+        
+    } catch (error) {
+        console.error('Error getting CSV template:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to get CSV template',
+            error: error.message
+        });
+    }
+}; 
+
+/**
+ * Upload Excel file and create multiple students
+ */
+exports.uploadExcelStudents = async (req, res) => {
+    try {
+        console.log('📁 Excel upload request received');
+        console.log('📁 Request body:', req.body);
+        console.log('📁 Request file:', req.file ? {
+            originalname: req.file.originalname,
+            mimetype: req.file.mimetype,
+            size: req.file.size
+        } : 'No file');
+        
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                message: 'Excel file is required'
+            });
+        }
+
+        const { residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent } = req.body;
+        
+        console.log('📁 Processing Excel upload for students in residence:', residenceId);
+        
+        if (!residenceId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Residence ID is required for all students'
+            });
+        }
+        
+        // Validate residence exists
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        // Parse Excel file
+        console.log('📊 Loading Excel file...');
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(req.file.buffer);
+        console.log('✅ Excel file loaded successfully');
+        
+        const worksheet = workbook.getWorksheet(1); // Get first worksheet
+        if (!worksheet) {
+            return res.status(400).json({
+                success: false,
+                message: 'No worksheet found in Excel file'
+            });
+        }
+        console.log('✅ Worksheet found');
+
+        // Convert Excel rows to CSV format
+        const csvData = [];
+        const headers = [];
+        
+        // Get headers from first row
+        worksheet.getRow(1).eachCell((cell, colNumber) => {
+            headers[colNumber - 1] = cell.value ? cell.value.toString().toLowerCase().trim() : '';
+        });
+
+        console.log('📋 Excel headers found:', headers);
+        console.log('📊 Total rows in worksheet:', worksheet.rowCount);
+        console.log('🔍 Expected headers vs actual:', {
+            expected: ['email', 'firstname', 'lastname', 'phone', 'roomnumber', 'monthlyrent', 'status', 'emergencycontact', 'startdate', 'enddate'],
+            actual: headers
+        });
+
+        // Process data rows (skip header row)
+        for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
+            const row = worksheet.getRow(rowNumber);
+            const rowData = {};
+            
+            // Skip empty rows
+            let hasData = false;
+            row.eachCell((cell, colNumber) => {
+                if (cell.value !== null && cell.value !== undefined && cell.value !== '') {
+                    hasData = true;
+                }
+            });
+            
+            if (!hasData) continue;
+
+            // Map Excel columns to expected fields
+            console.log(`📝 Processing row ${rowNumber} cells:`);
+            row.eachCell((cell, colNumber) => {
+                const header = headers[colNumber - 1];
+                const value = cell.value;
+                
+                if (header && value !== null && value !== undefined) {
+                    // Convert Excel date to string if needed
+                    if (value instanceof Date) {
+                        rowData[header] = value.toISOString().split('T')[0]; // YYYY-MM-DD format
+                        console.log(`   📅 ${header}: ${value} → ${rowData[header]} (date)`);
+                    } else {
+                        const stringValue = value.toString().trim();
+                        
+                        // Handle date strings in MM/DD/YYYY format
+                        if ((header === 'startdate' || header === 'enddate' || header === 'startDate' || header === 'endDate') && stringValue.includes('/')) {
+                            const parts = stringValue.split('/');
+                            if (parts.length === 3) {
+                                const month = parts[0].padStart(2, '0');
+                                const day = parts[1].padStart(2, '0');
+                                const year = parts[2];
+                                rowData[header] = `${year}-${month}-${day}`;
+                                console.log(`   📅 ${header}: ${stringValue} → ${rowData[header]} (converted date)`);
+                            } else {
+                                rowData[header] = stringValue;
+                                console.log(`   📝 ${header}: ${stringValue}`);
+                            }
+                        } else {
+                            rowData[header] = stringValue;
+                            console.log(`   📝 ${header}: ${stringValue}`);
+                        }
+                    }
+                }
+            });
+
+            // Normalize field names to handle variations (headers are converted to lowercase)
+            console.log(`🔄 Normalizing row ${rowNumber} data:`, rowData);
+            
+            // Handle room number variations
+            if (rowData.roomnumb) {
+                rowData.roomnumber = rowData.roomnumb;
+                delete rowData.roomnumb;
+                console.log(`   ✅ roomnumb → roomnumber: ${rowData.roomnumber}`);
+            }
+            if (rowData.roomnumber) {
+                console.log(`   ✅ roomnumber already exists: ${rowData.roomnumber}`);
+            }
+            
+            // Handle monthly rent variations
+            if (rowData.monthlyren) {
+                rowData.monthlyrent = rowData.monthlyren;
+                delete rowData.monthlyren;
+                console.log(`   ✅ monthlyren → monthlyrent: ${rowData.monthlyrent}`);
+            }
+            if (rowData.monthlyrent) {
+                console.log(`   ✅ monthlyrent already exists: ${rowData.monthlyrent}`);
+            }
+            
+            // Handle emergency contact variations
+            if (rowData.emergency) {
+                rowData.emergencycontact = rowData.emergency;
+                delete rowData.emergency;
+                console.log(`   ✅ emergency → emergencycontact: ${rowData.emergencycontact}`);
+            }
+            
+            // Handle date field variations (lowercase)
+            if (rowData.startdate) {
+                rowData.startDate = rowData.startdate;
+                delete rowData.startdate;
+                console.log(`   ✅ startdate → startDate: ${rowData.startDate}`);
+            }
+            if (rowData.enddate) {
+                rowData.endDate = rowData.enddate;
+                delete rowData.enddate;
+                console.log(`   ✅ enddate → endDate: ${rowData.endDate}`);
+            }
+            
+            // Handle firstName/lastName variations
+            if (rowData['first name']) {
+                rowData.firstname = rowData['first name'];
+                delete rowData['first name'];
+            }
+            if (rowData['last name']) {
+                rowData.lastname = rowData['last name'];
+                delete rowData['last name'];
+            }
+            if (rowData.firstname) {
+                rowData.firstname = rowData.firstname;
+            }
+            if (rowData.lastname) {
+                rowData.lastname = rowData.lastname;
+            }
+            
+            // Handle camelCase variations
+            if (rowData.firstName) {
+                rowData.firstname = rowData.firstName;
+                delete rowData.firstName;
+            }
+            if (rowData.lastName) {
+                rowData.lastname = rowData.lastName;
+                delete rowData.lastName;
+            }
+
+            // Only add row if it has required fields
+            if (rowData.email || rowData.firstname || rowData.lastname) {
+                console.log(`📝 Processing row ${rowNumber}:`, rowData);
+                csvData.push(rowData);
+            }
+        }
+
+        console.log(`📊 Parsed ${csvData.length} student records from Excel`);
+        console.log('📋 Final csvData:', JSON.stringify(csvData, null, 2));
+
+        if (csvData.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No valid student data found in Excel file'
+            });
+        }
+
+        const results = {
+            successful: [],
+            failed: [],
+            summary: {
+                totalProcessed: csvData.length,
+                totalSuccessful: 0,
+                totalFailed: 0,
+                totalStudents: 0
+            }
+        };
+        
+        // Process each Excel row (same logic as CSV upload)
+        console.log('🔄 Starting to process Excel rows...');
+        for (let i = 0; i < csvData.length; i++) {
+            const row = csvData[i];
+            const rowNumber = i + 2; // +2 because Excel rows start at 1 and we skip header
+            console.log(`🔄 Processing row ${i + 1}:`, row);
+            
+            try {
+                // Validate required fields
+                if (!row.email || !row.firstname || !row.lastname) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Missing required fields: email, firstName, lastName',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                // Check if user already exists
+                const existingUser = await User.findOne({ email: row.email });
+                if (existingUser) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Email already registered',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                // Validate room if provided
+                console.log(`🔍 Room validation for row ${rowNumber}:`, {
+                    roomnumber: row.roomnumber,
+                    room_number: row.room_number,
+                    defaultRoomNumber: defaultRoomNumber,
+                    allRowData: row
+                });
+                let roomNumber = row.roomnumber || row.room_number || defaultRoomNumber;
+                let room = null;
+                
+                if (roomNumber) {
+                    room = residence.rooms.find(r => r.roomNumber === roomNumber);
+                    if (!room) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Room ${roomNumber} not found in residence`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                    
+                    // Check room availability
+                    if (room.currentOccupancy >= room.capacity) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Room ${roomNumber} is at full capacity`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                }
+                
+                // Parse dates (handle both normalized and original field names)
+                const startDate = row.startDate || row.startdate || row.start_date ? new Date(row.startDate || row.startdate || row.start_date) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
+                const endDate = row.endDate || row.enddate || row.end_date ? new Date(row.endDate || row.enddate || row.end_date) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
+                
+                // Parse monthly rent from the correct column
+                let monthlyRent = parseFloat(row.monthlyrent || row.monthlyRent || row.monthly_rent) || 0;
+                console.log(`💰 Monthly rent parsing:`, {
+                    monthlyrent: row.monthlyrent,
+                    monthlyRent: row.monthlyRent,
+                    monthly_rent: row.monthly_rent,
+                    parsed: monthlyRent
+                });
+                
+                // Fallback to default if no rent found
+                if (monthlyRent === 0) {
+                    monthlyRent = parseFloat(defaultMonthlyRent) || 0;
+                    console.log(`💰 Using default monthly rent: $${monthlyRent}`);
+                }
+                
+                if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Invalid date format',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                if (endDate <= startDate) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'End date must be after start date',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                // Generate temporary password
+                const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+                
+                // Use status as is since it's already correct
+                let cleanStatus = row.status || 'active';
+                
+                // Create new student user
+                const student = new User({
+                    email: row.email,
+                    firstName: row.firstname,
+                    lastName: row.lastname,
+                    phone: row.phone || '',
+                    password: tempPassword,
+                    status: cleanStatus,
+                    emergencyContact: row.emergencycontact || row.emergency_contact || {},
+                    role: 'student',
+                    isVerified: true,
+                    residence: residenceId
+                });
+                
+                await student.save();
+                
+                // Generate application code
+                const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+                
+                // Create application record
+                const application = new Application({
+                    student: student._id,
+                    email: row.email,
+                    firstName: row.firstname,
+                    lastName: row.lastname,
+                    phone: row.phone || '',
+                    requestType: 'new',
+                    status: 'approved',
+                    paymentStatus: 'paid',
+                    startDate: startDate,
+                    endDate: endDate,
+                    preferredRoom: roomNumber,
+                    allocatedRoom: roomNumber,
+                    residence: residenceId,
+                    applicationCode: applicationCode,
+                    applicationDate: new Date(),
+                    actionDate: new Date(),
+                    actionBy: req.user._id
+                });
+                
+                await application.save();
+                
+                // Update student with application code
+                student.applicationCode = application.applicationCode;
+                await student.save();
+                
+                // Create debtor account
+                let debtor = null;
+                try {
+                    debtor = await createDebtorForStudent(student, {
+                        residenceId: residenceId,
+                        roomNumber: roomNumber,
+                        createdBy: req.user._id,
+                        application: application._id,
+                        applicationCode: application.applicationCode,
+                        startDate: startDate,
+                        endDate: endDate,
+                        roomPrice: monthlyRent
+                    });
+                    
+                    if (debtor) {
+                        application.debtor = debtor._id;
+                        await application.save();
+                        
+                        // 🆕 INTEGRATED: Backfill transactions for the debtor automatically
+                        try {
+                            console.log(`🔄 Auto-backfilling transactions for new debtor: ${debtor.debtorCode}`);
+                            const backfillResult = await backfillTransactionsForDebtor(debtor);
+                            
+                            if (backfillResult.success) {
+                                console.log(`✅ Auto-backfill completed for ${debtor.debtorCode}:`);
+                                console.log(`   - Lease start created: ${backfillResult.leaseStartCreated}`);
+                                console.log(`   - Monthly transactions created: ${backfillResult.monthlyTransactionsCreated}`);
+                                console.log(`   - Duplicates removed: ${backfillResult.duplicatesRemoved}`);
+                            } else {
+                                console.error(`❌ Auto-backfill failed for ${debtor.debtorCode}: ${backfillResult.error}`);
+                            }
+                        } catch (backfillError) {
+                            console.error(`❌ Failed to auto-backfill transactions for ${student.email}:`, backfillError);
+                            // Continue with student creation even if backfill fails
+                        }
+                    }
+                } catch (debtorError) {
+                    console.error(`❌ Failed to create debtor for Excel student ${row.email}:`, debtorError);
+                    // Continue with student creation even if debtor fails
+                }
+                
+                // Update room occupancy if room is assigned
+                if (room && roomNumber) {
+                    room.currentOccupancy = (room.currentOccupancy || 0) + 1;
+                    room.occupants = [...(room.occupants || []), student._id];
+                    
+                    if (room.currentOccupancy >= room.capacity) {
+                        room.status = 'occupied';
+                    } else if (room.currentOccupancy > 0) {
+                        room.status = 'reserved';
+                    }
+                    
+                    await residence.save();
+                }
+                
+                // Update student with room assignment
+                if (roomNumber) {
+                    student.currentRoom = roomNumber;
+                    student.roomValidUntil = endDate;
+                    student.roomApprovalDate = new Date();
+                    await student.save();
+                }
+                
+                // Create booking record
+                const booking = new Booking({
+                    student: student._id,
+                    residence: residenceId,
+                    room: room ? {
+                        roomNumber: roomNumber,
+                        type: room.type,
+                        price: room.price
+                    } : null,
+                    startDate: startDate,
+                    endDate: endDate,
+                    totalAmount: monthlyRent,
+                    paymentStatus: 'paid',
+                    status: 'confirmed',
+                    paidAmount: monthlyRent,
+                    payments: [{
+                        amount: monthlyRent,
+                        date: new Date(),
+                        method: 'admin_excel_upload',
+                        status: 'completed',
+                        transactionId: `EXCEL_${Date.now()}_${i}`
+                    }]
+                });
+                
+                await booking.save();
+                
+                // Update student with current booking
+                student.currentBooking = booking._id;
+                await student.save();
+                
+                results.successful.push({
+                    row: rowNumber,
+                    studentId: student._id,
+                    email: student.email,
+                    name: `${student.firstName} ${student.lastName}`,
+                    roomNumber: roomNumber,
+                    applicationCode: application.applicationCode,
+                    debtorCreated: !!debtor,
+                    temporaryPassword: tempPassword
+                });
+                
+                results.summary.totalSuccessful++;
+                results.summary.totalStudents++;
+                
+            } catch (error) {
+                results.failed.push({
+                    row: rowNumber,
+                    error: error.message,
+                    data: row
+                });
+                results.summary.totalFailed++;
+            }
+        }
+        
+        console.log(`✅ Excel upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
+        
+        res.status(200).json({
+            success: true,
+            message: 'Excel upload processed successfully',
+            data: results
+        });
+        
+    } catch (error) {
+        console.error('Error processing Excel upload:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to process Excel upload',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get Excel template for student upload
+ */
+exports.getStudentExcelTemplate = async (req, res) => {
+    try {
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Students');
+        
+        // Define headers
+        const headers = [
+            'Email',
+            'firstName', 
+            'lastName',
+            'Phone',
+            'Status',
+            'roomNumber',
+            'startDate',
+            'endDate',
+            'monthlyRent',
+            'Emergency Contact Name',
+            'Emergency Contact Phone'
+        ];
+        
+        // Add headers to worksheet
+        worksheet.addRow(headers);
+        
+        // Style the header row
+        const headerRow = worksheet.getRow(1);
+        headerRow.font = { bold: true };
+        headerRow.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFE0E0E0' }
+        };
+        
+        // Add sample data
+        const sampleData = [
+            [
+                'john.doe@example.com',
+                'John',
+                'Doe',
+                '+1234567890',
+                'active',
+                'A101',
+                '2025-01-15',
+                '2025-07-15',
+                '500',
+                'Jane Doe',
+                '+1234567891'
+            ],
+            [
+                'jane.smith@example.com',
+                'Jane',
+                'Smith',
+                '+1234567892',
+                'active',
+                'A102',
+                '2025-01-15',
+                '2025-07-15',
+                '500',
+                'John Smith',
+                '+1234567893'
+            ]
+        ];
+        
+        sampleData.forEach(row => {
+            worksheet.addRow(row);
+        });
+        
+        // Set column widths
+        worksheet.columns.forEach(column => {
+            column.width = 15;
+        });
+        
+        // Add data validation for status column
+        worksheet.dataValidations.add('E2:E1000', {
+            type: 'list',
+            allowBlank: true,
+            formulae: ['"active,inactive,pending"']
+        });
+        
+        // Add data validation for date columns
+        worksheet.dataValidations.add('G2:H1000', {
+            type: 'date',
+            allowBlank: true,
+            operator: 'greaterThan',
+            formulae: ['TODAY()']
+        });
+        
+        // Set response headers
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename="student_upload_template.xlsx"');
+        
+        // Write to response
+        await workbook.xlsx.write(res);
+        res.end();
+        
+    } catch (error) {
+        console.error('Error generating Excel template:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate Excel template',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Manual backfill transactions for all debtors
+ * @route POST /api/admin/students/backfill-transactions
+ * @access Private (Admin only)
+ */
+exports.backfillAllTransactions = async (req, res) => {
+    try {
+        console.log('🔄 Manual backfill request received');
+        
+        const { backfillAllTransactions } = require('../../services/transactionBackfillService');
+        
+        const result = await backfillAllTransactions();
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                message: 'Backfill completed successfully',
+                data: result.summary
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                message: 'Backfill failed',
+                error: result.error
+            });
+        }
+    } catch (error) {
+        console.error('❌ Error in manual backfill:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Backfill operation failed',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Manual backfill transactions for a specific debtor
+ * @route POST /api/admin/students/:debtorId/backfill-transactions
+ * @access Private (Admin only)
+ */
+exports.backfillDebtorTransactions = async (req, res) => {
+    try {
+        const { debtorId } = req.params;
+        console.log(`🔄 Manual backfill request for debtor: ${debtorId}`);
+        
+        const Debtor = require('../../models/Debtor');
+        const { backfillTransactionsForDebtor } = require('../../services/transactionBackfillService');
+        
+        // Find the debtor
+        const debtor = await Debtor.findById(debtorId)
+            .populate('user', 'firstName lastName email')
+            .populate('application', 'applicationCode startDate endDate');
+        
+        if (!debtor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Debtor not found'
+            });
+        }
+        
+        const result = await backfillTransactionsForDebtor(debtor);
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                message: 'Debtor backfill completed successfully',
+                data: {
+                    debtorCode: debtor.debtorCode,
+                    leaseStartCreated: result.leaseStartCreated,
+                    monthlyTransactionsCreated: result.monthlyTransactionsCreated,
+                    duplicatesRemoved: result.duplicatesRemoved
+                }
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                message: 'Debtor backfill failed',
+                error: result.error
+            });
+        }
+    } catch (error) {
+        console.error('❌ Error in debtor backfill:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Debtor backfill operation failed',
+            error: error.message
+        });
+    }
+}; 

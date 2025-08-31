@@ -584,7 +584,7 @@ class FinancialReportsController {
     }
 
     /**
-     * Generate Monthly Cash Flow
+     * Generate Monthly Cash Flow with Detailed Breakdowns
      * GET /api/finance/reports/monthly-cash-flow
      */
     static async generateMonthlyCashFlow(req, res) {
@@ -605,26 +605,212 @@ class FinancialReportsController {
                 });
             }
             
-            // Use the real FinancialReportingService to generate cash flow
-            const monthlyCashFlow = await FinancialReportingService.generateMonthlyCashFlow(period, basis);
+            // Use the Enhanced Cash Flow Service for detailed breakdowns
+            const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
+            const detailedCashFlow = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             
-            // Add residence filter if specified
-            if (residence) {
-                // Filter data by residence if needed
-                console.log(`Filtering cash flow for residence: ${residence}`);
-            }
+            // Transform the data to match the expected format while adding detailed breakdowns
+            const monthlyBreakdown = {};
+            const monthNames = ['january', 'february', 'march', 'april', 'may', 'june',
+                              'july', 'august', 'september', 'october', 'november', 'december'];
+            
+            monthNames.forEach((month, index) => {
+                const monthKey = `${period}-${String(index + 1).padStart(2, '0')}`;
+                const monthData = detailedCashFlow.detailed_breakdown.monthly_breakdown[monthKey] || {
+                    income: { total: 0, rental_income: 0, admin_fees: 0, deposits: 0, utilities: 0, other_income: 0 },
+                    expenses: { total: 0, maintenance: 0, utilities: 0, cleaning: 0, security: 0, management: 0, other_expenses: 0 },
+                    net_cash_flow: 0,
+                    transaction_count: 0,
+                    payment_count: 0,
+                    expense_count: 0
+                };
+                
+                monthlyBreakdown[month] = {
+                    operating_activities: {
+                        inflows: monthData.income.total,
+                        outflows: monthData.expenses.total,
+                        net: monthData.income.total - monthData.expenses.total,
+                        breakdown: {
+                            // Detailed income breakdown
+                            rental_income: { amount: monthData.income.rental_income, description: 'Rental Income from Students' },
+                            admin_fees: { amount: monthData.income.admin_fees, description: 'Administrative Fees' },
+                            deposits: { amount: monthData.income.deposits, description: 'Security Deposits' },
+                            utilities_income: { amount: monthData.income.utilities, description: 'Utilities Income' },
+                            other_income: { amount: monthData.income.other_income, description: 'Other Income Sources' },
+                            // Detailed expense breakdown
+                            maintenance_expenses: { amount: monthData.expenses.maintenance, description: 'Property Maintenance' },
+                            utilities_expenses: { amount: monthData.expenses.utilities, description: 'Utility Bills' },
+                            cleaning_expenses: { amount: monthData.expenses.cleaning, description: 'Cleaning Services' },
+                            security_expenses: { amount: monthData.expenses.security, description: 'Security Services' },
+                            management_expenses: { amount: monthData.expenses.management, description: 'Management Fees' },
+                            other_expenses: { amount: monthData.expenses.other_expenses, description: 'Other Operating Expenses' }
+                        }
+                    },
+                    investing_activities: {
+                        inflows: 0,
+                        outflows: 0,
+                        net: 0,
+                        breakdown: {}
+                    },
+                    financing_activities: {
+                        inflows: 0,
+                        outflows: 0,
+                        net: 0,
+                        breakdown: {}
+                    },
+                    net_cash_flow: monthData.net_cash_flow,
+                    opening_balance: 0, // Will be calculated
+                    closing_balance: 0, // Will be calculated
+                    // Additional detailed information
+                    transaction_details: {
+                        transaction_count: monthData.transaction_count,
+                        payment_count: monthData.payment_count,
+                        expense_count: monthData.expense_count
+                    }
+                };
+            });
+            
+            // Calculate opening and closing balances
+            let runningBalance = 0;
+            monthNames.forEach(month => {
+                monthlyBreakdown[month].opening_balance = runningBalance;
+                runningBalance += monthlyBreakdown[month].net_cash_flow;
+                monthlyBreakdown[month].closing_balance = runningBalance;
+            });
+            
+            // Calculate yearly totals with detailed breakdowns
+            const yearlyTotals = {
+                operating_activities: {
+                    inflows: detailedCashFlow.summary.total_income,
+                    outflows: detailedCashFlow.summary.total_expenses,
+                    net: detailedCashFlow.summary.total_income - detailedCashFlow.summary.total_expenses,
+                    breakdown: {
+                        // Income breakdown
+                        rental_income: { 
+                            amount: detailedCashFlow.detailed_breakdown.income.by_source.rental_income.total, 
+                            description: 'Total Rental Income',
+                            transactions: detailedCashFlow.detailed_breakdown.income.by_source.rental_income.transactions.length
+                        },
+                        admin_fees: { 
+                            amount: detailedCashFlow.detailed_breakdown.income.by_source.admin_fees.total, 
+                            description: 'Total Administrative Fees',
+                            transactions: detailedCashFlow.detailed_breakdown.income.by_source.admin_fees.transactions.length
+                        },
+                        deposits: { 
+                            amount: detailedCashFlow.detailed_breakdown.income.by_source.deposits.total, 
+                            description: 'Total Security Deposits',
+                            transactions: detailedCashFlow.detailed_breakdown.income.by_source.deposits.transactions.length
+                        },
+                        utilities_income: { 
+                            amount: detailedCashFlow.detailed_breakdown.income.by_source.utilities.total, 
+                            description: 'Total Utilities Income',
+                            transactions: detailedCashFlow.detailed_breakdown.income.by_source.utilities.transactions.length
+                        },
+                        other_income: { 
+                            amount: detailedCashFlow.detailed_breakdown.income.by_source.other_income.total, 
+                            description: 'Total Other Income',
+                            transactions: detailedCashFlow.detailed_breakdown.income.by_source.other_income.transactions.length
+                        },
+                        // Expense breakdown
+                        maintenance_expenses: { 
+                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.maintenance.total, 
+                            description: 'Total Maintenance Expenses',
+                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.maintenance.transactions.length
+                        },
+                        utilities_expenses: { 
+                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.utilities.total, 
+                            description: 'Total Utility Expenses',
+                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.utilities.transactions.length
+                        },
+                        cleaning_expenses: { 
+                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.cleaning.total, 
+                            description: 'Total Cleaning Expenses',
+                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.cleaning.transactions.length
+                        },
+                        security_expenses: { 
+                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.security.total, 
+                            description: 'Total Security Expenses',
+                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.security.transactions.length
+                        },
+                        management_expenses: { 
+                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.management.total, 
+                            description: 'Total Management Expenses',
+                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.management.transactions.length
+                        },
+                        other_expenses: { 
+                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.other_expenses.total, 
+                            description: 'Total Other Expenses',
+                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.other_expenses.transactions.length
+                        }
+                    }
+                },
+                investing_activities: {
+                    inflows: detailedCashFlow.summary.net_investing_cash_flow > 0 ? detailedCashFlow.summary.net_investing_cash_flow : 0,
+                    outflows: detailedCashFlow.summary.net_investing_cash_flow < 0 ? Math.abs(detailedCashFlow.summary.net_investing_cash_flow) : 0,
+                    net: detailedCashFlow.summary.net_investing_cash_flow,
+                    breakdown: {}
+                },
+                financing_activities: {
+                    inflows: detailedCashFlow.summary.net_financing_cash_flow > 0 ? detailedCashFlow.summary.net_financing_cash_flow : 0,
+                    outflows: detailedCashFlow.summary.net_financing_cash_flow < 0 ? Math.abs(detailedCashFlow.summary.net_financing_cash_flow) : 0,
+                    net: detailedCashFlow.summary.net_financing_cash_flow,
+                    breakdown: {}
+                },
+                net_cash_flow: detailedCashFlow.summary.net_change_in_cash
+            };
+            
+            // Enhanced summary with detailed insights
+            const summary = {
+                best_cash_flow_month: monthNames.reduce((best, month) => 
+                    monthlyBreakdown[month].net_cash_flow > monthlyBreakdown[best].net_cash_flow ? month : best, 'january'),
+                worst_cash_flow_month: monthNames.reduce((worst, month) => 
+                    monthlyBreakdown[month].net_cash_flow < monthlyBreakdown[worst].net_cash_flow ? month : worst, 'january'),
+                average_monthly_cash_flow: detailedCashFlow.summary.net_change_in_cash / 12,
+                ending_cash_balance: runningBalance,
+                // Additional detailed insights
+                total_income: detailedCashFlow.summary.total_income,
+                total_expenses: detailedCashFlow.summary.total_expenses,
+                transaction_count: detailedCashFlow.summary.transaction_count,
+                payment_count: detailedCashFlow.summary.payment_count,
+                expense_count: detailedCashFlow.summary.expense_count,
+                // Income breakdown summary
+                income_breakdown: detailedCashFlow.detailed_breakdown.income.by_source,
+                // Expense breakdown summary
+                expense_breakdown: detailedCashFlow.detailed_breakdown.expenses.by_category,
+                // Residence breakdown
+                residence_breakdown: {
+                    income: detailedCashFlow.detailed_breakdown.income.by_residence,
+                    expenses: detailedCashFlow.detailed_breakdown.expenses.by_residence
+                }
+            };
+            
+            const enhancedCashFlowData = {
+                period,
+                basis,
+                monthly_breakdown: monthlyBreakdown,
+                yearly_totals: yearlyTotals,
+                summary: summary,
+                // Include detailed breakdowns for frontend consumption
+                detailed_breakdown: {
+                    income: detailedCashFlow.detailed_breakdown.income,
+                    expenses: detailedCashFlow.detailed_breakdown.expenses,
+                    transactions: detailedCashFlow.detailed_breakdown.transactions,
+                    payments: detailedCashFlow.detailed_breakdown.payments,
+                    expenses_detail: detailedCashFlow.detailed_breakdown.expenses_detail
+                }
+            };
             
             res.json({
                 success: true,
-                data: monthlyCashFlow,
-                message: `Monthly cash flow generated for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
+                data: enhancedCashFlowData,
+                message: `Enhanced monthly cash flow with detailed breakdowns generated for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
             });
             
         } catch (error) {
-            console.error('Error generating monthly cash flow:', error);
+            console.error('Error generating enhanced monthly cash flow:', error);
             res.status(500).json({
                 success: false,
-                message: 'Error generating monthly cash flow',
+                message: 'Error generating enhanced monthly cash flow',
                 error: error.message
             });
         }

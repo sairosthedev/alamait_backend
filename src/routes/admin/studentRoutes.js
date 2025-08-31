@@ -12,6 +12,7 @@ const User = require('../../models/User');
 const Booking = require('../../models/Booking');
 const { adminUploadSignedLease } = require('../../controllers/admin/studentController');
 const admin = require('../../middleware/admin');
+const excelUpload = require('../../middleware/excelUpload');
 
 const {
     getAllStudents,
@@ -24,7 +25,13 @@ const {
     downloadSignedLease,
     getExpiredStudents,
     getAllSignedLeases,
-    manualAddStudent
+    manualAddStudent,
+    uploadCsvStudents,
+    uploadExcelStudents,
+    getStudentCsvTemplate,
+    getStudentExcelTemplate,
+    backfillAllTransactions,
+    backfillDebtorTransactions
 } = require('../../controllers/admin/studentController');
 
 // Validation middleware
@@ -136,6 +143,43 @@ router.post('/residence/:residenceId', [
 
 router.post('/', studentValidation, createStudent);
 router.post('/manual-add', manualStudentValidation, manualAddStudent);
+
+/**
+ * Upload CSV for bulk student creation
+ * POST /api/admin/students/upload-csv
+ */
+router.post('/upload-csv', auth, checkRole(['admin']), uploadCsvStudents);
+
+/**
+ * Upload Excel for bulk student creation
+ * POST /api/admin/students/upload-excel
+ */
+router.post('/upload-excel', auth, checkRole(['admin']), excelUpload.single('file'), uploadExcelStudents);
+
+/**
+ * Get CSV template for student upload
+ * GET /api/admin/students/csv-template
+ */
+router.get('/csv-template', auth, checkRole(['admin']), getStudentCsvTemplate);
+
+/**
+ * Get Excel template for student upload
+ * GET /api/admin/students/excel-template
+ */
+router.get('/excel-template', auth, checkRole(['admin']), getStudentExcelTemplate);
+
+/**
+ * Manual backfill transactions for all debtors
+ * POST /api/admin/students/backfill-transactions
+ */
+router.post('/backfill-transactions', auth, checkRole(['admin']), backfillAllTransactions);
+
+/**
+ * Manual backfill transactions for a specific debtor
+ * POST /api/admin/students/:debtorId/backfill-transactions
+ */
+router.post('/:debtorId/backfill-transactions', auth, checkRole(['admin']), backfillDebtorTransactions);
+
 router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);
 router.delete('/:studentId', async (req, res) => {

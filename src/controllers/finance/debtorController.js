@@ -9,6 +9,7 @@ const Residence = require('../../models/Residence');
 const Application = require('../../models/Application');
 const Booking = require('../../models/Booking');
 const { createDebtorForStudent } = require('../../services/debtorService');
+const DebtorTransactionSyncService = require('../../services/debtorTransactionSyncService');
 
 // Create a new debtor account for a student/tenant
 exports.createDebtor = async (req, res) => {
@@ -207,13 +208,14 @@ exports.getDebtorById = async (req, res) => {
         }
 
         // Get recent transactions
-        const transactions = await Transaction.find({
+        const transactions = await TransactionEntry.find({
             $or: [
-                { 'entries.account': debtor.accountCode },
-                { 'entries.debtorId': debtor._id }
+                { 'entries.accountCode': debtor.accountCode },
+                { sourceId: debtor._id },
+                { 'metadata.studentId': debtor.user._id.toString() },
+                { 'metadata.debtorId': debtor._id }
             ]
         })
-        .populate('entries.account')
         .sort({ date: -1 })
         .limit(10);
 
@@ -562,15 +564,14 @@ exports.getDebtorComprehensiveData = async (req, res) => {
         .sort({ date: -1 });
 
         // Get all transactions related to this debtor
-        const transactions = await Transaction.find({
+        const transactions = await TransactionEntry.find({
             $or: [
-                { 'entries.account': debtor.accountCode },
-                { 'entries.debtorId': debtor._id },
-                { reference: { $regex: debtor.debtorCode, $options: 'i' } }
+                { 'entries.accountCode': debtor.accountCode },
+                { sourceId: debtor._id },
+                { 'metadata.studentId': debtor.user._id.toString() },
+                { 'metadata.debtorId': debtor._id }
             ]
         })
-        .populate('entries')
-        .populate('residence', 'name address')
         .sort({ date: -1 });
 
         // Get residence details
@@ -703,10 +704,12 @@ exports.getAllDebtorsComprehensive = async (req, res) => {
                     .limit(5);
 
                     // Get recent transactions (last 5)
-                    const recentTransactions = await Transaction.find({
+                    const recentTransactions = await TransactionEntry.find({
                         $or: [
-                            { 'entries.account': debtor.accountCode },
-                            { 'entries.debtorId': debtor._id }
+                            { 'entries.accountCode': debtor.accountCode },
+                            { sourceId: debtor._id },
+                            { 'metadata.studentId': debtor.user._id.toString() },
+                            { 'metadata.debtorId': debtor._id }
                         ]
                     })
                     .sort({ date: -1 })
@@ -861,6 +864,159 @@ exports.getDebtorPaymentHistory = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error fetching debtor payment history',
+            error: error.message
+        });
+    }
+};
+
+// Get debtor transactions
+exports.getDebtorTransactions = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { startDate, endDate, type, limit = 50 } = req.query;
+
+        const debtor = await Debtor.findById(id)
+            .populate('user', 'firstName lastName email phone');
+
+        if (!debtor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Debtor not found'
+            });
+        }
+
+        // Build transaction query
+        const transactionQuery = {
+            $or: [
+                { 'entries.accountCode': debtor.accountCode },
+                { sourceId: debtor._id },
+                { 'metadata.studentId': debtor.user._id.toString() },
+                { 'metadata.debtorId': debtor._id }
+            ]
+        };
+
+        // Add date filters if provided
+        if (startDate || endDate) {
+            transactionQuery.date = {};
+            if (startDate) transactionQuery.date.$gte = new Date(startDate);
+            if (endDate) transactionQuery.date.$lte = new Date(endDate);
+        }
+
+        // Add type filter if provided
+        if (type && type !== 'all') {
+            if (type === 'accrual') {
+                transactionQuery.source = 'rental_accrual';
+            } else if (type === 'payment') {
+                transactionQuery.source = 'payment';
+            } else {
+                transactionQuery.source = type;
+            }
+        }
+
+        // Get transactions
+        const transactions = await TransactionEntry.find(transactionQuery)
+            .sort({ date: -1 })
+            .limit(parseInt(limit));
+
+        // Calculate transaction statistics
+        let totalAccruals = 0;
+        let totalPayments = 0;
+        let totalDebit = 0;
+        let totalCredit = 0;
+
+        transactions.forEach(transaction => {
+            const debitEntry = transaction.entries.find(e => e.accountCode === debtor.accountCode);
+            const amount = debitEntry ? debitEntry.debit : 0;
+            const creditAmount = debitEntry ? debitEntry.credit : 0;
+
+            totalDebit += amount;
+            totalCredit += creditAmount;
+
+            if (transaction.source === 'rental_accrual') {
+                totalAccruals += amount;
+            } else if (transaction.source === 'payment') {
+                totalPayments += creditAmount;
+            }
+        });
+
+        // Group transactions by month
+        const monthlyBreakdown = transactions.reduce((acc, transaction) => {
+            const month = new Date(transaction.date).toISOString().slice(0, 7); // YYYY-MM
+            if (!acc[month]) {
+                acc[month] = {
+                    accruals: 0,
+                    payments: 0,
+                    net: 0,
+                    transactions: []
+                };
+            }
+
+            const debitEntry = transaction.entries.find(e => e.accountCode === debtor.accountCode);
+            const amount = debitEntry ? debitEntry.debit : 0;
+            const creditAmount = debitEntry ? debitEntry.credit : 0;
+
+            if (transaction.source === 'rental_accrual') {
+                acc[month].accruals += amount;
+            } else if (transaction.source === 'payment') {
+                acc[month].payments += creditAmount;
+            }
+
+            acc[month].net = acc[month].accruals - acc[month].payments;
+            acc[month].transactions.push({
+                id: transaction._id,
+                date: transaction.date,
+                description: transaction.description,
+                source: transaction.source,
+                amount: amount || creditAmount,
+                type: amount > 0 ? 'debit' : 'credit'
+            });
+
+            return acc;
+        }, {});
+
+        res.status(200).json({
+            success: true,
+            debtor: {
+                _id: debtor._id,
+                debtorCode: debtor.debtorCode,
+                name: debtor.contactInfo.name,
+                email: debtor.contactInfo.email,
+                accountCode: debtor.accountCode
+            },
+            transactions: transactions.map(tx => {
+                const debitEntry = tx.entries.find(e => e.accountCode === debtor.accountCode);
+                const amount = debitEntry ? debitEntry.debit : 0;
+                const creditAmount = debitEntry ? debitEntry.credit : 0;
+                
+                return {
+                    _id: tx._id,
+                    transactionId: tx.transactionId,
+                    date: tx.date,
+                    description: tx.description,
+                    source: tx.source,
+                    sourceId: tx.sourceId,
+                    sourceModel: tx.sourceModel,
+                    amount: amount || creditAmount,
+                    type: amount > 0 ? 'debit' : 'credit',
+                    metadata: tx.metadata
+                };
+            }),
+            statistics: {
+                totalTransactions: transactions.length,
+                totalAccruals,
+                totalPayments,
+                totalDebit,
+                totalCredit,
+                netAmount: totalDebit - totalCredit,
+                monthlyBreakdown
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching debtor transactions:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching debtor transactions',
             error: error.message
         });
     }
@@ -1358,4 +1514,69 @@ exports.getDebtorCollectionSummary = async (req, res) => {
             error: error.message
         });
     }
+}; 
+
+// Get detailed debtor information including enhanced months tracking
+exports.getDebtorDetails = async (req, res) => {
+  try {
+    const { debtorId } = req.params;
+    
+    // Find the debtor
+    const debtor = await Debtor.findById(debtorId);
+    if (!debtor) {
+      return res.status(404).json({ success: false, error: 'Debtor not found' });
+    }
+    
+    // Get enhanced months tracking breakdown
+    const studentId = debtor.user.toString();
+    const monthsBreakdown = await DebtorTransactionSyncService.getDetailedMonthsBreakdown(studentId);
+    
+    // Get payments and transactions
+    const payments = await Payment.find({ student: studentId }).sort({ date: -1 });
+    
+    // Get all transactions for this debtor using multiple criteria
+    const transactions = await TransactionEntry.find({
+      $or: [
+        { 'entries.accountCode': debtor.accountCode },
+        { sourceId: debtor._id },
+        { 'metadata.studentId': studentId },
+        { 'metadata.debtorId': debtor._id }
+      ]
+    }).sort({ date: -1 });
+    
+    // Get allocation data for transaction history
+    const allocationData = debtor.allocation || {};
+    
+    // Prepare response with enhanced months tracking
+    const response = {
+      success: true,
+      debtor: {
+        ...debtor.toObject(),
+        // Include enhanced months tracking data
+        monthsAccrued: debtor.monthsAccrued || [],
+        monthsPaid: debtor.monthsPaid || [],
+        monthsAccruedSummary: debtor.monthsAccruedSummary || {},
+        monthsPaidSummary: debtor.monthsPaidSummary || {},
+        monthlyPayments: debtor.monthlyPayments || [],
+        // Include allocation data for transaction history
+        allocation: allocationData
+      },
+      payments: payments,
+      transactions: transactions,
+      monthsBreakdown: monthsBreakdown.success ? monthsBreakdown.breakdown : null,
+      // Enhanced data for ledger display
+      ledgerData: {
+        monthsAccrued: debtor.monthsAccrued || [],
+        monthsPaid: debtor.monthsPaid || [],
+        monthlyPayments: debtor.monthlyPayments || [],
+        allocation: allocationData
+      }
+    };
+    
+    res.json(response);
+    
+  } catch (error) {
+    console.error('Error fetching debtor details:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch debtor details' });
+  }
 }; 

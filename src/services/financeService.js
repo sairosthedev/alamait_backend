@@ -1,4 +1,4 @@
-import api from './api';
+import api from '../config/api';
 
 // Get transaction entries with filters
 export const getTransactionEntries = async (filters = {}) => {
@@ -258,6 +258,91 @@ export const getMonthlyCashFlow = async (period, basis = 'cash') => {
     return response.data;
   } catch (error) {
     console.error('Error fetching monthly cash flow:', error);
+    throw error;
+  }
+}; 
+
+// Create double-entry transaction
+export const createDoubleEntryTransaction = async (transactionData) => {
+  try {
+    const response = await api.post('/finance/transactions/create-double-entry', transactionData);
+    return response.data;
+  } catch (error) {
+    console.error('Error creating double-entry transaction:', error);
+    throw error;
+  }
+};
+
+// Get transaction accounts for dropdown
+export const getTransactionAccounts = async () => {
+  try {
+    const response = await api.get('/finance/accounts');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching transaction accounts:', error);
+    throw error;
+  }
+};
+
+// Transaction Entry Management
+
+// Update transaction entry
+export const updateTransactionEntry = async (id, updateData) => {
+  try {
+    const response = await api.put(`/finance/transactions/entries/${id}`, updateData);
+    return response.data;
+  } catch (error) {
+    console.error('Error updating transaction entry:', error);
+    throw error;
+  }
+};
+
+// Delete transaction entry
+export const deleteTransactionEntry = async (id) => {
+  try {
+    const response = await api.delete(`/finance/transactions/entries/${id}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error deleting transaction entry:', error);
+    throw error;
+  }
+};
+
+// Update multiple transaction entries for a transaction
+export const updateTransactionEntries = async (transactionId, entries) => {
+  try {
+    const response = await api.put(`/finance/transactions/${transactionId}/entries`, { entries });
+    return response.data;
+  } catch (error) {
+    console.error('Error updating multiple transaction entries:', error);
+    throw error;
+  }
+};
+
+// CSV Upload Functions
+
+// Upload CSV for bulk transaction creation
+export const uploadCsvTransactions = async (csvData, residence, defaultDate) => {
+  try {
+    const response = await api.post('/finance/transactions/upload-csv', {
+      csvData,
+      residence,
+      defaultDate
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error uploading CSV transactions:', error);
+    throw error;
+  }
+};
+
+// Get CSV template
+export const getCsvTemplate = async () => {
+  try {
+    const response = await api.get('/finance/transactions/csv-template');
+    return response.data;
+  } catch (error) {
+    console.error('Error getting CSV template:', error);
     throw error;
   }
 }; 

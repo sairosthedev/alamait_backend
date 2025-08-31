@@ -49,6 +49,9 @@ router.get('/:id/comprehensive', debtorController.getDebtorComprehensiveData);
 // Get debtor payment history with detailed mapping
 router.get('/:id/payment-history', debtorController.getDebtorPaymentHistory);
 
+// Get debtor transactions
+router.get('/:id/transactions', debtorController.getDebtorTransactions);
+
 // Create debtor for existing student
 router.post('/student/:userId', debtorController.createDebtorForExistingStudent);
 

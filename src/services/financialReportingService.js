@@ -3289,6 +3289,26 @@ class FinancialReportingService {
             throw error;
         }
     }
+
+    /**
+     * 🆕 NEW: Generate Detailed Cash Flow Statement with comprehensive breakdowns
+     * Uses the EnhancedCashFlowService for detailed income and expense analysis
+     */
+    static async generateDetailedCashFlowStatement(period, basis = 'cash', residenceId = null) {
+        try {
+            console.log(`💰 Generating Detailed Cash Flow Statement for ${period} (${basis} basis)${residenceId ? ` - Residence: ${residenceId}` : ''}`);
+            
+            // Use the enhanced cash flow service for detailed breakdowns
+            const EnhancedCashFlowService = require('./enhancedCashFlowService');
+            const detailedCashFlow = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residenceId);
+            
+            return detailedCashFlow;
+            
+        } catch (error) {
+            console.error('Error generating detailed cash flow statement:', error);
+            throw error;
+        }
+    }
 }
 
 module.exports = FinancialReportingService; 

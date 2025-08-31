@@ -57,6 +57,24 @@ router.post('/create-refund-transaction', TransactionController.createRefundTran
 router.post('/create-invoice-payment-transaction', TransactionController.createInvoicePaymentTransaction);
 
 /**
+ * Create double-entry transaction
+ * POST /api/finance/transactions/create-double-entry
+ */
+router.post('/create-double-entry', TransactionController.createDoubleEntryTransaction);
+
+/**
+ * Upload CSV for bulk transaction creation
+ * POST /api/finance/transactions/upload-csv
+ */
+router.post('/upload-csv', TransactionController.uploadCsvTransactions);
+
+/**
+ * Get CSV template
+ * GET /api/finance/transactions/csv-template
+ */
+router.get('/csv-template', TransactionController.getCsvTemplate);
+
+/**
  * Verify transaction creation for a specific source
  * GET /api/finance/transactions/verify-transaction/:sourceType/:sourceId
  */
@@ -69,10 +87,28 @@ router.get('/verify-transaction/:sourceType/:sourceId', TransactionController.ve
 router.get('/transaction-history/:sourceType/:sourceId', TransactionController.getTransactionHistory);
 
 /**
+ * Update transaction entry
+ * PUT /api/finance/transactions/entries/:id
+ */
+router.put('/entries/:id', TransactionController.updateTransactionEntry);
+
+/**
+ * Delete transaction entry
+ * DELETE /api/finance/transactions/entries/:id
+ */
+router.delete('/entries/:id', TransactionController.deleteTransactionEntry);
+
+/**
  * Get transaction entries by transaction ID
  * GET /api/finance/transactions/:id/entries
  */
 router.get('/:id/entries', TransactionController.getTransactionEntriesById);
+
+/**
+ * Update multiple transaction entries for a transaction
+ * PUT /api/finance/transactions/:transactionId/entries
+ */
+router.put('/:transactionId/entries', TransactionController.updateTransactionEntries);
 
 /**
  * Get transaction by ID (must be last to avoid conflicts)

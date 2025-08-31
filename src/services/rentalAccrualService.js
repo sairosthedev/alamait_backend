@@ -608,6 +608,34 @@ class RentalAccrualService {
             transaction.entries = [transactionEntry._id];
             await transaction.save();
             
+            // 🆕 NEW: Automatically sync to debtor
+            try {
+                const DebtorTransactionSyncService = require('./debtorTransactionSyncService');
+                const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+                
+                await DebtorTransactionSyncService.updateDebtorFromAccrual(
+                    transactionEntry,
+                    student.student.toString(),
+                    rentAmount,
+                    monthKey,
+                    {
+                        studentName: `${student.firstName} ${student.lastName}`,
+                        residence: student.residence,
+                        room: student.allocatedRoom,
+                        accrualMonth: month,
+                        accrualYear: year,
+                        type: 'monthly_rent_accrual',
+                        transactionId: transaction.transactionId
+                    }
+                );
+                
+                console.log(`✅ Debtor automatically synced for accrual: ${student.firstName} ${student.lastName}`);
+                
+            } catch (debtorError) {
+                console.error(`❌ Error syncing to debtor: ${debtorError.message}`);
+                // Don't fail the accrual creation if debtor sync fails
+            }
+            
             console.log(`✅ Monthly rent accrual created for ${student.firstName} ${student.lastName} - $${rentAmount}`);
             
             return {

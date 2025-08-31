@@ -1,0 +1,6 @@
+email,firstName,lastName,phone,roomNumber,startDate,endDate,monthlyRent,status,emergencyContact
+john.doe@example.com,John,Doe,+1234567890,A101,2025-01-15,2025-07-15,500,active,"{name:Jane Doe,phone:+1234567891}"
+jane.smith@example.com,Jane,Smith,+1234567892,A102,2025-01-15,2025-07-15,500,active,"{name:John Smith,phone:+1234567893}"
+michael.brown@example.com,Michael,Brown,+1234567894,A103,2025-01-15,2025-07-15,500,active,"{name:Sarah Brown,phone:+1234567895}"
+emily.jones@example.com,Emily,Jones,+1234567896,A104,2025-01-15,2025-07-15,500,active,"{name:David Jones,phone:+1234567897}"
+daniel.wilson@example.com,Daniel,Wilson,+1234567898,A105,2025-01-15,2025-07-15,500,active,"{name:Lisa Wilson,phone:+1234567899}"

@@ -1,4 +1,4 @@
-import api from './api';
+import api from '../config/api';
 
 // Get all invoices with filtering
 export const getInvoices = async (queryParams = '') => {

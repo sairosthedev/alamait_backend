@@ -690,6 +690,615 @@ class TransactionController {
             });
         }
     }
+
+    /**
+     * Update multiple transaction entries (for double-entry transactions)
+     */
+    static async updateTransactionEntries(req, res) {
+        try {
+            const { transactionId } = req.params;
+            const { entries } = req.body;
+            
+            console.log('🔧 Updating multiple transaction entries for transaction:', transactionId);
+            
+            if (!entries || !Array.isArray(entries)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Entries array is required'
+                });
+            }
+            
+            // Validate that debits equal credits
+            let totalDebit = 0;
+            let totalCredit = 0;
+            
+            for (const entry of entries) {
+                totalDebit += entry.debit || 0;
+                totalCredit += entry.credit || 0;
+            }
+            
+            if (Math.abs(totalDebit - totalCredit) > 0.01) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Total debits must equal total credits for double-entry transactions'
+                });
+            }
+            
+            // Find all entries for this transaction
+            const existingEntries = await TransactionEntry.find({ transactionId });
+            if (existingEntries.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'No transaction entries found for this transaction'
+                });
+            }
+            
+            // Update each entry
+            const updatedEntries = [];
+            for (const entryData of entries) {
+                if (!entryData._id) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Each entry must have an _id field'
+                    });
+                }
+                
+                const updatedEntry = await TransactionEntry.findByIdAndUpdate(
+                    entryData._id,
+                    {
+                        ...entryData,
+                        updatedBy: req.user._id,
+                        updatedAt: new Date()
+                    },
+                    { new: true, runValidators: true }
+                );
+                
+                if (!updatedEntry) {
+                    return res.status(404).json({
+                        success: false,
+                        message: `Transaction entry with ID ${entryData._id} not found`
+                    });
+                }
+                
+                updatedEntries.push(updatedEntry);
+            }
+            
+            console.log('✅ Multiple transaction entries updated successfully');
+            
+            res.status(200).json({
+                success: true,
+                message: 'Transaction entries updated successfully',
+                data: {
+                    entries: updatedEntries,
+                    totalDebit,
+                    totalCredit,
+                    balanced: Math.abs(totalDebit - totalCredit) < 0.01
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error updating multiple transaction entries:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to update transaction entries',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Update transaction entry
+     */
+    static async updateTransactionEntry(req, res) {
+        try {
+            const { id } = req.params;
+            const updateData = req.body;
+            
+            console.log('🔧 Updating transaction entry:', id, 'with data:', updateData);
+            
+            // Find the transaction entry
+            const transactionEntry = await TransactionEntry.findById(id);
+            if (!transactionEntry) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Transaction entry not found'
+                });
+            }
+            
+            // Store original data for audit
+            const originalData = transactionEntry.toObject();
+            
+            // Validate update data
+            const allowedFields = [
+                'description', 
+                'debit', 
+                'credit', 
+                'date', 
+                'account', 
+                'accountName', 
+                'accountType',
+                'metadata'
+            ];
+            
+            const filteredUpdateData = {};
+            for (const field of allowedFields) {
+                if (updateData[field] !== undefined) {
+                    filteredUpdateData[field] = updateData[field];
+                }
+            }
+            
+            // Validate debits and credits if both are provided
+            if (filteredUpdateData.debit !== undefined && filteredUpdateData.credit !== undefined) {
+                if (filteredUpdateData.debit > 0 && filteredUpdateData.credit > 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Transaction entry cannot have both debit and credit amounts'
+                    });
+                }
+            }
+            
+            // Add audit information
+            filteredUpdateData.updatedBy = req.user._id;
+            filteredUpdateData.updatedAt = new Date();
+            
+            // Update the transaction entry
+            const updatedEntry = await TransactionEntry.findByIdAndUpdate(
+                id,
+                filteredUpdateData,
+                { new: true, runValidators: true }
+            );
+            
+            console.log('✅ Transaction entry updated successfully');
+            
+            res.status(200).json({
+                success: true,
+                message: 'Transaction entry updated successfully',
+                data: updatedEntry
+            });
+            
+        } catch (error) {
+            console.error('Error updating transaction entry:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to update transaction entry',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Delete transaction entry
+     */
+    static async deleteTransactionEntry(req, res) {
+        try {
+            const { id } = req.params;
+            
+            console.log('🗑️ Deleting transaction entry:', id);
+            
+            // Find the transaction entry
+            const transactionEntry = await TransactionEntry.findById(id);
+            if (!transactionEntry) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Transaction entry not found'
+                });
+            }
+            
+            // Store data for audit
+            const deletedData = transactionEntry.toObject();
+            
+            // Check if this is part of a balanced transaction
+            // If it's part of a double-entry transaction, we might need to handle it differently
+            if (transactionEntry.source && transactionEntry.sourceId) {
+                console.log('⚠️ Transaction entry is part of a source transaction:', {
+                    source: transactionEntry.source,
+                    sourceId: transactionEntry.sourceId
+                });
+                
+                // For now, we'll allow deletion but log a warning
+                // In a production system, you might want to prevent deletion of system-generated entries
+            }
+            
+            // Delete the transaction entry
+            await TransactionEntry.findByIdAndDelete(id);
+            
+            console.log('✅ Transaction entry deleted successfully');
+            
+            res.status(200).json({
+                success: true,
+                message: 'Transaction entry deleted successfully',
+                data: {
+                    deletedEntry: deletedData
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error deleting transaction entry:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to delete transaction entry',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Create double-entry transaction
+     */
+    static async createDoubleEntryTransaction(req, res) {
+        try {
+            const {
+                description,
+                reference,
+                residence,
+                date,
+                entries
+            } = req.body;
+            
+            console.log('💰 Creating double-entry transaction:', { description, reference, residence });
+            
+            // Validate required fields
+            if (!description || !residence || !entries) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Description, residence, and entries are required'
+                });
+            }
+            
+            // Validate entries array
+            if (!Array.isArray(entries) || entries.length < 2) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'At least two entries are required for double-entry accounting'
+                });
+            }
+            
+            // Validate each entry
+            for (const entry of entries) {
+                if (!entry.account || (!entry.debit && !entry.credit)) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Each entry must have an account and either debit or credit amount'
+                    });
+                }
+                
+                if (entry.debit && entry.credit && entry.debit > 0 && entry.credit > 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'An entry cannot have both debit and credit amounts'
+                    });
+                }
+            }
+            
+            // Calculate totals and validate balance
+            let totalDebit = 0;
+            let totalCredit = 0;
+            
+            for (const entry of entries) {
+                totalDebit += entry.debit || 0;
+                totalCredit += entry.credit || 0;
+            }
+            
+            if (Math.abs(totalDebit - totalCredit) > 0.01) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Total debits (${totalDebit}) must equal total credits (${totalCredit})`
+                });
+            }
+            
+            // Generate transaction ID
+            const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+            
+            // Create transaction entry with all the double-entry details
+            const transactionEntry = new TransactionEntry({
+                transactionId,
+                date: date ? new Date(date) : new Date(),
+                description,
+                reference: reference || transactionId,
+                entries: entries.map(entry => ({
+                    accountCode: entry.account,
+                    accountName: entry.accountName || entry.account,
+                    accountType: entry.accountType || 'asset',
+                    debit: entry.debit || 0,
+                    credit: entry.credit || 0,
+                    description: entry.description || description
+                })),
+                totalDebit,
+                totalCredit,
+                source: 'manual',
+                sourceId: null, // No source for manual transactions
+                sourceModel: 'TransactionEntry',
+                residence: residence._id || residence,
+                createdBy: req.user.email,
+                metadata: {
+                    residenceId: residence._id || residence,
+                    residenceName: residence?.name || 'Unknown',
+                    createdBy: req.user.email,
+                    transactionType: 'manual_double_entry',
+                    balanced: true
+                }
+            });
+            
+            await transactionEntry.save();
+            console.log('✅ Transaction entry created:', transactionEntry._id);
+            
+            console.log('✅ Double-entry transaction created successfully');
+            
+            res.status(201).json({
+                success: true,
+                message: 'Double-entry transaction created successfully',
+                data: {
+                    transactionEntry: {
+                        _id: transactionEntry._id,
+                        transactionId: transactionEntry.transactionId,
+                        date: transactionEntry.date,
+                        description: transactionEntry.description,
+                        totalDebit: transactionEntry.totalDebit,
+                        totalCredit: transactionEntry.totalCredit,
+                        entries: transactionEntry.entries,
+                        balanced: transactionEntry.totalDebit === transactionEntry.totalCredit
+                    },
+                    summary: {
+                        totalDebit,
+                        totalCredit,
+                        balanced: Math.abs(totalDebit - totalCredit) < 0.01,
+                        entryCount: entries.length
+                    }
+                }
+            });
+            
+        } catch (error) {
+            console.error('Error creating double-entry transaction:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to create double-entry transaction',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Upload CSV and create multiple transaction entries
+     */
+    static async uploadCsvTransactions(req, res) {
+        try {
+            const { csvData, residence, defaultDate } = req.body;
+            
+            console.log('📁 Processing CSV upload for residence:', residence);
+            
+            if (!csvData || !Array.isArray(csvData) || csvData.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'CSV data is required and must be an array'
+                });
+            }
+            
+            if (!residence) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Residence is required for all transactions'
+                });
+            }
+            
+            const results = {
+                successful: [],
+                failed: [],
+                summary: {
+                    totalProcessed: csvData.length,
+                    totalSuccessful: 0,
+                    totalFailed: 0,
+                    totalDebits: 0,
+                    totalCredits: 0
+                }
+            };
+            
+            // Process each CSV row
+            for (let i = 0; i < csvData.length; i++) {
+                const row = csvData[i];
+                const rowNumber = i + 1;
+                
+                try {
+                    // Validate required fields
+                    if (!row.description || !row.entries || !Array.isArray(row.entries) || row.entries.length < 2) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: 'Missing description or insufficient entries (minimum 2 required)',
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                    
+                    // Validate entries
+                    let totalDebit = 0;
+                    let totalCredit = 0;
+                    const validEntries = [];
+                    
+                    for (const entry of row.entries) {
+                        if (!entry.account || (!entry.debit && !entry.credit)) {
+                            throw new Error(`Entry missing account or amounts`);
+                        }
+                        
+                        if (entry.debit && entry.credit && parseFloat(entry.debit) > 0 && parseFloat(entry.credit) > 0) {
+                            throw new Error(`Entry cannot have both debit and credit amounts`);
+                        }
+                        
+                        const debit = parseFloat(entry.debit) || 0;
+                        const credit = parseFloat(entry.credit) || 0;
+                        
+                        totalDebit += debit;
+                        totalCredit += credit;
+                        
+                        validEntries.push({
+                            account: entry.account,
+                            accountName: entry.accountName || entry.account,
+                            accountType: entry.accountType || 'asset',
+                            debit: debit,
+                            credit: credit,
+                            description: entry.description || row.description
+                        });
+                    }
+                    
+                    // Validate balance
+                    if (Math.abs(totalDebit - totalCredit) > 0.01) {
+                        throw new Error(`Debits (${totalDebit}) must equal credits (${totalCredit})`);
+                    }
+                    
+                    // Generate transaction ID
+                    const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+                    
+                    // Create transaction entry
+                    const transactionEntry = new TransactionEntry({
+                        transactionId,
+                        date: row.date ? new Date(row.date) : (defaultDate ? new Date(defaultDate) : new Date()),
+                        description: row.description,
+                        reference: row.reference || transactionId,
+                        entries: validEntries,
+                        totalDebit,
+                        totalCredit,
+                        source: 'manual',
+                        sourceId: null,
+                        sourceModel: 'TransactionEntry',
+                        residence: residence._id || residence,
+                        createdBy: req.user.email,
+                        metadata: {
+                            residenceId: residence._id || residence,
+                            residenceName: residence?.name || 'Unknown',
+                            createdBy: req.user.email,
+                            transactionType: 'manual_double_entry_csv',
+                            balanced: true,
+                            csvRow: rowNumber
+                        }
+                    });
+                    
+                    await transactionEntry.save();
+                    
+                    results.successful.push({
+                        row: rowNumber,
+                        transactionId: transactionEntry.transactionId,
+                        description: transactionEntry.description,
+                        totalDebit: transactionEntry.totalDebit,
+                        totalCredit: transactionEntry.totalCredit,
+                        entryCount: validEntries.length
+                    });
+                    
+                    results.summary.totalSuccessful++;
+                    results.summary.totalDebits += totalDebit;
+                    results.summary.totalCredits += totalCredit;
+                    
+                } catch (error) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: error.message,
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                }
+            }
+            
+            console.log(`✅ CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
+            
+            res.status(200).json({
+                success: true,
+                message: 'CSV upload processed successfully',
+                data: results
+            });
+            
+        } catch (error) {
+            console.error('Error processing CSV upload:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to process CSV upload',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Get CSV template for transaction entries
+     */
+    static async getCsvTemplate(req, res) {
+        try {
+            const template = {
+                headers: [
+                    'description',
+                    'reference',
+                    'date',
+                    'entries'
+                ],
+                sampleData: [
+                    {
+                        description: 'Sample Transaction 1',
+                        reference: 'REF-001',
+                        date: '2025-01-15',
+                        entries: [
+                            {
+                                account: '1001',
+                                accountName: 'Cash',
+                                accountType: 'asset',
+                                debit: 1000,
+                                credit: 0,
+                                description: 'Cash received'
+                            },
+                            {
+                                account: '4001',
+                                accountName: 'Rental Income',
+                                accountType: 'revenue',
+                                debit: 0,
+                                credit: 1000,
+                                description: 'Rental income earned'
+                            }
+                        ]
+                    },
+                    {
+                        description: 'Sample Transaction 2',
+                        reference: 'REF-002',
+                        date: '2025-01-16',
+                        entries: [
+                            {
+                                account: '5001',
+                                accountName: 'Maintenance Expense',
+                                accountType: 'expense',
+                                debit: 500,
+                                credit: 0,
+                                description: 'Maintenance cost'
+                            },
+                            {
+                                account: '1001',
+                                accountName: 'Cash',
+                                accountType: 'asset',
+                                debit: 0,
+                                credit: 500,
+                                description: 'Cash paid'
+                            }
+                        ]
+                    }
+                ],
+                instructions: [
+                    'Each row represents one double-entry transaction',
+                    'Each transaction must have at least 2 entries',
+                    'Total debits must equal total credits for each transaction',
+                    'Date format: YYYY-MM-DD',
+                    'Account types: asset, liability, equity, revenue, expense',
+                    'Only one of debit or credit should have a value per entry'
+                ]
+            };
+            
+            res.status(200).json({
+                success: true,
+                message: 'CSV template retrieved successfully',
+                data: template
+            });
+            
+        } catch (error) {
+            console.error('Error getting CSV template:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to get CSV template',
+                error: error.message
+            });
+        }
+    }
 }
 
 module.exports = TransactionController; 

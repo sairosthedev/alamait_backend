@@ -161,9 +161,37 @@ class EnhancedPaymentAllocationService {
           
           console.log(`📊 Total outstanding ${paymentType}: $${totalOutstanding}`);
           
-          // If no outstanding balance, treat as advance payment
-          if (totalOutstanding === 0) {
-            console.log(`⚠️ No outstanding ${paymentType} balance. Treating as advance payment.`);
+          // 🆕 FIX: Check if there are any charges owed (even if not yet paid)
+          const totalCharged = outstandingBalances.reduce((total, month) => {
+            if (paymentType === 'admin') {
+              return total + month.adminFee.owed;
+            } else if (paymentType === 'deposit') {
+              return total + month.deposit.owed;
+            }
+            return total;
+          }, 0);
+          
+          console.log(`📊 Total charged ${paymentType}: $${totalCharged}`);
+          
+          // If no outstanding balance but there are charges, it means they've been fully paid
+          if (totalOutstanding === 0 && totalCharged > 0) {
+            console.log(`✅ ${paymentType} charges have been fully paid. Treating extra as advance payment.`);
+            // If deposit already paid and extra received, post directly to 2020 (increase liability), no deferred income
+            if (paymentType === 'deposit' && remainingAmount > 0) {
+              const advanceResult = await this.handleAdvancePayment(
+                paymentData.paymentId, studentId, remainingAmount, paymentData, paymentType
+              );
+              allocationResults.push(advanceResult);
+              totalAllocated += remainingAmount;
+            }
+            // If admin already paid, ignore extra (no advance for once-off income)
+            remainingAmount = 0;
+            continue; // Skip to next payment type
+          }
+          
+          // If no charges at all, treat as advance payment
+          if (totalOutstanding === 0 && totalCharged === 0) {
+            console.log(`⚠️ No ${paymentType} charges found. Treating as advance payment.`);
             // If deposit already paid and extra received, post directly to 2020 (increase liability), no deferred income
             if (paymentType === 'deposit' && remainingAmount > 0) {
               const advanceResult = await this.handleAdvancePayment(
@@ -509,32 +537,78 @@ class EnhancedPaymentAllocationService {
     try {
       console.log(`🔍 Getting detailed outstanding balances for student: ${studentId}`);
       
-      // Get all transactions for this specific student (including similar account codes)
-      // This handles cases where lease start and monthly accruals use different account codes
+      // Get all transactions for this specific student
       const studentIdString = String(studentId);
       const allStudentTransactions = await TransactionEntry.find({
         $or: [
-          { 'entries.accountCode': { $regex: `^1100-${studentIdString}` } },
-          { 'entries.accountCode': { $regex: `^1100-${studentIdString.substring(0, 8)}` } }
+          { 'entries.accountCode': { $regex: `^1100-${studentIdString}$` } },
+          { 'metadata.studentId': studentIdString },
+          { 'sourceId': studentIdString }
         ]
       }).sort({ date: 1 });
-      
+
       console.log(`📊 Found ${allStudentTransactions.length} total transactions for student ${studentId}`);
       
+      // If no transactions found, return empty array
+      if (allStudentTransactions.length === 0) {
+        console.log(`ℹ️ No transactions found for student ${studentId}, returning empty array`);
+        return [];
+      }
+      
       // Separate different types of transactions
-      const accruals = allStudentTransactions.filter(tx => 
-        tx.source === 'rental_accrual' || 
-        (tx.source === 'lease_start' && tx.metadata?.proratedRent > 0) ||
-        (tx.metadata?.type === 'lease_start' && tx.metadata?.proratedRent > 0)
-      );
+      const accruals = allStudentTransactions.filter(tx => {
+        // For lease start transactions, also check if they have the correct account code
+        if (tx.metadata?.type === 'lease_start' || tx.source === 'lease_start') {
+          // Check if any entry has the correct student account code
+          const hasStudentAccount = tx.entries.some(entry => 
+            entry.accountCode === `1100-${studentIdString}`
+          );
+          if (hasStudentAccount) {
+            return true;
+          }
+        }
+        
+        // For other transactions, only include if sourceId matches the student ID
+        if (!tx.sourceId || tx.sourceId.toString() !== studentIdString) {
+          return false;
+        }
+        
+        // Include rental accruals
+        if (tx.source === 'rental_accrual') return true;
+        
+        return false;
+      });
       
       // 🆕 FIXED: Look for both payment transactions and payment allocation transactions
-      const payments = allStudentTransactions.filter(tx => 
-        tx.source === 'payment' || 
-        (tx.metadata?.allocationType === 'payment_allocation')
-      );
+      const payments = allStudentTransactions.filter(tx => {
+        // Only include transactions where sourceId matches the student ID
+        if (!tx.sourceId || tx.sourceId.toString() !== studentIdString) {
+          return false;
+        }
+        
+        return tx.source === 'payment' || 
+               (tx.metadata?.allocationType === 'payment_allocation');
+      });
       
       console.log(`📊 Found ${accruals.length} accrual transactions and ${payments.length} payment transactions`);
+      
+      // Debug: Log the accrual transactions found
+      console.log(`🔍 Found ${accruals.length} accrual transactions:`);
+      accruals.forEach((accrual, index) => {
+        console.log(`📋 Accrual ${index + 1}:`);
+        console.log(`   ID: ${accrual._id}`);
+        console.log(`   Date: ${accrual.date}`);
+        console.log(`   Source: ${accrual.source}`);
+        console.log(`   Type: ${accrual.metadata?.type}`);
+        console.log(`   Description: ${accrual.description}`);
+        
+        if (accrual.metadata?.type === 'lease_start') {
+          console.log(`  ✅ LEASE START TRANSACTION: ${accrual._id}`);
+          accrual.entries.forEach((entry, entryIndex) => {
+            console.log(`    Entry ${entryIndex + 1}: ${entry.accountCode} ${entry.accountType} ${entry.debit}/${entry.credit} - ${entry.description}`);
+          });
+        }
+      });
       
       // Track outstanding balances by month and type
       const monthlyOutstanding = {};
@@ -559,6 +633,9 @@ class EnhancedPaymentAllocationService {
             source: accrual.source,
             metadata: accrual.metadata
           };
+          console.log(`📅 Created monthly outstanding for ${monthKey} with transaction ID: ${accrual._id}`);
+        } else {
+          console.log(`📅 Updating existing monthly outstanding for ${monthKey} (current transaction: ${monthlyOutstanding[monthKey].transactionId}, new transaction: ${accrual._id})`);
         }
         
         // Categorize the debt by type
@@ -576,6 +653,56 @@ class EnhancedPaymentAllocationService {
             }
           }
         });
+        
+        // 🆕 FIX: For lease start transactions, we need to break down the AR debit into components
+        // The AR debit entry contains the total amount owed, but we need to categorize it
+        if (accrual.metadata?.type === 'lease_start') {
+          console.log(`🔍 Processing lease start transaction breakdown: ${accrual._id}`);
+          
+          // Find the AR debit entry to get the total amount
+          const arEntry = accrual.entries.find(entry => 
+            entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0
+          );
+          
+          if (arEntry) {
+            const totalAmount = arEntry.debit;
+            console.log(`  → Total AR debit amount: $${totalAmount}`);
+            
+            // Reset the amounts since we'll recalculate them properly
+            monthlyOutstanding[monthKey].rent.owed = 0;
+            monthlyOutstanding[monthKey].adminFee.owed = 0;
+            monthlyOutstanding[monthKey].deposit.owed = 0;
+            
+            // Now categorize based on the income/liability entries
+            accrual.entries.forEach(entry => {
+              const description = entry.description.toLowerCase();
+              
+              // Admin fee entry (account 4002)
+              if (entry.accountCode === '4002' && entry.accountType === 'Income' && entry.credit > 0) {
+                if (description.includes('admin fee') || description.includes('administrative')) {
+                  monthlyOutstanding[monthKey].adminFee.owed += entry.credit;
+                  console.log(`  → Found admin fee in lease start: $${entry.credit}`);
+                }
+              }
+              
+              // Deposit entry (account 2020)
+              if (entry.accountCode === '2020' && entry.accountType === 'Liability' && entry.credit > 0) {
+                if (description.includes('security deposit') || description.includes('deposit')) {
+                  monthlyOutstanding[monthKey].deposit.owed += entry.credit;
+                  console.log(`  → Found deposit in lease start: $${entry.credit}`);
+                }
+              }
+              
+              // Rent entry (account 4001) - Income entry creates the charge
+              if (entry.accountCode === '4001' && entry.accountType === 'Income' && entry.credit > 0) {
+                if (description.includes('rental income') || description.includes('prorated')) {
+                  monthlyOutstanding[monthKey].rent.owed += entry.credit;
+                  console.log(`  → Found prorated rent in lease start: $${entry.credit}`);
+                }
+              }
+            });
+          }
+        }
       });
       
              // 🆕 FIXED: Only work with actual accruals that exist for this specific student
@@ -945,6 +1072,36 @@ class EnhancedPaymentAllocationService {
       await paymentTransaction.save();
       console.log(`✅ Payment allocation transaction created: ${paymentTransaction._id}`);
       
+      // 🆕 NEW: Automatically sync to debtor
+      try {
+        const DebtorTransactionSyncService = require('./debtorTransactionSyncService');
+        const monthKey = monthSettled; // monthSettled is already in YYYY-MM format
+        
+        await DebtorTransactionSyncService.updateDebtorFromPayment(
+          paymentTransaction,
+          studentId,
+          amount,
+          monthKey,
+          {
+            paymentId: paymentId,
+            studentId: studentId,
+            amount: amount,
+            paymentType: paymentType,
+            monthSettled: monthSettled,
+            arTransactionId: arTransactionId,
+            allocationType: 'payment_allocation',
+            description: `${paymentType} payment allocation for ${monthSettled}`,
+            transactionId: paymentTransaction.transactionId
+          }
+        );
+        
+        console.log(`✅ Debtor automatically synced for payment allocation: ${studentId} - $${amount} for ${monthSettled}`);
+        
+      } catch (debtorError) {
+        console.error(`❌ Error syncing to debtor: ${debtorError.message}`);
+        // Don't fail the payment allocation if debtor sync fails
+      }
+      
       return paymentTransaction;
       
     } catch (error) {
@@ -1170,6 +1327,46 @@ class EnhancedPaymentAllocationService {
     } catch (error) {
       console.error(`❌ Error creating allocation record: ${error.message}`);
       return null;
+    }
+  }
+
+  /**
+   * 📊 Get outstanding balance summary for a student
+   * @param {string} studentId - Student ID
+   * @returns {Object} Summary of outstanding balances
+   */
+  static async getOutstandingBalanceSummary(studentId) {
+    try {
+      console.log(`📊 Getting outstanding balance summary for student: ${studentId}`);
+      
+      const outstandingBalances = await this.getDetailedOutstandingBalances(studentId);
+      
+      const totalOutstanding = outstandingBalances.reduce((sum, month) => sum + month.totalOutstanding, 0);
+      
+      return {
+        studentId,
+        totalOutstanding,
+        monthsWithOutstanding: outstandingBalances.length,
+        monthlyBreakdown: outstandingBalances.map(month => ({
+          monthKey: month.monthKey,
+          monthName: month.monthName,
+          year: month.year,
+          rent: month.rent.outstanding,
+          adminFee: month.adminFee.outstanding,
+          deposit: month.deposit.outstanding,
+          total: month.totalOutstanding
+        })),
+        summary: {
+          totalRent: outstandingBalances.reduce((sum, month) => sum + month.rent.outstanding, 0),
+          totalAdminFee: outstandingBalances.reduce((sum, month) => sum + month.adminFee.outstanding, 0),
+          totalDeposit: outstandingBalances.reduce((sum, month) => sum + month.deposit.outstanding, 0),
+          totalOutstanding
+        }
+      };
+      
+    } catch (error) {
+      console.error(`❌ Error getting outstanding balance summary: ${error.message}`);
+      throw error;
     }
   }
 }
