@@ -312,7 +312,7 @@ exports.createStudent = async (req, res) => {
             };
 
             await createDebtorForStudent(student, debtorOptions);
-            console.log(`✅ Debtor account created for student ${student.email}`);
+            console.log(`✅ Debtor account created for manually added student ${student.email}`);
         } catch (debtorError) {
             console.error('❌ Failed to create debtor account:', debtorError);
             // Continue with student creation even if debtor creation fails
@@ -2254,13 +2254,15 @@ exports.uploadExcelStudents = async (req, res) => {
                         // 🆕 INTEGRATED: Backfill transactions for the debtor automatically
                         try {
                             console.log(`🔄 Auto-backfilling transactions for new debtor: ${debtor.debtorCode}`);
-                            const backfillResult = await backfillTransactionsForDebtor(debtor);
+                            const backfillResult = await backfillTransactionsForDebtor(debtor, { bulk: true });
                             
                             if (backfillResult.success) {
                                 console.log(`✅ Auto-backfill completed for ${debtor.debtorCode}:`);
                                 console.log(`   - Lease start created: ${backfillResult.leaseStartCreated}`);
                                 console.log(`   - Monthly transactions created: ${backfillResult.monthlyTransactionsCreated}`);
                                 console.log(`   - Duplicates removed: ${backfillResult.duplicatesRemoved}`);
+                            } else if (backfillResult.skipped) {
+                                console.log(`⏭️  Backfill skipped for ${debtor.debtorCode}: ${backfillResult.reason || 'not in bulk mode'}`);
                             } else {
                                 console.error(`❌ Auto-backfill failed for ${debtor.debtorCode}: ${backfillResult.error}`);
                             }
@@ -2517,51 +2519,55 @@ exports.backfillAllTransactions = async (req, res) => {
  * @access Private (Admin only)
  */
 exports.backfillDebtorTransactions = async (req, res) => {
-    try {
-        const { debtorId } = req.params;
-        console.log(`🔄 Manual backfill request for debtor: ${debtorId}`);
-        
-        const Debtor = require('../../models/Debtor');
-        const { backfillTransactionsForDebtor } = require('../../services/transactionBackfillService');
-        
-        // Find the debtor
-        const debtor = await Debtor.findById(debtorId)
-            .populate('user', 'firstName lastName email')
-            .populate('application', 'applicationCode startDate endDate');
-        
-        if (!debtor) {
-            return res.status(404).json({
-                success: false,
-                message: 'Debtor not found'
-            });
-        }
-        
-        const result = await backfillTransactionsForDebtor(debtor);
-        
-        if (result.success) {
-            res.json({
-                success: true,
-                message: 'Debtor backfill completed successfully',
-                data: {
-                    debtorCode: debtor.debtorCode,
-                    leaseStartCreated: result.leaseStartCreated,
-                    monthlyTransactionsCreated: result.monthlyTransactionsCreated,
-                    duplicatesRemoved: result.duplicatesRemoved
-                }
-            });
-        } else {
-            res.status(500).json({
-                success: false,
-                message: 'Debtor backfill failed',
-                error: result.error
-            });
-        }
-    } catch (error) {
-        console.error('❌ Error in debtor backfill:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Debtor backfill operation failed',
-            error: error.message
-        });
-    }
+	try {
+		const { debtorId } = req.params;
+		console.log(`🔄 Manual backfill request for debtor: ${debtorId}`);
+		
+		const Debtor = require('../../models/Debtor');
+		const { backfillTransactionsForDebtor } = require('../../services/transactionBackfillService');
+		
+		// Find the debtor
+		const debtor = await Debtor.findById(debtorId)
+			.populate('user', 'firstName lastName email')
+			.populate('application', 'applicationCode startDate endDate');
+		
+		if (!debtor) {
+			return res.status(404).json({
+				success: false,
+				message: 'Debtor not found'
+			});
+		}
+		
+		const bulk = (req.query.bulk === 'true') || (req.body && req.body.bulk === true);
+		const manual = (req.query.manual === 'true') || (req.body && req.body.manual === true);
+		const result = await backfillTransactionsForDebtor(debtor, { bulk, manual });
+		
+		if (result.success) {
+			res.json({
+				success: true,
+				message: 'Backfill completed successfully',
+				leaseStartCreated: result.leaseStartCreated,
+				monthlyTransactionsCreated: result.monthlyTransactionsCreated,
+				duplicatesRemoved: result.duplicatesRemoved
+			});
+		} else if (result.skipped) {
+			res.status(200).json({
+				success: true,
+				message: `Backfill skipped: ${result.reason || 'not in bulk mode'}`
+			});
+		} else {
+			res.status(500).json({
+				success: false,
+				message: 'Backfill failed',
+				error: result.error
+			});
+		}
+	} catch (error) {
+		console.error('❌ Manual backfill failed:', error);
+		res.status(500).json({
+			success: false,
+			message: 'Backfill operation failed',
+			error: error.message
+		});
+	}
 }; 

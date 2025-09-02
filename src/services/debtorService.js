@@ -602,19 +602,19 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         try {
             const { backfillTransactionsForDebtor } = require('./transactionBackfillService');
             console.log(`🔄 Auto-backfilling transactions for new debtor: ${debtorCode}`);
-            const backfillResult = await backfillTransactionsForDebtor(debtor);
+            const backfillResult = await backfillTransactionsForDebtor(debtor, { bulk: false });
             
             if (backfillResult.success) {
                 console.log(`✅ Auto-backfill completed for ${debtorCode}:`);
                 console.log(`   - Lease start created: ${backfillResult.leaseStartCreated}`);
                 console.log(`   - Monthly transactions created: ${backfillResult.monthlyTransactionsCreated}`);
-                console.log(`   - Duplicates removed: ${backfillResult.duplicatesRemoved}`);
+            } else if (backfillResult.skipped) {
+                console.log(`⏭️  Backfill skipped for ${debtorCode}: ${backfillResult.reason || 'not in bulk mode'}`);
             } else {
                 console.error(`❌ Auto-backfill failed for ${debtorCode}: ${backfillResult.error}`);
             }
         } catch (backfillError) {
-            console.error(`❌ Failed to auto-backfill transactions for ${actualUser.email}:`, backfillError);
-            // Continue even if backfill fails - debtor is still created
+            console.error(`❌ Failed to auto-backfill transactions for debtor ${debtorCode}:`, backfillError);
         }
 
         return debtor;
