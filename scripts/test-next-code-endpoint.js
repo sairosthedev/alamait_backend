@@ -10,6 +10,9 @@ async function testNextCodeEndpoint() {
         type: 'Asset',
         category: 'Current Assets'
       }
+
+
+      
     });
     
     console.log('✅ Next-code endpoint response:');

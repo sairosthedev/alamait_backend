@@ -21,6 +21,12 @@ router.get('/entries/:id', auth, transactionController.getTransactionEntry);
 // Create manual transaction entry
 router.post('/entries', auth, checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), transactionController.createTransactionEntry);
 
+// Update transaction entry
+router.put('/entries/:id', auth, checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), transactionController.updateTransactionEntry);
+
+// Delete transaction entry
+router.delete('/entries/:id', auth, checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), transactionController.deleteTransactionEntry);
+
 // Get accounts for dropdown
 router.get('/accounts', auth, transactionController.getAccounts);
 

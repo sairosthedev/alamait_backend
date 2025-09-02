@@ -15,7 +15,7 @@ router.use(auth);
 router.use(financeAccess);
 
 /**
- * Get all transactions (main endpoint for frontend)
+ * Get all transactions
  * GET /api/finance/transactions
  */
 router.get('/', TransactionController.getAllTransactions);

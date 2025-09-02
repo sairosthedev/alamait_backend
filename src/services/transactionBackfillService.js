@@ -44,6 +44,24 @@ function calculateDepositAmount(roomPrice) {
 async function backfillTransactionsForDebtor(debtor) {
     try {
         console.log(`🔄 Backfilling transactions for debtor: ${debtor.debtorCode}`);
+        const Debtor = require('../models/Debtor');
+        const Residence = require('../models/Residence');
+
+        // Ensure debtor has populated user/residence to correctly identify student
+        if (!debtor.user?.firstName || !debtor.residence?.name) {
+            const populated = await Debtor.findById(debtor._id)
+                .populate('user', 'firstName lastName email')
+                .populate('residence', 'name');
+            if (populated) debtor = populated;
+        }
+
+        // Helpers to normalize ids and names
+        const getId = (value) => {
+            if (!value) return undefined;
+            if (typeof value === 'string') return value;
+            return value._id || value.id || undefined;
+        };
+        const getName = (res) => (res?.name ? res.name : (debtor.residenceName || 'Unknown'));
         
         // Get debtor's AR account
         const debtorAccount = await Account.findOne({ code: debtor.accountCode });
@@ -144,7 +162,9 @@ async function backfillTransactionsForDebtor(debtor) {
                 sourceModel: 'Debtor',
                 status: 'posted',
                 metadata: {
-                    studentId: debtor.user?._id,
+                    studentId: getId(debtor.user),
+                    residenceId: getId(debtor.residence),
+                    residenceName: getName(debtor.residence),
                     type: 'lease_start',
                     month: startDate.toISOString().split('T')[0].substring(0, 7),
                     applicationCode: applicationCode,
@@ -307,14 +327,16 @@ async function backfillTransactionsForDebtor(debtor) {
                 sourceModel: 'Debtor',
                 status: 'posted',
                 metadata: {
-                    studentId: debtor.user?._id,
+                    studentId: getId(debtor.user),
+                    residenceId: getId(debtor.residence),
+                    residenceName: getName(debtor.residence),
                     type: 'monthly_rent_accrual',
                     month: monthKey,
                     applicationCode: applicationCode,
                     roomNumber: debtor.roomNumber,
                     monthlyRent: monthlyRent
                 },
-                createdBy: debtor.createdBy || debtor.user?._id
+                createdBy: debtor.createdBy || getId(debtor.user)
             });
             
             await monthlyAccrualTransaction.save();

@@ -539,9 +539,13 @@ class EnhancedPaymentAllocationService {
       
       // Get all transactions for this specific student
       const studentIdString = String(studentId);
+      // Resolve debtor to get exact AR account code
+      const Debtor = require('../models/Debtor');
+      const debtorDoc = await Debtor.findOne({ user: studentIdString }).select('accountCode');
+      const arAccountCode = debtorDoc?.accountCode || `1100-${studentIdString}`;
       const allStudentTransactions = await TransactionEntry.find({
         $or: [
-          { 'entries.accountCode': { $regex: `^1100-${studentIdString}$` } },
+          { 'entries.accountCode': arAccountCode },
           { 'metadata.studentId': studentIdString },
           { 'sourceId': studentIdString }
         ]
@@ -568,26 +572,21 @@ class EnhancedPaymentAllocationService {
           }
         }
         
-        // For other transactions, only include if sourceId matches the student ID
-        if (!tx.sourceId || tx.sourceId.toString() !== studentIdString) {
-          return false;
+        // Include rental accruals (both lease start and monthly) regardless of sourceId
+        if (tx.source === 'rental_accrual') {
+          return true;
         }
-        
-        // Include rental accruals
-        if (tx.source === 'rental_accrual') return true;
         
         return false;
       });
       
-      // 🆕 FIXED: Look for both payment transactions and payment allocation transactions
+      // 🆕 Include payment and allocation transactions linked by studentId, sourceId, or AR account credit
       const payments = allStudentTransactions.filter(tx => {
-        // Only include transactions where sourceId matches the student ID
-        if (!tx.sourceId || tx.sourceId.toString() !== studentIdString) {
-          return false;
-        }
-        
-        return tx.source === 'payment' || 
-               (tx.metadata?.allocationType === 'payment_allocation');
+        const isAllocation = tx.metadata?.allocationType === 'payment_allocation';
+        const isPayment = tx.source === 'payment';
+        const matchesStudent = tx.metadata?.studentId?.toString() === studentIdString || (tx.sourceId && tx.sourceId.toString() === studentIdString);
+        const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
+        return isAllocation || (isPayment && (matchesStudent || touchesAR));
       });
       
       console.log(`📊 Found ${accruals.length} accrual transactions and ${payments.length} payment transactions`);
@@ -615,14 +614,19 @@ class EnhancedPaymentAllocationService {
       
       // Process accruals to build debt structure
       accruals.forEach(accrual => {
-        const accrualDate = new Date(accrual.date);
-        const monthKey = `${accrualDate.getFullYear()}-${String(accrualDate.getMonth() + 1).padStart(2, '0')}`;
+        // Prefer explicit metadata.month if present (YYYY-MM), fallback to date
+        const monthKey = accrual.metadata?.month || (() => {
+          const d = new Date(accrual.date);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        })();
+        const [yearStr, monStr] = monthKey.split('-');
+        const accrualDate = new Date(`${monthKey}-01T00:00:00.000Z`);
         
         if (!monthlyOutstanding[monthKey]) {
           monthlyOutstanding[monthKey] = {
             monthKey,
-            year: accrualDate.getFullYear(),
-            month: accrualDate.getMonth() + 1,
+            year: Number(yearStr) || accrualDate.getFullYear(),
+            month: Number(monStr) || (accrualDate.getMonth() + 1),
             monthName: accrualDate.toLocaleString('default', { month: 'long' }),
             date: accrualDate,
             rent: { owed: 0, paid: 0, outstanding: 0 },
@@ -709,53 +713,50 @@ class EnhancedPaymentAllocationService {
        // Do NOT create virtual months as they don't have real AR transactions to allocate to
        console.log(`📊 Working with ${Object.keys(monthlyOutstanding).length} actual accrual months for student ${studentId}`);
       
-      // 🆕 FIXED: Process payments to calculate what's been paid using monthSettled
+      // 🆕 Process payments: subtract by monthSettled; fallback to FIFO if missing
       payments.forEach(payment => {
         // Look for monthSettled in metadata for payment allocation transactions
         const monthSettled = payment.metadata?.monthSettled;
         const paymentType = payment.metadata?.paymentType;
+        const arEntry = Array.isArray(payment.entries) && payment.entries.find(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
+        const amount = arEntry?.credit || 0;
+        if (amount <= 0) return;
         
         if (monthSettled && monthlyOutstanding[monthSettled]) {
-          // Find the payment amount from AR credit entry
-          const arEntry = payment.entries.find(e => 
-            e.accountCode.startsWith('1100-') && e.accountType === 'Asset' && e.credit > 0
-          );
-          
-          if (arEntry) {
-            const amount = arEntry.credit;
-            console.log(`💰 Processing payment allocation for ${monthSettled}: $${amount} (${paymentType})`);
-            
-            // Apply payment to the correct month based on monthSettled
-            if (paymentType === 'admin') {
-              monthlyOutstanding[monthSettled].adminFee.paid += amount;
-              console.log(`  → Admin fee applied to ${monthSettled}: +$${amount}`);
-            } else if (paymentType === 'deposit') {
-              monthlyOutstanding[monthSettled].deposit.paid += amount;
-              console.log(`  → Deposit applied to ${monthSettled}: +$${amount}`);
-            } else if (paymentType === 'rent') {
-              monthlyOutstanding[monthSettled].rent.paid += amount;
-              console.log(`  → Rent applied to ${monthSettled}: +$${amount}`);
-            } else {
-              // Fallback: try to determine from description if paymentType is not set
-              const description = arEntry.description.toLowerCase();
-              if (description.includes('admin fee') || description.includes('administrative')) {
-                monthlyOutstanding[monthSettled].adminFee.paid += amount;
-                console.log(`  → Admin fee (fallback) applied to ${monthSettled}: +$${amount}`);
-              } else if (description.includes('security deposit') || description.includes('deposit')) {
-                monthlyOutstanding[monthSettled].deposit.paid += amount;
-                console.log(`  → Deposit (fallback) applied to ${monthSettled}: +$${amount}`);
-              } else {
-                monthlyOutstanding[monthSettled].rent.paid += amount;
-                console.log(`  → Rent (fallback) applied to ${monthSettled}: +$${amount}`);
-              }
-            }
+          console.log(`💰 Applying payment to ${monthSettled}: $${amount} (${paymentType})`);
+          if (paymentType === 'admin') {
+            monthlyOutstanding[monthSettled].adminFee.paid += amount;
+          } else if (paymentType === 'deposit') {
+            monthlyOutstanding[monthSettled].deposit.paid += amount;
+          } else if (paymentType === 'rent') {
+            monthlyOutstanding[monthSettled].rent.paid += amount;
+          } else {
+            // Fallback by description hint
+            const desc = (arEntry?.description || '').toLowerCase();
+            if (desc.includes('admin')) monthlyOutstanding[monthSettled].adminFee.paid += amount;
+            else if (desc.includes('deposit')) monthlyOutstanding[monthSettled].deposit.paid += amount;
+            else monthlyOutstanding[monthSettled].rent.paid += amount;
           }
-        } else if (payment.source === 'payment' && payment.metadata?.allocationType === 'payment_allocation') {
-          // Handle payment allocation transactions that don't have monthSettled
-          console.log(`⚠️ Payment allocation transaction without monthSettled: ${payment._id}`);
-          console.log(`   Payment type: ${paymentType}, Amount: $${payment.totalCredit}`);
-        } else if (monthSettled && !monthlyOutstanding[monthSettled]) {
-          console.log(`⚠️ Payment for ${monthSettled} but no accrual found for that month: ${payment._id}`);
+          return;
+        }
+
+        // FIFO fallback: apply to oldest months with outstanding
+        let remaining = amount;
+        const ordered = Object.keys(monthlyOutstanding).sort();
+        for (const mk of ordered) {
+          if (remaining <= 0) break;
+          const b = monthlyOutstanding[mk];
+          const owedRent = Math.max(0, b.rent.owed - b.rent.paid);
+          const owedAdmin = Math.max(0, b.adminFee.owed - b.adminFee.paid);
+          const owedDep = Math.max(0, b.deposit.owed - b.deposit.paid);
+          let need = owedRent + owedAdmin + owedDep;
+          if (need <= 0) continue;
+          const take = Math.min(remaining, need);
+          let toApply = take;
+          const takeRent = Math.min(toApply, owedRent); b.rent.paid += takeRent; toApply -= takeRent;
+          const takeAdmin = Math.min(toApply, owedAdmin); b.adminFee.paid += takeAdmin; toApply -= takeAdmin;
+          const takeDep = Math.min(toApply, owedDep); b.deposit.paid += takeDep; toApply -= takeDep;
+          remaining -= take;
         }
       });
       

@@ -439,4 +439,140 @@ exports.getAccounts = async (req, res) => {
       error: error.message
     });
   }
+};
+
+/**
+ * Update transaction entry
+ */
+exports.updateTransactionEntry = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+    
+    console.log('🔧 Updating transaction entry:', id, 'with data:', updateData);
+    
+    // Find the transaction entry
+    const transactionEntry = await TransactionEntry.findById(id);
+    if (!transactionEntry) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction entry not found'
+      });
+    }
+    
+    // Store original data for audit
+    const originalData = transactionEntry.toObject();
+    
+    // Validate update data
+    const allowedFields = [
+      'description', 
+      'debit', 
+      'credit', 
+      'date', 
+      'account', 
+      'accountName', 
+      'accountType',
+      'metadata'
+    ];
+    
+    const filteredUpdateData = {};
+    for (const field of allowedFields) {
+      if (updateData[field] !== undefined) {
+        filteredUpdateData[field] = updateData[field];
+      }
+    }
+    
+    // Validate debits and credits if both are provided
+    if (filteredUpdateData.debit !== undefined && filteredUpdateData.credit !== undefined) {
+      if (filteredUpdateData.debit > 0 && filteredUpdateData.credit > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Transaction entry cannot have both debit and credit amounts'
+        });
+      }
+    }
+    
+    // Add audit information
+    filteredUpdateData.updatedBy = req.user._id;
+    filteredUpdateData.updatedAt = new Date();
+    
+    // Update the transaction entry
+    const updatedEntry = await TransactionEntry.findByIdAndUpdate(
+      id,
+      filteredUpdateData,
+      { new: true, runValidators: true }
+    );
+    
+    console.log('✅ Transaction entry updated successfully');
+    
+    res.status(200).json({
+      success: true,
+      message: 'Transaction entry updated successfully',
+      data: updatedEntry
+    });
+    
+  } catch (error) {
+    console.error('Error updating transaction entry:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update transaction entry',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Delete transaction entry
+ */
+exports.deleteTransactionEntry = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log('🗑️ Deleting transaction entry:', id);
+    
+    // Find the transaction entry
+    const transactionEntry = await TransactionEntry.findById(id);
+    if (!transactionEntry) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction entry not found'
+      });
+    }
+    
+    // Store data for audit
+    const deletedData = transactionEntry.toObject();
+    
+    // Check if this is part of a balanced transaction
+    // If it's part of a double-entry transaction, we might need to handle it differently
+    if (transactionEntry.source && transactionEntry.sourceId) {
+      console.log('⚠️ Transaction entry is part of a source transaction:', {
+        source: transactionEntry.source,
+        sourceId: transactionEntry.sourceId
+      });
+      
+      // For now, we'll allow deletion but log a warning
+      // In a production system, you might want to prevent deletion of system-generated entries
+    }
+    
+    // Delete the transaction entry
+    await TransactionEntry.findByIdAndDelete(id);
+    
+    console.log('✅ Transaction entry deleted successfully');
+    
+    res.status(200).json({
+      success: true,
+      message: 'Transaction entry deleted successfully',
+      data: {
+        deletedEntry: deletedData
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error deleting transaction entry:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete transaction entry',
+      error: error.message
+    });
+  }
 }; 

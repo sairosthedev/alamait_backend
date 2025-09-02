@@ -1382,6 +1382,246 @@ const uploadReceiptHandler = async (req, res) => {
     });
 };
 
+/**
+ * Get students who paid in a specific month
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getStudentsWhoPaidInMonth = async (req, res) => {
+    try {
+        const { month } = req.params; // Format: "YYYY-MM"
+        const { page = 1, limit = 10 } = req.query;
+        
+        console.log(`🔍 Fetching students who paid in month: ${month}`);
+        
+        // Validate month format
+        if (!/^\d{4}-\d{2}$/.test(month)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid month format. Use YYYY-MM (e.g., 2025-05)'
+            });
+        }
+        
+        const skip = (page - 1) * limit;
+        
+        // Query for payment allocation transactions in the specified month
+        const paymentTransactions = await TransactionEntry.find({
+            'metadata.monthSettled': month,
+            'metadata.allocationType': 'payment_allocation',
+            'source': 'payment'
+        })
+        .populate('residence', 'name')
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(parseInt(limit));
+        
+        // Get total count for pagination
+        const totalCount = await TransactionEntry.countDocuments({
+            'metadata.monthSettled': month,
+            'metadata.allocationType': 'payment_allocation',
+            'source': 'payment'
+        });
+        
+        // Group transactions by student and get student details
+        const studentPayments = [];
+        const processedStudents = new Set();
+        
+        for (const transaction of paymentTransactions) {
+            const studentId = transaction.metadata?.studentId;
+            
+            if (!studentId || processedStudents.has(studentId)) {
+                continue;
+            }
+            
+            processedStudents.add(studentId);
+            
+            // Get student details
+            const student = await User.findById(studentId).select('firstName lastName email phone');
+            
+            if (!student) {
+                console.log(`⚠️ Student not found for ID: ${studentId}`);
+                continue;
+            }
+            
+            // Get all payment transactions for this student in this month
+            const studentMonthPayments = await TransactionEntry.find({
+                'metadata.studentId': studentId,
+                'metadata.monthSettled': month,
+                'metadata.allocationType': 'payment_allocation',
+                'source': 'payment'
+            }).sort({ date: 1 });
+            
+            // Calculate total amount paid by this student in this month
+            const totalAmount = studentMonthPayments.reduce((sum, tx) => {
+                const arEntry = tx.entries.find(e => 
+                    e.accountCode.startsWith('1100-') && e.accountType === 'Asset' && e.credit > 0
+                );
+                return sum + (arEntry ? arEntry.credit : 0);
+            }, 0);
+            
+            // Get payment breakdown by type
+            const paymentBreakdown = {
+                rent: 0,
+                admin: 0,
+                deposit: 0
+            };
+            
+            studentMonthPayments.forEach(tx => {
+                const paymentType = tx.metadata?.paymentType;
+                const arEntry = tx.entries.find(e => 
+                    e.accountCode.startsWith('1100-') && e.accountType === 'Asset' && e.credit > 0
+                );
+                
+                if (arEntry && paymentType) {
+                    paymentBreakdown[paymentType] += arEntry.credit;
+                }
+            });
+            
+            // Get the first payment date for this student in this month
+            const firstPaymentDate = studentMonthPayments[0]?.date;
+            
+            studentPayments.push({
+                studentId: studentId,
+                student: {
+                    _id: student._id,
+                    firstName: student.firstName,
+                    lastName: student.lastName,
+                    email: student.email,
+                    phone: student.phone
+                },
+                residence: transaction.residence,
+                month: month,
+                totalAmount: totalAmount,
+                paymentBreakdown: paymentBreakdown,
+                paymentDate: firstPaymentDate,
+                numberOfPayments: studentMonthPayments.length,
+                paymentTransactions: studentMonthPayments.map(tx => ({
+                    transactionId: tx.transactionId,
+                    date: tx.date,
+                    amount: tx.entries.find(e => 
+                        e.accountCode.startsWith('1100-') && e.accountType === 'Asset' && e.credit > 0
+                    )?.credit || 0,
+                    paymentType: tx.metadata?.paymentType,
+                    description: tx.description
+                }))
+            });
+        }
+        
+        // Sort by total amount paid (descending)
+        studentPayments.sort((a, b) => b.totalAmount - a.totalAmount);
+        
+        const totalPages = Math.ceil(totalCount / limit);
+        
+        res.json({
+            success: true,
+            message: `Students who paid in ${month}`,
+            data: {
+                month: month,
+                students: studentPayments,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: totalPages,
+                    totalCount: totalCount,
+                    limit: parseInt(limit)
+                },
+                summary: {
+                    totalStudents: studentPayments.length,
+                    totalAmount: studentPayments.reduce((sum, sp) => sum + sp.totalAmount, 0),
+                    averageAmount: studentPayments.length > 0 ? 
+                        studentPayments.reduce((sum, sp) => sum + sp.totalAmount, 0) / studentPayments.length : 0
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error fetching students who paid in month:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching students who paid in month',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get available months for payment filtering
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getAvailablePaymentMonths = async (req, res) => {
+    try {
+        console.log('🔍 Fetching available payment months');
+        
+        // Get all unique months where payments were made
+        const months = await TransactionEntry.aggregate([
+            {
+                $match: {
+                    'metadata.allocationType': 'payment_allocation',
+                    'source': 'payment',
+                    'metadata.monthSettled': { $exists: true, $ne: null }
+                }
+            },
+            {
+                $group: {
+                    _id: '$metadata.monthSettled',
+                    count: { $sum: 1 },
+                    totalAmount: {
+                        $sum: {
+                            $reduce: {
+                                input: {
+                                    $filter: {
+                                        input: '$entries',
+                                        cond: {
+                                            $and: [
+                                                { $regexMatch: { input: '$$this.accountCode', regex: '^1100-' } },
+                                                { $eq: ['$$this.accountType', 'Asset'] },
+                                                { $gt: ['$$this.credit', 0] }
+                                            ]
+                                        }
+                                    }
+                                },
+                                initialValue: 0,
+                                in: { $add: ['$$value', '$$this.credit'] }
+                            }
+                        }
+                    },
+                    lastPaymentDate: { $max: '$date' }
+                }
+            },
+            {
+                $sort: { _id: -1 } // Sort by month descending (newest first)
+            }
+        ]);
+        
+        const formattedMonths = months.map(month => ({
+            month: month._id,
+            year: parseInt(month._id.split('-')[0]),
+            monthNumber: parseInt(month._id.split('-')[1]),
+            monthName: new Date(month._id + '-01').toLocaleString('default', { month: 'long' }),
+            paymentCount: month.count,
+            totalAmount: month.totalAmount,
+            lastPaymentDate: month.lastPaymentDate
+        }));
+        
+        res.json({
+            success: true,
+            message: 'Available payment months retrieved successfully',
+            data: {
+                months: formattedMonths,
+                totalMonths: formattedMonths.length
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error fetching available payment months:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching available payment months',
+            error: error.message
+        });
+    }
+};
+
 // Export all functions
 module.exports = {
     getPayments,
@@ -1392,5 +1632,7 @@ module.exports = {
     getPaymentTotals,
     createPayment,
     sendReceiptEmail,
-    uploadReceipt: uploadReceiptHandler
+    uploadReceipt: uploadReceiptHandler,
+    getStudentsWhoPaidInMonth,
+    getAvailablePaymentMonths
 }; 
