@@ -119,31 +119,84 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
             const proratedRent = calculateProratedRent(startDate, monthlyRent);
 			const totalLeaseStartAmount = proratedRent + (adminFee || 0) + depositAmount;
 			
+            // Create proper double-entry accounting entries
+            const entries = [];
+            
+            // 1. Prorated Rent Accrual
+            if (proratedRent > 0) {
+                entries.push({
+                    accountCode: debtor.accountCode,
+                    accountName: debtorAccount.name,
+                    accountType: debtorAccount.type,
+                    debit: proratedRent,
+                    credit: 0,
+                    description: `Prorated rent due from ${debtor.user.firstName} ${debtor.user.lastName} - ${startDate.toISOString().split('T')[0]} to month end`
+                });
+                
+                entries.push({
+                    accountCode: '4001',
+                    accountName: 'Rental Income',
+                    accountType: 'Income',
+                    debit: 0,
+                    credit: proratedRent,
+                    description: `Prorated rental income accrued - ${debtor.user.firstName} ${debtor.user.lastName}`
+                });
+            }
+            
+            // 2. Admin Fee Accrual (if applicable)
+            if (adminFee > 0) {
+                entries.push({
+                    accountCode: debtor.accountCode,
+                    accountName: debtorAccount.name,
+                    accountType: debtorAccount.type,
+                    debit: adminFee,
+                    credit: 0,
+                    description: `Admin fee due from ${debtor.user.firstName} ${debtor.user.lastName}`
+                });
+                
+                entries.push({
+                    accountCode: '4002',
+                    accountName: 'Administrative Fees',
+                    accountType: 'Income',
+                    debit: 0,
+                    credit: adminFee,
+                    description: `Administrative income accrued - ${debtor.user.firstName} ${debtor.user.lastName}`
+                });
+            }
+            
+            // 3. Security Deposit Liability
+            if (depositAmount > 0) {
+                entries.push({
+                    accountCode: debtor.accountCode,
+                    accountName: debtorAccount.name,
+                    accountType: debtorAccount.type,
+                    debit: depositAmount,
+                    credit: 0,
+                    description: `Security deposit due from ${debtor.user.firstName} ${debtor.user.lastName}`
+                });
+                
+                entries.push({
+                    accountCode: '2020',
+                    accountName: 'Tenant Security Deposits',
+                    accountType: 'Liability',
+                    debit: 0,
+                    credit: depositAmount,
+                    description: `Security deposit liability created - ${debtor.user.firstName} ${debtor.user.lastName}`
+                });
+            }
+            
+            // Calculate totals
+            const totalDebit = entries.reduce((sum, entry) => sum + entry.debit, 0);
+            const totalCredit = entries.reduce((sum, entry) => sum + entry.credit, 0);
+
             const leaseStartTransaction = new TransactionEntry({
                 transactionId: `LEASE_START_${applicationCode}_${Date.now()}`,
                 date: startDate,
 				description: `Lease start for ${debtor.user.firstName} ${debtor.user.lastName}`,
                 reference: `LEASE_START_${applicationCode}`,
-                entries: [
-                    {
-                        accountCode: debtor.accountCode,
-                        accountName: debtorAccount.name,
-                        accountType: debtorAccount.type,
-                        debit: totalLeaseStartAmount,
-                        credit: 0,
-                        description: `Lease start charges for ${startDate.toISOString().split('T')[0]}`
-                    },
-                    {
-                        accountCode: '4001',
-                        accountName: 'Rental Income',
-                        accountType: 'Income',
-                        debit: 0,
-                        credit: proratedRent,
-						description: `Prorated rental income for ${debtor.user.firstName} ${debtor.user.lastName}`
-                    }
-                ],
-                totalDebit: totalLeaseStartAmount,
-                totalCredit: totalLeaseStartAmount,
+                entries,
+                totalDebit,
+                totalCredit,
                 source: 'rental_accrual',
                 sourceId: debtor._id,
                 sourceModel: 'Debtor',
