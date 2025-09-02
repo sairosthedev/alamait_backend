@@ -78,7 +78,7 @@ exports.submitApplication = async (req, res) => {
                 console.log(`📊 Previous financial summary:`, previousFinancialHistory);
             }
             
-            // Check if user has any active applications
+            // Check if user has any active applications or leases that haven't ended
             const activeApplication = await Application.findOne({
                 email: email.toLowerCase(),
                 status: { $in: ['pending', 'approved', 'waitlisted'] }
@@ -92,6 +92,27 @@ exports.submitApplication = async (req, res) => {
                         status: activeApplication.status,
                         applicationCode: activeApplication.applicationCode,
                         submittedDate: activeApplication.applicationDate
+                    }
+                });
+            }
+            
+            // Check if user has any approved applications with leases that haven't ended yet
+            const currentDate = new Date();
+            const activeLease = await Application.findOne({
+                email: email.toLowerCase(),
+                status: 'approved',
+                endDate: { $gt: currentDate } // Lease hasn't ended yet
+            });
+            
+            if (activeLease) {
+                return res.status(400).json({ 
+                    error: 'You currently have an active lease that hasn\'t ended yet. Please wait until your lease ends to apply again.',
+                    existingLease: {
+                        id: activeLease._id,
+                        applicationCode: activeLease.applicationCode,
+                        startDate: activeLease.startDate,
+                        endDate: activeLease.endDate,
+                        daysRemaining: Math.ceil((new Date(activeLease.endDate) - currentDate) / (1000 * 60 * 60 * 24))
                     }
                 });
             }

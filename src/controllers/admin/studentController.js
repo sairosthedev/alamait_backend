@@ -1039,10 +1039,32 @@ exports.manualAddStudent = async (req, res) => {
             adminFee
         } = req.body;
 
-        // Check if user already exists
+        // Check if user already exists and has an active lease
         let existingUser = await User.findOne({ email });
         if (existingUser) {
-            return res.status(400).json({ error: 'Email already registered' });
+            // Check if user has any active leases that haven't ended
+            const currentDate = new Date();
+            const activeLease = await Application.findOne({
+                email: email.toLowerCase(),
+                status: 'approved',
+                endDate: { $gt: currentDate } // Lease hasn't ended yet
+            });
+            
+            if (activeLease) {
+                return res.status(400).json({ 
+                    error: 'User has an active lease that hasn\'t ended yet. Please wait until the lease ends to create a new application.',
+                    existingLease: {
+                        id: activeLease._id,
+                        applicationCode: activeLease.applicationCode,
+                        startDate: activeLease.startDate,
+                        endDate: activeLease.endDate,
+                        daysRemaining: Math.ceil((new Date(activeLease.endDate) - currentDate) / (1000 * 60 * 60 * 24))
+                    }
+                });
+            }
+            
+            // If no active lease, allow re-application
+            console.log(`🔄 Re-application detected for existing student: ${email}`);
         }
 
         // Validate residence and room
@@ -1109,23 +1131,55 @@ exports.manualAddStudent = async (req, res) => {
         console.log(`   Parsed start date: ${parsedStartDate}`);
         console.log(`   Parsed end date: ${parsedEndDate}`);
 
-        // Generate temporary password
-        const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+        // Handle existing user or create new one
+        let student = existingUser;
+        
+        if (!student) {
+            // Generate temporary password for new user
+            const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
 
-        // Create new student user
-        const student = new User({
-            email,
-            firstName,
-            lastName,
-            phone,
-            password: tempPassword, // Let the pre-save hook hash it
-            status: 'active',
-            emergencyContact,
-            role: 'student',
-            isVerified: true
-        });
+            // Create new student user
+            student = new User({
+                email,
+                firstName,
+                lastName,
+                phone,
+                password: tempPassword, // Let the pre-save hook hash it
+                status: 'active',
+                emergencyContact,
+                role: 'student',
+                isVerified: true
+            });
 
-        await student.save();
+            await student.save();
+            console.log(`✅ New student created: ${student.email}`);
+        } else {
+            // Update existing user information if needed
+            let updated = false;
+            if (student.firstName !== firstName) {
+                student.firstName = firstName;
+                updated = true;
+            }
+            if (student.lastName !== lastName) {
+                student.lastName = lastName;
+                updated = true;
+            }
+            if (student.phone !== phone) {
+                student.phone = phone;
+                updated = true;
+            }
+            if (student.emergencyContact !== emergencyContact) {
+                student.emergencyContact = emergencyContact;
+                updated = true;
+            }
+            
+            if (updated) {
+                await student.save();
+                console.log(`✅ Existing student updated: ${student.email}`);
+            } else {
+                console.log(`✅ Using existing student: ${student.email}`);
+            }
+        }
 
         // Generate application code
         const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
@@ -1548,16 +1602,29 @@ exports.uploadCsvStudents = async (req, res) => {
                     continue;
                 }
                 
-                // Check if user already exists
+                // Check if user already exists and has an active lease
                 const existingUser = await User.findOne({ email: row.email });
                 if (existingUser) {
-                    results.failed.push({
-                        row: rowNumber,
-                        error: 'Email already registered',
-                        data: row
+                    // Check if user has any active leases that haven't ended
+                    const currentDate = new Date();
+                    const activeLease = await Application.findOne({
+                        email: row.email.toLowerCase(),
+                        status: 'approved',
+                        endDate: { $gt: currentDate } // Lease hasn't ended yet
                     });
-                    results.summary.totalFailed++;
-                    continue;
+                    
+                    if (activeLease) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `User has an active lease ending ${activeLease.endDate.toDateString()}. Cannot create new application.`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                    
+                    // If no active lease, allow re-application
+                    console.log(`🔄 Re-application detected for existing student: ${row.email}`);
                 }
                 
                 // Validate room if provided
@@ -1613,24 +1680,53 @@ exports.uploadCsvStudents = async (req, res) => {
                     continue;
                 }
                 
-                // Generate temporary password
-                const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+                // Handle existing user or create new one
+                let student = existingUser;
+                let tempPassword = null; // Initialize tempPassword
                 
-                // Create new student user
-                const student = new User({
-                    email: row.email,
-                    firstName: row.firstName,
-                    lastName: row.lastName,
-                    phone: row.phone || '',
-                    password: tempPassword,
-                    status: row.status || 'active',
-                    emergencyContact: row.emergencyContact || {},
-                    role: 'student',
-                    isVerified: true,
-                    residence: residenceId
-                });
-                
-                await student.save();
+                if (!student) {
+                    // Generate temporary password for new user
+                    tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+                    
+                    // Create new student user
+                    student = new User({
+                        email: row.email,
+                        firstName: row.firstName,
+                        lastName: row.lastName,
+                        phone: row.phone || '',
+                        password: tempPassword,
+                        status: row.status || 'active',
+                        emergencyContact: row.emergencyContact || {},
+                        role: 'student',
+                        isVerified: true,
+                        residence: residenceId
+                    });
+                    
+                    await student.save();
+                    console.log(`✅ New student created: ${student.email}`);
+                } else {
+                    // Update existing user information if needed
+                    let updated = false;
+                    if (student.firstName !== row.firstName) {
+                        student.firstName = row.firstName;
+                        updated = true;
+                    }
+                    if (student.lastName !== row.lastName) {
+                        student.lastName = row.lastName;
+                        updated = true;
+                    }
+                    if (student.phone !== (row.phone || '')) {
+                        student.phone = row.phone || '';
+                        updated = true;
+                    }
+                    
+                    if (updated) {
+                        await student.save();
+                        console.log(`✅ Existing student updated: ${student.email}`);
+                    } else {
+                        console.log(`✅ Using existing student: ${student.email}`);
+                    }
+                }
                 
                 // Generate application code
                 const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
@@ -1745,7 +1841,8 @@ exports.uploadCsvStudents = async (req, res) => {
                     roomNumber: roomNumber,
                     applicationCode: application.applicationCode,
                     debtorCreated: !!debtor,
-                    temporaryPassword: tempPassword
+                    temporaryPassword: tempPassword || 'Existing user - no new password generated',
+                    isExistingUser: !!existingUser
                 });
                 
                 results.summary.totalSuccessful++;
@@ -2096,16 +2193,29 @@ exports.uploadExcelStudents = async (req, res) => {
                     continue;
                 }
                 
-                // Check if user already exists
+                // Check if user already exists and has an active lease
                 const existingUser = await User.findOne({ email: row.email });
                 if (existingUser) {
-                    results.failed.push({
-                        row: rowNumber,
-                        error: 'Email already registered',
-                        data: row
+                    // Check if user has any active leases that haven't ended
+                    const currentDate = new Date();
+                    const activeLease = await Application.findOne({
+                        email: row.email.toLowerCase(),
+                        status: 'approved',
+                        endDate: { $gt: currentDate } // Lease hasn't ended yet
                     });
-                    results.summary.totalFailed++;
-                    continue;
+                    
+                    if (activeLease) {
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `User has an active lease ending ${activeLease.endDate.toDateString()}. Cannot create new application.`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                    
+                    // If no active lease, allow re-application
+                    console.log(`🔄 Re-application detected for existing student: ${row.email}`);
                 }
                 
                 // Validate room if provided
@@ -2181,27 +2291,56 @@ exports.uploadExcelStudents = async (req, res) => {
                     continue;
                 }
                 
-                // Generate temporary password
-                const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+                // Handle existing user or create new one
+                let student = existingUser;
+                let tempPassword = null; // Initialize tempPassword
                 
-                // Use status as is since it's already correct
-                let cleanStatus = row.status || 'active';
-                
-                // Create new student user
-                const student = new User({
-                    email: row.email,
-                    firstName: row.firstname,
-                    lastName: row.lastname,
-                    phone: row.phone || '',
-                    password: tempPassword,
-                    status: cleanStatus,
-                    emergencyContact: row.emergencycontact || row.emergency_contact || {},
-                    role: 'student',
-                    isVerified: true,
-                    residence: residenceId
-                });
-                
-                await student.save();
+                if (!student) {
+                    // Generate temporary password for new user
+                    tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+                    
+                    // Use status as is since it's already correct
+                    let cleanStatus = row.status || 'active';
+                    
+                    // Create new student user
+                    student = new User({
+                        email: row.email,
+                        firstName: row.firstname,
+                        lastName: row.lastname,
+                        phone: row.phone || '',
+                        password: tempPassword,
+                        status: cleanStatus,
+                        emergencyContact: row.emergencycontact || row.emergency_contact || {},
+                        role: 'student',
+                        isVerified: true,
+                        residence: residenceId
+                    });
+                    
+                    await student.save();
+                    console.log(`✅ New student created: ${student.email}`);
+                } else {
+                    // Update existing user information if needed
+                    let updated = false;
+                    if (student.firstName !== row.firstname) {
+                        student.firstName = row.firstname;
+                        updated = true;
+                    }
+                    if (student.lastName !== row.lastname) {
+                        student.lastName = row.lastname;
+                        updated = true;
+                    }
+                    if (student.phone !== (row.phone || '')) {
+                        student.phone = row.phone || '';
+                        updated = true;
+                    }
+                    
+                    if (updated) {
+                        await student.save();
+                        console.log(`✅ Existing student updated: ${student.email}`);
+                    } else {
+                        console.log(`✅ Using existing student: ${student.email}`);
+                    }
+                }
                 
                 // Generate application code
                 const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
@@ -2336,7 +2475,8 @@ exports.uploadExcelStudents = async (req, res) => {
                     roomNumber: roomNumber,
                     applicationCode: application.applicationCode,
                     debtorCreated: !!debtor,
-                    temporaryPassword: tempPassword
+                    temporaryPassword: tempPassword || 'Existing user - no new password generated',
+                    isExistingUser: !!existingUser
                 });
                 
                 results.summary.totalSuccessful++;
