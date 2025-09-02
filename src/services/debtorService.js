@@ -599,10 +599,12 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         console.log(`   Room: ${roomNumber || 'Not set'}`);
 
         // 🆕 INTEGRATED: Auto-backfill transactions for the new debtor
+        // NOTE: Only run backfill if rental accrual service is NOT handling transactions
+        // (Rental accrual service creates transactions when lease starts via application approval)
         try {
             const { backfillTransactionsForDebtor } = require('./transactionBackfillService');
             console.log(`🔄 Auto-backfilling transactions for new debtor: ${debtorCode}`);
-            const backfillResult = await backfillTransactionsForDebtor(debtor, { bulk: false });
+            const backfillResult = await backfillTransactionsForDebtor(debtor, { auto: true });
             
             if (backfillResult.success) {
                 console.log(`✅ Auto-backfill completed for ${debtorCode}:`);

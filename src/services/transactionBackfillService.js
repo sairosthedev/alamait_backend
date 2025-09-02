@@ -34,6 +34,7 @@ function calculateProratedRent(startDate, monthlyRent) {
  */
 function calculateDepositAmount(roomPrice) {
 	// Standard practice: 1 month rent as deposit
+	return roomPrice || 0;
 }
 
 /**
@@ -46,12 +47,12 @@ function calculateDepositAmount(roomPrice) {
  */
 async function backfillTransactionsForDebtor(debtor, options = {}) {
 	try {
-		// Guard: run only when explicitly requested for bulk or manual flows
-		if (!options.bulk && !options.manual) {
+		// Guard: run only when explicitly requested for bulk, manual, or auto flows
+		if (!options.bulk && !options.manual && !options.auto) {
 			return {
 				success: true,
 				skipped: true,
-				reason: 'Backfill disabled outside bulk/manual modes'
+				reason: 'Backfill disabled outside bulk/manual/auto modes'
 			};
 		}
 
@@ -104,10 +105,12 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 		let duplicatesRemoved = 0;
         
 		// Idempotency: skip if a lease-start entry already exists (either prior debtor-based or lease-based)
+		// Check for both backfill-created and rental accrual service-created lease start transactions
 		const existingLeaseStart = await TransactionEntry.findOne({
             $or: [
 				{ reference: `LEASE_START_${applicationCode}` },
-				{ source: 'rental_accrual', sourceModel: 'Debtor', sourceId: debtor._id, description: { $regex: /^Lease start / } }
+				{ source: 'rental_accrual', sourceModel: 'Debtor', sourceId: debtor._id, description: { $regex: /^Lease start / } },
+				{ 'metadata.studentId': getId(debtor.user), 'metadata.type': 'lease_start' }
 			]
 		});
 		
@@ -145,10 +148,16 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
                 sourceId: debtor._id,
                 sourceModel: 'Debtor',
                 status: 'posted',
+                createdBy: 'system',
                 metadata: {
 					// marker for lease-start created by backfill
                     type: 'lease_start',
-					applicationCode
+					applicationCode,
+					studentId: debtor.user._id,
+					studentName: `${debtor.user.firstName} ${debtor.user.lastName}`,
+					residenceId: debtor.residence?._id,
+					residenceName: debtor.residence?.name || 'Unknown Residence',
+					month: startDate.toISOString().substring(0, 7) // YYYY-MM format
 				}
 			});
             
@@ -160,26 +169,58 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 		const currentMonthIter = new Date(startDate);
         currentMonthIter.setDate(1); // Set to first day of month
         
+        // Get lease start month to skip it for monthly accruals
+        const leaseStartYear = startDate.getFullYear();
+        const leaseStartMonth = startDate.getMonth() + 1; // 1-12
+        const leaseStartMonthKey = `${leaseStartYear}-${String(leaseStartMonth).padStart(2, '0')}`;
+        
+        // Get current month boundary - only create transactions up to current month
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth() + 1; // 1-12
+        const currentMonthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+        
         while (currentMonthIter < endDate) {
 			const year = currentMonthIter.getFullYear();
 			const month = currentMonthIter.getMonth() + 1; // 1-12
 			const monthKey = `${year}-${String(month).padStart(2, '0')}`;
 
+			// Stop at current month - future months are handled by cron job
+			if (year > currentYear || (year === currentYear && month > currentMonth)) {
+				console.log(`⏭️ Stopping at current month boundary: ${currentMonthKey}. Future months (${monthKey}+) will be handled by cron job.`);
+				break;
+			}
+
+			// Skip monthly accrual for lease start month (already covered by lease start transaction)
+			if (monthKey === leaseStartMonthKey) {
+				console.log(`⏭️ Skipping monthly accrual for lease start month: ${monthKey}`);
+				currentMonthIter.setMonth(currentMonthIter.getMonth() + 1);
+				continue;
+			}
+
 			// Skip if any existing accrual exists for this student+period from either model
+			// Check for both backfill-created and rental accrual service-created monthly accruals
 			const existingMonthlyAccrual = await TransactionEntry.findOne({
                 source: 'rental_accrual',
 				$and: [
-					{ 'metadata.type': 'monthly_rent_accrual' },
+					{
+						$or: [
+							{ 'metadata.type': 'monthly_rent_accrual' },
+							{ description: { $regex: /Monthly rent accrual/ } }
+						]
+					},
 					{
                 $or: [
                     { 'metadata.month': monthKey },
-							{ 'metadata.accrualMonth': month, 'metadata.accrualYear': year }
+							{ 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+							{ description: { $regex: new RegExp(monthKey) } }
 						]
 					},
 					{
 						$or: [
 							{ 'metadata.studentId': getId(debtor.user) },
-							{ sourceModel: 'Debtor', sourceId: debtor._id }
+							{ sourceModel: 'Debtor', sourceId: debtor._id },
+							{ 'entries.accountCode': debtor.accountCode }
 						]
                     }
                 ]

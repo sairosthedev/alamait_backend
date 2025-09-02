@@ -57,16 +57,21 @@ class RentalAccrualService {
         try {
             console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}`);
             
-            // Check if lease start entries already exist
+            // Check if lease start entries already exist (from either rental accrual service or backfill service)
             const existingEntries = await TransactionEntry.findOne({
-                'metadata.studentId': application.student,
-                'metadata.type': 'lease_start',
-                'metadata.leaseStartDate': application.startDate
+                $or: [
+                    // Rental accrual service created transactions
+                    { 'metadata.studentId': application.student, 'metadata.type': 'lease_start' },
+                    // Backfill service created transactions
+                    { 'metadata.studentId': application.student, 'metadata.type': 'lease_start' },
+                    { source: 'rental_accrual', sourceModel: 'Debtor', 'metadata.studentId': application.student },
+                    { description: { $regex: /^Lease start/ }, 'metadata.studentId': application.student }
+                ]
             });
             
             if (existingEntries) {
-                console.log(`⚠️ Lease start entries already exist for ${application.firstName}`);
-                return { success: false, error: 'Lease start entries already exist' };
+                console.log(`⚠️ Lease start entries already exist for ${application.firstName} (created by ${existingEntries.createdBy || 'unknown service'})`);
+                return { success: false, error: 'Lease start entries already exist', existingTransaction: existingEntries._id };
             }
             
             // Get residence and room details for pricing
@@ -488,16 +493,22 @@ class RentalAccrualService {
                 }
             }
 
-            // Check if accrual already exists for this month
+            // Check if accrual already exists for this month (from either rental accrual service or backfill service)
+            const monthKey = `${year}-${String(month).padStart(2, '0')}`;
             const existingAccrual = await TransactionEntry.findOne({
-                'metadata.studentId': student.student.toString(),
-                'metadata.accrualMonth': month,
-                'metadata.accrualYear': year,
-                'metadata.type': 'monthly_rent_accrual'
+                $or: [
+                    // Rental accrual service created transactions
+                    { 'metadata.studentId': student.student.toString(), 'metadata.accrualMonth': month, 'metadata.accrualYear': year, 'metadata.type': 'monthly_rent_accrual' },
+                    // Backfill service created transactions
+                    { 'metadata.studentId': student.student.toString(), 'metadata.month': monthKey, 'metadata.type': 'monthly_rent_accrual' },
+                    { source: 'rental_accrual', 'metadata.studentId': student.student.toString(), description: { $regex: new RegExp(monthKey) } },
+                    { 'entries.accountCode': { $regex: `^1100-${student.student.toString()}` }, description: { $regex: /Monthly rent accrual/ }, description: { $regex: new RegExp(monthKey) } }
+                ]
             });
             
             if (existingAccrual) {
-                return { success: false, error: 'Accrual already exists for this month' };
+                console.log(`   ⚠️ Monthly accrual already exists for ${student.firstName} ${student.lastName} - ${monthKey} (created by ${existingAccrual.createdBy || 'unknown service'})`);
+                return { success: false, error: 'Accrual already exists for this month', existingTransaction: existingAccrual._id };
             }
             
             // Get residence and room details for pricing
