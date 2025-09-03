@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const FinancialReportsController = require('../controllers/financialReportsController');
-const OptimizedFinancialReportsController = require('../controllers/optimizedFinancialReportsController');
 const { auth, financeAccess } = require('../middleware/auth');
 
 /**
@@ -62,12 +61,6 @@ router.get('/monthly-income-expenses', FinancialReportsController.generateMonthl
  * GET /api/financial-reports/monthly-balance-sheet?period=2025&basis=cash
  */
 router.get('/monthly-balance-sheet', FinancialReportsController.generateMonthlyBalanceSheet);
-
-/**
- * OPTIMIZED Monthly Balance Sheet (Performance optimized version)
- * GET /api/financial-reports/monthly-balance-sheet-optimized?period=2025&basis=cash
- */
-router.get('/monthly-balance-sheet-optimized', OptimizedFinancialReportsController.generateMonthlyBalanceSheetOptimized);
 
 /**
  * Monthly Cash Flow (January to December breakdown)
