@@ -435,7 +435,7 @@ class BalanceSheetService {
       };
       
       // 🚀 OPTIMIZATION: Process months in parallel instead of sequentially
-      console.log(`⚡ Processing all 12 months in parallel for faster generation...`);
+      console.log(`⚡ Processing all 12 months in parallel for faster generation... [DEPLOYED]`);
       
       const monthPromises = [];
       for (let month = 1; month <= 12; month++) {
