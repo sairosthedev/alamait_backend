@@ -320,131 +320,14 @@ class BalanceSheetService {
         // Don't throw error as this is not critical for balance sheet generation
       }
       
-      // 🆕 AGGREGATE PARENT DEPOSIT ACCOUNTS WITH ALL CHILD ACCOUNTS
-      try {
-        console.log('\n🔗 Aggregating parent deposit accounts with child accounts...');
-        
-        // Aggregate account 2020 (Tenant Security Deposits)
-        const mainDepositAccount = accountBalances['2020'];
-        if (mainDepositAccount) {
-          let totalDepositBalance = mainDepositAccount.balance;
-          let totalDepositDebits = mainDepositAccount.debitTotal;
-          let totalDepositCredits = mainDepositAccount.creditTotal;
-          
-          // Find all child deposit accounts (2020-*)
-          const childDepositAccounts = Object.keys(accountBalances).filter(code => 
-            code.startsWith('2020-') && code !== '2020'
-          );
-          
-          console.log(`📊 Found ${childDepositAccounts.length} child deposit accounts: ${childDepositAccounts.join(', ')}`);
-          
-          // Aggregate child account balances
-          childDepositAccounts.forEach(childCode => {
-            const childAccount = accountBalances[childCode];
-            if (childAccount) {
-              totalDepositBalance += childAccount.balance;
-              totalDepositDebits += childAccount.debitTotal;
-              totalDepositCredits += childAccount.creditTotal;
-              console.log(`   Child deposit account ${childCode}: $${childAccount.balance}`);
-            }
-          });
-          
-          // Update the main deposit account with aggregated totals
-          mainDepositAccount.balance = totalDepositBalance;
-          mainDepositAccount.debitTotal = totalDepositDebits;
-          mainDepositAccount.creditTotal = totalDepositCredits;
-          mainDepositAccount.aggregated = true;
-          mainDepositAccount.childAccounts = childDepositAccounts;
-          mainDepositAccount.totalWithChildren = totalDepositBalance;
-          
-          console.log(`✅ Updated main deposit account (2020) with aggregated balance: $${totalDepositBalance}`);
-        }
-        
-        // Aggregate account 2030 (Deferred Income - Advance Rent)
-        const mainDeferredAccount = accountBalances['2030'];
-        if (mainDeferredAccount) {
-          let totalDeferredBalance = mainDeferredAccount.balance;
-          let totalDeferredDebits = mainDeferredAccount.debitTotal;
-          let totalDeferredCredits = mainDeferredAccount.creditTotal;
-          
-          // Find all child deferred accounts (2030-*)
-          const childDeferredAccounts = Object.keys(accountBalances).filter(code => 
-            code.startsWith('2030-') && code !== '2030'
-          );
-          
-          console.log(`📊 Found ${childDeferredAccounts.length} child deferred accounts: ${childDeferredAccounts.join(', ')}`);
-          
-          // Aggregate child account balances
-          childDeferredAccounts.forEach(childCode => {
-            const childAccount = accountBalances[childCode];
-            if (childAccount) {
-              totalDeferredBalance += childAccount.balance;
-              totalDeferredDebits += childAccount.debitTotal;
-              totalDeferredCredits += childAccount.creditTotal;
-              console.log(`   Child deferred account ${childCode}: $${childAccount.balance}`);
-            }
-          });
-          
-          // Update the main deferred account with aggregated totals
-          mainDeferredAccount.balance = totalDeferredBalance;
-          mainDeferredAccount.debitTotal = totalDeferredDebits;
-          mainDeferredAccount.creditTotal = totalDeferredCredits;
-          mainDeferredAccount.aggregated = true;
-          mainDeferredAccount.childAccounts = childDeferredAccounts;
-          mainDeferredAccount.totalWithChildren = totalDeferredBalance;
-          
-          console.log(`✅ Updated main deferred account (2030) with aggregated balance: $${totalDeferredBalance}`);
-        }
-        
-        // Aggregate account 2501 (Deferred Income - Rent)
-        const mainRentDeferredAccount = accountBalances['2501'];
-        if (mainRentDeferredAccount) {
-          let totalRentDeferredBalance = mainRentDeferredAccount.balance;
-          let totalRentDeferredDebits = mainRentDeferredAccount.debitTotal;
-          let totalRentDeferredCredits = mainRentDeferredAccount.creditTotal;
-          
-          // Find all child rent deferred accounts (2501-*)
-          const childRentDeferredAccounts = Object.keys(accountBalances).filter(code => 
-            code.startsWith('2501-') && code !== '2501'
-          );
-          
-          console.log(`📊 Found ${childRentDeferredAccounts.length} child rent deferred accounts: ${childRentDeferredAccounts.join(', ')}`);
-          
-          // Aggregate child account balances
-          childRentDeferredAccounts.forEach(childCode => {
-            const childAccount = accountBalances[childCode];
-            if (childAccount) {
-              totalRentDeferredBalance += childAccount.balance;
-              totalRentDeferredDebits += childAccount.debitTotal;
-              totalRentDeferredCredits += childAccount.creditTotal;
-              console.log(`   Child rent deferred account ${childCode}: $${childAccount.balance}`);
-            }
-          });
-          
-          // Update the main rent deferred account with aggregated totals
-          mainRentDeferredAccount.balance = totalRentDeferredBalance;
-          mainRentDeferredAccount.debitTotal = totalRentDeferredDebits;
-          mainRentDeferredAccount.creditTotal = totalRentDeferredCredits;
-          mainRentDeferredAccount.aggregated = true;
-          mainRentDeferredAccount.childAccounts = childRentDeferredAccounts;
-          mainRentDeferredAccount.totalWithChildren = totalRentDeferredBalance;
-          
-          console.log(`✅ Updated main rent deferred account (2501) with aggregated balance: $${totalRentDeferredBalance}`);
-        }
-        
-      } catch (error) {
-        console.error('❌ Error aggregating deposit accounts:', error);
-        // Don't throw error as this is not critical for balance sheet generation
-      }
-      
       // Categorize into balance sheet sections with proper classification
       Object.values(accountBalances).forEach(account => {
         const balance = account.balance;
         
-        // 🆕 FIX: Skip ALL child accounts from balance sheet - only show parent accounts
-        // This ensures balance sheet shows only parent accounts with aggregated totals
-        if (this.isChildAccount(account.code)) {
-          console.log(`⏭️ Skipping child account ${account.code} - only parent accounts shown in balance sheet`);
+        // 🆕 FIX: Skip child accounts that have been aggregated into their parent
+        // This prevents double-counting when parent accounts aggregate child balances
+        if (account.code.startsWith('1100-') && accountBalances['1100']?.aggregated) {
+          console.log(`⏭️ Skipping child AR account ${account.code} - already aggregated into parent 1100`);
           return; // Skip this child account
         }
         
@@ -1031,31 +914,6 @@ class BalanceSheetService {
   }
 
   // Enhanced helper methods for formatting data
-  
-  /**
-   * Check if an account is a child account (has a parent account)
-   * Child accounts follow patterns like: 1100-68b83cfd7021d4021c1f3363, 2000-001, etc.
-   */
-  static isChildAccount(accountCode) {
-    // Check for common child account patterns
-    if (accountCode.includes('-')) {
-      return true; // Any account with a dash is likely a child account
-    }
-    
-    // Check for specific parent-child patterns
-    const parentChildPatterns = [
-      /^1100-\w+$/,  // AR child accounts: 1100-studentId
-      /^2000-\w+$/,  // AP child accounts: 2000-supplierId
-      /^2020-\w+$/,  // Deposit child accounts: 2020-studentId
-      /^2030-\w+$/,  // Deferred income child accounts: 2030-studentId
-      /^2501-\w+$/,  // Deferred rent child accounts: 2501-studentId
-      /^1000-\w+$/,  // Cash child accounts: 1000-locationId
-      /^1500-\w+$/,  // Equipment child accounts: 1500-equipmentId
-    ];
-    
-    return parentChildPatterns.some(pattern => pattern.test(accountCode));
-  }
-  
   static formatCashAndBankAccounts(currentAssets) {
     const cashAndBank = {};
     let total = 0;
