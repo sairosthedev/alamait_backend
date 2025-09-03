@@ -75,6 +75,7 @@ class TransactionController {
                 amount: entry.totalDebit || entry.totalCredit || 0,
                 residence: entry.residence,
                 expenseId: entry.expenseId,
+                status: entry.status || 'posted', // ✅ Added status field
                 createdBy: {
                     _id: entry.createdBy,
                     firstName: 'System',
@@ -817,7 +818,8 @@ class TransactionController {
                 'account', 
                 'accountName', 
                 'accountType',
-                'metadata'
+                'metadata',
+                'status'  // Added status to allow voiding transactions
             ];
             
             const filteredUpdateData = {};
