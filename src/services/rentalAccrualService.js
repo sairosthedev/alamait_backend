@@ -3,6 +3,7 @@ const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
 const Invoice = require('../models/Invoice');
 const mongoose = require('mongoose');
+const { logTransactionOperation, logSystemOperation } = require('../utils/auditLogger');
 
 /**
  * Enhanced Rental Accrual Service
@@ -46,6 +47,17 @@ class RentalAccrualService {
             ])
         });
         await child.save();
+        
+        // Log account creation
+        await logSystemOperation('create', 'Account', child._id, {
+            source: 'Rental Accrual Service',
+            type: 'student_ar_account',
+            studentId: studentId,
+            studentName: studentName,
+            parentAccount: '1100',
+            accountCode: childCode
+        });
+        
         return child;
     }
     
@@ -326,6 +338,17 @@ class RentalAccrualService {
             });
             
             await transactionEntry.save();
+            
+            // Log transaction creation
+            await logSystemOperation('create', 'TransactionEntry', transactionEntry._id, {
+                source: 'Rental Accrual Service',
+                type: 'lease_start',
+                applicationId: application._id,
+                studentId: application.student,
+                studentName: `${application.firstName} ${application.lastName}`,
+                totalDebit: totalDebit,
+                totalCredit: totalCredit
+            });
             
             // Update transaction with entry reference
             transaction.entries = [transactionEntry._id];

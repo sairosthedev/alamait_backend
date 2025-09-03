@@ -2,6 +2,7 @@ const Vendor = require('../models/Vendor');
 const Account = require('../models/Account');
 const TransactionEntry = require('../models/TransactionEntry');
 const mongoose = require('mongoose');
+const { logVendorOperation, logAccountOperation } = require('../utils/auditLogger');
 
 // Helper function to calculate vendor totals from transactions
 async function calculateVendorTotals(vendorId, chartOfAccountsCode) {
@@ -151,6 +152,15 @@ exports.createVendor = async (req, res) => {
 
         // Create chart of accounts entries if they don't exist
         await ensureChartOfAccountsEntries(chartOfAccountsCode, expenseAccountCode, savedVendor);
+
+        // Log vendor creation
+        await logVendorOperation('create', savedVendor, user._id, {
+            source: 'Manual Creation',
+            businessName: savedVendor.businessName,
+            chartOfAccountsCode: savedVendor.chartOfAccountsCode,
+            category: savedVendor.category,
+            vendorType: savedVendor.vendorType
+        });
 
         res.status(201).json({
             message: 'Vendor created successfully',

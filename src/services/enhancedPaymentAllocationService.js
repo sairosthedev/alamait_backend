@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const TransactionEntry = require('../models/TransactionEntry');
 const Payment = require('../models/Payment');
 const AdvancePayment = require('../models/AdvancePayment');
+const { logTransactionOperation, logSystemOperation } = require('../utils/auditLogger');
 
 class EnhancedPaymentAllocationService {
   /**
@@ -1071,6 +1072,18 @@ class EnhancedPaymentAllocationService {
       });
       
       await paymentTransaction.save();
+      
+      // Log payment allocation transaction creation
+      await logSystemOperation('create', 'TransactionEntry', paymentTransaction._id, {
+        source: 'Enhanced Payment Allocation Service',
+        type: 'payment_allocation',
+        paymentId: paymentId,
+        studentId: studentId,
+        amount: amount,
+        paymentType: paymentType,
+        monthSettled: monthSettled
+      });
+      
       console.log(`✅ Payment allocation transaction created: ${paymentTransaction._id}`);
       
       // 🆕 NEW: Automatically sync to debtor

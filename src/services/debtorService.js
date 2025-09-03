@@ -32,6 +32,18 @@ async function ensureStudentARAccount(studentId, studentName) {
         ])
     });
     await acc.save();
+    
+    // Log account creation
+    const { logSystemOperation } = require('../utils/auditLogger');
+    await logSystemOperation('create', 'Account', acc._id, {
+        source: 'Debtor Service',
+        type: 'student_ar_account',
+        studentId: studentId,
+        studentName: studentName,
+        parentAccount: '1100',
+        accountCode: code
+    });
+    
     return acc;
 }
 

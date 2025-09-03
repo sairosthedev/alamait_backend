@@ -7,6 +7,7 @@ const Payment = require('../models/Payment');
 const Invoice = require('../models/Invoice');
 const Vendor = require('../models/Vendor');
 const Debtor = require('../models/Debtor');
+const { logTransactionOperation, logSystemOperation } = require('../utils/auditLogger');
 
 /**
  * Comprehensive Double-Entry Accounting Service with Petty Cash Management
@@ -100,14 +101,14 @@ class DoubleEntryAccountingService {
                 residence: residence // Include residence in entry for better tracking
             });
 
-            // Credit: Bank/Cash (Source)
+            // Credit: Bank Account (Source)
             entries.push({
                 accountCode: await this.getPaymentSourceAccount('Cash'),
-                accountName: 'Cash on Hand',
+                accountName: 'Bank Account',
                 accountType: 'Asset',
                 debit: 0,
                 credit: amount,
-                description: `Cash withdrawn for petty cash allocation to ${user.firstName} ${user.lastName} - ${residenceDoc.name}`,
+                description: `Bank withdrawal for petty cash allocation to ${user.firstName} ${user.lastName} - ${residenceDoc.name}`,
                 residence: residence // Include residence in entry for better tracking
             });
 
@@ -426,14 +427,14 @@ class DoubleEntryAccountingService {
                 residence: residence // Include residence in entry for better tracking
             });
 
-            // Credit: Bank/Cash (Source)
+            // Credit: Bank Account (Source)
             entries.push({
                 accountCode: await this.getPaymentSourceAccount('Cash'),
-                accountName: 'Cash on Hand',
+                accountName: 'Bank Account',
                 accountType: 'Asset',
                 debit: 0,
                 credit: amount,
-                description: `Cash used to replenish ${user.firstName} ${user.lastName} petty cash - ${residenceDoc.name}`,
+                description: `Bank withdrawal to replenish ${user.firstName} ${user.lastName} petty cash - ${residenceDoc.name}`,
                 residence: residence // Include residence in entry for better tracking
             });
 
@@ -668,11 +669,11 @@ class DoubleEntryAccountingService {
                     if (request.paymentMethod === 'Cash' || request.paymentMethod === 'Immediate') {
                         entries.push({
                             accountCode: await this.getPaymentSourceAccount('Cash'),
-                            accountName: 'Cash',
+                            accountName: 'Bank Account',
                             accountType: 'Asset',
                             debit: 0,
                             credit: amount,
-                            description: `Cash payment for ${item.description}`
+                            description: `Bank payment for ${item.description}`
                         });
                     } else {
                         entries.push({
@@ -2374,9 +2375,10 @@ class DoubleEntryAccountingService {
                 // Already in correct format
                 vendorCode = vendor.chartOfAccountsCode;
             } else {
-                // Generate new code in 200xxx format
-                const vendorNumber = vendor.vendorCode ? parseInt(vendor.vendorCode.slice(-3)) : Math.floor(Math.random() * 999) + 1;
-                vendorCode = `200${vendorNumber.toString().padStart(3, '0')}`;
+                // Generate new code in 200xxx format using consistent logic
+                // Use the same logic as vendorController.js to ensure consistency
+                const vendorCount = await Vendor.countDocuments();
+                vendorCode = `200${(vendorCount + 1).toString().padStart(3, '0')}`;
             }
             
             account = await this.getOrCreateAccount(
@@ -2397,17 +2399,17 @@ class DoubleEntryAccountingService {
 
     static async getPaymentSourceAccount(paymentMethod) {
         const methodAccounts = {
-            'Bank Transfer': '1001', // Bank Account
-            'Cash': '1002', // Cash on Hand
-            'Ecocash': '1003', // Ecocash Wallet
-            'Innbucks': '1004', // Innbucks Wallet
-            'Online Payment': '1005', // Online Payment Account
-            'MasterCard': '1006', // Credit Card Account
-            'Visa': '1006', // Credit Card Account
-            'PayPal': '1007' // PayPal Account
+            'Bank Transfer': '1000', // Bank Account
+            'Cash': '1000', // Bank Account (corrected)
+            'Ecocash': '1000', // Bank Account (corrected)
+            'Innbucks': '1000', // Bank Account (corrected)
+            'Online Payment': '1000', // Bank Account (corrected)
+            'MasterCard': '1000', // Bank Account (corrected)
+            'Visa': '1000', // Bank Account (corrected)
+            'PayPal': '1000' // Bank Account (corrected)
         };
 
-        const accountCode = methodAccounts[paymentMethod] || '1002'; // Default to Cash
+        const accountCode = methodAccounts[paymentMethod] || '1000'; // Default to Bank Account
         
         let account = await Account.findOne({ code: accountCode });
         if (!account) {
@@ -2420,16 +2422,16 @@ class DoubleEntryAccountingService {
     static getPaymentAccountName(paymentMethod) {
         const methodNames = {
             'Bank Transfer': 'Bank Account',
-            'Cash': 'Cash on Hand',
-            'Ecocash': 'Ecocash Wallet',
-            'Innbucks': 'Innbucks Wallet',
-            'Online Payment': 'Online Payment Account',
-            'MasterCard': 'Credit Card Account',
-            'Visa': 'Credit Card Account',
-            'PayPal': 'PayPal Account'
+            'Cash': 'Bank Account',
+            'Ecocash': 'Bank Account',
+            'Innbucks': 'Bank Account',
+            'Online Payment': 'Bank Account',
+            'MasterCard': 'Bank Account',
+            'Visa': 'Bank Account',
+            'PayPal': 'Bank Account'
         };
 
-        return methodNames[paymentMethod] || 'Cash on Hand';
+        return methodNames[paymentMethod] || 'Bank Account';
     }
 
     static async getOrCreateAccount(code, name, type) {
@@ -2444,6 +2446,15 @@ class DoubleEntryAccountingService {
                 isActive: true
             });
             await account.save();
+            
+            // Log account creation
+            await logSystemOperation('create', 'Account', account._id, {
+                source: 'Double Entry Accounting Service',
+                type: 'auto_created_account',
+                accountCode: code,
+                accountName: name,
+                accountType: type
+            });
         }
         
         return account;

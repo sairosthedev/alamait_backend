@@ -1190,20 +1190,31 @@ class BalanceSheetService {
         return;
       }
 
-      // Get all child accounts linked to 2000
+      // Get all accounts payable accounts (both children of 2000 and standalone AP accounts)
       const childAccounts = await Account.find({ 
         parentAccount: mainAPAccount._id,
         isActive: true
       });
 
-      if (childAccounts.length === 0) {
-        console.log('ℹ️ No child accounts found for account 2000');
-        return;
-      }
+      // Also get standalone accounts payable accounts that aren't children of 2000
+      const standaloneAPAccounts = await Account.find({
+        type: 'Liability',
+        isActive: true,
+        $or: [
+          { name: { $regex: /accounts payable/i } },
+          { code: { $regex: '^21' } } // Include 2100, 2101, 2102, etc.
+        ],
+        parentAccount: { $ne: mainAPAccount._id }
+      });
 
-      console.log(`📊 Found ${childAccounts.length} child accounts for account 2000:`);
+      // Combine all accounts payable accounts
+      const allAPAccounts = [...childAccounts, ...standaloneAPAccounts];
+
+      console.log(`📊 Found ${childAccounts.length} child accounts for account 2000`);
+      console.log(`📊 Found ${standaloneAPAccounts.length} standalone AP accounts`);
+      console.log(`📊 Found ${allAPAccounts.length} total AP accounts`);
       
-      // Calculate total balance for account 2000 including children
+      // Calculate total balance for account 2000 including all AP accounts
       let totalAPBalance = 0;
       
       // Add main account 2000 balance
@@ -1212,12 +1223,19 @@ class BalanceSheetService {
         console.log(`   Main account 2000: $${balanceSheet.liabilities.current['2000'].balance}`);
       }
       
-      // Add child account balances
-      for (const childAccount of childAccounts) {
-        if (balanceSheet.liabilities.current[childAccount.code]) {
-          const childBalance = balanceSheet.liabilities.current[childAccount.code].balance;
-          totalAPBalance += childBalance;
-          console.log(`   Child account ${childAccount.code}: $${childBalance}`);
+      // Add all AP account balances (including children and orphaned accounts)
+      for (const apAccount of allAPAccounts) {
+        // Skip the main account 2000 as we already added it above
+        if (apAccount.code === '2000') {
+          continue;
+        }
+        
+        if (balanceSheet.liabilities.current[apAccount.code]) {
+          const accountBalance = balanceSheet.liabilities.current[apAccount.code].balance;
+          totalAPBalance += accountBalance;
+          const isChild = apAccount.parentAccount && apAccount.parentAccount.toString() === mainAPAccount._id.toString();
+          const status = isChild ? 'CHILD' : 'ORPHANED';
+          console.log(`   ${status} account ${apAccount.code}: $${accountBalance}`);
         }
       }
       
