@@ -103,10 +103,10 @@ export const getMonthlyIncomeStatement = async (period, basis = 'cash') => {
   }
 };
 
-// Get Monthly Balance Sheet (January to December breakdown)
+// Get Monthly Balance Sheet (January to December breakdown) - OPTIMIZED VERSION
 export const getMonthlyBalanceSheet = async (period, basis = 'cash') => {
   try {
-    const response = await api.get(`/financial-reports/monthly-balance-sheet?period=${period}&basis=${basis}`);
+    const response = await api.get(`/financial-reports/monthly-balance-sheet-optimized?period=${period}&basis=${basis}`);
     return response.data;
   } catch (error) {
     console.error('Error fetching monthly balance sheet:', error);
