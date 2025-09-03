@@ -1133,10 +1133,11 @@ exports.manualAddStudent = async (req, res) => {
 
         // Handle existing user or create new one
         let student = existingUser;
+        let tempPassword = null; // Initialize tempPassword at higher scope
         
         if (!student) {
             // Generate temporary password for new user
-            const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+            tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
 
             // Create new student user
             student = new User({
@@ -1430,7 +1431,7 @@ exports.manualAddStudent = async (req, res) => {
 
                 ACCOUNT DETAILS:
                 Email: ${email}
-                Temporary Password: ${tempPassword}
+                ${tempPassword ? `Temporary Password: ${tempPassword}` : 'Password: Use your existing password'}
 
                 APPLICATION DETAILS:
                 Application Code: ${application.applicationCode}
@@ -1503,7 +1504,8 @@ exports.manualAddStudent = async (req, res) => {
             },
             loginDetails: {
                 email,
-                temporaryPassword: tempPassword
+                temporaryPassword: tempPassword || 'Existing user - no new password generated',
+                isExistingUser: !!existingUser
             },
             booking: {
                 id: booking._id,

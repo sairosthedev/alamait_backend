@@ -1253,6 +1253,7 @@ class EnhancedPaymentAllocationService {
       const startDate = new Date(leaseStartDate);
       const year = startDate.getFullYear();
       const month = startDate.getMonth();
+      const dayOfMonth = startDate.getDate();
       
       // Get the first day of the month
       const firstDayOfMonth = new Date(year, month, 1);
@@ -1264,15 +1265,24 @@ class EnhancedPaymentAllocationService {
       // Calculate days from lease start to end of month
       const daysFromStart = lastDayOfMonth.getDate() - startDate.getDate() + 1;
       
-      // Calculate prorated amounts
-      const proratedRent = Math.round((monthlyRent / daysInMonth) * daysFromStart * 100) / 100;
+      let proratedRent;
+      
+      // Business rule: If lease starts from 20th onwards, use $7 per day
+      if (dayOfMonth >= 20) {
+        proratedRent = daysFromStart * 7; // $7 per day
+        console.log(`📅 Lease starts on ${dayOfMonth}th (≥20th): Using $7/day rate`);
+        console.log(`   Days from start: ${daysFromStart}, Amount: $${proratedRent}`);
+      } else {
+        // Use normal prorated calculation
+        proratedRent = Math.round((monthlyRent / daysInMonth) * daysFromStart * 100) / 100;
+        console.log(`📅 Lease starts on ${dayOfMonth}th (<20th): Using prorated calculation`);
+        console.log(`   Monthly rent: $${monthlyRent}, Days in month: ${daysInMonth}, Days from start: ${daysFromStart}`);
+        console.log(`   Prorated rent: $${proratedRent} (${monthlyRent} × ${daysFromStart}/${daysInMonth})`);
+      }
+      
       const proratedAdminFee = monthlyAdminFee; // Admin fee is charged once, not prorated
       const proratedDeposit = monthlyDeposit; // Deposit is charged once, not prorated
       
-      console.log(`📅 Prorated calculation for ${startDate.toLocaleDateString()}:`);
-      console.log(`   Days in month: ${daysInMonth}`);
-      console.log(`   Days from lease start: ${daysFromStart}`);
-      console.log(`   Prorated rent: $${proratedRent} (${monthlyRent} × ${daysFromStart}/${daysInMonth})`);
       console.log(`   Admin fee: $${proratedAdminFee} (charged once)`);
       console.log(`   Deposit: $${proratedDeposit} (charged once)`);
       
@@ -1282,7 +1292,8 @@ class EnhancedPaymentAllocationService {
         proratedDeposit,
         daysInMonth,
         daysFromStart,
-        calculationDate: startDate
+        calculationDate: startDate,
+        calculationMethod: dayOfMonth >= 20 ? 'flat_rate_7_per_day' : 'prorated'
       };
       
     } catch (error) {
@@ -1293,7 +1304,8 @@ class EnhancedPaymentAllocationService {
         proratedDeposit: monthlyDeposit,
         daysInMonth: 30,
         daysFromStart: 30,
-        calculationDate: new Date()
+        calculationDate: new Date(),
+        calculationMethod: 'error_fallback'
       };
     }
   }

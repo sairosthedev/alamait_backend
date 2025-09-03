@@ -13,16 +13,29 @@ function calculateProratedRent(startDate, monthlyRent) {
     const start = new Date(startDate);
     const year = start.getFullYear();
     const month = start.getMonth();
+    const dayOfMonth = start.getDate();
     
     // Get the last day of the month
     const lastDayOfMonth = new Date(year, month + 1, 0);
     const daysInMonth = lastDayOfMonth.getDate();
     
     // Calculate days from start date to end of month
-    const daysFromStart = daysInMonth - start.getDate() + 1;
+    const daysFromStart = daysInMonth - dayOfMonth + 1;
     
-    // Calculate prorated amount
-    const proratedAmount = (monthlyRent / daysInMonth) * daysFromStart;
+    let proratedAmount;
+    
+    // Business rule: If lease starts from 20th onwards, use $7 per day
+    if (dayOfMonth >= 20) {
+        proratedAmount = daysFromStart * 7; // $7 per day
+        console.log(`📅 Lease starts on ${dayOfMonth}th (≥20th): Using $7/day rate`);
+        console.log(`   Days from start: ${daysFromStart}, Amount: $${proratedAmount}`);
+    } else {
+        // Use normal prorated calculation
+        proratedAmount = (monthlyRent / daysInMonth) * daysFromStart;
+        console.log(`📅 Lease starts on ${dayOfMonth}th (<20th): Using prorated calculation`);
+        console.log(`   Monthly rent: $${monthlyRent}, Days in month: ${daysInMonth}, Days from start: ${daysFromStart}`);
+        console.log(`   Prorated amount: $${monthlyRent} × ${daysFromStart}/${daysInMonth} = $${proratedAmount}`);
+    }
     
     return Math.round(proratedAmount * 100) / 100; // Round to 2 decimal places
 }
@@ -201,6 +214,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
                 source: 'rental_accrual',
                 sourceId: debtor._id,
                 sourceModel: 'Debtor',
+                residence: debtor.residence?._id, // Add residence field
                 status: 'posted',
                 createdBy: 'system',
                 metadata: {
@@ -218,6 +232,35 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
             
             await leaseStartTransaction.save();
             leaseStartCreated = true;
+            
+            // 🆕 AUTO-INVOICE: Create and send lease start invoice
+            try {
+                console.log(`📄 Creating lease start invoice for backfilled transaction...`);
+                const RentalAccrualService = require('./rentalAccrualService');
+                
+                // Create a mock application object for invoice creation
+                const mockApplication = {
+                    _id: debtor.application || new mongoose.Types.ObjectId(),
+                    applicationCode: applicationCode,
+                    student: debtor.user._id,
+                    firstName: debtor.user.firstName,
+                    lastName: debtor.user.lastName,
+                    startDate: startDate,
+                    residence: debtor.residence?._id,
+                    allocatedRoom: debtor.roomNumber
+                };
+                
+                const invoice = await RentalAccrualService.createAndSendLeaseStartInvoice(
+                    mockApplication, 
+                    proratedRent, 
+                    adminFee, 
+                    securityDeposit
+                );
+                console.log(`📄 Lease start invoice created and sent: ${invoice.invoiceNumber}`);
+            } catch (invoiceError) {
+                console.error(`⚠️ Failed to create/send lease start invoice:`, invoiceError.message);
+                // Don't fail the entire process if invoice creation fails
+            }
 		}
 
 		// Prepare iteration over months (idempotent per monthKey)
@@ -309,6 +352,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 					totalCredit: monthlyRent,
                 source: 'rental_accrual',
                 sourceModel: 'Debtor',
+                residence: debtor.residence?._id, // Add residence field
                 status: 'posted',
                 metadata: {
                     studentId: getId(debtor.user),
@@ -325,6 +369,34 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
             
             await monthlyAccrualTransaction.save();
             monthlyTransactionsCreated++;
+            
+            // 🆕 AUTO-INVOICE: Create and send monthly rent invoice
+            try {
+                console.log(`📄 Creating monthly invoice for backfilled transaction: ${monthKey}...`);
+                const RentalAccrualService = require('./rentalAccrualService');
+                
+                // Create a mock student object for invoice creation
+                const mockStudent = {
+                    student: debtor.user._id,
+                    firstName: debtor.user.firstName,
+                    lastName: debtor.user.lastName,
+                    email: debtor.user.email,
+                    phone: debtor.user.phone,
+                    residence: debtor.residence?._id,
+                    allocatedRoom: debtor.roomNumber
+                };
+                
+                const invoice = await RentalAccrualService.createAndSendMonthlyInvoice(
+                    mockStudent, 
+                    month, 
+                    year, 
+                    monthlyRent
+                );
+                console.log(`📄 Monthly invoice created and sent: ${invoice.invoiceNumber}`);
+            } catch (invoiceError) {
+                console.error(`⚠️ Failed to create/send monthly invoice:`, invoiceError.message);
+                // Don't fail the entire process if invoice creation fails
+            }
 			}
             
             // Move to next month

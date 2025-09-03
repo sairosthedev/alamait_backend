@@ -72,7 +72,78 @@ class RentalAccrualService {
             
             if (existingEntries) {
                 console.log(`⚠️ Lease start entries already exist for this application ${application.applicationCode} (created by ${existingEntries.createdBy || 'unknown service'})`);
-                return { success: false, error: 'Lease start entries already exist for this application', existingTransaction: existingEntries._id };
+                
+                // 🆕 Even if transactions exist, still create invoice if it doesn't exist
+                try {
+                    console.log(`📄 Checking if lease start invoice exists for application ${application.applicationCode}...`);
+                    
+                    const Invoice = require('../models/Invoice');
+                    const existingInvoice = await Invoice.findOne({
+                        student: application.student,
+                        billingPeriod: `LEASE_START_${application.applicationCode}`,
+                        status: { $ne: 'cancelled' }
+                    });
+                    
+                    if (!existingInvoice) {
+                        console.log(`📄 Creating missing lease start invoice for application ${application.applicationCode}...`);
+                        
+                        // Get residence and room details for pricing
+                        const Residence = require('../models/Residence');
+                        const residence = await Residence.findById(application.residence);
+                        if (!residence) {
+                            throw new Error('Residence not found for invoice creation');
+                        }
+                        
+                        // Find room price
+                        const room = residence.rooms.find(r => r.roomNumber === application.allocatedRoom);
+                        if (!room || !room.price) {
+                            throw new Error('Room price not found for invoice creation');
+                        }
+                        
+                        // Calculate prorated amounts (same logic as transaction creation)
+                        const startDate = new Date(application.startDate);
+                        const daysInMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
+                        const startDay = startDate.getDate();
+                        const proratedDays = daysInMonth - startDay + 1;
+                        
+                        let proratedRent;
+                        if (startDay >= 20) {
+                            proratedRent = proratedDays * 7; // $7 per day
+                        } else {
+                            proratedRent = (room.price / daysInMonth) * proratedDays;
+                        }
+                        
+                        const adminFee = 20; // Standard admin fee
+                        const securityDeposit = room.price; // Security deposit equals monthly rent
+                        
+                        const invoice = await this.createAndSendLeaseStartInvoice(application, proratedRent, adminFee, securityDeposit);
+                        console.log(`📄 Lease start invoice created and sent: ${invoice.invoiceNumber}`);
+                        
+                        return { 
+                            success: true, 
+                            message: 'Transactions already existed, but invoice was created and sent',
+                            existingTransaction: existingEntries._id,
+                            invoiceCreated: true,
+                            invoiceNumber: invoice.invoiceNumber
+                        };
+                    } else {
+                        console.log(`📄 Lease start invoice already exists: ${existingInvoice.invoiceNumber}`);
+                        return { 
+                            success: true, 
+                            message: 'Both transactions and invoice already exist',
+                            existingTransaction: existingEntries._id,
+                            existingInvoice: existingInvoice._id
+                        };
+                    }
+                } catch (invoiceError) {
+                    console.error(`❌ Error creating invoice for existing transactions:`, invoiceError.message);
+                    return { 
+                        success: false, 
+                        error: 'Transactions exist but invoice creation failed', 
+                        existingTransaction: existingEntries._id,
+                        invoiceError: invoiceError.message
+                    };
+                }
             }
             
             // Get residence and room details for pricing
@@ -94,7 +165,21 @@ class RentalAccrualService {
             const daysInMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
             const startDay = startDate.getDate();
             const proratedDays = daysInMonth - startDay + 1;
-            const proratedRent = (room.price / daysInMonth) * proratedDays;
+            
+            let proratedRent;
+            
+            // Business rule: If lease starts from 20th onwards, use $7 per day
+            if (startDay >= 20) {
+                proratedRent = proratedDays * 7; // $7 per day
+                console.log(`📅 Lease starts on ${startDay}th (≥20th): Using $7/day rate`);
+                console.log(`   Days from start: ${proratedDays}, Amount: $${proratedRent}`);
+            } else {
+                // Use normal prorated calculation
+                proratedRent = (room.price / daysInMonth) * proratedDays;
+                console.log(`📅 Lease starts on ${startDay}th (<20th): Using prorated calculation`);
+                console.log(`   Monthly rent: $${room.price}, Days in month: ${daysInMonth}, Days from start: ${proratedDays}`);
+                console.log(`   Prorated rent: $${proratedRent} (${room.price} × ${proratedDays}/${daysInMonth})`);
+            }
             
             // Determine admin fee (only for St Kilda)
             const adminFee = residence.name.toLowerCase().includes('st kilda') ? 20 : 0;
@@ -127,7 +212,7 @@ class RentalAccrualService {
                 description: `Lease start: ${application.firstName} ${application.lastName} - ${residence.name}`,
                 type: 'accrual',
                 residence: application.residence,
-                createdBy: 'system', // System-generated transaction
+                createdBy: '68b7909295210ad2fa2c5dcf', // System user ID // System-generated transaction
                 metadata: {
                     studentId: application.student,
                     studentName: `${application.firstName} ${application.lastName}`,
@@ -221,7 +306,7 @@ class RentalAccrualService {
                 sourceId: application.student, // Use student ID, not application ID
                 sourceModel: 'Lease',
                 residence: application.residence,
-                createdBy: 'system',
+                createdBy: '68b7909295210ad2fa2c5dcf', // System user ID
                 status: 'posted',
                 metadata: {
                     applicationId: application._id.toString(),
@@ -249,6 +334,15 @@ class RentalAccrualService {
             console.log(`✅ Lease start accounting entries created for ${application.firstName} ${application.lastName}`);
             console.log(`   Total Debit: $${totalDebit.toFixed(2)}`);
             console.log(`   Total Credit: $${totalCredit.toFixed(2)}`);
+            
+            // 🆕 AUTO-INVOICE: Create and send lease start invoice
+            try {
+                const invoice = await this.createAndSendLeaseStartInvoice(application, proratedRent, adminFee, securityDeposit);
+                console.log(`📄 Lease start invoice created and sent: ${invoice.invoiceNumber}`);
+            } catch (invoiceError) {
+                console.error(`⚠️ Failed to create/send lease start invoice:`, invoiceError.message);
+                // Don't fail the entire process if invoice creation fails
+            }
             
             // 🆕 AUTO-BACKFILL: If lease started in the past, create missing monthly accruals
             const now = new Date();
@@ -551,7 +645,7 @@ class RentalAccrualService {
                 description: `Monthly rent accrual for ${student.firstName} ${student.lastName} - ${month}/${year}`,
                 type: 'accrual',
                 residence: student.residence,
-                createdBy: 'system',
+                createdBy: '68b7909295210ad2fa2c5dcf', // System user ID
                 metadata: {
                     studentId: student.student.toString(), // Use student ID, not application ID
                     studentName: `${student.firstName} ${student.lastName}`,
@@ -600,7 +694,7 @@ class RentalAccrualService {
                 sourceId: student.student, // Use student ID, not application ID
                 sourceModel: 'Lease',
                 residence: student.residence,
-                createdBy: 'system',
+                createdBy: '68b7909295210ad2fa2c5dcf', // System user ID
                 status: 'posted',
                 metadata: {
                     studentId: student.student.toString(), // Use student ID, not application ID
@@ -647,6 +741,15 @@ class RentalAccrualService {
             } catch (debtorError) {
                 console.error(`❌ Error syncing to debtor: ${debtorError.message}`);
                 // Don't fail the accrual creation if debtor sync fails
+            }
+            
+            // 🆕 AUTO-INVOICE: Create and send monthly rent invoice
+            try {
+                const invoice = await this.createAndSendMonthlyInvoice(student, month, year, rentAmount);
+                console.log(`📄 Monthly invoice created and sent: ${invoice.invoiceNumber}`);
+            } catch (invoiceError) {
+                console.error(`⚠️ Failed to create/send monthly invoice:`, invoiceError.message);
+                // Don't fail the entire process if invoice creation fails
             }
             
             console.log(`✅ Monthly rent accrual created for ${student.firstName} ${student.lastName} - $${rentAmount}`);
@@ -715,7 +818,7 @@ class RentalAccrualService {
                 ],
                 status: 'sent',
                 paymentStatus: 'unpaid',
-                createdBy: 'system',
+                createdBy: '68b7909295210ad2fa2c5dcf', // System user ID
                 metadata: {
                     type: 'monthly_rent',
                     month,
@@ -743,12 +846,283 @@ class RentalAccrualService {
         const year = new Date().getFullYear();
         const month = (new Date().getMonth() + 1).toString().padStart(2, '0');
         
-        // Get count of invoices for this month
-        const count = await Invoice.countDocuments({
-            billingPeriod: `${year}-${month}`
-        });
+        // Get count of all invoices (not just for this month) to ensure uniqueness
+        const count = await Invoice.countDocuments();
         
-        return `INV-${year}${month}-${(count + 1).toString().padStart(3, '0')}`;
+        // Use timestamp to ensure uniqueness
+        const timestamp = Date.now().toString().slice(-6); // Last 6 digits of timestamp
+        
+        return `INV-${year}${month}-${timestamp}`;
+    }
+    
+    /**
+     * 🆕 Create and send lease start invoice
+     */
+    static async createAndSendLeaseStartInvoice(application, proratedRent, adminFee, securityDeposit) {
+        try {
+            const Invoice = require('../models/Invoice');
+            const User = require('../models/User');
+            const Residence = require('../models/Residence');
+            const { sendEmail } = require('../utils/email');
+            
+            // Get student and residence details
+            const student = await User.findById(application.student);
+            const residence = await Residence.findById(application.residence);
+            
+            if (!student || !residence) {
+                throw new Error('Student or residence not found');
+            }
+            
+            // Check if invoice already exists
+            const existingInvoice = await Invoice.findOne({
+                student: student._id,
+                billingPeriod: `LEASE_START_${application.applicationCode}`,
+                status: { $ne: 'cancelled' }
+            });
+            
+            if (existingInvoice) {
+                console.log(`📄 Lease start invoice already exists: ${existingInvoice.invoiceNumber}`);
+                return existingInvoice;
+            }
+            
+            // Generate invoice number
+            const invoiceNumber = await this.generateInvoiceNumber();
+            
+            // Calculate totals
+            const totalAmount = proratedRent + adminFee + securityDeposit;
+            
+            // Create charges array
+            const charges = [];
+            if (proratedRent > 0) {
+                charges.push({
+                    description: 'Prorated Rent',
+                    amount: proratedRent,
+                    quantity: 1,
+                    unitPrice: proratedRent,
+                    total: proratedRent
+                });
+            }
+            if (adminFee > 0) {
+                charges.push({
+                    description: 'Administrative Fee',
+                    amount: adminFee,
+                    quantity: 1,
+                    unitPrice: adminFee,
+                    total: adminFee
+                });
+            }
+            if (securityDeposit > 0) {
+                charges.push({
+                    description: 'Security Deposit',
+                    amount: securityDeposit,
+                    quantity: 1,
+                    unitPrice: securityDeposit,
+                    total: securityDeposit
+                });
+            }
+            
+            // Create invoice
+            const invoice = new Invoice({
+                invoiceNumber,
+                student: student._id,
+                residence: residence._id,
+                room: application.allocatedRoom,
+                billingPeriod: `LEASE_START_${application.applicationCode}`,
+                billingStartDate: new Date(application.startDate),
+                billingEndDate: new Date(application.startDate),
+                dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+                subtotal: totalAmount,
+                totalAmount: totalAmount,
+                balanceDue: totalAmount,
+                charges,
+                status: 'sent',
+                paymentStatus: 'unpaid',
+                studentName: `${student.firstName} ${student.lastName}`,
+                studentEmail: student.email,
+                studentPhone: student.phone,
+                residenceName: residence.name,
+                residenceAddress: `${residence.address}, ${residence.city}`,
+                createdBy: '68b7909295210ad2fa2c5dcf', // System user ID
+                metadata: {
+                    type: 'lease_start',
+                    applicationId: application._id,
+                    applicationCode: application.applicationCode,
+                    proratedRent,
+                    adminFee,
+                    securityDeposit
+                }
+            });
+            
+            await invoice.save();
+            
+            // Send email
+            await this.sendInvoiceEmail(invoice, student, residence);
+            
+            console.log(`📄 Lease start invoice created and sent: ${invoiceNumber}`);
+            return invoice;
+            
+        } catch (error) {
+            console.error('❌ Error creating/sending lease start invoice:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 🆕 Create and send monthly rent invoice
+     */
+    static async createAndSendMonthlyInvoice(student, month, year, rentAmount) {
+        try {
+            const Invoice = require('../models/Invoice');
+            const User = require('../models/User');
+            const Residence = require('../models/Residence');
+            
+            // Get residence details
+            const residence = await Residence.findById(student.residence);
+            
+            if (!residence) {
+                throw new Error('Residence not found');
+            }
+            
+            const billingPeriod = `${year}-${month.toString().padStart(2, '0')}`;
+            
+            // Check if invoice already exists
+            const existingInvoice = await Invoice.findOne({
+                student: student.student,
+                billingPeriod: billingPeriod,
+                status: { $ne: 'cancelled' }
+            });
+            
+            if (existingInvoice) {
+                console.log(`📄 Monthly invoice already exists: ${existingInvoice.invoiceNumber}`);
+                return existingInvoice;
+            }
+            
+            // Generate invoice number
+            const invoiceNumber = await this.generateInvoiceNumber();
+            
+            // Calculate dates
+            const monthStart = new Date(year, month - 1, 1);
+            const monthEnd = new Date(year, month, 0);
+            const dueDate = new Date(year, month - 1, 5); // Due on 5th of month
+            
+            // Create charges array
+            const charges = [{
+                description: 'Monthly Rent',
+                amount: rentAmount,
+                quantity: 1,
+                unitPrice: rentAmount,
+                total: rentAmount
+            }];
+            
+            // Create invoice
+            const invoice = new Invoice({
+                invoiceNumber,
+                student: student.student,
+                residence: student.residence,
+                room: student.allocatedRoom,
+                billingPeriod: billingPeriod,
+                billingStartDate: monthStart,
+                billingEndDate: monthEnd,
+                dueDate: dueDate,
+                subtotal: rentAmount,
+                totalAmount: rentAmount,
+                balanceDue: rentAmount,
+                charges,
+                status: 'sent',
+                paymentStatus: 'unpaid',
+                studentName: `${student.firstName} ${student.lastName}`,
+                studentEmail: student.email,
+                studentPhone: student.phone,
+                residenceName: residence.name,
+                residenceAddress: `${residence.address}, ${residence.city}`,
+                createdBy: '68b7909295210ad2fa2c5dcf', // System user ID
+                metadata: {
+                    type: 'monthly_rent',
+                    month,
+                    year,
+                    rentAmount
+                }
+            });
+            
+            await invoice.save();
+            
+            // Send email
+            await this.sendInvoiceEmail(invoice, student, residence);
+            
+            console.log(`📄 Monthly invoice created and sent: ${invoiceNumber}`);
+            return invoice;
+            
+        } catch (error) {
+            console.error('❌ Error creating/sending monthly invoice:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 🆕 Send invoice email to student
+     */
+    static async sendInvoiceEmail(invoice, student, residence) {
+        try {
+            const { sendEmail } = require('../utils/email');
+            
+            const emailContent = `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+                        <h2 style="color: #333;">Invoice ${invoice.invoiceNumber}</h2>
+                        <p>Dear ${student.firstName} ${student.lastName},</p>
+                        <p>Please find your invoice details below:</p>
+                        
+                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                            <h3 style="color: #333; margin-top: 0;">Invoice Details</h3>
+                            <p><strong>Invoice Number:</strong> ${invoice.invoiceNumber}</p>
+                            <p><strong>Billing Period:</strong> ${invoice.billingPeriod}</p>
+                            <p><strong>Room:</strong> ${invoice.room}</p>
+                            <p><strong>Residence:</strong> ${residence.name}</p>
+                            <p><strong>Due Date:</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</p>
+                        </div>
+                        
+                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                            <h3 style="color: #333; margin-top: 0;">Charges</h3>
+                            ${invoice.charges.map(charge => `
+                                <div style="display: flex; justify-content: space-between; margin: 5px 0;">
+                                    <span>${charge.description}</span>
+                                    <span>$${(charge.total || charge.amount || 0).toFixed(2)}</span>
+                                </div>
+                            `).join('')}
+                            <hr style="margin: 10px 0;">
+                            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 16px;">
+                                <span>Total Amount:</span>
+                                <span>$${invoice.totalAmount.toFixed(2)}</span>
+                            </div>
+                        </div>
+                        
+                        <div style="background-color: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                            <h3 style="color: #1976d2; margin-top: 0;">Payment Information</h3>
+                            <p>Please make payment by the due date to avoid late fees.</p>
+                            <p>For payment inquiries, please contact our finance team.</p>
+                        </div>
+                        
+                        <hr style="margin: 20px 0;">
+                        <p style="font-size: 12px; color: #666;">
+                            This is an automated message from Alamait Student Accommodation.<br>
+                            Please do not reply to this email.
+                        </p>
+                    </div>
+                </div>
+            `;
+            
+            await sendEmail({
+                to: student.email,
+                subject: `Invoice ${invoice.invoiceNumber} - Alamait Student Accommodation`,
+                html: emailContent
+            });
+            
+            console.log(`📧 Invoice email sent to ${student.email}`);
+            
+        } catch (error) {
+            console.error('❌ Error sending invoice email:', error);
+            throw error;
+        }
     }
     
     /**

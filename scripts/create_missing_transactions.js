@@ -22,16 +22,29 @@ function calculateProratedRent(startDate, monthlyRent) {
     const start = new Date(startDate);
     const year = start.getFullYear();
     const month = start.getMonth();
+    const dayOfMonth = start.getDate();
     
     // Get the last day of the month
     const lastDayOfMonth = new Date(year, month + 1, 0);
     const daysInMonth = lastDayOfMonth.getDate();
     
     // Calculate days from start date to end of month
-    const daysFromStart = daysInMonth - start.getDate() + 1;
+    const daysFromStart = daysInMonth - dayOfMonth + 1;
     
-    // Calculate prorated amount
-    const proratedAmount = (monthlyRent / daysInMonth) * daysFromStart;
+    let proratedAmount;
+    
+    // Business rule: If lease starts from 20th onwards, use $7 per day
+    if (dayOfMonth >= 20) {
+        proratedAmount = daysFromStart * 7; // $7 per day
+        console.log(`📅 Lease starts on ${dayOfMonth}th (≥20th): Using $7/day rate`);
+        console.log(`   Days from start: ${daysFromStart}, Amount: $${proratedAmount}`);
+    } else {
+        // Use normal prorated calculation
+        proratedAmount = (monthlyRent / daysInMonth) * daysFromStart;
+        console.log(`📅 Lease starts on ${dayOfMonth}th (<20th): Using prorated calculation`);
+        console.log(`   Monthly rent: $${monthlyRent}, Days in month: ${daysInMonth}, Days from start: ${daysFromStart}`);
+        console.log(`   Prorated amount: $${monthlyRent} × ${daysFromStart}/${daysInMonth} = $${proratedAmount}`);
+    }
     
     return Math.round(proratedAmount * 100) / 100; // Round to 2 decimal places
 }
