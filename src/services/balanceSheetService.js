@@ -324,13 +324,6 @@ class BalanceSheetService {
       Object.values(accountBalances).forEach(account => {
         const balance = account.balance;
         
-        // 🆕 FIX: Skip child accounts that have been aggregated into their parent
-        // This prevents double-counting when parent accounts aggregate child balances
-        if (account.code.startsWith('1100-') && accountBalances['1100']?.aggregated) {
-          console.log(`⏭️ Skipping child AR account ${account.code} - already aggregated into parent 1100`);
-          return; // Skip this child account
-        }
-        
         // Use comprehensive category mapping to ensure all accounts are properly categorized
         const mappedCategory = this.mapAccountToCategory(account.code, account.name, account.type);
         console.log(`🔍 Account ${account.code} (${account.name}): type=${account.type}, mapped=${mappedCategory}, balance=$${balance}`);
@@ -529,19 +522,6 @@ class BalanceSheetService {
             monthBalanceSheet = await this.generateBalanceSheet(monthEndDate, residence);
           }
           
-          // Safety check: Ensure monthBalanceSheet has proper structure
-          if (!monthBalanceSheet || !monthBalanceSheet.assets || !monthBalanceSheet.liabilities || !monthBalanceSheet.equity) {
-            console.warn(`⚠️ Month ${monthKey}: monthBalanceSheet has incomplete structure, using fallback data`);
-            monthBalanceSheet = {
-              assets: { current: {}, nonCurrent: {}, totalCurrent: 0, totalNonCurrent: 0, totalAssets: 0, accumulatedDepreciation: 0 },
-              liabilities: { current: {}, nonCurrent: {}, totalCurrent: 0, totalNonCurrent: 0, totalLiabilities: 0 },
-              equity: { capital: 0, retainedEarnings: 0, otherEquity: 0, totalEquity: 0 },
-              workingCapital: 0,
-              currentRatio: 0,
-              debtToEquity: 0
-            };
-          }
-          
           // Structure the data as expected by the React component with enhanced structure
           monthlyData[monthKey] = {
             month: monthKey,
@@ -552,14 +532,14 @@ class BalanceSheetService {
                 accountsReceivable: this.formatAccountsReceivable(monthBalanceSheet.assets.current),
                 inventory: this.formatInventoryAccounts(monthBalanceSheet.assets.current),
                 prepaidExpenses: this.formatPrepaidAccounts(monthBalanceSheet.assets.current),
-                total: monthBalanceSheet.assets.totalCurrent || 0
+                total: monthBalanceSheet.assets.totalCurrent
               },
               nonCurrent: {
                 propertyPlantEquipment: this.formatFixedAssets(monthBalanceSheet.assets.nonCurrent),
-                accumulatedDepreciation: monthBalanceSheet.assets.accumulatedDepreciation || 0,
-                total: monthBalanceSheet.assets.totalNonCurrent || 0
+                accumulatedDepreciation: monthBalanceSheet.assets.accumulatedDepreciation,
+                total: monthBalanceSheet.assets.totalNonCurrent
               },
-              total: monthBalanceSheet.assets.totalAssets || 0
+              total: monthBalanceSheet.assets.totalAssets
             },
             
             // Debug: Show what's in cashAndBank after formatting (move logs outside object construction)
@@ -570,51 +550,51 @@ class BalanceSheetService {
                 tenantDeposits: this.formatTenantDeposits(monthBalanceSheet.liabilities.current),
                 deferredIncome: this.formatDeferredIncome(monthBalanceSheet.liabilities.current),
                 taxesPayable: this.formatTaxesPayable(monthBalanceSheet.liabilities.current),
-                total: Math.abs(monthBalanceSheet.liabilities.totalCurrent || 0)
+                total: Math.abs(monthBalanceSheet.liabilities.totalCurrent)
               },
               nonCurrent: {
                 longTermLoans: this.formatLongTermLoans(monthBalanceSheet.liabilities.nonCurrent),
                 otherLongTermLiabilities: this.formatOtherLongTermLiabilities(monthBalanceSheet.liabilities.nonCurrent),
-                total: Math.abs(monthBalanceSheet.liabilities.totalNonCurrent || 0)
+                total: Math.abs(monthBalanceSheet.liabilities.totalNonCurrent)
               },
-              total: Math.abs(monthBalanceSheet.liabilities.totalLiabilities || 0)
+              total: Math.abs(monthBalanceSheet.liabilities.totalLiabilities)
             },
             equity: {
               capital: {
                 accountCode: '3000',
                 accountName: 'Owner\'s Capital',
-                amount: monthBalanceSheet.equity.capital || 0 // Allow negative values for equity
+                amount: monthBalanceSheet.equity.capital // Allow negative values for equity
               },
               retainedEarnings: {
                 accountCode: '3100',
                 accountName: 'Retained Earnings',
-                amount: monthBalanceSheet.equity.retainedEarnings || 0 // Allow negative values for equity
+                amount: monthBalanceSheet.equity.retainedEarnings // Allow negative values for equity
               },
               otherEquity: {
                 accountCode: '3200',
                 accountName: 'Other Equity',
-                amount: monthBalanceSheet.equity.otherEquity || 0 // Allow negative values for equity
+                amount: monthBalanceSheet.equity.otherEquity // Allow negative values for equity
               },
-              total: monthBalanceSheet.equity.totalEquity || 0
+              total: monthBalanceSheet.equity.totalEquity
             },
             summary: {
-              totalAssets: monthBalanceSheet.assets.totalAssets || 0,
-              totalLiabilities: Math.abs(monthBalanceSheet.liabilities.totalLiabilities || 0), // Ensure positive values for liabilities
-              totalEquity: monthBalanceSheet.equity.totalEquity || 0, // Allow negative values for equity
-              workingCapital: monthBalanceSheet.workingCapital || 0,
-              currentRatio: monthBalanceSheet.currentRatio || 0,
-              debtToEquity: monthBalanceSheet.debtToEquity || 0
+              totalAssets: monthBalanceSheet.assets.totalAssets,
+              totalLiabilities: Math.abs(monthBalanceSheet.liabilities.totalLiabilities), // Ensure positive values for liabilities
+              totalEquity: monthBalanceSheet.equity.totalEquity, // Allow negative values for equity
+              workingCapital: monthBalanceSheet.workingCapital,
+              currentRatio: monthBalanceSheet.currentRatio,
+              debtToEquity: monthBalanceSheet.debtToEquity
             }
           };
           
-          // Accumulate annual totals with safety checks
-          annualSummary.totalAnnualAssets += monthBalanceSheet.assets.totalAssets || 0;
-          annualSummary.totalAnnualLiabilities += Math.abs(monthBalanceSheet.liabilities.totalLiabilities || 0); // Ensure positive values for liabilities
-          annualSummary.totalAnnualEquity += monthBalanceSheet.equity.totalEquity || 0; // Allow negative values for equity
-          annualSummary.totalAnnualCurrentAssets += monthBalanceSheet.assets.totalCurrent || 0;
-          annualSummary.totalAnnualNonCurrentAssets += monthBalanceSheet.assets.totalNonCurrent || 0;
-          annualSummary.totalAnnualCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalCurrent || 0); // Ensure positive values for liabilities
-          annualSummary.totalAnnualNonCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalNonCurrent || 0); // Ensure positive values for liabilities
+          // Accumulate annual totals
+          annualSummary.totalAnnualAssets += monthBalanceSheet.assets.totalAssets;
+          annualSummary.totalAnnualLiabilities += Math.abs(monthBalanceSheet.liabilities.totalLiabilities); // Ensure positive values for liabilities
+          annualSummary.totalAnnualEquity += monthBalanceSheet.equity.totalEquity; // Allow negative values for equity
+          annualSummary.totalAnnualCurrentAssets += monthBalanceSheet.assets.totalCurrent;
+          annualSummary.totalAnnualNonCurrentAssets += monthBalanceSheet.assets.totalNonCurrent;
+          annualSummary.totalAnnualCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalCurrent); // Ensure positive values for liabilities
+          annualSummary.totalAnnualNonCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalNonCurrent); // Ensure positive values for liabilities
           
         } catch (monthError) {
           console.error(`❌ Error generating balance sheet for month ${month}:`, monthError);
@@ -920,12 +900,6 @@ class BalanceSheetService {
     
     console.log('🔍 formatCashAndBankAccounts - Processing current assets:', currentAssets);
     
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!currentAssets || typeof currentAssets !== 'object') {
-      console.warn('⚠️ formatCashAndBankAccounts: currentAssets is null/undefined, returning empty object');
-      return { total: 0 };
-    }
-    
     Object.entries(currentAssets).forEach(([code, asset]) => {
       // Include ALL cash, bank, and petty cash accounts by code pattern
       if (code.startsWith('100') || code.startsWith('101')) {
@@ -953,12 +927,6 @@ class BalanceSheetService {
 
   static formatAccountsReceivable(currentAssets) {
     const accountsReceivable = {};
-    
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!currentAssets || typeof currentAssets !== 'object') {
-      console.warn('⚠️ formatAccountsReceivable: currentAssets is null/undefined, returning empty object');
-      return { total: 0 };
-    }
     
     Object.entries(currentAssets).forEach(([code, asset]) => {
       // Look for any account that is an AR account (student-specific or generic)
@@ -990,12 +958,6 @@ class BalanceSheetService {
   static formatInventoryAccounts(currentAssets) {
     const inventory = {};
     
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!currentAssets || typeof currentAssets !== 'object') {
-      console.warn('⚠️ formatInventoryAccounts: currentAssets is null/undefined, returning empty object');
-      return { total: 0 };
-    }
-    
     Object.entries(currentAssets).forEach(([code, asset]) => {
       if (asset.name.toLowerCase().includes('inventory') || asset.name.toLowerCase().includes('supplies')) {
         inventory[code] = {
@@ -1014,12 +976,6 @@ class BalanceSheetService {
   static formatPrepaidAccounts(currentAssets) {
     const prepaid = {};
     
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!currentAssets || typeof currentAssets !== 'object') {
-      console.warn('⚠️ formatPrepaidAccounts: currentAssets is null/undefined, returning empty object');
-      return { total: 0 };
-    }
-    
     Object.entries(currentAssets).forEach(([code, asset]) => {
       if (asset.name.toLowerCase().includes('prepaid')) {
         prepaid[code] = {
@@ -1037,12 +993,6 @@ class BalanceSheetService {
 
   static formatFixedAssets(nonCurrentAssets) {
     const fixedAssets = {};
-    
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!nonCurrentAssets || typeof nonCurrentAssets !== 'object') {
-      console.warn('⚠️ formatFixedAssets: nonCurrentAssets is null/undefined, returning empty object');
-      return { total: 0 };
-    }
     
     Object.entries(nonCurrentAssets).forEach(([code, asset]) => {
       if (asset.name.toLowerCase().includes('property') || 
@@ -1065,12 +1015,6 @@ class BalanceSheetService {
   static formatAccountsPayable(currentLiabilities) {
     const accountsPayable = {};
     
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!currentLiabilities || typeof currentLiabilities !== 'object') {
-      console.warn('⚠️ formatAccountsPayable: currentLiabilities is null/undefined, returning empty object');
-      return { total: 0 };
-    }
-    
     Object.entries(currentLiabilities).forEach(([code, liability]) => {
       if (liability.name.toLowerCase().includes('payable')) {
         accountsPayable[code] = {
@@ -1089,12 +1033,6 @@ class BalanceSheetService {
   static formatAccruedExpenses(currentLiabilities) {
     const accrued = {};
     
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!currentLiabilities || typeof currentLiabilities !== 'object') {
-      console.warn('⚠️ formatAccruedExpenses: currentLiabilities is null/undefined, returning empty object');
-      return { total: 0 };
-    }
-    
     Object.entries(currentLiabilities).forEach(([code, liability]) => {
       if (liability.name.toLowerCase().includes('accrued')) {
         accrued[code] = {
@@ -1112,12 +1050,6 @@ class BalanceSheetService {
 
   static formatTenantDeposits(currentLiabilities) {
     const deposits = {};
-    
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!currentLiabilities || typeof currentLiabilities !== 'object') {
-      console.warn('⚠️ formatTenantDeposits: currentLiabilities is null/undefined, returning empty object');
-      return { total: 0 };
-    }
     
     Object.entries(currentLiabilities).forEach(([code, liability]) => {
       if (liability.name.toLowerCase().includes('deposit') || 
@@ -1139,12 +1071,6 @@ class BalanceSheetService {
   static formatTaxesPayable(currentLiabilities) {
     const taxes = {};
     
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!currentLiabilities || typeof currentLiabilities !== 'object') {
-      console.warn('⚠️ formatTaxesPayable: currentLiabilities is null/undefined, returning empty object');
-      return { total: 0 };
-    }
-    
     Object.entries(currentLiabilities).forEach(([code, liability]) => {
       if (liability.name.toLowerCase().includes('tax')) {
         taxes[code] = {
@@ -1162,12 +1088,6 @@ class BalanceSheetService {
 
   static formatDeferredIncome(currentLiabilities) {
     const deferredIncome = {};
-    
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!currentLiabilities || typeof currentLiabilities !== 'object') {
-      console.warn('⚠️ formatDeferredIncome: currentLiabilities is null/undefined, returning empty object');
-      return { total: 0 };
-    }
     
     Object.entries(currentLiabilities).forEach(([code, liability]) => {
       if (liability.name.toLowerCase().includes('deferred') || 
@@ -1189,12 +1109,6 @@ class BalanceSheetService {
   static formatLongTermLoans(nonCurrentLiabilities) {
     const loans = {};
     
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!nonCurrentLiabilities || typeof nonCurrentLiabilities !== 'object') {
-      console.warn('⚠️ formatLongTermLoans: nonCurrentLiabilities is null/undefined, returning empty object');
-      return { total: 0 };
-    }
-    
     Object.entries(nonCurrentLiabilities).forEach(([code, liability]) => {
       if (liability.name.toLowerCase().includes('loan')) {
         loans[code] = {
@@ -1212,12 +1126,6 @@ class BalanceSheetService {
 
   static formatOtherLongTermLiabilities(nonCurrentLiabilities) {
     const other = {};
-    
-    // Add null/undefined check to prevent "Cannot convert undefined or null to object" error
-    if (!nonCurrentLiabilities || typeof nonCurrentLiabilities !== 'object') {
-      console.warn('⚠️ formatOtherLongTermLiabilities: nonCurrentLiabilities is null/undefined, returning empty object');
-      return { total: 0 };
-    }
     
     Object.entries(nonCurrentLiabilities).forEach(([code, liability]) => {
       if (!liability.name.toLowerCase().includes('loan')) {
