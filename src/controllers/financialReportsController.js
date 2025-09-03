@@ -376,7 +376,7 @@ class FinancialReportsController {
             }
             
             // 🚀 OPTIMIZATION: Add timeout and progress tracking
-            console.log(`🚀 Starting optimized monthly balance sheet generation for ${period}...`);
+            console.log(`🚀 Starting optimized monthly balance sheet generation for ${period}... [DEPLOYED]`);
             const startTime = Date.now();
             
             // Set a timeout promise to prevent hanging
