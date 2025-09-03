@@ -62,7 +62,7 @@ class OptimizedFinancialReportsController {
             
             for (let month = 1; month <= 12; month++) {
                 monthPromises.push(
-                    OptimizedFinancialReportsController.generateMonthBalanceSheetOptimized(month, year, residence, allTransactions)
+                    this.generateMonthBalanceSheetOptimized(month, year, residence, allTransactions)
                 );
             }
             
@@ -153,7 +153,7 @@ class OptimizedFinancialReportsController {
             const monthTransactions = allTransactions.filter(t => t.date <= monthEnd);
             
             // OPTIMIZATION: Calculate all account balances from filtered transactions
-            const accountBalances = OptimizedFinancialReportsController.calculateAccountBalancesFromTransactions(monthTransactions, residenceId);
+            const accountBalances = this.calculateAccountBalancesFromTransactions(monthTransactions, residenceId);
             
             // Build balance sheet structure
             const totalCashAndBank = (accountBalances['1000'] || 0) + (accountBalances['1001'] || 0) + 
@@ -266,4 +266,3 @@ class OptimizedFinancialReportsController {
 }
 
 module.exports = OptimizedFinancialReportsController;
-
