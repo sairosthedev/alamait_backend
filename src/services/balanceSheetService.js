@@ -195,41 +195,13 @@ class BalanceSheetService {
         
         const arByMonthOutstanding = arDebits - arCredits;
         
-        // Calculate individual AR account balances properly
-        const arAccountBalances = {};
-        
-        // Process accrual entries to get individual AR account debits
-        accrualEntries.forEach(tx => {
-          tx.entries.forEach(line => {
-            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
-              if (!arAccountBalances[line.accountCode]) {
-                arAccountBalances[line.accountCode] = { debits: 0, credits: 0 };
-              }
-              arAccountBalances[line.accountCode].debits += Number(line.debit || 0);
-            }
-          });
-        });
-        
-        // Process payment entries to get individual AR account credits
-        paymentEntries.forEach(tx => {
-          tx.entries.forEach(line => {
-            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
-              if (!arAccountBalances[line.accountCode]) {
-                arAccountBalances[line.accountCode] = { debits: 0, credits: 0 };
-              }
-              arAccountBalances[line.accountCode].credits += Number(line.credit || 0);
-            }
-          });
-        });
-        
         // Override account balances with monthSettled values
         Object.values(accountBalances).forEach(account => {
           if (account.code && (account.code.startsWith('1100-') || account.code === '1100')) {
-            // Calculate individual AR account balance
-            const arBalance = arAccountBalances[account.code] || { debits: 0, credits: 0 };
-            account.balance = arBalance.debits - arBalance.credits;
-            account.debitTotal = arBalance.debits;
-            account.creditTotal = arBalance.credits;
+            // Override AR accounts with monthSettled calculation
+            account.balance = arByMonthOutstanding;
+            account.debitTotal = arDebits;
+            account.creditTotal = arCredits;
           } else if (account.code && account.code.match(/^100[0-9]/)) {
             // Override cash accounts with monthSettled calculation
             account.balance = cashByMonth;
@@ -275,50 +247,6 @@ class BalanceSheetService {
             break;
         }
       });
-      
-      // 🆕 AGGREGATE PARENT AR ACCOUNT (1100) WITH ALL CHILD ACCOUNTS
-      try {
-        console.log('\n🔗 Aggregating parent AR account (1100) with child accounts...');
-        
-        // Find the main AR account (1100)
-        const mainARAccount = accountBalances['1100'];
-        if (mainARAccount) {
-          let totalARBalance = mainARAccount.balance;
-          let totalARDebits = mainARAccount.debitTotal;
-          let totalARCredits = mainARAccount.creditTotal;
-          
-          // Find all child AR accounts (1100-*)
-          const childARAccounts = Object.keys(accountBalances).filter(code => 
-            code.startsWith('1100-') && code !== '1100'
-          );
-          
-          console.log(`📊 Found ${childARAccounts.length} child AR accounts: ${childARAccounts.join(', ')}`);
-          
-          // Aggregate child account balances
-          childARAccounts.forEach(childCode => {
-            const childAccount = accountBalances[childCode];
-            if (childAccount) {
-              totalARBalance += childAccount.balance;
-              totalARDebits += childAccount.debitTotal;
-              totalARCredits += childAccount.creditTotal;
-              console.log(`   Child account ${childCode}: $${childAccount.balance}`);
-            }
-          });
-          
-          // Update the main AR account with aggregated totals
-          mainARAccount.balance = totalARBalance;
-          mainARAccount.debitTotal = totalARDebits;
-          mainARAccount.creditTotal = totalARCredits;
-          mainARAccount.aggregated = true;
-          mainARAccount.childAccounts = childARAccounts;
-          mainARAccount.totalWithChildren = totalARBalance;
-          
-          console.log(`✅ Updated main AR account (1100) with aggregated balance: $${totalARBalance}`);
-        }
-      } catch (error) {
-        console.error('❌ Error aggregating AR accounts:', error);
-        // Don't throw error as this is not critical for balance sheet generation
-      }
       
       // Categorize into balance sheet sections with proper classification
       Object.values(accountBalances).forEach(account => {
