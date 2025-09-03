@@ -434,6 +434,12 @@ class BalanceSheetService {
         totalAnnualNonCurrentLiabilities: 0
       };
       
+      // 🚀 OPTIMIZATION: Cache accounts once to avoid repeated database queries
+      console.log(`⚡ Caching accounts to avoid repeated database queries... [DEPLOYED]`);
+      const Account = require('../models/Account');
+      const cachedAccounts = await Account.find().sort({ code: 1 });
+      console.log(`📋 Cached ${cachedAccounts.length} accounts for reuse across all months`);
+      
       // 🚀 OPTIMIZATION: Process months in parallel instead of sequentially
       console.log(`⚡ Processing all 12 months in parallel for faster generation... [DEPLOYED]`);
       
@@ -447,8 +453,8 @@ class BalanceSheetService {
           let monthBalanceSheet;
           
           if (type === 'monthly') {
-            // Calculate monthly activity (change from previous month)
-            monthBalanceSheet = await this.generateMonthlyActivityBalanceSheet(year, month, residence);
+            // Calculate monthly activity (change from previous month) - pass cached accounts
+            monthBalanceSheet = await this.generateMonthlyActivityBalanceSheet(year, month, residence, cachedAccounts);
           } else {
             // Calculate cumulative balance as of month end (default behavior)
             monthBalanceSheet = await this.generateBalanceSheet(monthEndDate, residence);
@@ -537,17 +543,62 @@ class BalanceSheetService {
         monthPromises.push(monthPromise);
       }
       
-      // Wait for all months to complete
+      // Wait for all months to complete with progress tracking
       console.log(`⏳ Waiting for all 12 months to complete...`);
-      const monthResults = await Promise.all(monthPromises);
+      const startTime = Date.now();
       
-      // Process results
-      for (const result of monthResults) {
-        const { month, monthKey, monthBalanceSheet, error } = result;
+      // Use Promise.allSettled to handle individual month failures gracefully
+      const monthResults = await Promise.allSettled(monthPromises);
+      
+      const endTime = Date.now();
+      const duration = (endTime - startTime) / 1000;
+      console.log(`✅ All months processed in ${duration.toFixed(2)} seconds`);
+      
+      // Process results from Promise.allSettled
+      for (let i = 0; i < monthResults.length; i++) {
+        const result = monthResults[i];
+        const month = i + 1;
+        const monthKey = month;
+        
+        if (result.status === 'rejected') {
+          // Handle error case
+          console.error(`❌ Error generating balance sheet for month ${month}:`, result.reason);
+          monthlyData[monthKey] = {
+            month: monthKey,
+            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+            assets: { 
+              current: { cashAndBank: {}, accountsReceivable: {}, inventory: {}, prepaidExpenses: {}, total: 0 }, 
+              nonCurrent: { propertyPlantEquipment: {}, accumulatedDepreciation: 0, total: 0 }, 
+              total: 0 
+            },
+            liabilities: { 
+              current: { accountsPayable: {}, accruedExpenses: {}, tenantDeposits: {}, taxesPayable: {}, total: 0 }, 
+              nonCurrent: { longTermLoans: {}, otherLongTermLiabilities: {}, total: 0 }, 
+              total: 0 
+            },
+            equity: { 
+              capital: { accountCode: '3000', accountName: 'Owner\'s Capital', amount: 0 }, 
+              retainedEarnings: { accountCode: '3100', accountName: 'Retained Earnings', amount: 0 }, 
+              otherEquity: { accountCode: '3200', accountName: 'Other Equity', amount: 0 }, 
+              total: 0 
+            },
+            summary: { 
+              totalAssets: 0, 
+              totalLiabilities: 0, 
+              totalEquity: 0, 
+              workingCapital: 0, 
+              currentRatio: 0, 
+              debtToEquity: 0 
+            }
+          };
+          continue;
+        }
+        
+        const { month: resultMonth, monthKey: resultMonthKey, monthBalanceSheet, error } = result.value;
         
         if (error) {
-          // Handle error case
-          console.error(`❌ Error generating balance sheet for month ${month}:`, error);
+          // Handle error case from the promise result
+          console.error(`❌ Error generating balance sheet for month ${resultMonth}:`, error);
           monthlyData[monthKey] = {
             month: monthKey,
             monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
@@ -687,7 +738,7 @@ class BalanceSheetService {
    * Generate Monthly Activity Balance Sheet (shows monthly changes, not cumulative balances)
    * This method calculates the change in balances for a specific month
    */
-  static async generateMonthlyActivityBalanceSheet(year, month, residence = null) {
+  static async generateMonthlyActivityBalanceSheet(year, month, residence = null, cachedAccounts = null) {
     try {
       console.log(`📊 Generating Monthly Activity Balance Sheet for ${year}-${month}${residence ? ` for residence: ${residence}` : ' (all residences)'}`);
       
@@ -744,9 +795,12 @@ class BalanceSheetService {
         message: 'Monthly activity balance sheet generated successfully'
       };
       
-      // Get ALL accounts from the database to ensure none are missing
-      const Account = require('../models/Account');
-      const allAccounts = await Account.find().sort({ code: 1 });
+      // 🚀 OPTIMIZATION: Use cached accounts if provided, otherwise fetch once
+      let allAccounts = cachedAccounts;
+      if (!allAccounts) {
+        const Account = require('../models/Account');
+        allAccounts = await Account.find().sort({ code: 1 });
+      }
       
       // Initialize account balances for monthly activity
       const accountBalances = {};
@@ -765,7 +819,12 @@ class BalanceSheetService {
         };
       });
       
-      // Process ONLY the transactions that occurred in this month
+      // 🚀 OPTIMIZATION: Process transactions more efficiently with batch processing
+      console.log(`⚡ Processing ${monthTransactions.length} transactions with optimized batch processing...`);
+      
+      // Group transactions by account code for more efficient processing
+      const accountTransactionMap = new Map();
+      
       monthTransactions.forEach(entry => {
         if (entry.entries && Array.isArray(entry.entries)) {
           entry.entries.forEach(lineItem => {
@@ -775,26 +834,47 @@ class BalanceSheetService {
             const debit = lineItem.debit || 0;
             const credit = lineItem.credit || 0;
             
-            if (accountBalances[accountCode]) {
-              accountBalances[accountCode].debitTotal += debit;
-              accountBalances[accountCode].creditTotal += credit;
-              // Update name and type from transaction if more recent
-              if (accountName) accountBalances[accountCode].name = accountName;
-              if (accountType) accountBalances[accountCode].type = accountType;
-            } else {
-              // Create account if not found in database (fallback)
-              accountBalances[accountCode] = {
+            if (!accountTransactionMap.has(accountCode)) {
+              accountTransactionMap.set(accountCode, {
                 code: accountCode,
                 name: accountName || `Account ${accountCode}`,
                 type: accountType || 'Asset',
-                debitTotal: debit,
-                creditTotal: credit,
-                balance: 0,
+                debitTotal: 0,
+                creditTotal: 0,
                 description: '',
                 category: 'Other'
-              };
+              });
             }
+            
+            const accountData = accountTransactionMap.get(accountCode);
+            accountData.debitTotal += debit;
+            accountData.creditTotal += credit;
+            if (accountName) accountData.name = accountName;
+            if (accountType) accountData.type = accountType;
           });
+        }
+      });
+      
+      // Apply the transaction data to account balances
+      accountTransactionMap.forEach((transactionData, accountCode) => {
+        if (accountBalances[accountCode]) {
+          accountBalances[accountCode].debitTotal += transactionData.debitTotal;
+          accountBalances[accountCode].creditTotal += transactionData.creditTotal;
+          // Update name and type from transaction if more recent
+          if (transactionData.name) accountBalances[accountCode].name = transactionData.name;
+          if (transactionData.type) accountBalances[accountCode].type = transactionData.type;
+        } else {
+          // Create account if not found in database (fallback)
+          accountBalances[accountCode] = {
+            code: accountCode,
+            name: transactionData.name,
+            type: transactionData.type,
+            debitTotal: transactionData.debitTotal,
+            creditTotal: transactionData.creditTotal,
+            balance: 0,
+            description: transactionData.description,
+            category: transactionData.category
+          };
         }
       });
       
@@ -821,9 +901,17 @@ class BalanceSheetService {
         }
       });
       
+      // 🚀 OPTIMIZATION: Only process accounts with non-zero balances to improve performance
+      console.log(`⚡ Processing only accounts with non-zero balances for better performance...`);
+      
       // Categorize into balance sheet sections
       Object.values(accountBalances).forEach(account => {
         const balance = account.balance;
+        
+        // Skip accounts with zero balance to improve performance
+        if (balance === 0) {
+          return;
+        }
         
         // Use comprehensive category mapping to ensure all accounts are properly categorized
         const mappedCategory = this.mapAccountToCategory(account.code, account.name, account.type);
