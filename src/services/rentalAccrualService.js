@@ -57,21 +57,22 @@ class RentalAccrualService {
         try {
             console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}`);
             
-            // Check if lease start entries already exist (from either rental accrual service or backfill service)
+            // Check if lease start entries already exist for THIS SPECIFIC APPLICATION
+            // Allow multiple lease starts for the same student (re-applications)
             const existingEntries = await TransactionEntry.findOne({
                 $or: [
-                    // Rental accrual service created transactions
-                    { 'metadata.studentId': application.student, 'metadata.type': 'lease_start' },
-                    // Backfill service created transactions
-                    { 'metadata.studentId': application.student, 'metadata.type': 'lease_start' },
-                    { source: 'rental_accrual', sourceModel: 'Debtor', 'metadata.studentId': application.student },
-                    { description: { $regex: /^Lease start/ }, 'metadata.studentId': application.student }
+                    // Check for transactions specific to this application
+                    { 'metadata.applicationId': application._id, 'metadata.type': 'lease_start' },
+                    { 'metadata.applicationCode': application.applicationCode, 'metadata.type': 'lease_start' },
+                    // Check for transactions with this specific debtor (if it exists)
+                    { source: 'rental_accrual', sourceModel: 'Application', sourceId: application._id },
+                    { description: { $regex: new RegExp(`Lease start.*${application.applicationCode}`) } }
                 ]
             });
             
             if (existingEntries) {
-                console.log(`⚠️ Lease start entries already exist for ${application.firstName} (created by ${existingEntries.createdBy || 'unknown service'})`);
-                return { success: false, error: 'Lease start entries already exist', existingTransaction: existingEntries._id };
+                console.log(`⚠️ Lease start entries already exist for this application ${application.applicationCode} (created by ${existingEntries.createdBy || 'unknown service'})`);
+                return { success: false, error: 'Lease start entries already exist for this application', existingTransaction: existingEntries._id };
             }
             
             // Get residence and room details for pricing
@@ -224,6 +225,7 @@ class RentalAccrualService {
                 status: 'posted',
                 metadata: {
                     applicationId: application._id.toString(),
+                    applicationCode: application.applicationCode,
                     studentId: application.student.toString(), // Add correct student ID
                     studentName: `${application.firstName} ${application.lastName}`,
                     residence: application.residence,

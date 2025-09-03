@@ -104,13 +104,14 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
         let monthlyTransactionsCreated = 0;
 		let duplicatesRemoved = 0;
         
-		// Idempotency: skip if a lease-start entry already exists (either prior debtor-based or lease-based)
-		// Check for both backfill-created and rental accrual service-created lease start transactions
+		// Idempotency: skip if a lease-start entry already exists for THIS SPECIFIC APPLICATION/DEBTOR
+		// Allow multiple lease starts for the same student (re-applications)
 		const existingLeaseStart = await TransactionEntry.findOne({
             $or: [
 				{ reference: `LEASE_START_${applicationCode}` },
 				{ source: 'rental_accrual', sourceModel: 'Debtor', sourceId: debtor._id, description: { $regex: /^Lease start / } },
-				{ 'metadata.studentId': getId(debtor.user), 'metadata.type': 'lease_start' }
+				{ 'metadata.applicationCode': applicationCode, 'metadata.type': 'lease_start' },
+				{ 'metadata.debtorId': debtor._id.toString(), 'metadata.type': 'lease_start' }
 			]
 		});
 		
@@ -206,6 +207,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 					// marker for lease-start created by backfill
                     type: 'lease_start',
 					applicationCode,
+					debtorId: debtor._id.toString(),
 					studentId: debtor.user._id,
 					studentName: `${debtor.user.firstName} ${debtor.user.lastName}`,
 					residenceId: debtor.residence?._id,
