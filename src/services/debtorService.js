@@ -1143,14 +1143,9 @@ exports.syncDebtorTotalsWithAR = async (debtorId = null) => {
                     updatedAt: new Date()
                 };
 
-                // Update status based on balance
-                if (currentBalanceFromAR === 0) {
-                    updateData.status = 'paid';
-                } else if (currentBalanceFromAR > 0) {
-                    updateData.status = 'overdue';
-                } else {
-                    updateData.status = 'active';
-                }
+                // Update status based on balance and payment timeline
+                const DebtorTransactionSyncService = require('./debtorTransactionSyncService');
+                updateData.status = DebtorTransactionSyncService.determineDebtorStatus(currentBalanceFromAR, arTransactions);
 
                 // Update monthly payments if they don't exist or need updating
                 if (!debtor.monthlyPayments || debtor.monthlyPayments.length === 0) {

@@ -1093,13 +1093,13 @@ exports.manualAddStudent = async (req, res) => {
         console.log(`   req.user: ${req.user ? 'exists' : 'undefined'}`);
         console.log(`   req.user._id: ${req.user?._id || 'undefined'}`);
         
-        if (!residenceId || !roomNumber || !startDate || !endDate || !monthlyRent || !req.user?._id) {
+        // Only validate truly required fields - financial details are now optional
+        if (!residenceId || !roomNumber || !startDate || !endDate || !req.user?._id) {
             const missingVars = [];
             if (!residenceId) missingVars.push('residenceId');
             if (!roomNumber) missingVars.push('roomNumber');
             if (!startDate) missingVars.push('startDate');
             if (!endDate) missingVars.push('endDate');
-            if (!monthlyRent) missingVars.push('monthlyRent');
             if (!req.user?._id) missingVars.push('req.user._id');
             
             return res.status(400).json({ 
@@ -1107,6 +1107,16 @@ exports.manualAddStudent = async (req, res) => {
                 details: `Missing: ${missingVars.join(', ')}`
             });
         }
+        
+        // Set default values for optional financial fields
+        const finalMonthlyRent = monthlyRent || 150; // Default monthly rent
+        const finalSecurityDeposit = securityDeposit || finalMonthlyRent; // Default to 1 month's rent
+        const finalAdminFee = adminFee || 0; // Default admin fee
+        
+        console.log('💰 Financial details (with defaults):');
+        console.log(`   Monthly Rent: $${finalMonthlyRent} ${monthlyRent ? '(provided)' : '(default)'}`);
+        console.log(`   Security Deposit: $${finalSecurityDeposit} ${securityDeposit ? '(provided)' : '(default)'}`);
+        console.log(`   Admin Fee: $${finalAdminFee} ${adminFee ? '(provided)' : '(default)'}`);
         
         // Parse and validate dates
         let parsedStartDate, parsedEndDate;
@@ -1144,16 +1154,33 @@ exports.manualAddStudent = async (req, res) => {
                 email,
                 firstName,
                 lastName,
-                phone,
+                phone: phone || '', // Make phone optional
                 password: tempPassword, // Let the pre-save hook hash it
                 status: 'active',
-                emergencyContact,
+                emergencyContact: emergencyContact || {}, // Make emergency contact optional
                 role: 'student',
                 isVerified: true
             });
 
             await student.save();
             console.log(`✅ New student created: ${student.email}`);
+            
+            // Create audit log for new student creation
+            await createAuditLog({
+                action: 'create',
+                collection: 'User',
+                recordId: student._id,
+                userId: req.user._id,
+                before: null,
+                after: {
+                    email: student.email,
+                    firstName: student.firstName,
+                    lastName: student.lastName,
+                    role: student.role,
+                    status: student.status
+                },
+                details: `Manual student creation - ${student.email}`
+            });
         } else {
             // Update existing user information if needed
             let updated = false;
@@ -1165,11 +1192,11 @@ exports.manualAddStudent = async (req, res) => {
                 student.lastName = lastName;
                 updated = true;
             }
-            if (student.phone !== phone) {
-                student.phone = phone;
+            if (student.phone !== (phone || '')) {
+                student.phone = phone || '';
                 updated = true;
             }
-            if (student.emergencyContact !== emergencyContact) {
+            if (emergencyContact && JSON.stringify(student.emergencyContact) !== JSON.stringify(emergencyContact)) {
                 student.emergencyContact = emergencyContact;
                 updated = true;
             }
@@ -1177,6 +1204,27 @@ exports.manualAddStudent = async (req, res) => {
             if (updated) {
                 await student.save();
                 console.log(`✅ Existing student updated: ${student.email}`);
+                
+                // Create audit log for existing student update
+                await createAuditLog({
+                    action: 'update',
+                    collection: 'User',
+                    recordId: student._id,
+                    userId: req.user._id,
+                    before: {
+                        firstName: existingUser.firstName,
+                        lastName: existingUser.lastName,
+                        phone: existingUser.phone,
+                        emergencyContact: existingUser.emergencyContact
+                    },
+                    after: {
+                        firstName: student.firstName,
+                        lastName: student.lastName,
+                        phone: student.phone,
+                        emergencyContact: student.emergencyContact
+                    },
+                    details: `Manual student update during re-application - ${student.email}`
+                });
             } else {
                 console.log(`✅ Using existing student: ${student.email}`);
             }
@@ -1207,6 +1255,27 @@ exports.manualAddStudent = async (req, res) => {
         });
 
         await application.save();
+
+        // Create audit log for application creation
+        await createAuditLog({
+            action: 'create',
+            collection: 'Application',
+            recordId: application._id,
+            userId: req.user._id,
+            before: null,
+            after: {
+                applicationCode: application.applicationCode,
+                email: application.email,
+                firstName: application.firstName,
+                lastName: application.lastName,
+                status: application.status,
+                residence: application.residence,
+                allocatedRoom: application.allocatedRoom,
+                startDate: application.startDate,
+                endDate: application.endDate
+            },
+            details: `Manual application creation - ${application.applicationCode} for ${application.email}`
+        });
 
         // Update student with application code
         student.applicationCode = application.applicationCode;
@@ -1239,13 +1308,33 @@ exports.manualAddStudent = async (req, res) => {
                 applicationCode: application.applicationCode, // Link application code
                 startDate: parsedStartDate,
                 endDate: parsedEndDate,
-                roomPrice: monthlyRent
+                roomPrice: finalMonthlyRent
             });
             
             if (debtor) {
                 console.log(`✅ Debtor account created for manually added student ${student.email}`);
                 console.log(`   Application Code: ${application.applicationCode}`);
                 console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                
+                // Create audit log for debtor creation
+                await createAuditLog({
+                    action: 'create',
+                    collection: 'Debtor',
+                    recordId: debtor._id,
+                    userId: req.user._id,
+                    before: null,
+                    after: {
+                        debtorCode: debtor.debtorCode,
+                        user: debtor.user,
+                        accountCode: debtor.accountCode,
+                        status: debtor.status,
+                        currentBalance: debtor.currentBalance,
+                        totalOwed: debtor.totalOwed,
+                        residence: debtor.residence,
+                        roomNumber: debtor.roomNumber
+                    },
+                    details: `Manual debtor creation - ${debtor.debtorCode} for student ${student.email}`
+                });
                 
                 // Link the debtor back to the application
                 application.debtor = debtor._id;
@@ -1296,7 +1385,9 @@ exports.manualAddStudent = async (req, res) => {
                 roomNumber,
                 startDate: parsedStartDate,
                 endDate: parsedEndDate,
-                monthlyRent
+                monthlyRent: finalMonthlyRent,
+                securityDeposit: finalSecurityDeposit,
+                adminFee: finalAdminFee
             });
             
             // CRITICAL: Clean up created data and fail the request
@@ -1660,7 +1751,7 @@ exports.uploadCsvStudents = async (req, res) => {
                 // Parse dates
                 const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
                 const endDate = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
-                const monthlyRent = parseFloat(row.monthlyRent) || parseFloat(defaultMonthlyRent) || 0;
+                const monthlyRent = parseFloat(row.monthlyRent) || parseFloat(defaultMonthlyRent) || 150; // Default to $150
                 
                 if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                     results.failed.push({
@@ -1861,6 +1952,26 @@ exports.uploadCsvStudents = async (req, res) => {
         }
         
         console.log(`✅ CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
+        
+        // Create audit log for CSV bulk upload
+        await createAuditLog({
+            action: 'bulk_create',
+            collection: 'User',
+            recordId: null, // Bulk operation doesn't have a single record ID
+            userId: req.user._id,
+            before: null,
+            after: {
+                totalProcessed: results.summary.totalProcessed,
+                totalSuccessful: results.summary.totalSuccessful,
+                totalFailed: results.summary.totalFailed,
+                residenceId: residenceId,
+                defaultRoomNumber: defaultRoomNumber,
+                defaultStartDate: defaultStartDate,
+                defaultEndDate: defaultEndDate,
+                defaultMonthlyRent: defaultMonthlyRent
+            },
+            details: `CSV bulk student upload - ${results.summary.totalSuccessful} students created, ${results.summary.totalFailed} failed`
+        });
         
         res.status(200).json({
             success: true,
@@ -2269,7 +2380,7 @@ exports.uploadExcelStudents = async (req, res) => {
                 
                 // Fallback to default if no rent found
                 if (monthlyRent === 0) {
-                    monthlyRent = parseFloat(defaultMonthlyRent) || 0;
+                    monthlyRent = parseFloat(defaultMonthlyRent) || 150; // Default to $150
                     console.log(`💰 Using default monthly rent: $${monthlyRent}`);
                 }
                 
@@ -2495,6 +2606,27 @@ exports.uploadExcelStudents = async (req, res) => {
         }
         
         console.log(`✅ Excel upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
+        
+        // Create audit log for Excel bulk upload
+        await createAuditLog({
+            action: 'bulk_create',
+            collection: 'User',
+            recordId: null, // Bulk operation doesn't have a single record ID
+            userId: req.user._id,
+            before: null,
+            after: {
+                totalProcessed: results.summary.totalProcessed,
+                totalSuccessful: results.summary.totalSuccessful,
+                totalFailed: results.summary.totalFailed,
+                residenceId: residenceId,
+                defaultRoomNumber: defaultRoomNumber,
+                defaultStartDate: defaultStartDate,
+                defaultEndDate: defaultEndDate,
+                defaultMonthlyRent: defaultMonthlyRent,
+                fileName: req.file ? req.file.originalname : 'unknown'
+            },
+            details: `Excel bulk student upload - ${results.summary.totalSuccessful} students created, ${results.summary.totalFailed} failed`
+        });
         
         res.status(200).json({
             success: true,

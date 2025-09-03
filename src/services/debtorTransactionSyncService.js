@@ -46,14 +46,8 @@ class DebtorTransactionSyncService {
             debtor.overdueAmount = currentBalance > 0 ? currentBalance : 0;
             debtor.updatedAt = new Date();
             
-            // Update status based on calculated balance
-            if (currentBalance === 0) {
-                debtor.status = 'paid';
-            } else if (currentBalance > 0) {
-                debtor.status = 'overdue';
-            } else {
-                debtor.status = 'active';
-            }
+            // Update status based on calculated balance and payment timeline
+            debtor.status = this.determineDebtorStatus(currentBalance, transactionEntries);
             
             console.log(`✅ Totals recalculated from transaction entries:`);
             console.log(`   Total Owed: $${totalOwed.toFixed(2)}`);
@@ -71,6 +65,85 @@ class DebtorTransactionSyncService {
         } catch (error) {
             console.error(`❌ Error recalculating totals from transaction entries:`, error);
             throw error;
+        }
+    }
+    
+    /**
+     * Determine debtor status based on balance and payment timeline
+     * @param {number} currentBalance - Current outstanding balance
+     * @param {Array} transactionEntries - Array of transaction entries
+     * @returns {string} Status: 'paid', 'active', or 'overdue'
+     */
+    static determineDebtorStatus(currentBalance, transactionEntries) {
+        try {
+            // If no balance, status is paid
+            if (currentBalance === 0) {
+                return 'paid';
+            }
+            
+            // If there's a balance, check if any charges are past due
+            const now = new Date();
+            const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            
+            // Find the oldest unpaid charge
+            let oldestUnpaidCharge = null;
+            let hasOverdueCharges = false;
+            
+            // Group transactions by month to analyze payment timeline
+            const monthlyCharges = {};
+            
+            transactionEntries.forEach(transaction => {
+                if (transaction.source === 'rental_accrual' && transaction.metadata?.type) {
+                    const monthKey = transaction.metadata.month || (() => {
+                        const d = new Date(transaction.date);
+                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                    })();
+                    
+                    if (!monthlyCharges[monthKey]) {
+                        monthlyCharges[monthKey] = {
+                            monthKey,
+                            amount: 0,
+                            date: new Date(transaction.date),
+                            isLeaseStart: transaction.metadata.type === 'lease_start'
+                        };
+                    }
+                    
+                    monthlyCharges[monthKey].amount += transaction.totalDebit;
+                }
+            });
+            
+            // Check each month's charges
+            Object.values(monthlyCharges).forEach(charge => {
+                // Calculate due date (end of the month + grace period)
+                const dueDate = new Date(charge.date);
+                dueDate.setMonth(dueDate.getMonth() + 1); // Due at end of next month
+                dueDate.setDate(0); // Last day of the month
+                
+                // Add 7-day grace period
+                dueDate.setDate(dueDate.getDate() + 7);
+                
+                // If charge is past due and still outstanding
+                if (dueDate < now && charge.amount > 0) {
+                    hasOverdueCharges = true;
+                    if (!oldestUnpaidCharge || charge.date < oldestUnpaidCharge.date) {
+                        oldestUnpaidCharge = charge;
+                    }
+                }
+            });
+            
+            // Determine status based on overdue charges
+            if (hasOverdueCharges) {
+                return 'overdue';
+            } else if (currentBalance > 0) {
+                return 'active'; // Has balance but not overdue yet
+            } else {
+                return 'paid';
+            }
+            
+        } catch (error) {
+            console.error(`❌ Error determining debtor status:`, error);
+            // Fallback to simple logic
+            return currentBalance === 0 ? 'paid' : 'active';
         }
     }
     

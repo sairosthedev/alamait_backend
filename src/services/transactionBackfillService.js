@@ -72,6 +72,8 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
         console.log(`🔄 Backfilling transactions for debtor: ${debtor.debtorCode}`);
         const Debtor = require('../models/Debtor');
         const Residence = require('../models/Residence');
+        
+        let invoiceQueue = []; // Queue for FIFO invoice processing
 
         // Ensure debtor has populated user/residence to correctly identify student
 		if (!debtor.user?.firstName || !debtor.user?.lastName || !debtor.residence?.name) {
@@ -233,13 +235,11 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
             await leaseStartTransaction.save();
             leaseStartCreated = true;
             
-            // 🆕 AUTO-INVOICE: Create and send lease start invoice
-            try {
-                console.log(`📄 Creating lease start invoice for backfilled transaction...`);
-                const RentalAccrualService = require('./rentalAccrualService');
-                
-                // Create a mock application object for invoice creation
-                const mockApplication = {
+            // Store lease start invoice data for FIFO processing
+            invoiceQueue.push({
+                type: 'lease_start',
+                transaction: leaseStartTransaction,
+                application: {
                     _id: debtor.application || new mongoose.Types.ObjectId(),
                     applicationCode: applicationCode,
                     student: debtor.user._id,
@@ -248,19 +248,13 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
                     startDate: startDate,
                     residence: debtor.residence?._id,
                     allocatedRoom: debtor.roomNumber
-                };
-                
-                const invoice = await RentalAccrualService.createAndSendLeaseStartInvoice(
-                    mockApplication, 
-                    proratedRent, 
-                    adminFee, 
-                    securityDeposit
-                );
-                console.log(`📄 Lease start invoice created and sent: ${invoice.invoiceNumber}`);
-            } catch (invoiceError) {
-                console.error(`⚠️ Failed to create/send lease start invoice:`, invoiceError.message);
-                // Don't fail the entire process if invoice creation fails
-            }
+                },
+                amounts: {
+                    proratedRent,
+                    adminFee,
+                    securityDeposit: depositAmount
+                }
+            });
 		}
 
 		// Prepare iteration over months (idempotent per monthKey)
@@ -370,13 +364,11 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
             await monthlyAccrualTransaction.save();
             monthlyTransactionsCreated++;
             
-            // 🆕 AUTO-INVOICE: Create and send monthly rent invoice
-            try {
-                console.log(`📄 Creating monthly invoice for backfilled transaction: ${monthKey}...`);
-                const RentalAccrualService = require('./rentalAccrualService');
-                
-                // Create a mock student object for invoice creation
-                const mockStudent = {
+            // Store monthly invoice data for FIFO processing
+            invoiceQueue.push({
+                type: 'monthly_rent_accrual',
+                transaction: monthlyAccrualTransaction,
+                student: {
                     student: debtor.user._id,
                     firstName: debtor.user.firstName,
                     lastName: debtor.user.lastName,
@@ -384,19 +376,13 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
                     phone: debtor.user.phone,
                     residence: debtor.residence?._id,
                     allocatedRoom: debtor.roomNumber
-                };
-                
-                const invoice = await RentalAccrualService.createAndSendMonthlyInvoice(
-                    mockStudent, 
-                    month, 
-                    year, 
+                },
+                amounts: {
+                    month,
+                    year,
                     monthlyRent
-                );
-                console.log(`📄 Monthly invoice created and sent: ${invoice.invoiceNumber}`);
-            } catch (invoiceError) {
-                console.error(`⚠️ Failed to create/send monthly invoice:`, invoiceError.message);
-                // Don't fail the entire process if invoice creation fails
-            }
+                }
+            });
 			}
             
             // Move to next month
@@ -409,11 +395,62 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
         // Sync debtor data arrays with transaction data
         await DebtorDataSyncService.syncDebtorDataArrays(debtor._id);
         
+        // 🆕 FIFO INVOICE PROCESSING: Create invoices in chronological order
+        if (invoiceQueue.length > 0) {
+            console.log(`\n📄 Processing ${invoiceQueue.length} invoices in FIFO order...`);
+            
+            // Sort invoice queue by transaction date (FIFO)
+            invoiceQueue.sort((a, b) => {
+                const dateA = new Date(a.transaction.date);
+                const dateB = new Date(b.transaction.date);
+                return dateA - dateB; // Ascending order (oldest first)
+            });
+            
+            let invoicesCreated = 0;
+            let invoiceErrors = 0;
+            
+            for (const invoiceData of invoiceQueue) {
+                try {
+                    const RentalAccrualService = require('./rentalAccrualService');
+                    
+                    if (invoiceData.type === 'lease_start') {
+                        console.log(`📄 Creating lease start invoice (FIFO): ${invoiceData.transaction.transactionId}`);
+                        const invoice = await RentalAccrualService.createAndSendLeaseStartInvoice(
+                            invoiceData.application,
+                            invoiceData.amounts.proratedRent,
+                            invoiceData.amounts.adminFee,
+                            invoiceData.amounts.securityDeposit
+                        );
+                        console.log(`✅ Lease start invoice created: ${invoice.invoiceNumber}`);
+                        invoicesCreated++;
+                        
+                    } else if (invoiceData.type === 'monthly_rent_accrual') {
+                        console.log(`📄 Creating monthly invoice (FIFO): ${invoiceData.transaction.transactionId}`);
+                        const invoice = await RentalAccrualService.createAndSendMonthlyInvoice(
+                            invoiceData.student,
+                            invoiceData.amounts.month,
+                            invoiceData.amounts.year,
+                            invoiceData.amounts.monthlyRent
+                        );
+                        console.log(`✅ Monthly invoice created: ${invoice.invoiceNumber}`);
+                        invoicesCreated++;
+                    }
+                    
+                } catch (invoiceError) {
+                    console.error(`❌ Failed to create invoice for ${invoiceData.transaction.transactionId}:`, invoiceError.message);
+                    invoiceErrors++;
+                }
+            }
+            
+            console.log(`📊 FIFO Invoice Summary: ${invoicesCreated} created, ${invoiceErrors} errors`);
+        }
+        
         return {
             success: true,
             leaseStartCreated,
             monthlyTransactionsCreated,
             duplicatesRemoved,
+            invoicesCreated: invoiceQueue.length,
             debtor: debtor
         };
         
