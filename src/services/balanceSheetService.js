@@ -440,6 +440,12 @@ class BalanceSheetService {
       const cachedAccounts = await Account.find().sort({ code: 1 });
       console.log(`📋 Cached ${cachedAccounts.length} accounts for reuse across all months`);
       
+      // 🚀 OPTIMIZATION: Pre-filter accounts to only include balance sheet relevant ones
+      const balanceSheetAccounts = cachedAccounts.filter(account => 
+        ['Asset', 'Liability', 'Equity'].includes(account.type)
+      );
+      console.log(`📊 Filtered to ${balanceSheetAccounts.length} balance sheet relevant accounts`);
+      
       // 🚀 OPTIMIZATION: Process months in parallel instead of sequentially
       console.log(`⚡ Processing all 12 months in parallel for faster generation... [DEPLOYED]`);
       
@@ -453,8 +459,8 @@ class BalanceSheetService {
           let monthBalanceSheet;
           
           if (type === 'monthly') {
-            // Calculate monthly activity (change from previous month) - pass cached accounts
-            monthBalanceSheet = await this.generateMonthlyActivityBalanceSheet(year, month, residence, cachedAccounts);
+            // Calculate monthly activity (change from previous month) - pass filtered accounts
+            monthBalanceSheet = await this.generateMonthlyActivityBalanceSheet(year, month, residence, balanceSheetAccounts);
           } else {
             // Calculate cumulative balance as of month end (default behavior)
             monthBalanceSheet = await this.generateBalanceSheet(monthEndDate, residence);
@@ -763,6 +769,40 @@ class BalanceSheetService {
       const monthTransactions = await TransactionEntry.find(monthQuery).sort({ date: 1 });
       
       console.log(`🔍 Found ${monthTransactions.length} transactions for ${monthKey}`);
+      
+      // 🚀 OPTIMIZATION: Early exit for months with no transactions
+      if (monthTransactions.length === 0) {
+        console.log(`⚡ No transactions found for ${monthKey}, returning zero balance sheet`);
+        return {
+          asOfDate: monthEndDate,
+          residence: residence || 'all',
+          assets: { 
+            current: {}, 
+            nonCurrent: {}, 
+            totalCurrent: 0, 
+            totalNonCurrent: 0, 
+            totalAssets: 0,
+            accumulatedDepreciation: 0
+          },
+          liabilities: { 
+            current: {}, 
+            nonCurrent: {}, 
+            totalCurrent: 0, 
+            totalNonCurrent: 0, 
+            totalLiabilities: 0 
+          },
+          equity: { 
+            capital: 0, 
+            retainedEarnings: 0, 
+            otherEquity: 0,
+            totalEquity: 0 
+          },
+          workingCapital: 0,
+          currentRatio: 0,
+          debtToEquity: 0,
+          message: `No transactions found for ${monthKey} - zero balance sheet returned`
+        };
+      }
       
       // Initialize balance sheet structure for monthly activity
       const balanceSheet = {
