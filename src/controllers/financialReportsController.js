@@ -375,7 +375,24 @@ class FinancialReportsController {
                 });
             }
             
-            const monthlyBalanceSheet = await BalanceSheetService.generateMonthlyBalanceSheet(period, residence, type);
+            // 🚀 OPTIMIZATION: Add timeout and progress tracking
+            console.log(`🚀 Starting optimized monthly balance sheet generation for ${period}...`);
+            const startTime = Date.now();
+            
+            // Set a timeout promise to prevent hanging
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => {
+                    reject(new Error('Balance sheet generation timed out after 4 minutes'));
+                }, 240000); // 4 minutes timeout
+            });
+            
+            const balanceSheetPromise = BalanceSheetService.generateMonthlyBalanceSheet(period, residence, type);
+            
+            const monthlyBalanceSheet = await Promise.race([balanceSheetPromise, timeoutPromise]);
+            
+            const endTime = Date.now();
+            const duration = (endTime - startTime) / 1000;
+            console.log(`✅ Balance sheet generation completed in ${duration.toFixed(2)} seconds`);
             
             res.json({
                 success: true,

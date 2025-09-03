@@ -434,12 +434,16 @@ class BalanceSheetService {
         totalAnnualNonCurrentLiabilities: 0
       };
       
-      // Generate balance sheet for each month
+      // 🚀 OPTIMIZATION: Process months in parallel instead of sequentially
+      console.log(`⚡ Processing all 12 months in parallel for faster generation...`);
+      
+      const monthPromises = [];
       for (let month = 1; month <= 12; month++) {
         const monthEndDate = new Date(year, month, 0); // Last day of the month
         const monthKey = month;
         
-        try {
+        const monthPromise = (async () => {
+          try {
           let monthBalanceSheet;
           
           if (type === 'monthly') {
@@ -524,9 +528,26 @@ class BalanceSheetService {
           annualSummary.totalAnnualCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalCurrent); // Ensure positive values for liabilities
           annualSummary.totalAnnualNonCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalNonCurrent); // Ensure positive values for liabilities
           
-        } catch (monthError) {
-          console.error(`❌ Error generating balance sheet for month ${month}:`, monthError);
-          // Provide empty data for failed months
+          } catch (monthError) {
+            console.error(`❌ Error generating balance sheet for month ${month}:`, monthError);
+            return { month, monthKey, error: monthError };
+          }
+        })();
+        
+        monthPromises.push(monthPromise);
+      }
+      
+      // Wait for all months to complete
+      console.log(`⏳ Waiting for all 12 months to complete...`);
+      const monthResults = await Promise.all(monthPromises);
+      
+      // Process results
+      for (const result of monthResults) {
+        const { month, monthKey, monthBalanceSheet, error } = result;
+        
+        if (error) {
+          // Handle error case
+          console.error(`❌ Error generating balance sheet for month ${month}:`, error);
           monthlyData[monthKey] = {
             month: monthKey,
             monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
@@ -555,6 +576,81 @@ class BalanceSheetService {
               debtToEquity: 0 
             }
           };
+          continue;
+        }
+        
+        if (monthBalanceSheet) {
+          // Structure the data as expected by the React component with enhanced structure
+          monthlyData[monthKey] = {
+            month: monthKey,
+            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+            assets: {
+              current: {
+                cashAndBank: monthBalanceSheet.assets.cashAndBank || {},
+                accountsReceivable: monthBalanceSheet.assets.accountsReceivable || {},
+                inventory: monthBalanceSheet.assets.inventory || {},
+                prepaidExpenses: monthBalanceSheet.assets.prepaidExpenses || {},
+                total: monthBalanceSheet.assets.totalCurrent
+              },
+              nonCurrent: {
+                propertyPlantEquipment: monthBalanceSheet.assets.propertyPlantEquipment || {},
+                accumulatedDepreciation: monthBalanceSheet.assets.accumulatedDepreciation || 0,
+                total: monthBalanceSheet.assets.totalNonCurrent
+              },
+              total: monthBalanceSheet.assets.totalAssets
+            },
+            liabilities: {
+              current: {
+                accountsPayable: monthBalanceSheet.liabilities.accountsPayable || {},
+                accruedExpenses: monthBalanceSheet.liabilities.accruedExpenses || {},
+                tenantDeposits: monthBalanceSheet.liabilities.tenantDeposits || {},
+                deferredIncome: monthBalanceSheet.liabilities.deferredIncome || {},
+                taxesPayable: monthBalanceSheet.liabilities.taxesPayable || {},
+                total: Math.abs(monthBalanceSheet.liabilities.totalCurrent) // Ensure positive values for liabilities
+              },
+              nonCurrent: {
+                longTermLoans: monthBalanceSheet.liabilities.longTermLoans || {},
+                otherLongTermLiabilities: monthBalanceSheet.liabilities.otherLongTermLiabilities || {},
+                total: Math.abs(monthBalanceSheet.liabilities.totalNonCurrent) // Ensure positive values for liabilities
+              },
+              total: Math.abs(monthBalanceSheet.liabilities.totalLiabilities) // Ensure positive values for liabilities
+            },
+            equity: {
+              capital: {
+                accountCode: '3000',
+                accountName: 'Owner\'s Capital',
+                amount: monthBalanceSheet.equity.capital // Allow negative values for equity
+              },
+              retainedEarnings: {
+                accountCode: '3100',
+                accountName: 'Retained Earnings',
+                amount: monthBalanceSheet.equity.retainedEarnings // Allow negative values for equity
+              },
+              otherEquity: {
+                accountCode: '3200',
+                accountName: 'Other Equity',
+                amount: monthBalanceSheet.equity.otherEquity // Allow negative values for equity
+              },
+              total: monthBalanceSheet.equity.totalEquity
+            },
+            summary: {
+              totalAssets: monthBalanceSheet.assets.totalAssets,
+              totalLiabilities: Math.abs(monthBalanceSheet.liabilities.totalLiabilities), // Ensure positive values for liabilities
+              totalEquity: monthBalanceSheet.equity.totalEquity, // Allow negative values for equity
+              workingCapital: monthBalanceSheet.workingCapital,
+              currentRatio: monthBalanceSheet.currentRatio,
+              debtToEquity: monthBalanceSheet.debtToEquity
+            }
+          };
+          
+          // Accumulate annual totals
+          annualSummary.totalAnnualAssets += monthBalanceSheet.assets.totalAssets;
+          annualSummary.totalAnnualLiabilities += Math.abs(monthBalanceSheet.liabilities.totalLiabilities); // Ensure positive values for liabilities
+          annualSummary.totalAnnualEquity += monthBalanceSheet.equity.totalEquity; // Allow negative values for equity
+          annualSummary.totalAnnualCurrentAssets += monthBalanceSheet.assets.totalCurrent;
+          annualSummary.totalAnnualNonCurrentAssets += monthBalanceSheet.assets.totalNonCurrent;
+          annualSummary.totalAnnualCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalCurrent); // Ensure positive values for liabilities
+          annualSummary.totalAnnualNonCurrentLiabilities += Math.abs(monthBalanceSheet.liabilities.totalNonCurrent); // Ensure positive values for liabilities
         }
       }
       
