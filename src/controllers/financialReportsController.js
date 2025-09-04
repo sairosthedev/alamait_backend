@@ -382,8 +382,8 @@ class FinancialReportsController {
             // Set a timeout promise to prevent hanging
             const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(() => {
-                    reject(new Error('Balance sheet generation timed out after 3 minutes'));
-                }, 180000); // 3 minutes timeout (reduced from 4 minutes)
+                    reject(new Error('Balance sheet generation timed out after 4 minutes'));
+                }, 240000); // 4 minutes timeout (increased to allow parallel processing)
             });
             
             const balanceSheetPromise = BalanceSheetService.generateMonthlyBalanceSheet(period, residence, type);
