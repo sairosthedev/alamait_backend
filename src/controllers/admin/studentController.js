@@ -21,6 +21,7 @@ const DebtorTransactionSyncService = require('../../services/debtorTransactionSy
 const DebtorDataSyncService = require('../../services/debtorDataSyncService');
 const { backfillTransactionsForDebtor } = require('../../services/transactionBackfillService');
 const ExcelJS = require('exceljs');
+const StudentDeletionService = require('../../services/studentDeletionService');
 
 // Helper function to safely format dates
 const safeDateFormat = (date) => {
@@ -421,92 +422,59 @@ exports.updateStudent = async (req, res) => {
     }
 };
 
-// Delete student
+// Delete student comprehensively
 exports.deleteStudent = async (req, res) => {
     try {
-        const student = await User.findOne({
-            _id: req.params.studentId,
-            role: 'student'
-        });
+        const studentId = req.params.studentId;
 
-        if (!student) {
-            return res.status(404).json({ error: 'Student not found' });
+        // Validate deletion before proceeding
+        const validation = await StudentDeletionService.validateDeletion(studentId);
+        
+        if (!validation.canDelete) {
+            return res.status(400).json({ 
+                error: 'Cannot delete student',
+                reasons: validation.blockers
+            });
         }
 
-        // Check for active bookings
-        const activeBookings = await Booking.findOne({
-            student: student._id,
-            status: { $in: ['pending', 'confirmed'] }
-        });
-
-        if (activeBookings) {
-            return res.status(400).json({ error: 'Cannot delete student with active bookings' });
+        // Show warnings if any exist
+        if (validation.warnings.length > 0) {
+            console.log('⚠️ Deletion warnings:', validation.warnings);
         }
 
-        // Archive before removing the student
-        const application = await Application.findOne({ student: student._id }).sort({ createdAt: -1 });
-        // Fetch payment history
-        const bookings = await Booking.find({ student: student._id }).lean();
-        const paymentHistory = bookings.flatMap(booking => booking.payments || []);
-        // Fetch leases
-        const leases = await Lease.find({ studentId: student._id }).lean();
-        await ExpiredStudent.create({
-            student: student.toObject(),
-            application: application ? application.toObject() : null,
-            previousApplicationCode: application ? application.applicationCode : null,
-            archivedAt: new Date(),
-            reason: 'deleted_by_admin',
-            paymentHistory,
-            leases
+        // Perform comprehensive deletion
+        const deletionSummary = await StudentDeletionService.deleteStudentCompletely(
+            studentId, 
+            req.user
+        );
+
+        // Return detailed response with safety checks
+        const safeDeletedCollections = deletionSummary.deletedCollections || {};
+        const safeErrors = deletionSummary.errors || [];
+        
+        res.json({
+            message: safeErrors.length > 0 
+                ? 'Student deletion completed with some errors' 
+                : 'Student and all related data deleted successfully',
+            summary: {
+                studentInfo: deletionSummary.studentInfo || { id: studentId, email: 'Unknown', name: 'Unknown' },
+                collectionsAffected: Object.keys(safeDeletedCollections).length,
+                totalRecordsDeleted: Object.values(safeDeletedCollections)
+                    .reduce((sum, item) => sum + (item.count || 0), 0),
+                archived: deletionSummary.archived || false,
+                residenceUpdated: deletionSummary.residenceUpdated || null,
+                warnings: validation.warnings || [],
+                errors: safeErrors
+            },
+            details: safeDeletedCollections
         });
 
-        // Before removing the student, update room status in residence
-        if (student.residence && student.currentRoom) {
-            const residence = await Residence.findById(student.residence);
-            if (residence) {
-                const room = residence.rooms.find(r => r.roomNumber === student.currentRoom);
-                if (room) {
-                    // Decrement occupancy, but not below 0
-                    room.currentOccupancy = Math.max(0, (room.currentOccupancy || 1) - 1);
-                    // Update status
-                    if (room.currentOccupancy === 0) {
-                        room.status = 'available';
-                    } else if (room.currentOccupancy < room.capacity) {
-                        room.status = 'reserved';
-                    } else {
-                        room.status = 'occupied';
-                    }
-                    await residence.save();
-                }
-            }
-        }
-
-        // Save before state for audit
-        const before = student.toObject();
-        await student.remove();
-
-        // Audit log for deletion
-        await AuditLog.create({
-            user: req.user?._id,
-            action: 'delete',
-            collection: 'User',
-            recordId: before._id,
-            before,
-            after: null
-        });
-
-        await createAuditLog({
-            action: 'DELETE',
-            resourceType: 'Student',
-            resourceId: student._id,
-            userId: req.user._id,
-            details: `Deleted student ${student.email}`
-        });
-
-        res.json({ message: 'Student deleted successfully' });
     } catch (error) {
-        console.error('Error in deleteStudent:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Error in comprehensive student deletion:', error);
+        res.status(500).json({ 
+            error: 'Server error during student deletion',
+            message: error.message
+        });
     }
 };
 

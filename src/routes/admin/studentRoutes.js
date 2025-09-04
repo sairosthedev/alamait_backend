@@ -13,6 +13,7 @@ const Booking = require('../../models/Booking');
 const { adminUploadSignedLease } = require('../../controllers/admin/studentController');
 const admin = require('../../middleware/admin');
 const excelUpload = require('../../middleware/excelUpload');
+const StudentDeletionService = require('../../services/studentDeletionService');
 
 const {
     getAllStudents,
@@ -182,73 +183,7 @@ router.post('/:debtorId/backfill-transactions', auth, checkRole(['admin']), back
 
 router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);
-router.delete('/:studentId', async (req, res) => {
-    try {
-        const { studentId } = req.params;
-        const student = await User.findById(studentId);
-
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        const application = await Application.findOne({ student: student._id }).sort({ createdAt: -1 });
-        if (application) {
-            // Archive before removing the user and application
-            try {
-                let user = null;
-                if (application.student) {
-                    user = await User.findById(application.student._id);
-                }
-                // Fetch payment history
-                let paymentHistory = [];
-                if (user) {
-                    const bookings = await Booking.find({ student: user._id }).lean();
-                    paymentHistory = bookings.flatMap(booking => booking.payments || []);
-                }
-                // Fetch leases
-                let leases = [];
-                if (user) {
-                    leases = await Lease.find({ studentId: user._id }).lean();
-                }
-                await ExpiredStudent.create({
-                    student: user ? user.toObject() : null,
-                    application: application.toObject(),
-                    previousApplicationCode: application.applicationCode,
-                    archivedAt: new Date(),
-                    reason: 'application_deleted',
-                    paymentHistory,
-                    leases
-                });
-            } catch (archiveError) {
-                console.error('Error archiving to ExpiredStudent:', archiveError);
-            }
-        }
-
-        if (student.residence && student.currentRoom) {
-            const residence = await Residence.findById(student.residence);
-            if (residence) {
-                const room = residence.rooms.find(r => r.roomNumber === student.currentRoom);
-                if (room) {
-                    room.currentOccupancy = Math.max(0, (room.currentOccupancy || 1) - 1);
-                    if (room.currentOccupancy === 0) {
-                        room.status = 'available';
-                    } else if (room.currentOccupancy < room.capacity) {
-                        room.status = 'reserved';
-                    } else {
-                        room.status = 'occupied';
-                    }
-                    await residence.save();
-                }
-            }
-        }
-
-        await student.remove();
-        res.status(200).json({ message: 'Student archived successfully' });
-    } catch (error) {
-        console.error('Error archiving student:', error);
-        res.status(500).json({ error: 'Error archiving student' });
-    }
-});
+router.delete('/:studentId', auth, checkRole(['admin']), deleteStudent);
 router.get('/:studentId/payments', getStudentPayments);
 router.get('/:studentId/leases', getStudentLeases);
 router.get('/lease-agreement/:studentId', downloadSignedLease);
