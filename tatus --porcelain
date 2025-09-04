@@ -1,0 +1,15 @@
+[33mcommit 55e89c0ebbf8b226d2b633556a6738026cb89211[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: kudzaicindy <165305935+kudzaicindy@users.noreply.github.com>
+Date:   Thu Sep 4 09:06:20 2025 +0200
+
+     Optimize balance sheet generation for Render deployment
+    
+    - Fix parallel processing race conditions
+    - Add cached account data to reduce DB queries
+    - Implement batch transaction processing
+    - Add fallback to sequential processing
+    - Reduce timeout from 4min to 3min
+    - Add performance metrics and progress tracking
+    - Skip zero-balance accounts for better performance
+
+src/controllers/financialReportsController.js
