@@ -394,6 +394,7 @@ class FinancialReportsController {
             const duration = (endTime - startTime) / 1000;
             console.log(`✅ Balance sheet generation completed in ${duration.toFixed(2)} seconds`);
             
+            
             // Add performance metrics to response
             monthlyBalanceSheet.performance = {
                 generationTime: duration,
