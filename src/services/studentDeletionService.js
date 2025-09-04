@@ -31,6 +31,7 @@ const Liability = require('../models/finance/Liability');
 const IncomeStatement = require('../models/finance/IncomeStatement');
 const OtherExpense = require('../models/finance/OtherExpense');
 const OtherIncome = require('../models/finance/OtherIncome');
+const Account = require('../models/Account');
 
 const { createAuditLog } = require('../utils/auditLogger');
 
@@ -98,8 +99,9 @@ class StudentDeletionService {
 
                 // Delete from all collections in the correct order (dependencies first)
                 const deletionPlan = [
-                    // Step 1: Delete transaction-related data
-                    { collection: 'TransactionEntry', field: 'reference', description: 'Transaction entries' },
+                    // Step 1: Delete transaction-related data (multiple patterns)
+                    { collection: 'TransactionEntry', field: 'reference', description: 'Transaction entries (by reference)' },
+                    { special: 'deleteTransactionEntriesAdvanced', description: 'Transaction entries (advanced patterns)' },
                     { collection: 'Transaction', field: 'reference', description: 'Transactions' },
                     
                     // Step 2: Delete financial records
@@ -107,6 +109,7 @@ class StudentDeletionService {
                     { collection: 'Payment', field: 'user', description: 'Payments (user field)' },
                     { collection: 'Receipt', field: 'student', description: 'Receipts' },
                     { collection: 'Debtor', field: 'user', description: 'Debtor accounts' },
+                    { special: 'deleteStudentSpecificAccounts', description: 'Student-specific AR accounts' },
                     { collection: 'StudentAccount', field: 'student', description: 'Student accounts' },
                     { collection: 'TenantAccount', field: 'tenant', description: 'Tenant accounts' },
                     { collection: 'Invoice', field: 'student', description: 'Invoices' },
@@ -279,8 +282,152 @@ class StudentDeletionService {
             case 'updateResidenceOccupancy':
                 await this.updateResidenceOccupancy(student, session, deletionSummary);
                 break;
+            case 'deleteTransactionEntriesAdvanced':
+                await this.deleteTransactionEntriesAdvanced(student, session, deletionSummary);
+                break;
+            case 'deleteStudentSpecificAccounts':
+                await this.deleteStudentSpecificAccounts(student, session, deletionSummary);
+                break;
             default:
                 console.log(`⚠️ Unknown special deletion type: ${type}`);
+        }
+    }
+
+    /**
+     * Delete transaction entries using advanced patterns
+     */
+    static async deleteTransactionEntriesAdvanced(student, session, deletionSummary) {
+        try {
+            const studentId = student._id.toString();
+            const studentEmail = student.email;
+            const studentName = `${student.firstName} ${student.lastName}`;
+            
+            console.log(`🔍 Advanced transaction entry deletion for: ${studentEmail}`);
+            
+            // Pattern 1: Reference contains student ID as ObjectId
+            const pattern1 = await TransactionEntry.deleteMany({
+                reference: new mongoose.Types.ObjectId(studentId)
+            }).session(session);
+            
+            // Pattern 2: Reference contains student ID as string
+            const pattern2 = await TransactionEntry.deleteMany({
+                reference: studentId
+            }).session(session);
+            
+            // Pattern 3: Description contains student email
+            const pattern3 = await TransactionEntry.deleteMany({
+                description: { $regex: studentEmail, $options: 'i' }
+            }).session(session);
+            
+            // Pattern 4: Description contains student name
+            const pattern4 = await TransactionEntry.deleteMany({
+                description: { $regex: studentName, $options: 'i' }
+            }).session(session);
+            
+            // Pattern 5: Reference contains PAYMENT- prefix with student ID
+            const pattern5 = await TransactionEntry.deleteMany({
+                reference: { $regex: `PAYMENT.*${studentId}`, $options: 'i' }
+            }).session(session);
+            
+            // Pattern 6: Any field that might contain the student ID
+            const pattern6 = await TransactionEntry.deleteMany({
+                $or: [
+                    { relatedDocument: studentId },
+                    { relatedDocument: new mongoose.Types.ObjectId(studentId) },
+                    { metadata: { $regex: studentId, $options: 'i' } }
+                ]
+            }).session(session);
+            
+            const totalDeleted = pattern1.deletedCount + pattern2.deletedCount + 
+                               pattern3.deletedCount + pattern4.deletedCount + 
+                               pattern5.deletedCount + pattern6.deletedCount;
+            
+            if (totalDeleted > 0) {
+                if (!deletionSummary.deletedCollections['TransactionEntry (Advanced)']) {
+                    deletionSummary.deletedCollections['TransactionEntry (Advanced)'] = {
+                        count: 0,
+                        description: 'Transaction entries (advanced patterns)'
+                    };
+                }
+                deletionSummary.deletedCollections['TransactionEntry (Advanced)'].count += totalDeleted;
+                
+                console.log(`🗑️ Advanced transaction entry deletion: ${totalDeleted} entries`);
+                console.log(`  - ObjectId reference: ${pattern1.deletedCount}`);
+                console.log(`  - String reference: ${pattern2.deletedCount}`);
+                console.log(`  - Email in description: ${pattern3.deletedCount}`);
+                console.log(`  - Name in description: ${pattern4.deletedCount}`);
+                console.log(`  - Payment reference: ${pattern5.deletedCount}`);
+                console.log(`  - Other patterns: ${pattern6.deletedCount}`);
+            }
+            
+        } catch (error) {
+            console.error('❌ Error in advanced transaction entry deletion:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Delete student-specific accounts from the Account collection
+     */
+    static async deleteStudentSpecificAccounts(student, session, deletionSummary) {
+        try {
+            const studentId = student._id.toString();
+            const studentEmail = student.email;
+            const studentName = `${student.firstName} ${student.lastName}`;
+            
+            console.log(`🔍 Deleting student-specific accounts for: ${studentEmail}`);
+            
+            // Pattern 1: Code contains student ID (1100-{studentId})
+            const pattern1 = await Account.deleteMany({
+                code: { $regex: studentId, $options: 'i' }
+            }).session(session);
+            
+            // Pattern 2: Name contains student name
+            const pattern2 = await Account.deleteMany({
+                name: { $regex: studentName, $options: 'i' }
+            }).session(session);
+            
+            // Pattern 3: Description indicates student-specific
+            const pattern3 = await Account.deleteMany({
+                description: { $regex: 'Student-specific', $options: 'i' },
+                $or: [
+                    { code: { $regex: studentId, $options: 'i' } },
+                    { name: { $regex: studentName, $options: 'i' } }
+                ]
+            }).session(session);
+            
+            // Pattern 4: Subcategory is "Accounts Receivable" and contains student info
+            const pattern4 = await Account.deleteMany({
+                subcategory: 'Accounts Receivable',
+                $or: [
+                    { code: { $regex: studentId, $options: 'i' } },
+                    { name: { $regex: studentName, $options: 'i' } },
+                    { name: { $regex: studentEmail, $options: 'i' } }
+                ]
+            }).session(session);
+            
+            const totalDeleted = pattern1.deletedCount + pattern2.deletedCount + 
+                               pattern3.deletedCount + pattern4.deletedCount;
+            
+            if (totalDeleted > 0) {
+                if (!deletionSummary.deletedCollections['Account (Student-Specific)']) {
+                    deletionSummary.deletedCollections['Account (Student-Specific)'] = {
+                        count: 0,
+                        description: 'Student-specific AR control accounts'
+                    };
+                }
+                deletionSummary.deletedCollections['Account (Student-Specific)'].count += totalDeleted;
+                
+                console.log(`🗑️ Student-specific account deletion: ${totalDeleted} accounts`);
+                console.log(`  - Code pattern: ${pattern1.deletedCount}`);
+                console.log(`  - Name pattern: ${pattern2.deletedCount}`);
+                console.log(`  - Description pattern: ${pattern3.deletedCount}`);
+                console.log(`  - AR subcategory: ${pattern4.deletedCount}`);
+            }
+            
+        } catch (error) {
+            console.error('❌ Error in student-specific account deletion:', error);
+            throw error;
         }
     }
 
@@ -453,6 +600,7 @@ class StudentDeletionService {
             Payment,
             Receipt,
             Debtor,
+            Account,
             StudentAccount,
             TenantAccount,
             Invoice,
