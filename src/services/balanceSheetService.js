@@ -628,23 +628,23 @@ class BalanceSheetService {
           monthlyData[monthKey] = {
             month: monthKey,
             monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
-            assets: { 
+            assets: {
               current: { cashAndBank: {}, accountsReceivable: {}, inventory: {}, prepaidExpenses: {}, total: 0 }, 
               nonCurrent: { propertyPlantEquipment: {}, accumulatedDepreciation: 0, total: 0 }, 
               total: 0 
             },
-            liabilities: { 
+            liabilities: {
               current: { accountsPayable: {}, accruedExpenses: {}, tenantDeposits: {}, taxesPayable: {}, total: 0 }, 
               nonCurrent: { longTermLoans: {}, otherLongTermLiabilities: {}, total: 0 }, 
               total: 0 
             },
-            equity: { 
+            equity: {
               capital: { accountCode: '3000', accountName: 'Owner\'s Capital', amount: 0 }, 
               retainedEarnings: { accountCode: '3100', accountName: 'Retained Earnings', amount: 0 }, 
               otherEquity: { accountCode: '3200', accountName: 'Other Equity', amount: 0 }, 
               total: 0 
             },
-            summary: { 
+            summary: {
               totalAssets: 0, 
               totalLiabilities: 0, 
               totalEquity: 0, 
@@ -802,7 +802,7 @@ class BalanceSheetService {
       // 🚀 OPTIMIZATION: Use cached accounts if provided, otherwise fetch once
       let allAccounts = cachedAccounts;
       if (!allAccounts) {
-        const Account = require('../models/Account');
+      const Account = require('../models/Account');
         allAccounts = await Account.find().sort({ code: 1 });
       }
       
@@ -861,24 +861,24 @@ class BalanceSheetService {
       
       // Apply the transaction data to account balances
       accountTransactionMap.forEach((transactionData, accountCode) => {
-        if (accountBalances[accountCode]) {
+            if (accountBalances[accountCode]) {
           accountBalances[accountCode].debitTotal += transactionData.debitTotal;
           accountBalances[accountCode].creditTotal += transactionData.creditTotal;
-          // Update name and type from transaction if more recent
+              // Update name and type from transaction if more recent
           if (transactionData.name) accountBalances[accountCode].name = transactionData.name;
           if (transactionData.type) accountBalances[accountCode].type = transactionData.type;
-        } else {
-          // Create account if not found in database (fallback)
-          accountBalances[accountCode] = {
-            code: accountCode,
+            } else {
+              // Create account if not found in database (fallback)
+              accountBalances[accountCode] = {
+                code: accountCode,
             name: transactionData.name,
             type: transactionData.type,
             debitTotal: transactionData.debitTotal,
             creditTotal: transactionData.creditTotal,
-            balance: 0,
+                balance: 0,
             description: transactionData.description,
             category: transactionData.category
-          };
+              };
         }
       });
       
