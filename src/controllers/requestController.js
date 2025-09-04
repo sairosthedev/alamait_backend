@@ -1006,7 +1006,7 @@ exports.createRequest = async (req, res) => {
 };
 
 // Update request (only if pending)
-exports.updateRequest = async (req, res) => {
+exports.updateRequest = async (req, res) => { //n
     try {
         const { id } = req.params;
         const user = req.user;
