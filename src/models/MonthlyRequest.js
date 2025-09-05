@@ -45,7 +45,7 @@ const monthlyRequestItemSchema = new mongoose.Schema({
     },
     quantity: {
         type: Number,
-        required: true,
+        required: false,
         min: 1
     },
     estimatedCost: {
@@ -317,9 +317,15 @@ monthlyRequestSchema.index({ isTemplate: 1 });
 monthlyRequestSchema.pre('save', function(next) {
     // Calculate total cost
     if (this.items && this.items.length > 0) {
+        console.log(`🔍 Pre-save: Calculating totalEstimatedCost for ${this.items.length} items`);
         this.totalEstimatedCost = this.items.reduce((total, item) => {
-            return total + (item.estimatedCost * item.quantity);
+            const quantity = item.quantity || 1; // Default to 1 if quantity is missing
+            const estimatedCost = item.estimatedCost || 0; // Default to 0 if cost is missing
+            const itemTotal = estimatedCost * quantity;
+            console.log(`🔍 Pre-save: Item ${item.title} - qty: ${quantity}, cost: ${estimatedCost}, total: ${itemTotal}`);
+            return total + itemTotal;
         }, 0);
+        console.log(`🔍 Pre-save: Final totalEstimatedCost: ${this.totalEstimatedCost}`);
     }
     
     // Format description with month name if not a template
