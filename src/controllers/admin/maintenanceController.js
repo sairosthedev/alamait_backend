@@ -288,27 +288,28 @@ exports.createMaintenanceRequest = async (req, res) => {
         const request = new Maintenance(maintenanceData);
         await request.save();
 
-        // Send email notifications (non-blocking)
+        // Populate the created request with all necessary details before sending email
+        const populatedRequest = await Maintenance.findById(request._id)
+            .populate('student', 'firstName lastName')
+            .populate('residence', 'name')
+            .populate('updates.author', 'firstName lastName');
+
+        // Send email notifications (non-blocking) - moved after population
         try {
             // Send notification to CEO and Finance Admin about admin-created maintenance request
-            await EmailNotificationService.sendAdminMaintenanceRequestToCEOAndFinance(request, req.user);
+            await EmailNotificationService.sendAdminMaintenanceRequestToCEOAndFinance(populatedRequest, req.user);
             
             // If there's a student associated with this request, send confirmation email
-            if (request.student) {
-                const student = await User.findById(request.student);
+            if (populatedRequest.student) {
+                const student = await User.findById(populatedRequest.student._id);
                 if (student) {
-                    await EmailNotificationService.sendMaintenanceRequestConfirmation(request, student);
+                    await EmailNotificationService.sendMaintenanceRequestConfirmation(populatedRequest, student);
                 }
             }
         } catch (emailError) {
             console.error('Failed to send maintenance request email notifications:', emailError);
             // Don't fail the request if email fails
         }
-
-        // Populate the created request with student details and add additional fields
-        const populatedRequest = await Maintenance.findById(request._id)
-            .populate('student', 'firstName lastName')
-            .populate('updates.author', 'firstName lastName');
 
         // Format dates to ISO string
         const formatDate = (date) => {

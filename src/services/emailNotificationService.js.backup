@@ -152,6 +152,8 @@ class EmailNotificationService {
 							<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
 							<li><strong>Category:</strong> ${maintenance.category}</li>
 							<li><strong>Priority:</strong> ${maintenance.priority}</li>
+							<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+							<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
 							<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
 							<li><strong>Submitted By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
 							<li><strong>Submitted Date:</strong> ${new Date().toLocaleDateString()}</li>
@@ -214,6 +216,8 @@ class EmailNotificationService {
 								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
 								<li><strong>Category:</strong> ${maintenance.category}</li>
 								<li><strong>Priority:</strong> ${maintenance.priority}</li>
+								<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+								<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
 								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
 								<li><strong>Request ID:</strong> ${maintenance._id}</li>
 								<li><strong>Submitted Date:</strong> ${new Date().toLocaleDateString()}</li>
@@ -295,6 +299,8 @@ class EmailNotificationService {
 								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
 								<li><strong>Category:</strong> ${maintenance.category}</li>
 								<li><strong>Priority:</strong> ${maintenance.priority}</li>
+								<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+								<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
 								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
 								<li><strong>Student:</strong> ${maintenance.student?.firstName} ${maintenance.student?.lastName}</li>
 								<li><strong>Student Email:</strong> ${maintenance.student?.email}</li>
@@ -417,6 +423,8 @@ class EmailNotificationService {
 								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
 								<li><strong>Category:</strong> ${maintenance.category}</li>
 								<li><strong>Priority:</strong> ${maintenance.priority}</li>
+								<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+								<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
 								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
 								<li><strong>Approved Amount:</strong> $${maintenance.amount?.toFixed(2) || '0.00'}</li>
 								<li><strong>Approved By:</strong> ${approvedBy?.firstName} ${approvedBy?.lastName}</li>
@@ -472,6 +480,8 @@ class EmailNotificationService {
 								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
 								<li><strong>Category:</strong> ${maintenance.category}</li>
 								<li><strong>Priority:</strong> ${maintenance.priority}</li>
+								<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+								<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
 								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
 								<li><strong>Rejected By:</strong> ${rejectedBy?.firstName} ${rejectedBy?.lastName}</li>
 								<li><strong>Rejection Date:</strong> ${new Date().toLocaleDateString()}</li>
@@ -519,45 +529,23 @@ class EmailNotificationService {
 				role: { $in: ['ceo', 'finance_admin', 'finance'] }
 			});
 
-		// Helper function to format values with better fallbacks
-		const formatValue = (value, fallback = 'Not specified') => {
-			if (value === null || value === undefined || value === '') {
-				return fallback;
-			}
-			return value;
-		};
-		
-		// Format category with proper capitalization
-		const formatCategory = (category) => {
-			if (!category) return 'Not specified';
-			return category.split('_').map(word => 
-				word.charAt(0).toUpperCase() + word.slice(1)
-			).join(' ');
-		};
-		
-		// Format residence name
-		const residenceName = maintenance.residence?.name || 
-			(maintenance.residence && typeof maintenance.residence === 'string' ? maintenance.residence : 'Not specified');
-		
-		// Format room information
-		const roomInfo = formatValue(maintenance.room, 'Not specified');
-		
-		const emailContent = `
+			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
 						<h2 style="color: #333;">New Maintenance Request - Admin Created</h2>
 						<p>Dear Management Team,</p>
 						<p>An admin has created a new maintenance request that requires your attention:</p>
 						<ul>
-							<li><strong>Issue:</strong> ${formatValue(maintenance.issue, 'No issue specified')}</li>
-							<li><strong>Description:</strong> ${formatValue(maintenance.description, 'No description provided')}</li>
-							<li><strong>Category:</strong> ${formatCategory(maintenance.category)}</li>
-							<li><strong>Priority:</strong> ${formatValue(maintenance.priority, 'Medium').charAt(0).toUpperCase() + formatValue(maintenance.priority, 'Medium').slice(1)}</li>
-							${roomInfo !== 'Not specified' ? `<li><strong>Room:</strong> ${roomInfo}</li>` : ''}
-							<li><strong>Residence:</strong> ${residenceName}</li>
-							<li><strong>Amount:</strong> $${(maintenance.amount || 0).toFixed(2)}</li>
+							<li><strong>Issue:</strong> ${maintenance.issue}</li>
+							<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
+							<li><strong>Category:</strong> ${maintenance.category}</li>
+							<li><strong>Priority:</strong> ${maintenance.priority}</li>
+							<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+							<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
+							<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
+							<li><strong>Amount:</strong> $${maintenance.amount?.toFixed(2) || '0.00'}</li>
 							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
-							<li><strong>Created Date:</strong> ${new Date(maintenance.createdAt || Date.now()).toLocaleDateString()}</li>
+							<li><strong>Created Date:</strong> ${new Date().toLocaleDateString()}</li>
 						</ul>
 						<p><strong>Action Required:</strong> Please review and process this maintenance request for approval.</p>
 						<hr style="margin: 20px 0;">
@@ -622,33 +610,7 @@ class EmailNotificationService {
 				requestTypeDisplay = 'Maintenance Request';
 			}
 
-		// Helper function to format values with better fallbacks
-		const formatValue = (value, fallback = 'Not specified') => {
-			if (value === null || value === undefined || value === '') {
-				return fallback;
-			}
-			return value;
-		};
-		
-		// Format category with proper capitalization
-		const formatCategory = (category) => {
-			if (!category) return 'Not specified';
-			return category.split('_').map(word => 
-				word.charAt(0).toUpperCase() + word.slice(1)
-			).join(' ');
-		};
-		
-		// Format residence name
-		const residenceName = request.residence?.name || 
-			(request.residence && typeof request.residence === 'string' ? request.residence : 'Not specified');
-		
-		// Format room information
-		const roomInfo = formatValue(request.room, 'Not specified');
-		
-		// Format department information
-		const departmentInfo = formatValue(request.department, 'Not specified');
-		
-		const emailContent = `
+			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
 						<h2 style="color: #333;">New ${requestTypeDisplay} - Admin Created</h2>
@@ -656,15 +618,15 @@ class EmailNotificationService {
 						<p>An admin has created a new ${requestTypeDisplay.toLowerCase()} that requires your attention:</p>
 						<ul>
 							<li><strong>Request Type:</strong> ${requestTypeDisplay}</li>
-							<li><strong>Title:</strong> ${formatValue(request.title, 'No title provided')}</li>
-							<li><strong>Description:</strong> ${formatValue(request.description, 'No description provided')}</li>
-							${request.issue ? `<li><strong>Issue:</strong> ${request.issue}</li>` : ''}
-							<li><strong>Category:</strong> ${formatCategory(request.category)}</li>
-							<li><strong>Priority:</strong> ${formatValue(request.priority, 'Medium').charAt(0).toUpperCase() + formatValue(request.priority, 'Medium').slice(1)}</li>
-							${roomInfo !== 'Not specified' ? `<li><strong>Room:</strong> ${roomInfo}</li>` : ''}
-							<li><strong>Residence:</strong> ${residenceName}</li>
-							${departmentInfo !== 'Not specified' ? `<li><strong>Department:</strong> ${departmentInfo}</li>` : ''}
-							<li><strong>Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</li>
+							<li><strong>Title:</strong> ${request.title || 'No title provided'}</li>
+							<li><strong>Description:</strong> ${request.description || 'No description provided'}</li>
+							<li><strong>Issue:</strong> ${request.issue || 'N/A'}</li>
+							<li><strong>Category:</strong> ${request.category || 'N/A'}</li>
+							<li><strong>Priority:</strong> ${request.priority || 'medium'}</li>
+							<li><strong>Room:</strong> ${request.room || 'N/A'}</li>
+							<li><strong>Residence:</strong> ${request.residence?.name || 'N/A'}</li>
+							<li><strong>Department:</strong> ${request.department || 'N/A'}</li>
+							<li><strong>Amount:</strong> $${request.amount?.toFixed(2) || '0.00'}</li>
 							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
 							<li><strong>Created Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
 						</ul>
