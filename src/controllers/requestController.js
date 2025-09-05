@@ -994,7 +994,12 @@ exports.createRequest = async (req, res) => {
         
         await request.save();
         
-        // Send email notifications (non-blocking)
+        
+        const populatedRequest = await Request.findById(request._id)
+            .populate('submittedBy', 'firstName lastName email role')
+            .populate('residence', 'name');
+        
+        // Send email notifications (non-blocking) - moved after population
         try {
             console.log('🔍 Request creation email debugging:');
             console.log('req.user:', req.user ? 'Present' : 'Missing');
@@ -1002,18 +1007,19 @@ exports.createRequest = async (req, res) => {
             console.log('User ID:', req.user?._id);
             console.log('Request type:', request.type);
             console.log('Request title:', request.title);
+            console.log('Populated residence:', populatedRequest.residence?.name);
             
             // Check if user is admin and send appropriate emails
             if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager')) {
                 if (request.type === 'student_maintenance' || request.type === 'operational' || request.type === 'financial') {
                     console.log('📧 Sending admin request email to CEO and Finance Admin');
-                    await EmailNotificationService.sendAdminRequestToCEOAndFinance(request, req.user);
+                    await EmailNotificationService.sendAdminRequestToCEOAndFinance(populatedRequest, req.user);
                 }
             } else {
                 // For students, send to admins
                 if (request.type === 'student_maintenance') {
                     console.log('📧 Sending student maintenance email to admins');
-                    await EmailNotificationService.sendMaintenanceRequestSubmitted(request, req.user);
+                    await EmailNotificationService.sendMaintenanceRequestSubmitted(populatedRequest, req.user);
                 }
             }
             
@@ -1021,10 +1027,6 @@ exports.createRequest = async (req, res) => {
             console.error('Failed to send request email notifications:', emailError);
             // Don't fail the request if email fails
         }
-        
-        const populatedRequest = await Request.findById(request._id)
-            .populate('submittedBy', 'firstName lastName email role')
-            .populate('residence', 'name');
         
         res.status(201).json(populatedRequest);
     } catch (error) {
