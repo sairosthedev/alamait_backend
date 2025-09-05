@@ -337,7 +337,7 @@ exports.updateExpense = async (req, res) => {
         }
 
         // Find expense
-        const expense = await Expense.findById(id);
+        const expense = await Expense.findById(id).populate('residence');
         if (!expense) {
             return res.status(404).json({ error: 'Expense not found', id });
         }
@@ -402,7 +402,7 @@ exports.deleteExpense = async (req, res) => {
         }
 
         // Find expense
-        const expense = await Expense.findById(id);
+        const expense = await Expense.findById(id).populate('residence');
         if (!expense) {
             return res.status(404).json({ error: 'Expense not found' });
         }
@@ -995,7 +995,7 @@ exports.recordExpensePayment = async (req, res) => {
         } = req.body;
 
         // Validate expense exists
-        const expense = await Expense.findById(id);
+        const expense = await Expense.findById(id).populate('residence');
         if (!expense) {
             return res.status(404).json({ message: 'Expense not found' });
         }

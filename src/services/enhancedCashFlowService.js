@@ -394,8 +394,7 @@ class EnhancedCashFlowService {
                 utilities: { total: 0, transactions: [] },
                 cleaning: { total: 0, transactions: [] },
                 security: { total: 0, transactions: [] },
-                management: { total: 0, transactions: [] },
-                other_expenses: { total: 0, transactions: [] }
+                management: { total: 0, transactions: [] }
             },
             by_residence: {},
             by_month: {},
@@ -403,19 +402,78 @@ class EnhancedCashFlowService {
         };
         
         // Process transaction entries for expenses (Cash credits = expenses paid)
+        const processedTransactions = new Set();
+        const processedExpenses = new Set(); // Track processed expense IDs
+        
         transactionEntries.forEach(entry => {
             if (entry.entries && entry.entries.length > 0) {
-                // Look for Cash credits (expenses paid)
-                const cashEntry = entry.entries.find(line => 
-                    line.accountCode === '1000' && line.accountName === 'Cash' && line.credit > 0
-                );
+                // Look for Cash/Bank credits (expenses paid)
+                const cashEntry = entry.entries.find(line => {
+                    const accountCode = line.accountCode || line.account?.code;
+                    const accountName = line.accountName || line.account?.name;
+                    return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
+                });
                 
                 if (cashEntry) {
+                    // Check if this expense was already processed
+                    let expenseId = null;
+                    if (entry.reference) {
+                        // Check for EXP- prefix or direct expense ID
+                        if (entry.reference.startsWith('EXP-')) {
+                            expenseId = entry.reference;
+                        } else {
+                            // Check if reference contains an expense ID pattern
+                            const expenseIdMatch = entry.reference.match(/EXP-[\w-]+/);
+                            if (expenseIdMatch) {
+                                expenseId = expenseIdMatch[0];
+                            } else {
+                                // Use the reference as expense ID if it looks like an ObjectId
+                                expenseId = entry.reference;
+                            }
+                        }
+                    }
+                    
+                    // Also check if this transaction is related to any expense by looking at the description
+                    if (entry.description && entry.description.includes('Payment for Expense')) {
+                        const expenseIdFromDesc = entry.description.match(/EXP-[\w-]+/);
+                        if (expenseIdFromDesc) {
+                            expenseId = expenseIdFromDesc[0];
+                        }
+                    }
+                    
+                    // Also check sourceId field which contains the actual expense _id
+                    if (entry.sourceId) {
+                        // Add the sourceId to processed expenses to prevent duplicate processing
+                        processedExpenses.add(entry.sourceId);
+                    }
+                    
+                    // Skip if this expense was already processed
+                    if (expenseId && processedExpenses.has(expenseId)) {
+                        return; // Skip this transaction
+                    }
+                    
+                    // Mark this transaction as processed
+                    processedTransactions.add(entry.transactionId);
+                    
+                    // Mark the expense as processed
+                    if (expenseId) {
+                        processedExpenses.add(expenseId);
+                    }
+                    
+                    // Also mark any related expense transaction IDs and expense IDs
+                    if (entry.reference) {
+                        processedTransactions.add(entry.reference);
+                        // If reference looks like an expense ID, also add it as processed
+                        if (entry.reference.startsWith('EXP-')) {
+                            processedTransactions.add(entry.reference);
+                        }
+                    }
+                    
                     const expenseAmount = cashEntry.credit;
                     expenseBreakdown.total += expenseAmount;
                     
                     // Categorize based on description
-                    let category = 'other_expenses';
+                    let category = 'maintenance'; // Default to maintenance instead of other_expenses
                     let description = entry.description || 'Cash Expense';
                     
                     if (entry.description) {
@@ -461,14 +519,49 @@ class EnhancedCashFlowService {
                 }
                 
                 // Also check for traditional Expense account types (for completeness)
-                entry.entries.forEach(line => {
-                    const accountCode = line.accountCode;
-                    const accountName = line.accountName;
-                    const accountType = line.accountType;
-                    const debit = line.debit || 0;
-                    
-                    if (accountType === 'Expense' || accountType === 'expense') {
-                        expenseBreakdown.total += debit;
+                // Skip if this transaction was already processed in the Cash credits section
+                if (!processedTransactions.has(entry.transactionId)) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode || line.account?.code;
+                        const accountName = line.accountName || line.account?.name;
+                        const accountType = line.accountType || line.account?.type;
+                        const debit = line.debit || 0;
+                        
+                        if (accountType === 'Expense' || accountType === 'expense') {
+                            // Check if this expense was already processed
+                            let expenseId = null;
+                            if (entry.reference) {
+                                if (entry.reference.startsWith('EXP-')) {
+                                    expenseId = entry.reference;
+                                } else {
+                                    const expenseIdMatch = entry.reference.match(/EXP-[\w-]+/);
+                                    if (expenseIdMatch) {
+                                        expenseId = expenseIdMatch[0];
+                                    } else {
+                                        expenseId = entry.reference;
+                                    }
+                                }
+                            }
+                            
+                            // Also check sourceId field
+                            if (entry.sourceId) {
+                                processedExpenses.add(entry.sourceId);
+                            }
+                            
+                            // Skip if this expense was already processed
+                            if (expenseId && processedExpenses.has(expenseId)) {
+                                return; // Skip this line
+                            }
+                            
+                            // Mark this transaction as processed
+                            processedTransactions.add(entry.transactionId);
+                            
+                            // Mark the expense as processed
+                            if (expenseId) {
+                                processedExpenses.add(expenseId);
+                            }
+                            
+                            expenseBreakdown.total += debit;
                         
                         // Categorize by account code
                         if (accountCode.startsWith('5001') || accountName.toLowerCase().includes('maintenance')) {
@@ -527,8 +620,9 @@ class EnhancedCashFlowService {
                                 description: entry.description || 'Management Expense'
                             });
                         } else {
-                            expenseBreakdown.by_category.other_expenses.total += debit;
-                            expenseBreakdown.by_category.other_expenses.transactions.push({
+                            // Default to maintenance category instead of other_expenses
+                            expenseBreakdown.by_category.maintenance.total += debit;
+                            expenseBreakdown.by_category.maintenance.transactions.push({
                                 transactionId: entry.transactionId,
                                 date: entry.date,
                                 amount: debit,
@@ -554,16 +648,57 @@ class EnhancedCashFlowService {
                         expenseBreakdown.by_month[monthKey] += debit;
                     }
                 });
+                }
             }
         });
         
         // Process expense details from Expense model
+        // Only process expenses that haven't been counted in transaction entries
         expenses.forEach(expense => {
             const expenseAmount = expense.amount || 0;
+            
+            // Skip if this expense was already processed in transaction entries
+            const expenseTransactionId = expense.transactionId || expense._id;
+            const expenseId = expense._id.toString();
+            
+            // Check if this expense was already processed by checking:
+            // 1. Direct transaction ID match
+            // 2. Expense ID match (in case expense._id was used as reference)
+            // 3. Reference field match (in case expense ID was used as reference)
+            // 4. Expense ID in processedExpenses Set
+            // 5. Check if any processed expense ID matches this expense's ID pattern
+            // 6. Check if the expense reference matches any processed expense ID
+            // 7. Check if this expense's reference field matches any processed expense ID
+            // 8. Check if this expense's expenseId field matches any processed expense ID
+            const isAlreadyProcessed = processedTransactions.has(expenseTransactionId) || 
+                processedTransactions.has(expenseId) ||
+                processedTransactions.has(expense.reference) ||
+                processedExpenses.has(expenseId) ||
+                processedExpenses.has(expense.reference) ||
+                processedExpenses.has(expense.expenseId) || // Check expenseId field
+                Array.from(processedExpenses).some(processedId => {
+                    // Check if the processed expense ID matches this expense in any way
+                    return processedId.includes(expenseId) || 
+                        expenseId.includes(processedId) ||
+                        (expense.reference && processedId.includes(expense.reference)) ||
+                        (expense.reference && expense.reference.includes(processedId)) ||
+                        // Check if the processed expense ID is in the expense's reference field
+                        (expense.reference && expense.reference.includes(processedId)) ||
+                        // Check if this expense's reference is in any processed expense ID
+                        (expense.reference && Array.from(processedExpenses).some(p => p.includes(expense.reference))) ||
+                        // Check if this expense's expenseId matches any processed expense ID
+                        (expense.expenseId && processedId.includes(expense.expenseId)) ||
+                        (expense.expenseId && expense.expenseId.includes(processedId));
+                });
+            
+            if (isAlreadyProcessed) {
+                return; // Skip this expense
+            }
+            
             expenseBreakdown.total += expenseAmount;
             
             // Categorize expense based on category field
-            let category = 'other_expenses';
+            let category = 'maintenance'; // Default to maintenance instead of other_expenses
             if (expense.category) {
                 const expCategory = expense.category.toLowerCase();
                 if (expCategory.includes('maintenance')) {
@@ -783,8 +918,7 @@ class EnhancedCashFlowService {
                     utilities: 0,
                     cleaning: 0,
                     security: 0,
-                    management: 0,
-                    other_expenses: 0
+                    management: 0
                 },
                 net_cash_flow: 0,
                 transaction_count: 0,
@@ -900,18 +1034,91 @@ class EnhancedCashFlowService {
                             } else if (desc.includes('management')) {
                                 months[monthKey].expenses.management += expenseAmount;
                             } else {
-                                months[monthKey].expenses.other_expenses += expenseAmount;
+                                // Default to maintenance instead of other_expenses
+                                months[monthKey].expenses.maintenance += expenseAmount;
                             }
                         } else {
-                            months[monthKey].expenses.other_expenses += expenseAmount;
+                            // Default to maintenance instead of other_expenses
+                            months[monthKey].expenses.maintenance += expenseAmount;
                         }
                     }
                 }
             }
         });
         
-        // Process expenses by month
+        // Process expenses by month - ONLY count expenses that haven't been processed in transaction entries
+        // This prevents double counting since expenses are already counted in transaction entries
+        const processedExpenseIds = new Set();
+        
+        // First, collect all expense IDs that were processed in transaction entries
+        transactionEntries.forEach(entry => {
+            if (entry.entries && entry.entries.length > 0) {
+                // Look for Cash/Bank credits (expenses paid)
+                const cashEntry = entry.entries.find(line => {
+                    const accountCode = line.accountCode || line.account?.code;
+                    const accountName = line.accountName || line.account?.name;
+                    return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
+                });
+                
+                if (cashEntry) {
+                    // Extract expense ID from reference or description
+                    let expenseId = null;
+                    if (entry.reference) {
+                        if (entry.reference.startsWith('EXP-')) {
+                            expenseId = entry.reference;
+                        } else {
+                            const expenseIdMatch = entry.reference.match(/EXP-[\w-]+/);
+                            if (expenseIdMatch) {
+                                expenseId = expenseIdMatch[0];
+                            } else {
+                                expenseId = entry.reference;
+                            }
+                        }
+                    }
+                    
+                    if (entry.description && entry.description.includes('Payment for Expense')) {
+                        const expenseIdFromDesc = entry.description.match(/EXP-[\w-]+/);
+                        if (expenseIdFromDesc) {
+                            expenseId = expenseIdFromDesc[0];
+                        }
+                    }
+                    
+                    if (entry.sourceId) {
+                        processedExpenseIds.add(entry.sourceId);
+                    }
+                    
+                    if (expenseId) {
+                        processedExpenseIds.add(expenseId);
+                    }
+                }
+            }
+        });
+        
+        // Only process expenses that haven't been counted in transaction entries
         expenses.forEach(expense => {
+            const expenseId = expense._id.toString();
+            const expenseTransactionId = expense.transactionId || expense._id;
+            
+            // Check if this expense was already processed in transaction entries
+            const isAlreadyProcessed = processedExpenseIds.has(expenseId) || 
+                processedExpenseIds.has(expenseTransactionId) ||
+                processedExpenseIds.has(expense.reference) ||
+                Array.from(processedExpenseIds).some(processedId => {
+                    // Ensure both values are strings before calling includes
+                    const processedIdStr = String(processedId);
+                    const expenseIdStr = String(expenseId);
+                    const expenseRefStr = expense.reference ? String(expense.reference) : '';
+                    
+                    return processedIdStr.includes(expenseIdStr) || 
+                        expenseIdStr.includes(processedIdStr) ||
+                        (expenseRefStr && processedIdStr.includes(expenseRefStr)) ||
+                        (expenseRefStr && expenseRefStr.includes(processedIdStr));
+                });
+            
+            if (isAlreadyProcessed) {
+                return; // Skip this expense - it was already counted in transaction entries
+            }
+            
             const monthKey = expense.expenseDate.toISOString().slice(0, 7);
             if (months[monthKey]) {
                 months[monthKey].expense_count++;
@@ -932,10 +1139,12 @@ class EnhancedCashFlowService {
                     } else if (category.includes('management')) {
                         months[monthKey].expenses.management += expenseAmount;
                     } else {
-                        months[monthKey].expenses.other_expenses += expenseAmount;
+                        // Default to maintenance instead of other_expenses
+                        months[monthKey].expenses.maintenance += expenseAmount;
                     }
                 } else {
-                    months[monthKey].expenses.other_expenses += expenseAmount;
+                    // Default to maintenance instead of other_expenses
+                    months[monthKey].expenses.maintenance += expenseAmount;
                 }
             }
         });
