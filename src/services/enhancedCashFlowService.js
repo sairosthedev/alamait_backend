@@ -42,7 +42,7 @@ class EnhancedCashFlowService {
             
             if (basis === 'cash') {
                 transactionQuery.source = {
-                    $in: ['payment', 'expense_payment', 'rental_payment', 'manual', 'payment_collection', 'bank_transfer']
+                    $in: ['payment', 'expense_payment', 'rental_payment', 'manual', 'payment_collection', 'bank_transfer', 'advance_payment']
                 };
             }
             
@@ -104,10 +104,13 @@ class EnhancedCashFlowService {
             
             const netChangeInCash = netOperatingCashFlow + netInvestingCashFlow + netFinancingCashFlow;
             
+            // Calculate cash breakdown
+            const cashBreakdown = await this.calculateCashBreakdown(transactionEntries, payments, period);
+            
             // Generate monthly breakdown
             const monthlyBreakdown = this.generateMonthlyBreakdown(transactionEntries, payments, expenses, period);
             
-            return {
+            const cashFlowData = {
                 period,
                 basis,
                 summary: {
@@ -121,6 +124,7 @@ class EnhancedCashFlowService {
                     payment_count: payments.length,
                     expense_count: expenses.length
                 },
+                cash_breakdown: cashBreakdown,
                 operating_activities: operatingActivities,
                 investing_activities: investingActivities,
                 financing_activities: financingActivities,
@@ -140,6 +144,11 @@ class EnhancedCashFlowService {
                 }
             };
             
+            // Add formatted cash flow statement
+            cashFlowData.formatted_cash_flow_statement = this.formatCashFlowStatement(cashFlowData);
+            
+            return cashFlowData;
+            
         } catch (error) {
             console.error('Error generating detailed cash flow statement:', error);
             throw error;
@@ -157,15 +166,65 @@ class EnhancedCashFlowService {
                 admin_fees: { total: 0, transactions: [] },
                 deposits: { total: 0, transactions: [] },
                 utilities: { total: 0, transactions: [] },
+                advance_payments: { total: 0, transactions: [] },
                 other_income: { total: 0, transactions: [] }
             },
             by_residence: {},
             by_month: {},
-            payment_details: []
+            payment_details: [],
+            advance_payments: {
+                total: 0,
+                by_student: {},
+                by_residence: {},
+                by_month: {},
+                transactions: []
+            }
         };
         
         // Create a map of transaction entries to their corresponding payments for accurate date handling
         const transactionToPaymentMap = new Map();
+        
+        // Debug: Log all transaction IDs to see what we're working with
+        console.log(`🔍 Total transactions loaded: ${transactionEntries.length}`);
+        const transactionIds = transactionEntries.map(t => t.transactionId);
+        console.log(`🔍 Transaction IDs:`, transactionIds);
+        
+        // Check if R180 transaction is in the loaded transactions
+        const r180Transaction = transactionEntries.find(t => t.transactionId === 'TXN17570154497464WBST');
+        if (r180Transaction) {
+            console.log(`✅ R180 Transaction found in loaded transactions:`, {
+                transactionId: r180Transaction.transactionId,
+                reference: r180Transaction.reference,
+                date: r180Transaction.date
+            });
+        } else {
+            console.log(`❌ R180 Transaction NOT found in loaded transactions`);
+        }
+        
+        // First, create a simple mapping based on reference field
+        transactionEntries.forEach(entry => {
+            if (entry.reference) {
+                const payment = payments.find(p => p._id.toString() === entry.reference);
+                if (payment) {
+                    transactionToPaymentMap.set(entry.transactionId, payment);
+                    console.log(`🔗 Mapped transaction ${entry.transactionId} to payment ${payment.paymentId}`);
+                } else {
+                    console.log(`⚠️ No payment found for reference ${entry.reference} in transaction ${entry.transactionId}`);
+                }
+            } else {
+                console.log(`📝 Processing transaction ${entry.transactionId} without payment reference`);
+            }
+            
+            // Special logging for R180 transaction
+            if (entry.transactionId === 'TXN17570154497464WBST') {
+                console.log(`🔍 R180 Transaction in mapping loop:`, {
+                    transactionId: entry.transactionId,
+                    reference: entry.reference,
+                    hasReference: !!entry.reference,
+                    foundPayment: !!payments.find(p => p._id.toString() === entry.reference)
+                });
+            }
+        });
         
         if (payments.length > 0) {
             payments.forEach(payment => {
@@ -209,29 +268,72 @@ class EnhancedCashFlowService {
             console.log('⚠️ No payments found in database. Using transaction dates for cash flow.');
         }
         
+        // Ensure ALL transactions are processed, even those without valid payment references
+        transactionEntries.forEach(entry => {
+            if (!transactionToPaymentMap.has(entry.transactionId)) {
+                // This transaction doesn't have a valid payment reference, but we still need to process it
+                console.log(`📝 Processing transaction ${entry.transactionId} without payment reference`);
+            }
+        });
+        
+        console.log(`📊 Transaction-to-Payment mapping created: ${transactionToPaymentMap.size} transactions linked to payments`);
+        
         // Process transaction entries for income
         transactionEntries.forEach(entry => {
             // Get the corresponding payment for accurate date handling
             const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
             const effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
             
+            if (correspondingPayment) {
+                console.log(`💰 Processing transaction ${entry.transactionId} with payment date ${effectiveDate.toISOString().slice(0, 7)} (was ${entry.date.toISOString().slice(0, 7)})`);
+            } else if (entry.reference) {
+                console.log(`💰 Processing transaction ${entry.transactionId} with transaction date ${effectiveDate.toISOString().slice(0, 7)} (invalid payment reference)`);
+            }
+            
+            // Special logging for R180 transaction
+            if (entry.transactionId === 'TXN17570154497464WBST') {
+                console.log(`🔍 R180 Transaction Debug:`, {
+                    transactionId: entry.transactionId,
+                    reference: entry.reference,
+                    hasPayment: !!correspondingPayment,
+                    effectiveDate: effectiveDate.toISOString().slice(0, 7),
+                    originalDate: entry.date.toISOString().slice(0, 7)
+                });
+            }
+            
             if (entry.entries && entry.entries.length > 0) {
-                // Look for Cash debits (income received)
-                const cashEntry = entry.entries.find(line => 
-                    line.accountCode === '1000' && line.accountName === 'Cash' && line.debit > 0
-                );
+                // Look for Cash/Bank debits (income received) - check both Cash and Bank Account
+                const cashEntry = entry.entries.find(line => {
+                    const accountCode = line.accountCode || line.account?.code;
+                    const accountName = line.accountName || line.account?.name;
+                    return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.debit > 0;
+                });
                 
                 if (cashEntry) {
                     const incomeAmount = cashEntry.debit;
                     incomeBreakdown.total += incomeAmount;
                     
+                    // Special logging for R180 transaction
+                    if (entry.transactionId === 'TXN17570154497464WBST') {
+                        console.log(`🔍 R180 Cash Entry Found:`, {
+                            amount: incomeAmount,
+                            accountCode: cashEntry.accountCode,
+                            accountName: cashEntry.accountName
+                        });
+                    }
+                    
                     // Categorize based on description and source
                     let category = 'other_income';
                     let description = entry.description || 'Cash Income';
+                    let isAdvancePayment = false;
                     
                     if (entry.description) {
                         const desc = entry.description.toLowerCase();
-                        if (desc.includes('rent')) {
+                        if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future')) {
+                            category = 'advance_payments';
+                            description = 'Advance Payment from Student';
+                            isAdvancePayment = true;
+                        } else if (desc.includes('rent')) {
                             category = 'rental_income';
                             description = 'Rental Income from Students';
                         } else if (desc.includes('admin')) {
@@ -246,6 +348,171 @@ class EnhancedCashFlowService {
                         }
                     }
                     
+                    // Check if this is a direct advance payment transaction
+                    if (entry.source === 'advance_payment' || entry.sourceModel === 'AdvancePayment') {
+                        category = 'advance_payments';
+                        description = 'Advance Payment Transaction';
+                        isAdvancePayment = true;
+                    }
+                    
+                    // Check if this is an advance payment by looking at payment details
+                    if (correspondingPayment) {
+                        const paymentDate = correspondingPayment.date;
+                        const paymentMonth = paymentDate.getMonth() + 1; // 1-12
+                        const paymentYear = paymentDate.getFullYear();
+                        
+                        // Check if payment is for future months (advance payment)
+                        if (correspondingPayment.allocation && correspondingPayment.allocation.monthlyBreakdown) {
+                            // Try to match this specific transaction amount to a specific allocation
+                            const matchingAllocation = correspondingPayment.allocation.monthlyBreakdown.find(allocation => {
+                                if (allocation.amountAllocated && Math.abs(allocation.amountAllocated - incomeAmount) < 0.01) {
+                                    return true; // Found matching amount
+                                }
+                                return false;
+                            });
+                            
+                            if (matchingAllocation) {
+                                // Check if the matching allocation is for a future month
+                                if (matchingAllocation.month && matchingAllocation.year) {
+                                    // Parse month string like "2025-09" or just month number
+                                    let allocationMonth, allocationYear;
+                                    if (typeof matchingAllocation.month === 'string' && matchingAllocation.month.includes('-')) {
+                                        // Format: "2025-09"
+                                        const [year, month] = matchingAllocation.month.split('-');
+                                        allocationYear = parseInt(year);
+                                        allocationMonth = parseInt(month);
+                                    } else if (matchingAllocation.month && matchingAllocation.year) {
+                                        // Format: month number and year
+                                        allocationYear = matchingAllocation.year;
+                                        allocationMonth = matchingAllocation.month;
+                                    }
+                                    
+                                    if (allocationYear && allocationMonth) {
+                                        // If allocation is for a future month/year, it's an advance payment
+                                        if (allocationYear > paymentYear) {
+                                            category = 'advance_payments';
+                                            description = 'Advance Payment for Future Periods';
+                                            isAdvancePayment = true;
+                                            console.log(`🔍 Advance payment detected (future year): ${incomeAmount} - Transaction: ${entry.transactionId} - Payment: ${correspondingPayment.paymentId} - Allocation: ${matchingAllocation.month}/${matchingAllocation.year}`);
+                                        } else if (allocationYear === paymentYear && allocationMonth > paymentMonth) {
+                                            category = 'advance_payments';
+                                            description = 'Advance Payment for Future Periods';
+                                            isAdvancePayment = true;
+                                            console.log(`🔍 Advance payment detected (future month): ${incomeAmount} - Transaction: ${entry.transactionId} - Payment: ${correspondingPayment.paymentId} - Allocation: ${matchingAllocation.month}/${matchingAllocation.year}`);
+                                        } else {
+                                            // Current month allocation - categorize based on type
+                                            if (matchingAllocation.allocationType === 'rent_settlement') {
+                                                category = 'rental_income';
+                                                description = 'Rental Income from Students';
+                                            } else if (matchingAllocation.allocationType === 'admin_settlement') {
+                                                category = 'admin_fees';
+                                                description = 'Administrative Fees';
+                                            } else if (matchingAllocation.allocationType === 'advance_payment') {
+                                                category = 'advance_payments';
+                                                description = 'Advance Payment for Future Periods';
+                                                isAdvancePayment = true;
+                                            }
+                                            console.log(`🔍 Current allocation detected: ${incomeAmount} - Transaction: ${entry.transactionId} - Payment: ${correspondingPayment.paymentId} - Allocation: ${matchingAllocation.month}/${matchingAllocation.year} - Type: ${matchingAllocation.allocationType}`);
+                                        }
+                                    }
+                                }
+                            } else {
+                                // No exact amount match found, fall back to checking if any allocation is for future months
+                                const hasFutureAllocation = correspondingPayment.allocation.monthlyBreakdown.some(allocation => {
+                                    if (allocation.month && allocation.year) {
+                                        // Parse month string like "2025-09" or just month number
+                                        let allocationMonth, allocationYear;
+                                        if (typeof allocation.month === 'string' && allocation.month.includes('-')) {
+                                            // Format: "2025-09"
+                                            const [year, month] = allocation.month.split('-');
+                                            allocationYear = parseInt(year);
+                                            allocationMonth = parseInt(month);
+                                        } else if (allocation.month && allocation.year) {
+                                            // Format: month number and year
+                                            allocationYear = allocation.year;
+                                            allocationMonth = allocation.month;
+                                        }
+                                        
+                                        if (allocationYear && allocationMonth) {
+                                            // If allocation is for a future month/year, it's an advance payment
+                                            if (allocationYear > paymentYear) {
+                                                return true; // Future year
+                                            } else if (allocationYear === paymentYear && allocationMonth > paymentMonth) {
+                                                return true; // Future month in same year
+                                            }
+                                        }
+                                    }
+                                    return false;
+                                });
+                                
+                                if (hasFutureAllocation) {
+                                    category = 'advance_payments';
+                                    description = 'Advance Payment for Future Periods';
+                                    isAdvancePayment = true;
+                                    console.log(`🔍 Advance payment detected (fallback): ${incomeAmount} - Transaction: ${entry.transactionId} - Payment: ${correspondingPayment.paymentId}`);
+                                }
+                            }
+                        }
+                        
+                        // Fallback: Check if payment is for future months using old structure
+                        if (!isAdvancePayment && correspondingPayment.payments && correspondingPayment.payments.length > 0) {
+                            const hasFutureAllocation = correspondingPayment.payments.some(payment => {
+                                if (payment.month && payment.year) {
+                                    const allocationDate = new Date(payment.year, payment.month - 1);
+                                    return allocationDate > paymentDate;
+                                }
+                                return false;
+                            });
+                            
+                            if (hasFutureAllocation) {
+                                category = 'advance_payments';
+                                description = 'Advance Payment for Future Rent';
+                                isAdvancePayment = true;
+                            }
+                        }
+                        
+                        // Check monthlyBreakdown for advance payments
+                        if (correspondingPayment.monthlyBreakdown && correspondingPayment.monthlyBreakdown.length > 0) {
+                            const advanceAllocations = correspondingPayment.monthlyBreakdown.filter(
+                                allocation => allocation.allocationType === 'advance_payment'
+                            );
+                            
+                            if (advanceAllocations.length > 0) {
+                                // Calculate advance payment amount
+                                const advanceAmount = advanceAllocations.reduce((sum, allocation) => 
+                                    sum + (allocation.amountAllocated || 0), 0
+                                );
+                                
+                                // If this transaction amount matches the advance amount, it's an advance payment
+                                if (Math.abs(incomeAmount - advanceAmount) < 0.01) {
+                                    category = 'advance_payments';
+                                    description = 'Advance Payment for Future Periods';
+                                    isAdvancePayment = true;
+                                }
+                            }
+                        }
+                        
+                        // Also check if the payment amount is larger than what's allocated for current month
+                        // This could indicate an advance payment
+                        if (correspondingPayment.payments && correspondingPayment.payments.length > 0) {
+                            const currentMonth = paymentDate.getMonth() + 1;
+                            const currentYear = paymentDate.getFullYear();
+                            
+                            const currentMonthAllocations = correspondingPayment.payments.filter(payment => 
+                                payment.month === currentMonth && payment.year === currentYear
+                            );
+                            
+                            const currentMonthTotal = currentMonthAllocations.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+                            
+                            // If payment amount is significantly larger than current month allocation, it might be advance
+                            if (correspondingPayment.totalAmount > currentMonthTotal * 1.5) {
+                                category = 'advance_payments';
+                                description = 'Advance Payment (Excess Amount)';
+                                isAdvancePayment = true;
+                            }
+                        }
+                    }
+                    
                     // Add to appropriate category
                     incomeBreakdown.by_source[category].total += incomeAmount;
                     incomeBreakdown.by_source[category].transactions.push({
@@ -256,8 +523,51 @@ class EnhancedCashFlowService {
                         accountName: cashEntry.accountName,
                         residence: entry.residence?.name || 'Unknown',
                         description: description,
-                        source: 'Cash Payment'
+                        source: 'Cash Payment',
+                        isAdvancePayment: isAdvancePayment
                     });
+                    
+                    // Track advance payments separately
+                    if (isAdvancePayment) {
+                        incomeBreakdown.advance_payments.total += incomeAmount;
+                        incomeBreakdown.advance_payments.transactions.push({
+                            transactionId: entry.transactionId,
+                            date: effectiveDate,
+                            amount: incomeAmount,
+                            student: correspondingPayment?.student?.firstName + ' ' + correspondingPayment?.student?.lastName || 'Unknown Student',
+                            residence: entry.residence?.name || 'Unknown',
+                            description: description,
+                            paymentId: correspondingPayment?.paymentId || 'Unknown',
+                            futureAllocations: correspondingPayment?.payments?.filter(p => {
+                                if (p.month && p.year) {
+                                    const allocationDate = new Date(p.year, p.month - 1);
+                                    return allocationDate > effectiveDate;
+                                }
+                                return false;
+                            }) || []
+                        });
+                        
+                        // Group advance payments by student
+                        const studentName = correspondingPayment?.student?.firstName + ' ' + correspondingPayment?.student?.lastName || 'Unknown Student';
+                        if (!incomeBreakdown.advance_payments.by_student[studentName]) {
+                            incomeBreakdown.advance_payments.by_student[studentName] = 0;
+                        }
+                        incomeBreakdown.advance_payments.by_student[studentName] += incomeAmount;
+                        
+                        // Group advance payments by residence
+                        const residenceName = entry.residence?.name || 'Unknown';
+                        if (!incomeBreakdown.advance_payments.by_residence[residenceName]) {
+                            incomeBreakdown.advance_payments.by_residence[residenceName] = 0;
+                        }
+                        incomeBreakdown.advance_payments.by_residence[residenceName] += incomeAmount;
+                        
+                        // Group advance payments by month
+                        const monthKey = effectiveDate.toISOString().slice(0, 7);
+                        if (!incomeBreakdown.advance_payments.by_month[monthKey]) {
+                            incomeBreakdown.advance_payments.by_month[monthKey] = 0;
+                        }
+                        incomeBreakdown.advance_payments.by_month[monthKey] += incomeAmount;
+                    }
                     
                     // Group by residence
                     const residenceName = entry.residence?.name || 'Unknown';
@@ -405,6 +715,30 @@ class EnhancedCashFlowService {
         const processedTransactions = new Set();
         const processedExpenses = new Set(); // Track processed expense IDs
         
+        // Helper function to get residence name from transaction entry or related expense
+        const getResidenceName = (entry, expenses) => {
+            let residenceName = entry.residence?.name || 'Unknown';
+            
+            // If residence is unknown, try to get it from the expense record
+            if (residenceName === 'Unknown' && entry.reference) {
+                // Look for expense by reference
+                const relatedExpense = expenses.find(expense => 
+                    expense._id.toString() === entry.reference || 
+                    expense.expenseId === entry.reference ||
+                    entry.reference.includes(expense._id.toString())
+                );
+                
+                if (relatedExpense && relatedExpense.residence) {
+                    residenceName = relatedExpense.residence.name || 'Unknown';
+                    console.log(`🏠 Found residence for transaction ${entry.transactionId}: ${residenceName} from expense ${relatedExpense._id}`);
+                } else {
+                    console.log(`⚠️ Could not find residence for transaction ${entry.transactionId} with reference ${entry.reference}`);
+                }
+            }
+            
+            return residenceName;
+        };
+        
         transactionEntries.forEach(entry => {
             if (entry.entries && entry.entries.length > 0) {
                 // Look for Cash/Bank credits (expenses paid)
@@ -414,7 +748,13 @@ class EnhancedCashFlowService {
                     return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
                 });
                 
-                if (cashEntry) {
+                // Skip petty cash transfers - they are not expenses
+                const isPettyCashTransfer = entry.description && (
+                    entry.description.toLowerCase().includes('petty cash') ||
+                    entry.description.toLowerCase().includes('cash allocation')
+                );
+                
+                if (cashEntry && !isPettyCashTransfer) {
                     // Check if this expense was already processed
                     let expenseId = null;
                     if (entry.reference) {
@@ -491,6 +831,9 @@ class EnhancedCashFlowService {
                         }
                     }
                     
+                    // Get residence name using helper function
+                    const residenceName = getResidenceName(entry, expenses);
+                    
                     // Add to appropriate category
                     expenseBreakdown.by_category[category].total += expenseAmount;
                     expenseBreakdown.by_category[category].transactions.push({
@@ -499,12 +842,11 @@ class EnhancedCashFlowService {
                         amount: expenseAmount,
                         accountCode: cashEntry.accountCode,
                         accountName: cashEntry.accountName,
-                        residence: entry.residence?.name || 'Unknown',
+                        residence: residenceName,
                         description: description
                     });
                     
                     // Group by residence
-                    const residenceName = entry.residence?.name || 'Unknown';
                     if (!expenseBreakdown.by_residence[residenceName]) {
                         expenseBreakdown.by_residence[residenceName] = 0;
                     }
@@ -563,6 +905,9 @@ class EnhancedCashFlowService {
                             
                             expenseBreakdown.total += debit;
                         
+                        // Get residence name using helper function
+                        const residenceName = getResidenceName(entry, expenses);
+                        
                         // Categorize by account code
                         if (accountCode.startsWith('5001') || accountName.toLowerCase().includes('maintenance')) {
                             expenseBreakdown.by_category.maintenance.total += debit;
@@ -572,7 +917,7 @@ class EnhancedCashFlowService {
                                 amount: debit,
                                 accountCode,
                                 accountName,
-                                residence: entry.residence?.name || 'Unknown',
+                                residence: residenceName,
                                 description: entry.description || 'Maintenance Expense'
                             });
                         } else if (accountCode.startsWith('5002') || accountName.toLowerCase().includes('utilit')) {
@@ -583,7 +928,7 @@ class EnhancedCashFlowService {
                                 amount: debit,
                                 accountCode,
                                 accountName,
-                                residence: entry.residence?.name || 'Unknown',
+                                residence: residenceName,
                                 description: entry.description || 'Utilities Expense'
                             });
                         } else if (accountCode.startsWith('5003') || accountName.toLowerCase().includes('clean')) {
@@ -594,7 +939,7 @@ class EnhancedCashFlowService {
                                 amount: debit,
                                 accountCode,
                                 accountName,
-                                residence: entry.residence?.name || 'Unknown',
+                                residence: residenceName,
                                 description: entry.description || 'Cleaning Expense'
                             });
                         } else if (accountCode.startsWith('5004') || accountName.toLowerCase().includes('security')) {
@@ -605,7 +950,7 @@ class EnhancedCashFlowService {
                                 amount: debit,
                                 accountCode,
                                 accountName,
-                                residence: entry.residence?.name || 'Unknown',
+                                residence: residenceName,
                                 description: entry.description || 'Security Expense'
                             });
                         } else if (accountCode.startsWith('5005') || accountName.toLowerCase().includes('management')) {
@@ -616,7 +961,7 @@ class EnhancedCashFlowService {
                                 amount: debit,
                                 accountCode,
                                 accountName,
-                                residence: entry.residence?.name || 'Unknown',
+                                residence: residenceName,
                                 description: entry.description || 'Management Expense'
                             });
                         } else {
@@ -628,13 +973,12 @@ class EnhancedCashFlowService {
                                 amount: debit,
                                 accountCode,
                                 accountName,
-                                residence: entry.residence?.name || 'Unknown',
+                                residence: residenceName,
                                 description: entry.description || 'Other Expense'
                             });
                         }
                         
                         // Group by residence
-                        const residenceName = entry.residence?.name || 'Unknown';
                         if (!expenseBreakdown.by_residence[residenceName]) {
                             expenseBreakdown.by_residence[residenceName] = 0;
                         }
@@ -910,6 +1254,7 @@ class EnhancedCashFlowService {
                     admin_fees: 0,
                     deposits: 0,
                     utilities: 0,
+                    advance_payments: 0,
                     other_income: 0
                 },
                 expenses: {
@@ -983,19 +1328,107 @@ class EnhancedCashFlowService {
                 months[monthKey].transaction_count++;
                 
                 if (entry.entries && entry.entries.length > 0) {
-                    // Process Cash debits (income)
-                    const cashDebit = entry.entries.find(line => 
-                        line.accountCode === '1000' && line.accountName === 'Cash' && line.debit > 0
-                    );
+                    // Process Cash/Bank debits (income) - check both Cash and Bank Account
+                    const cashDebit = entry.entries.find(line => {
+                        const accountCode = line.accountCode || line.account?.code;
+                        const accountName = line.accountName || line.account?.name;
+                        return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.debit > 0;
+                    });
                     
                     if (cashDebit) {
                         const incomeAmount = cashDebit.debit;
                         months[monthKey].income.total += incomeAmount;
                         
                         // Categorize income
-                        if (entry.description) {
+                        let isAdvancePayment = false;
+                        
+                        // Check if this is an advance payment by looking at payment details
+                        if (correspondingPayment) {
+                            const paymentDate = correspondingPayment.date;
+                            const paymentMonth = paymentDate.getMonth() + 1; // 1-12
+                            const paymentYear = paymentDate.getFullYear();
+                            
+                            // Check if payment is for future months (advance payment)
+                            if (correspondingPayment.allocation && correspondingPayment.allocation.monthlyBreakdown) {
+                                // Try to match this specific transaction amount to a specific allocation
+                                const matchingAllocation = correspondingPayment.allocation.monthlyBreakdown.find(allocation => {
+                                    if (allocation.amountAllocated && Math.abs(allocation.amountAllocated - incomeAmount) < 0.01) {
+                                        return true; // Found matching amount
+                                    }
+                                    return false;
+                                });
+                                
+                                if (matchingAllocation) {
+                                    // Check if the matching allocation is for a future month
+                                    if (matchingAllocation.month && matchingAllocation.year) {
+                                        // Parse month string like "2025-09" or just month number
+                                        let allocationMonth, allocationYear;
+                                        if (typeof matchingAllocation.month === 'string' && matchingAllocation.month.includes('-')) {
+                                            // Format: "2025-09"
+                                            const [year, month] = matchingAllocation.month.split('-');
+                                            allocationYear = parseInt(year);
+                                            allocationMonth = parseInt(month);
+                                        } else if (matchingAllocation.month && matchingAllocation.year) {
+                                            // Format: month number and year
+                                            allocationYear = matchingAllocation.year;
+                                            allocationMonth = matchingAllocation.month;
+                                        }
+                                        
+                                        if (allocationYear && allocationMonth) {
+                                            // If allocation is for a future month/year, it's an advance payment
+                                            if (allocationYear > paymentYear) {
+                                                isAdvancePayment = true;
+                                            } else if (allocationYear === paymentYear && allocationMonth > paymentMonth) {
+                                                isAdvancePayment = true;
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // No exact amount match found, fall back to checking if any allocation is for future months
+                                    const hasFutureAllocation = correspondingPayment.allocation.monthlyBreakdown.some(allocation => {
+                                        if (allocation.month && allocation.year) {
+                                            // Parse month string like "2025-09" or just month number
+                                            let allocationMonth, allocationYear;
+                                            if (typeof allocation.month === 'string' && allocation.month.includes('-')) {
+                                                // Format: "2025-09"
+                                                const [year, month] = allocation.month.split('-');
+                                                allocationYear = parseInt(year);
+                                                allocationMonth = parseInt(month);
+                                            } else if (allocation.month && allocation.year) {
+                                                // Format: month number and year
+                                                allocationYear = allocation.year;
+                                                allocationMonth = allocation.month;
+                                            }
+                                            
+                                            if (allocationYear && allocationMonth) {
+                                                // If allocation is for a future month/year, it's an advance payment
+                                                if (allocationYear > paymentYear) {
+                                                    return true; // Future year
+                                                } else if (allocationYear === paymentYear && allocationMonth > paymentMonth) {
+                                                    return true; // Future month in same year
+                                                }
+                                            }
+                                        }
+                                        return false;
+                                    });
+                                    
+                                    if (hasFutureAllocation) {
+                                        isAdvancePayment = true;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (isAdvancePayment) {
+                            months[monthKey].income.advance_payments += incomeAmount;
+                            console.log(`💰 Advance payment detected: ${incomeAmount} for ${monthKey} - Transaction: ${entry.transactionId}`);
+                        } else if (entry.description) {
                             const desc = entry.description.toLowerCase();
-                            if (desc.includes('rent')) {
+                            if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future')) {
+                                months[monthKey].income.advance_payments += incomeAmount;
+                            } else if (entry.source === 'advance_payment' || entry.sourceModel === 'AdvancePayment') {
+                                months[monthKey].income.advance_payments += incomeAmount;
+                            } else if (desc.includes('rent')) {
                                 months[monthKey].income.rental_income += incomeAmount;
                             } else if (desc.includes('admin')) {
                                 months[monthKey].income.admin_fees += incomeAmount;
@@ -1011,13 +1444,28 @@ class EnhancedCashFlowService {
                         }
                     }
                     
-                    // Process Cash credits (expenses)
-                    const cashCredit = entry.entries.find(line => 
-                        line.accountCode === '1000' && line.accountName === 'Cash' && line.credit > 0
-                    );
+                    // Process Cash/Bank credits (expenses) - check both Cash and Bank Account
+                    const cashCredit = entry.entries.find(line => {
+                        const accountCode = line.accountCode || line.account?.code;
+                        const accountName = line.accountName || line.account?.name;
+                        return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
+                    });
                     
                     if (cashCredit) {
                         const expenseAmount = cashCredit.credit;
+                        
+                        // Check if this is a petty cash allocation (should not be counted as expense)
+                        const isPettyCashTransfer = entry.description && (
+                            entry.description.toLowerCase().includes('petty cash') ||
+                            entry.description.toLowerCase().includes('cash allocation')
+                        );
+                        
+                        if (isPettyCashTransfer) {
+                            // Don't count as expense - skip to next entry
+                            console.log(`💰 Petty cash transfer excluded from monthly expenses: ${expenseAmount}`);
+                            return; // Skip this transaction entry
+                        }
+                        
                         months[monthKey].expenses.total += expenseAmount;
                         
                         // Categorize expenses
@@ -1084,11 +1532,11 @@ class EnhancedCashFlowService {
                     }
                     
                     if (entry.sourceId) {
-                        processedExpenseIds.add(entry.sourceId);
+                        processedExpenseIds.add(String(entry.sourceId));
                     }
                     
                     if (expenseId) {
-                        processedExpenseIds.add(expenseId);
+                        processedExpenseIds.add(String(expenseId));
                     }
                 }
             }
@@ -1163,6 +1611,359 @@ class EnhancedCashFlowService {
         });
         
         return months;
+    }
+    
+    /**
+     * Calculate comprehensive cash breakdown
+     */
+    static async calculateCashBreakdown(transactionEntries, payments, period) {
+        const cashBreakdown = {
+            beginning_cash: 0,
+            ending_cash: 0,
+            cash_inflows: {
+                total: 0,
+                from_customers: 0,
+                from_advance_payments: 0,
+                from_other_sources: 0
+            },
+            cash_outflows: {
+                total: 0,
+                to_suppliers: 0,
+                for_expenses: 0,
+                for_other_purposes: 0
+            },
+            internal_cash_transfers: {
+                total: 0,
+                by_month: {},
+                transactions: []
+            },
+            net_change_in_cash: 0,
+            cash_reconciliation: {
+                beginning_cash: 0,
+                cash_inflows: 0,
+                cash_outflows: 0,
+                calculated_ending_cash: 0,
+                actual_ending_cash: 0,
+                difference: 0
+            },
+            by_month: {},
+            advance_payments_impact: {
+                total_advance_received: 0,
+                advance_utilized: 0,
+                advance_outstanding: 0,
+                by_student: {},
+                by_residence: {}
+            }
+        };
+        
+        // Initialize monthly breakdown
+        for (let month = 1; month <= 12; month++) {
+            const monthKey = `${period}-${String(month).padStart(2, '0')}`;
+            cashBreakdown.by_month[monthKey] = {
+                beginning_cash: 0,
+                cash_inflows: 0,
+                cash_outflows: 0,
+                net_change: 0,
+                ending_cash: 0,
+                advance_payments_received: 0,
+                advance_payments_utilized: 0,
+                internal_transfers: 0
+            };
+        }
+        
+        // Create a map of transaction entries to their corresponding payments for accurate date handling
+        const transactionToPaymentMap = new Map();
+        
+        // Process transaction entries to calculate cash flows
+        transactionEntries.forEach(entry => {
+            if (entry.entries && entry.entries.length > 0) {
+                // Use payment date if available, otherwise use transaction date
+                let effectiveDate = entry.date;
+                
+                // Try to find corresponding payment for accurate date
+                if (entry.reference) {
+                    // Look for payment by reference
+                    const payment = payments.find(p => p._id.toString() === entry.reference);
+                    if (payment) {
+                        effectiveDate = payment.date;
+                        transactionToPaymentMap.set(entry.transactionId, payment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${payment.paymentId} with date ${payment.date.toISOString().slice(0, 7)}`);
+                    } else {
+                        console.log(`⚠️ No payment found for reference ${entry.reference} in transaction ${entry.transactionId} - using transaction date`);
+                        // Use transaction date if payment reference is invalid
+                        effectiveDate = entry.date;
+                    }
+                }
+                
+                const monthKey = effectiveDate.toISOString().slice(0, 7);
+                
+                // Process cash inflows (debits to cash accounts)
+                const cashInflow = entry.entries.find(line => {
+                    const accountCode = line.accountCode || line.account?.code;
+                    const accountName = line.accountName || line.account?.name;
+                    return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.debit > 0;
+                });
+                
+                // Also check for petty cash account inflows (internal transfers)
+                const pettyCashInflow = entry.entries.find(line => {
+                    const accountCode = line.accountCode || line.account?.code;
+                    const accountName = line.accountName || line.account?.name;
+                    return accountCode === '1011' && accountName === 'Admin Petty Cash' && line.debit > 0;
+                });
+                
+                if (cashInflow) {
+                    const amount = cashInflow.debit;
+                    cashBreakdown.cash_inflows.total += amount;
+                    cashBreakdown.cash_inflows.from_customers += amount;
+                    
+                    // Check if this is an advance payment
+                    const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+                    let isAdvancePayment = false;
+                    
+                    // Check description for advance payment keywords
+                    if (entry.description && (
+                        entry.description.toLowerCase().includes('advance') ||
+                        entry.description.toLowerCase().includes('prepaid') ||
+                        entry.description.toLowerCase().includes('future')
+                    )) {
+                        isAdvancePayment = true;
+                    }
+                    
+                    // Check if this is a direct advance payment transaction
+                    if (entry.source === 'advance_payment' || entry.sourceModel === 'AdvancePayment') {
+                        isAdvancePayment = true;
+                    }
+                    
+                    // Check monthlyBreakdown for advance payments
+                    if (correspondingPayment && correspondingPayment.monthlyBreakdown && correspondingPayment.monthlyBreakdown.length > 0) {
+                        const advanceAllocations = correspondingPayment.monthlyBreakdown.filter(
+                            allocation => allocation.allocationType === 'advance_payment'
+                        );
+                        
+                        if (advanceAllocations.length > 0) {
+                            // Calculate advance payment amount
+                            const advanceAmount = advanceAllocations.reduce((sum, allocation) => 
+                                sum + (allocation.amountAllocated || 0), 0
+                            );
+                            
+                            // If this transaction amount matches the advance amount, it's an advance payment
+                            if (Math.abs(amount - advanceAmount) < 0.01) {
+                                isAdvancePayment = true;
+                            }
+                        }
+                    }
+                    
+                    // Also check payment details for advance payments
+                    if (correspondingPayment && correspondingPayment.payments && correspondingPayment.payments.length > 0) {
+                        const hasFutureAllocation = correspondingPayment.payments.some(payment => {
+                            if (payment.month && payment.year) {
+                                const allocationDate = new Date(payment.year, payment.month - 1);
+                                return allocationDate > correspondingPayment.date;
+                            }
+                            return false;
+                        });
+                        
+                        if (hasFutureAllocation) {
+                            isAdvancePayment = true;
+                        }
+                    }
+                    
+                    if (isAdvancePayment) {
+                        cashBreakdown.cash_inflows.from_advance_payments += amount;
+                        cashBreakdown.advance_payments_impact.total_advance_received += amount;
+                        
+                        if (cashBreakdown.by_month[monthKey]) {
+                            cashBreakdown.by_month[monthKey].advance_payments_received += amount;
+                        }
+                    }
+                    
+                    if (cashBreakdown.by_month[monthKey]) {
+                        cashBreakdown.by_month[monthKey].cash_inflows += amount;
+                    }
+                }
+                
+                // Handle petty cash inflows (internal transfers)
+                if (pettyCashInflow) {
+                    const amount = pettyCashInflow.debit;
+                    
+                    // Check if this is a petty cash allocation (cash transfer, not income)
+                    const isPettyCashTransfer = entry.description && (
+                        entry.description.toLowerCase().includes('petty cash') ||
+                        entry.description.toLowerCase().includes('cash allocation')
+                    );
+                    
+                    if (isPettyCashTransfer) {
+                        // This is an internal cash transfer - don't count as income
+                        // The cash is just moving between accounts (Bank to Petty Cash)
+                        console.log(`💰 Petty cash inflow tracked: ${amount} - internal transfer`);
+                        
+                        // Track the corresponding outflow was already handled above
+                        // This inflow balances the outflow, so net effect is zero
+                    }
+                }
+                
+                // Process cash outflows (credits to cash accounts)
+                const cashOutflow = entry.entries.find(line => {
+                    const accountCode = line.accountCode || line.account?.code;
+                    const accountName = line.accountName || line.account?.name;
+                    return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
+                });
+                
+                if (cashOutflow) {
+                    const amount = cashOutflow.credit;
+                    
+                    // Check if this is a petty cash allocation (cash transfer, not expense)
+                    const isPettyCashTransfer = entry.description && (
+                        entry.description.toLowerCase().includes('petty cash') ||
+                        entry.description.toLowerCase().includes('cash allocation')
+                    );
+                    
+                    if (isPettyCashTransfer) {
+                        // This is a cash transfer between accounts - track it as internal transfer only
+                        // DO NOT count as cash outflow since it's just moving money between accounts
+                        
+                        // Track as internal cash transfer
+                        if (!cashBreakdown.internal_cash_transfers) {
+                            cashBreakdown.internal_cash_transfers = {
+                                total: 0,
+                                by_month: {},
+                                transactions: []
+                            };
+                        }
+                        cashBreakdown.internal_cash_transfers.total += amount;
+                        cashBreakdown.internal_cash_transfers.transactions.push({
+                            transactionId: entry.transactionId,
+                            date: effectiveDate,
+                            amount: amount,
+                            from_account: 'Bank Account',
+                            to_account: 'Admin Petty Cash',
+                            description: entry.description
+                        });
+                        
+                        if (cashBreakdown.by_month[monthKey]) {
+                            if (!cashBreakdown.by_month[monthKey].internal_transfers) {
+                                cashBreakdown.by_month[monthKey].internal_transfers = 0;
+                            }
+                            cashBreakdown.by_month[monthKey].internal_transfers += amount;
+                        }
+                        
+                        console.log(`💰 Petty cash transfer tracked: ${amount} - internal transfer (not counted as outflow)`);
+                        return; // Skip to next entry - don't count as expense
+                    }
+                    
+                    // Only count actual business expenses as cash outflows
+                    cashBreakdown.cash_outflows.total += amount;
+                    cashBreakdown.cash_outflows.for_expenses += amount;
+                    
+                    if (cashBreakdown.by_month[monthKey]) {
+                        cashBreakdown.by_month[monthKey].cash_outflows += amount;
+                    }
+                }
+            }
+        });
+        
+        // Calculate net change in cash
+        cashBreakdown.net_change_in_cash = cashBreakdown.cash_inflows.total - cashBreakdown.cash_outflows.total;
+        
+        // Calculate monthly ending cash balances
+        let runningBalance = cashBreakdown.beginning_cash;
+        Object.keys(cashBreakdown.by_month).forEach(monthKey => {
+            const month = cashBreakdown.by_month[monthKey];
+            month.beginning_cash = runningBalance;
+            month.net_change = month.cash_inflows - month.cash_outflows;
+            month.ending_cash = month.beginning_cash + month.net_change;
+            runningBalance = month.ending_cash;
+        });
+        
+        // Set ending cash
+        cashBreakdown.ending_cash = runningBalance;
+        
+        // Calculate cash reconciliation
+        // Note: Internal transfers don't affect net cash flow, so they're excluded from reconciliation
+        cashBreakdown.cash_reconciliation.cash_inflows = cashBreakdown.cash_inflows.total;
+        cashBreakdown.cash_reconciliation.cash_outflows = cashBreakdown.cash_outflows.total;
+        cashBreakdown.cash_reconciliation.calculated_ending_cash = cashBreakdown.beginning_cash + cashBreakdown.net_change_in_cash;
+        cashBreakdown.cash_reconciliation.actual_ending_cash = cashBreakdown.ending_cash;
+        
+        // The difference should now be zero since internal transfers are properly excluded
+        cashBreakdown.cash_reconciliation.difference = cashBreakdown.cash_reconciliation.actual_ending_cash - cashBreakdown.cash_reconciliation.calculated_ending_cash;
+        
+        return cashBreakdown;
+    }
+    
+    /**
+     * Format cash flow statement in standard format
+     */
+    static formatCashFlowStatement(cashFlowData) {
+        const { period, cash_breakdown, operating_activities, investing_activities, financing_activities, summary } = cashFlowData;
+        
+        return {
+            period,
+            cash_flow_statement: {
+                // Operating Activities
+                operating_activities: {
+                    cash_received_from_customers: operating_activities.cash_received_from_customers,
+                    cash_paid_to_suppliers: operating_activities.cash_paid_to_suppliers,
+                    cash_paid_for_expenses: operating_activities.cash_paid_for_expenses,
+                    net_cash_from_operating_activities: operating_activities.cash_received_from_customers - 
+                                                       operating_activities.cash_paid_to_suppliers - 
+                                                       operating_activities.cash_paid_for_expenses
+                },
+                
+                // Investing Activities
+                investing_activities: {
+                    purchase_of_equipment: investing_activities.purchase_of_equipment,
+                    purchase_of_buildings: investing_activities.purchase_of_buildings,
+                    net_cash_from_investing_activities: -(investing_activities.purchase_of_equipment + 
+                                                         investing_activities.purchase_of_buildings)
+                },
+                
+                // Financing Activities
+                financing_activities: {
+                    owners_contribution: financing_activities.owners_contribution,
+                    loan_proceeds: financing_activities.loan_proceeds,
+                    net_cash_from_financing_activities: financing_activities.owners_contribution + 
+                                                       financing_activities.loan_proceeds
+                },
+                
+                // Net Change in Cash
+                net_change_in_cash: summary.net_change_in_cash,
+                
+                // Cash at Beginning of Period
+                cash_at_beginning_of_period: cash_breakdown.beginning_cash,
+                
+                // Cash at End of Period
+                cash_at_end_of_period: cash_breakdown.ending_cash,
+                
+                // Cash Reconciliation
+                cash_reconciliation: {
+                    beginning_cash: cash_breakdown.beginning_cash,
+                    net_change_in_cash: summary.net_change_in_cash,
+                    calculated_ending_cash: cash_breakdown.beginning_cash + summary.net_change_in_cash,
+                    actual_ending_cash: cash_breakdown.ending_cash,
+                    difference: cash_breakdown.ending_cash - (cash_breakdown.beginning_cash + summary.net_change_in_cash),
+                    note: "Internal cash transfers are excluded from net cash flow calculation"
+                }
+            },
+            
+            // Detailed Cash Breakdown
+            detailed_cash_breakdown: {
+                cash_inflows: {
+                    from_customers: cash_breakdown.cash_inflows.from_customers,
+                    from_advance_payments: cash_breakdown.cash_inflows.from_advance_payments,
+                    from_other_sources: cash_breakdown.cash_inflows.from_other_sources,
+                    total_cash_inflows: cash_breakdown.cash_inflows.total
+                },
+                cash_outflows: {
+                    to_suppliers: cash_breakdown.cash_outflows.to_suppliers,
+                    for_expenses: cash_breakdown.cash_outflows.for_expenses,
+                    for_other_purposes: cash_breakdown.cash_outflows.for_other_purposes,
+                    total_cash_outflows: cash_breakdown.cash_outflows.total
+                },
+                internal_cash_transfers: cash_breakdown.internal_cash_transfers,
+                advance_payments_impact: cash_breakdown.advance_payments_impact
+            }
+        };
     }
 }
 

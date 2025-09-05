@@ -1,5 +1,6 @@
 
 const FinancialReportingService = require('../services/financialReportingService');
+const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
 const AccountingService = require('../services/accountingService');
 const BalanceSheetService = require('../services/balanceSheetService');
 const Account = require('../models/Account');
@@ -663,6 +664,7 @@ class FinancialReportsController {
                             admin_fees: { amount: monthData.income.admin_fees, description: 'Administrative Fees' },
                             deposits: { amount: monthData.income.deposits, description: 'Security Deposits' },
                             utilities_income: { amount: monthData.income.utilities, description: 'Utilities Income' },
+                            advance_payments: { amount: monthData.income.advance_payments, description: 'Advance Payments from Students' },
                             other_income: { amount: monthData.income.other_income, description: 'Other Income Sources' },
                             // Detailed expense breakdown
                             maintenance_expenses: { amount: monthData.expenses.maintenance, description: 'Property Maintenance' },
@@ -798,6 +800,8 @@ class FinancialReportsController {
                 income_breakdown: detailedCashFlow.detailed_breakdown.income.by_source,
                 // Expense breakdown summary
                 expense_breakdown: detailedCashFlow.detailed_breakdown.expenses.by_category,
+                // Advance payments summary
+                advance_payments: detailedCashFlow.detailed_breakdown.income.advance_payments,
                 // Residence breakdown
                 residence_breakdown: {
                     income: detailedCashFlow.detailed_breakdown.income.by_residence,
@@ -811,6 +815,8 @@ class FinancialReportsController {
                 monthly_breakdown: monthlyBreakdown,
                 yearly_totals: yearlyTotals,
                 summary: summary,
+                cash_breakdown: detailedCashFlow.cash_breakdown,
+                formatted_cash_flow_statement: detailedCashFlow.formatted_cash_flow_statement,
                 // Include detailed breakdowns for frontend consumption
                 detailed_breakdown: {
                     income: detailedCashFlow.detailed_breakdown.income,
@@ -1044,27 +1050,13 @@ class FinancialReportsController {
                 });
             }
             
-            let detailedCashFlowStatement;
-            if (residence) {
-                // For now, use the detailed method but filter by residence
-                // TODO: Create residence-filtered detailed cash flow method
-                detailedCashFlowStatement = await FinancialReportingService.generateDetailedCashFlowStatement(period, basis);
-                // Filter by residence in the response
-                if (detailedCashFlowStatement.detailed_breakdown) {
-                    detailedCashFlowStatement.detailed_breakdown.transactions = 
-                        detailedCashFlowStatement.detailed_breakdown.transactions.filter(t => 
-                            t.residence && t.residence.toString() === residence
-                        );
-                }
-            } else {
-                // Use detailed method
-                detailedCashFlowStatement = await FinancialReportingService.generateDetailedCashFlowStatement(period, basis);
-            }
+            // Use EnhancedCashFlowService which properly handles residence filtering at the database level
+            const detailedCashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             
             res.json({
                 success: true,
                 data: detailedCashFlowStatement,
-                message: `Detailed cash flow statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
+                message: `Enhanced monthly cash flow with detailed breakdowns generated for ${period} (${basis} basis)${residence ? ` (residence: ${residence})` : ' (all residences)'}`
             });
             
         } catch (error) {
@@ -1548,60 +1540,6 @@ class FinancialReportsController {
         }
     }
 
-    /**
-     * Generate Detailed Cash Flow Statement with specific income and expense breakdowns
-     * GET /api/finance/reports/detailed-cash-flow
-     */
-    static async generateDetailedCashFlowStatement(req, res) {
-        try {
-            const { period, basis = 'cash', residence } = req.query;
-            
-            if (!period) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Period parameter is required (e.g., 2024)'
-                });
-            }
-            
-            if (!['cash', 'accrual'].includes(basis)) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Basis must be either "cash" or "accrual"'
-                });
-            }
-            
-            let detailedCashFlowStatement;
-            if (residence) {
-                // For now, use the detailed method but filter by residence
-                // TODO: Create residence-filtered detailed cash flow method
-                detailedCashFlowStatement = await FinancialReportingService.generateDetailedCashFlowStatement(period, basis);
-                // Filter by residence in the response
-                if (detailedCashFlowStatement.detailed_breakdown) {
-                    detailedCashFlowStatement.detailed_breakdown.transactions = 
-                        detailedCashFlowStatement.detailed_breakdown.transactions.filter(t => 
-                            t.residence && t.residence.toString() === residence
-                        );
-                }
-            } else {
-                // Use detailed method
-                detailedCashFlowStatement = await FinancialReportingService.generateDetailedCashFlowStatement(period, basis);
-            }
-            
-            res.json({
-                success: true,
-                data: detailedCashFlowStatement,
-                message: `Detailed cash flow statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
-            });
-            
-        } catch (error) {
-            console.error('Error generating detailed cash flow statement:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Error generating detailed cash flow statement',
-                error: error.message
-            });
-        }
-    }
 }
 
 module.exports = FinancialReportsController; 
