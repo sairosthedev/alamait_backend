@@ -1,7 +1,4 @@
 
-
-
-
 const FinancialReportingService = require('../services/financialReportingService');
 const AccountingService = require('../services/accountingService');
 const BalanceSheetService = require('../services/balanceSheetService');
@@ -648,7 +645,7 @@ class FinancialReportsController {
                 const monthKey = `${period}-${String(index + 1).padStart(2, '0')}`;
                 const monthData = detailedCashFlow.detailed_breakdown.monthly_breakdown[monthKey] || {
                     income: { total: 0, rental_income: 0, admin_fees: 0, deposits: 0, utilities: 0, other_income: 0 },
-                    expenses: { total: 0, maintenance: 0, utilities: 0, cleaning: 0, security: 0, management: 0, other_expenses: 0 },
+                    expenses: { total: 0, maintenance: 0, utilities: 0, cleaning: 0, security: 0, management: 0 },
                     net_cash_flow: 0,
                     transaction_count: 0,
                     payment_count: 0,
@@ -673,7 +670,6 @@ class FinancialReportsController {
                             cleaning_expenses: { amount: monthData.expenses.cleaning, description: 'Cleaning Services' },
                             security_expenses: { amount: monthData.expenses.security, description: 'Security Services' },
                             management_expenses: { amount: monthData.expenses.management, description: 'Management Fees' },
-                            other_expenses: { amount: monthData.expenses.other_expenses, description: 'Other Operating Expenses' }
                         }
                     },
                     investing_activities: {
@@ -767,11 +763,6 @@ class FinancialReportsController {
                             description: 'Total Management Expenses',
                             transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.management.transactions.length
                         },
-                        other_expenses: { 
-                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.other_expenses.total, 
-                            description: 'Total Other Expenses',
-                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.other_expenses.transactions.length
-                        }
                     }
                 },
                 investing_activities: {
