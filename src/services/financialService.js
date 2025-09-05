@@ -381,10 +381,11 @@ class FinancialService {
             // Generate payment transaction ID
             const paymentTransactionId = await this.generateTransactionId();
             
-            // Create payment transaction
+            // Create payment transaction with proper payment date
+            const paymentDate = expense.paidDate || new Date();
             const paymentTransaction = new Transaction({
                 transactionId: paymentTransactionId,
-                date: new Date(),
+                date: paymentDate, // Use actual payment date for accurate cashflow
                 description: `Payment for expense: ${expense.description}`,
                 reference: expense.expenseId,
                 residence: expense.residence,

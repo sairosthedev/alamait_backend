@@ -1025,10 +1025,11 @@ class EnhancedPaymentAllocationService {
         }
       }
 
-      // Create payment allocation transaction
+      // Create payment allocation transaction with proper payment date
+      const paymentDate = paymentData.date ? new Date(paymentData.date) : new Date();
       const paymentTransaction = new TransactionEntry({
         transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-        date: new Date(),
+        date: paymentDate, // Use actual payment date for accurate cashflow
         description: `Payment allocation: ${paymentType} for ${monthSettled}`,
         reference: paymentId,
         entries: [

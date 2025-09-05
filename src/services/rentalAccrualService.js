@@ -450,14 +450,13 @@ class RentalAccrualService {
             const endDate = new Date(year, month, 0);
             
             // Find students with active leases for this month
-            const activeStudents = await mongoose.connection.db
-                .collection('applications')
-                .find({
+            const Application = require('../models/Application');
+            const activeStudents = await Application.find({
                     status: 'approved',
                     startDate: { $lte: endDate },
                     endDate: { $gte: startDate },
                     paymentStatus: { $ne: 'cancelled' }
-                }).toArray();
+                });
             
             console.log(`Found ${activeStudents.length} active students for ${month}/${year}`);
             

@@ -1757,18 +1757,21 @@ class DoubleEntryAccountingService {
                 throw new Error('Residence ID is required for transaction creation');
             }
 
-            // Handle payment date
+            // Handle payment date - prioritize actual payment date for cashflow accuracy
             let transactionDate;
             try {
+                // First try to use the payment date from the payment record
                 if (payment.date instanceof Date) {
                     transactionDate = payment.date;
-                } else if (typeof payment.date === 'string') {
+                } else if (typeof payment.date === 'string' && payment.date) {
                     transactionDate = new Date(payment.date);
                     if (isNaN(transactionDate.getTime())) {
-                        throw new Error('Invalid date string');
+                        throw new Error('Invalid payment date string');
                     }
                 } else {
+                    // Fallback to current date if no payment date is available
                     transactionDate = new Date();
+                    console.log('⚠️ No payment date provided, using current date for transaction');
                 }
             } catch (error) {
                 console.log('⚠️ Invalid payment date, using current date');

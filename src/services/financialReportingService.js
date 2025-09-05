@@ -1000,30 +1000,100 @@ class FinancialReportingService {
             
             console.log(`Generating monthly cash flow for ${period} from ${startDate} to ${endDate}`);
             
-            // For cash basis, only include actual cash transactions
-            let query = {
-                date: { $gte: startDate, $lte: endDate }
-            };
+            // For cash basis, we need to get transactions with proper date handling
+            let entries = [];
             
             if (basis === 'cash') {
-                // Cash basis: only include transactions that represent actual cash flow
-                query.source = {
-                    $in: [
-                        'rental_payment',      // When rent is actually received
-                        'expense_payment',     // When expenses are actually paid
-                        'manual',              // Manual cash transactions
-                        'payment_collection',  // Cash payments
-                        'bank_transfer',       // Bank transfers
-                        'payment'              // Cash payments (rent, deposits, etc.)
-                    ]
+                console.log('🔵 CASH BASIS: Using paidDate for accurate cash flow timing');
+                
+                // Get expense payments using paidDate from Expense collection
+                const Expense = require('../models/finance/Expense');
+                const paidExpenses = await Expense.find({
+                    paidDate: { $gte: startDate, $lte: endDate },
+                    paymentStatus: 'Paid'
+                }).populate('residence');
+                
+                // Get payment transactions and update their dates to use actual payment dates
+                const paymentQuery = {
+                    source: {
+                        $in: [
+                            'rental_payment',      // When rent is actually received
+                            'expense_payment',     // When expenses are actually paid
+                            'manual',              // Manual cash transactions
+                            'payment_collection',  // Cash payments
+                            'bank_transfer',       // Bank transfers
+                            'payment'              // Cash payments (rent, deposits, etc.)
+                        ]
+                    }
                 };
-                console.log('🔵 CASH BASIS: Only including actual cash transactions');
+                
+                const paymentEntries = await TransactionEntry.find(paymentQuery).populate('entries');
+                
+                // Update payment entries to use actual payment dates for cashflow accuracy
+                const Payment = require('../models/Payment');
+                for (const entry of paymentEntries) {
+                    let payment = null;
+                    
+                    // Try to find payment by sourceId first
+                    if (entry.sourceId) {
+                        try {
+                            payment = await Payment.findById(entry.sourceId);
+                        } catch (error) {
+                            console.log(`⚠️ Could not find payment by sourceId for entry ${entry._id}:`, error.message);
+                        }
+                    }
+                    
+                    // If not found by sourceId, try to find by metadata.paymentId
+                    if (!payment && entry.metadata && entry.metadata.paymentId) {
+                        try {
+                            payment = await Payment.findById(entry.metadata.paymentId);
+                        } catch (error) {
+                            console.log(`⚠️ Could not find payment by metadata.paymentId for entry ${entry._id}:`, error.message);
+                        }
+                    }
+                    
+                    // If payment found, update the entry date to use the actual payment date
+                    if (payment && payment.date) {
+                        const originalDate = entry.date;
+                        entry.date = new Date(payment.date);
+                        console.log(`📅 Updated transaction ${entry._id} date from ${originalDate} to payment date: ${payment.date}`);
+                    }
+                }
+                
+                // Filter entries to only include those within the date range after date correction
+                const filteredEntries = paymentEntries.filter(entry => {
+                    return entry.date >= startDate && entry.date <= endDate;
+                });
+                
+                // Combine and process entries with proper date handling
+                entries = [...filteredEntries];
+                
+                // Add expense entries with paidDate
+                for (const expense of paidExpenses) {
+                    // Find corresponding transaction entries for this expense
+                    const expenseEntries = await TransactionEntry.find({
+                        sourceId: expense._id,
+                        source: 'expense_payment'
+                    }).populate('entries');
+                    
+                    // Update the date to use paidDate for cashflow accuracy
+                    expenseEntries.forEach(entry => {
+                        if (expense.paidDate) {
+                            entry.date = expense.paidDate;
+                        }
+                    });
+                    
+                    entries.push(...expenseEntries);
+                }
+                
             } else {
-                // Accrual basis: include all transactions
+                // Accrual basis: include all transactions with original dates
                 console.log('🔵 ACCRUAL BASIS: Including all transactions');
+                const query = {
+                    date: { $gte: startDate, $lte: endDate }
+                };
+                entries = await TransactionEntry.find(query).populate('entries');
             }
-            
-            const entries = await TransactionEntry.find(query).populate('entries');
             
             const monthNames = [
                 'january', 'february', 'march', 'april', 'may', 'june',
@@ -1058,9 +1128,19 @@ class FinancialReportingService {
                 };
             });
             
+            // Helper function to get effective date for cashflow reporting
+            const getEffectiveDate = (entry) => {
+                // For cash basis, prioritize paidDate when available
+                if (basis === 'cash' && entry.metadata && entry.metadata.paidDate) {
+                    return new Date(entry.metadata.paidDate);
+                }
+                return entry.date;
+            };
+
             // Process cash flows by month
             entries.forEach(entry => {
-                const month = entry.date.getMonth();
+                const effectiveDate = getEffectiveDate(entry);
+                const month = effectiveDate.getMonth();
                 const monthName = monthNames[month];
                 
                 // Skip if no entries or entries is not an array
@@ -1076,11 +1156,15 @@ class FinancialReportingService {
                     const debit = line.debit || 0;
                     const credit = line.credit || 0;
                     
-                    // For cash basis, ONLY include CASH accounts (1000, 1001, 1002, 1011)
+                    // For cash basis, ONLY include actual CASH accounts (1000-1999)
                     if (basis === 'cash') {
                         const isCashAccount = /^10/.test(accountCode);
                         
                         // Skip non-cash accounts completely - they don't represent cash flow
+                        // This includes:
+                        // - Revenue accounts (4000-4999) - these are earned, not cash received
+                        // - Expense accounts (5000-5999) - these are incurred, not cash paid
+                        // - Non-cash assets (1100-1999 except cash accounts)
                         if (!isCashAccount) {
                             return;
                         }
@@ -2450,34 +2534,49 @@ class FinancialReportingService {
         // Convert to string if it's a number
         accountCode = String(accountCode);
         
-        // Special case: Security deposits are always financing
+        // CASH FLOW ACTIVITY CLASSIFICATION - Only for actual cash movements
+        
+        // Operating Activities - Only actual cash accounts and cash-related operations
+        if (/^(100|101|102|103)/.test(accountCode)) {
+            // Cash accounts (1000-1039) - actual cash movements
+            return 'operating';
+        }
+        
+        // Special case: Security deposits are financing (cash received as deposits)
         if (accountCode.startsWith('2020')) {
             return 'financing';
         }
         
-        // Operating Activities (Cash, Bank, AR, Revenue, Expenses, AP)
-        if (/^(100|101|110|111|40|50|60|20)/.test(accountCode)) {
-            return 'operating';
-        }
-        // Investing Activities (Long-Term Assets, Equipment, Property)
-        else if (/^[2][0-9]/.test(accountCode) && !/^(20)/.test(accountCode)) {
-            return 'investing';
-        }
-        // Financing Activities (Liabilities, Equity, Loans)
-        else if (/^[3-4]/.test(accountCode)) {
+        // Financing Activities - Cash-related liabilities (loans, advances)
+        if (/^(20|21|22)/.test(accountCode)) {
+            // Cash-related liabilities (bank loans, cash advances, deposits)
             return 'financing';
         }
-        // Default to Operating if no match
-        return 'operating';
+        
+        // Investing Activities - Only if it's actual cash investment/divestment
+        if (/^(15|16|17|18|19)/.test(accountCode)) {
+            // Long-term cash investments
+            return 'investing';
+        }
+        
+        // DO NOT classify revenue (40xx) or expense (50xx) accounts
+        // These represent revenue earned/expenses incurred, not cash movements
+        // Cashflow should only show when cash actually changes hands
+        
+        return 'operating'; // Default fallback for cash accounts
     }
 
-    // Enhanced helper method for better account classification
+    // Enhanced helper method for better account classification - CASH FLOW ONLY
     static classifyCashFlowActivity(accountCode, accountName) {
-        if (/^[45]/.test(accountCode)) return 'operating';
-        if (/^[6]/.test(accountCode)) return 'investing';
-        if (/^[23]/.test(accountCode)) return 'financing';
+        // Only classify actual cash movements, not revenue earned or expenses incurred
+        if (/^(100|101|102|103)/.test(accountCode)) return 'operating'; // Cash accounts
+        if (/^(20|21|22)/.test(accountCode)) return 'financing'; // Cash-related liabilities
+        if (/^(15|16|17|18|19)/.test(accountCode)) return 'investing'; // Cash investments
         if (accountName.toLowerCase().includes('deposit')) return 'financing';
-        return 'operating'; // default
+        
+        // DO NOT classify revenue (4xxx) or expense (5xxx) accounts
+        // These don't represent cash movements
+        return 'operating'; // Default for cash accounts only
     }
 
     // Security deposit tracking
@@ -2552,20 +2651,27 @@ class FinancialReportingService {
     }
 
     static calculateCashFlow(accountType, debit, credit, accountCode, accountName) {
+        // CASH FLOW: Only actual cash movements, NOT revenue earned or expenses incurred
+        // Only include cash accounts (1000-1999) for true cash basis reporting
+        
         if (accountType === 'Asset' || accountType === 'asset') {
-            // For cash accounts (1000, 1001, 1002, 1011), use correct logic
+            // Only include actual cash accounts (1000-1999)
             if (accountCode && /^10/.test(accountCode)) {
-                return debit - credit; // Debit = inflow (+), Credit = outflow (-)
-            } else {
-                return credit - debit; // Asset decrease = cash inflow (+), Asset increase = cash outflow (-)
+                return debit - credit; // Debit = cash inflow (+), Credit = cash outflow (-)
             }
+            // Skip non-cash assets (like Accounts Receivable, Property, Equipment)
+            return 0;
         } else if (accountType === 'Liability' || accountType === 'liability') {
-            return debit - credit; // Liability increase = cash inflow (+), Liability decrease = cash outflow (-)
-        } else if (accountType === 'Income' || accountType === 'income') {
-            return credit; // Income = cash inflow (+) - when you receive money
-        } else if (accountType === 'Expense' || accountType === 'expense') {
-            return -(debit - credit); // Expense = cash outflow (-) - when you pay money
+            // Only include cash-related liabilities (like bank loans, cash advances)
+            if (accountCode && /^20/.test(accountCode)) {
+                return debit - credit; // Liability increase = cash inflow (+), Liability decrease = cash outflow (-)
+            }
+            // Skip non-cash liabilities
+            return 0;
         }
+        // DO NOT include Income or Expense accounts in cashflow
+        // Income/Expense accounts represent revenue earned/expenses incurred, not cash movements
+        // Cashflow should only show when cash actually changes hands
         return 0;
     }
 

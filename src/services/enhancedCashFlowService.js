@@ -54,7 +54,7 @@ class EnhancedCashFlowService {
             // Get payments for additional income details
             const paymentQuery = {
                 date: { $gte: startDate, $lte: endDate },
-                status: { $in: ['confirmed', 'completed', 'paid'] }
+                status: { $in: ['confirmed', 'completed', 'paid', 'Confirmed', 'Completed', 'Paid'] }
             };
             
             if (residenceId) {
@@ -164,8 +164,57 @@ class EnhancedCashFlowService {
             payment_details: []
         };
         
+        // Create a map of transaction entries to their corresponding payments for accurate date handling
+        const transactionToPaymentMap = new Map();
+        
+        if (payments.length > 0) {
+            payments.forEach(payment => {
+            // Find transaction entries that correspond to this payment
+            const relatedTransactions = transactionEntries.filter(entry => {
+                // Match by payment ID in description
+                if (entry.description?.includes(payment.paymentId)) {
+                    return true;
+                }
+                
+                // Match by payment _id in reference field (this is the key fix!)
+                if (entry.reference && entry.reference === payment._id.toString()) {
+                    return true;
+                }
+                
+                // Match by amount and date proximity (for cases where payment ID is not in description)
+                // Check if any payment component matches the transaction amount
+                const paymentComponents = payment.payments || [];
+                const amountMatch = paymentComponents.some(comp => 
+                    Math.abs(entry.totalDebit - comp.amount) < 0.01
+                ) || Math.abs(entry.totalDebit - payment.totalAmount) < 0.01;
+                
+                const dateProximity = Math.abs(entry.date.getTime() - payment.date.getTime()) < 30 * 24 * 60 * 60 * 1000; // Within 30 days
+                
+                // Also check if the transaction description contains payment-related keywords
+                const descriptionMatch = entry.description && (
+                    entry.description.toLowerCase().includes('payment') ||
+                    entry.description.toLowerCase().includes('allocation') ||
+                    entry.description.toLowerCase().includes('rent') ||
+                    entry.description.toLowerCase().includes('admin')
+                );
+                
+                return amountMatch && dateProximity && descriptionMatch;
+            });
+            
+            relatedTransactions.forEach(transaction => {
+                transactionToPaymentMap.set(transaction.transactionId, payment);
+            });
+        });
+        } else {
+            console.log('⚠️ No payments found in database. Using transaction dates for cash flow.');
+        }
+        
         // Process transaction entries for income
         transactionEntries.forEach(entry => {
+            // Get the corresponding payment for accurate date handling
+            const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+            const effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
+            
             if (entry.entries && entry.entries.length > 0) {
                 // Look for Cash debits (income received)
                 const cashEntry = entry.entries.find(line => 
@@ -201,7 +250,7 @@ class EnhancedCashFlowService {
                     incomeBreakdown.by_source[category].total += incomeAmount;
                     incomeBreakdown.by_source[category].transactions.push({
                         transactionId: entry.transactionId,
-                        date: entry.date,
+                        date: effectiveDate, // Use payment date instead of transaction date
                         amount: incomeAmount,
                         accountCode: cashEntry.accountCode,
                         accountName: cashEntry.accountName,
@@ -217,8 +266,8 @@ class EnhancedCashFlowService {
                     }
                     incomeBreakdown.by_residence[residenceName] += incomeAmount;
                     
-                    // Group by month
-                    const monthKey = entry.date.toISOString().slice(0, 7); // YYYY-MM
+                    // Group by month using the effective date (payment date)
+                    const monthKey = effectiveDate.toISOString().slice(0, 7); // YYYY-MM
                     if (!incomeBreakdown.by_month[monthKey]) {
                         incomeBreakdown.by_month[monthKey] = 0;
                     }
@@ -240,7 +289,7 @@ class EnhancedCashFlowService {
                             incomeBreakdown.by_source.rental_income.total += credit;
                             incomeBreakdown.by_source.rental_income.transactions.push({
                                 transactionId: entry.transactionId,
-                                date: entry.date,
+                                date: effectiveDate, // Use payment date instead of transaction date
                                 amount: credit,
                                 accountCode,
                                 accountName,
@@ -251,7 +300,7 @@ class EnhancedCashFlowService {
                             incomeBreakdown.by_source.admin_fees.total += credit;
                             incomeBreakdown.by_source.admin_fees.transactions.push({
                                 transactionId: entry.transactionId,
-                                date: entry.date,
+                                date: effectiveDate, // Use payment date instead of transaction date
                                 amount: credit,
                                 accountCode,
                                 accountName,
@@ -262,7 +311,7 @@ class EnhancedCashFlowService {
                             incomeBreakdown.by_source.deposits.total += credit;
                             incomeBreakdown.by_source.deposits.transactions.push({
                                 transactionId: entry.transactionId,
-                                date: entry.date,
+                                date: effectiveDate, // Use payment date instead of transaction date
                                 amount: credit,
                                 accountCode,
                                 accountName,
@@ -273,7 +322,7 @@ class EnhancedCashFlowService {
                             incomeBreakdown.by_source.utilities.total += credit;
                             incomeBreakdown.by_source.utilities.transactions.push({
                                 transactionId: entry.transactionId,
-                                date: entry.date,
+                                date: effectiveDate, // Use payment date instead of transaction date
                                 amount: credit,
                                 accountCode,
                                 accountName,
@@ -284,7 +333,7 @@ class EnhancedCashFlowService {
                             incomeBreakdown.by_source.other_income.total += credit;
                             incomeBreakdown.by_source.other_income.transactions.push({
                                 transactionId: entry.transactionId,
-                                date: entry.date,
+                                date: effectiveDate, // Use payment date instead of transaction date
                                 amount: credit,
                                 accountCode,
                                 accountName,
@@ -300,8 +349,8 @@ class EnhancedCashFlowService {
                         }
                         incomeBreakdown.by_residence[residenceName] += credit;
                         
-                        // Group by month
-                        const monthKey = entry.date.toISOString().slice(0, 7); // YYYY-MM
+                        // Group by month using the effective date (payment date)
+                        const monthKey = effectiveDate.toISOString().slice(0, 7); // YYYY-MM
                         if (!incomeBreakdown.by_month[monthKey]) {
                             incomeBreakdown.by_month[monthKey] = 0;
                         }
@@ -744,9 +793,58 @@ class EnhancedCashFlowService {
             };
         }
         
+        // Create a map of transaction entries to their corresponding payments for accurate date handling
+        const transactionToPaymentMap = new Map();
+        
+        if (payments.length > 0) {
+            payments.forEach(payment => {
+            // Find transaction entries that correspond to this payment
+            const relatedTransactions = transactionEntries.filter(entry => {
+                // Match by payment ID in description
+                if (entry.description?.includes(payment.paymentId)) {
+                    return true;
+                }
+                
+                // Match by payment _id in reference field (this is the key fix!)
+                if (entry.reference && entry.reference === payment._id.toString()) {
+                    return true;
+                }
+                
+                // Match by amount and date proximity (for cases where payment ID is not in description)
+                // Check if any payment component matches the transaction amount
+                const paymentComponents = payment.payments || [];
+                const amountMatch = paymentComponents.some(comp => 
+                    Math.abs(entry.totalDebit - comp.amount) < 0.01
+                ) || Math.abs(entry.totalDebit - payment.totalAmount) < 0.01;
+                
+                const dateProximity = Math.abs(entry.date.getTime() - payment.date.getTime()) < 30 * 24 * 60 * 60 * 1000; // Within 30 days
+                
+                // Also check if the transaction description contains payment-related keywords
+                const descriptionMatch = entry.description && (
+                    entry.description.toLowerCase().includes('payment') ||
+                    entry.description.toLowerCase().includes('allocation') ||
+                    entry.description.toLowerCase().includes('rent') ||
+                    entry.description.toLowerCase().includes('admin')
+                );
+                
+                return amountMatch && dateProximity && descriptionMatch;
+            });
+            
+            relatedTransactions.forEach(transaction => {
+                transactionToPaymentMap.set(transaction.transactionId, payment);
+            });
+        });
+        } else {
+            console.log('⚠️ No payments found in database. Using transaction dates for cash flow.');
+        }
+        
         // Process transaction entries by month
         transactionEntries.forEach(entry => {
-            const monthKey = entry.date.toISOString().slice(0, 7);
+            // Get the corresponding payment for accurate date handling
+            const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+            const effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
+            const monthKey = effectiveDate.toISOString().slice(0, 7);
+            
             if (months[monthKey]) {
                 months[monthKey].transaction_count++;
                 

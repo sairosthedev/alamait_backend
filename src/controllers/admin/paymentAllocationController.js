@@ -17,6 +17,10 @@ const mongoose = require('mongoose');
 // Get student's accounts receivable balances for payment allocation
 const getStudentARBalances = async (req, res) => {
     try {
+        // Set longer timeout for this complex operation
+        req.setTimeout(300000); // 5 minutes
+        res.setTimeout(300000); // 5 minutes
+        
         const { studentId } = req.params;
         
         if (!studentId) {
@@ -413,6 +417,10 @@ const getPaymentCoverageAnalysis = async (req, res) => {
 // Get general outstanding balances summary for admin dashboard
 const getOutstandingBalancesSummary = async (req, res) => {
     try {
+        // Set longer timeout for this complex operation
+        req.setTimeout(300000); // 5 minutes
+        res.setTimeout(300000); // 5 minutes
+        
         const { residence, startDate, endDate } = req.query;
 
         console.log(`📊 Getting outstanding balances summary`);
