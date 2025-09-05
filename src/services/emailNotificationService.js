@@ -171,17 +171,22 @@ class EmailNotificationService {
 			// Send to all admins with valid email addresses
 			let sentCount = 0;
 			for (const admin of admins) {
-				if (admin.email && admin.email.includes('@')) {
-					try {
-						await sendEmail({
-							to: admin.email,
-							subject: 'New Maintenance Request - Action Required',
-							html: emailContent
-						});
-						sentCount++;
-					} catch (emailError) {
-						console.error(`Failed to send email to ${admin.email}:`, emailError.message);
-					}
+				// Skip invalid email addresses (like alamait.com domain) - same logic as monthly requests
+				if (!admin.email || !admin.email.includes('@gmail.com')) {
+					console.log(`⚠️ Skipping invalid email: ${admin.email}`);
+					continue;
+				}
+				
+				try {
+					await sendEmail({
+						to: admin.email,
+						subject: 'New Maintenance Request - Action Required',
+						html: emailContent
+					});
+					sentCount++;
+					console.log(`✅ Email sent to: ${admin.email}`);
+				} catch (emailError) {
+					console.error(`❌ Failed to send email to ${admin.email}:`, emailError.message);
 				}
 			}
 
@@ -509,6 +514,158 @@ class EmailNotificationService {
 			return true;
 		} catch (error) {
 			console.error('❌ Error sending maintenance rejection notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send notification when admin creates maintenance request (sends to CEO and Finance Admin)
+	 */
+	static async sendAdminMaintenanceRequestToCEOAndFinance(maintenance, submittedBy) {
+		try {
+			// Get CEO and Finance Admin users
+			const User = require('../models/User');
+			const ceoAndFinanceUsers = await User.find({
+				role: { $in: ['ceo', 'finance_admin', 'finance'] }
+			});
+
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">New Maintenance Request - Admin Created</h2>
+						<p>Dear Management Team,</p>
+						<p>An admin has created a new maintenance request that requires your attention:</p>
+						<ul>
+							<li><strong>Issue:</strong> ${maintenance.issue}</li>
+							<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
+							<li><strong>Category:</strong> ${maintenance.category}</li>
+							<li><strong>Priority:</strong> ${maintenance.priority}</li>
+							<li><strong>Location:</strong> ${maintenance.location || 'N/A'}</li>
+							<li><strong>Room:</strong> ${maintenance.room || 'N/A'}</li>
+							<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
+							<li><strong>Amount:</strong> $${maintenance.amount?.toFixed(2) || '0.00'}</li>
+							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
+							<li><strong>Created Date:</strong> ${new Date().toLocaleDateString()}</li>
+						</ul>
+						<p><strong>Action Required:</strong> Please review and process this maintenance request for approval.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			// Send to all CEO and Finance users with valid email addresses
+			let sentCount = 0;
+			for (const user of ceoAndFinanceUsers) {
+				// Skip invalid email addresses (like alamait.com domain) - same logic as monthly requests
+				if (!user.email || !user.email.includes('@gmail.com')) {
+					console.log(`⚠️ Skipping invalid email: ${user.email}`);
+					continue;
+				}
+				
+				try {
+					await sendEmail({
+						to: user.email,
+						subject: 'New Maintenance Request - Admin Created - Action Required',
+						html: emailContent
+					});
+					sentCount++;
+					console.log(`✅ Email sent to: ${user.email}`);
+				} catch (emailError) {
+					console.error(`❌ Failed to send email to ${user.email}:`, emailError.message);
+				}
+			}
+
+			console.log(`✅ Admin maintenance request notification sent to ${sentCount} CEO/Finance users`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending admin maintenance request notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send notification when admin creates request (sends to CEO and Finance Admin) - for Request objects
+	 */
+	static async sendAdminRequestToCEOAndFinance(request, submittedBy) {
+		try {
+			// Get CEO and Finance Admin users
+			const User = require('../models/User');
+			const ceoAndFinanceUsers = await User.find({
+				role: { $in: ['ceo', 'finance_admin', 'finance'] }
+			});
+
+			// Determine request type display name
+			let requestTypeDisplay = 'Request';
+			if (request.type === 'student_maintenance') {
+				requestTypeDisplay = 'Student Maintenance Request';
+			} else if (request.type === 'operational') {
+				requestTypeDisplay = 'Operational Request';
+			} else if (request.type === 'financial') {
+				requestTypeDisplay = 'Financial Request';
+			} else if (request.type === 'maintenance') {
+				requestTypeDisplay = 'Maintenance Request';
+			}
+
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #333;">New ${requestTypeDisplay} - Admin Created</h2>
+						<p>Dear Management Team,</p>
+						<p>An admin has created a new ${requestTypeDisplay.toLowerCase()} that requires your attention:</p>
+						<ul>
+							<li><strong>Request Type:</strong> ${requestTypeDisplay}</li>
+							<li><strong>Title:</strong> ${request.title || 'No title provided'}</li>
+							<li><strong>Description:</strong> ${request.description || 'No description provided'}</li>
+							<li><strong>Issue:</strong> ${request.issue || 'N/A'}</li>
+							<li><strong>Category:</strong> ${request.category || 'N/A'}</li>
+							<li><strong>Priority:</strong> ${request.priority || 'medium'}</li>
+							<li><strong>Room:</strong> ${request.room || 'N/A'}</li>
+							<li><strong>Residence:</strong> ${request.residence?.name || 'N/A'}</li>
+							<li><strong>Department:</strong> ${request.department || 'N/A'}</li>
+							<li><strong>Amount:</strong> $${request.amount?.toFixed(2) || '0.00'}</li>
+							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
+							<li><strong>Created Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
+						</ul>
+						<p><strong>Action Required:</strong> Please review and process this ${requestTypeDisplay.toLowerCase()} for approval.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			// Send to all CEO and Finance users with valid email addresses
+			let sentCount = 0;
+			for (const user of ceoAndFinanceUsers) {
+				// Skip invalid email addresses (like alamait.com domain) - same logic as monthly requests
+				if (!user.email || !user.email.includes('@gmail.com')) {
+					console.log(`⚠️ Skipping invalid email: ${user.email}`);
+					continue;
+				}
+				
+				try {
+					await sendEmail({
+						to: user.email,
+						subject: `New ${requestTypeDisplay} - Admin Created - Action Required`,
+						html: emailContent
+					});
+					sentCount++;
+					console.log(`✅ Email sent to: ${user.email}`);
+				} catch (emailError) {
+					console.error(`❌ Failed to send email to ${user.email}:`, emailError.message);
+				}
+			}
+
+			console.log(`✅ Admin ${requestTypeDisplay.toLowerCase()} notification sent to ${sentCount} CEO/Finance users`);
+			return true;
+		} catch (error) {
+			console.error('❌ Error sending admin request notification:', error);
 			throw error;
 		}
 	}

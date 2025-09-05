@@ -1,6 +1,7 @@
 const Maintenance = require('../models/Maintenance');
 const Expense = require('../models/finance/Expense');
 const { generateUniqueId } = require('../utils/idGenerator');
+const EmailNotificationService = require('../services/emailNotificationService');
 
 // Get all maintenance requests
 exports.getAllMaintenance = async (req, res) => {
@@ -110,6 +111,29 @@ exports.createMaintenance = async (req, res) => {
 
         const maintenance = new Maintenance(maintenanceData);
         const savedMaintenance = await maintenance.save();
+
+        // Send email notifications (non-blocking)
+        try {
+            // Check if the user is an admin - if so, send to CEO and Finance Admin
+            if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager')) {
+                await EmailNotificationService.sendAdminMaintenanceRequestToCEOAndFinance(savedMaintenance, req.user);
+            } else {
+                // For students, send to admins
+                await EmailNotificationService.sendMaintenanceRequestSubmitted(savedMaintenance, req.user);
+            }
+            
+            // If there's a student associated with this request, send confirmation email
+            if (savedMaintenance.student) {
+                const User = require('../models/User');
+                const student = await User.findById(savedMaintenance.student);
+                if (student) {
+                    await EmailNotificationService.sendMaintenanceRequestConfirmation(savedMaintenance, student);
+                }
+            }
+        } catch (emailError) {
+            console.error('Failed to send maintenance request email notifications:', emailError);
+            // Don't fail the request if email fails
+        }
 
         // Populate requestedBy for the response
         await savedMaintenance.populate('requestedBy', 'firstName lastName email role');
