@@ -2,6 +2,7 @@ const { validationResult } = require('express-validator');
 const Maintenance = require('../../models/Maintenance');
 const User = require('../../models/User');
 const mongoose = require('mongoose');
+const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Get maintenance dashboard stats
 exports.getMaintenanceStats = async (req, res) => {
@@ -286,6 +287,23 @@ exports.createMaintenanceRequest = async (req, res) => {
         // Create the maintenance request
         const request = new Maintenance(maintenanceData);
         await request.save();
+
+        // Send email notifications (non-blocking)
+        try {
+            // Send notification to CEO and Finance Admin about admin-created maintenance request
+            await EmailNotificationService.sendAdminMaintenanceRequestToCEOAndFinance(request, req.user);
+            
+            // If there's a student associated with this request, send confirmation email
+            if (request.student) {
+                const student = await User.findById(request.student);
+                if (student) {
+                    await EmailNotificationService.sendMaintenanceRequestConfirmation(request, student);
+                }
+            }
+        } catch (emailError) {
+            console.error('Failed to send maintenance request email notifications:', emailError);
+            // Don't fail the request if email fails
+        }
 
         // Populate the created request with student details and add additional fields
         const populatedRequest = await Maintenance.findById(request._id)
