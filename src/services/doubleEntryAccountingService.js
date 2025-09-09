@@ -571,7 +571,7 @@ class DoubleEntryAccountingService {
     /**
      * 1. MAINTENANCE REQUEST APPROVAL (Accrual Basis) - FIXED FOR DUPLICATES
      */
-    static async recordMaintenanceApproval(request, user) {
+    static async recordMaintenanceApproval(request, user, approvalDate = null) {
         try {
             console.log('🏗️ Recording maintenance approval (accrual basis)');
 
@@ -594,8 +594,9 @@ class DoubleEntryAccountingService {
             
             const transactionId = await this.generateTransactionId();
             
-            // Use dateRequested for accrual basis (income statement) - when expense is incurred
-            const accrualDate = request.dateRequested ? new Date(request.dateRequested) : new Date();
+            // Use approval date if provided, otherwise fall back to dateRequested, then current date
+            const accrualDate = approvalDate ? new Date(approvalDate) : 
+                               (request.dateRequested ? new Date(request.dateRequested) : new Date());
             
             const transaction = new Transaction({
                 transactionId,
@@ -773,7 +774,7 @@ class DoubleEntryAccountingService {
                     category: 'Maintenance',
                     amount: totalAmount,
                     description: `Maintenance: ${request.title}`,
-                    expenseDate: new Date(),
+                    expenseDate: accrualDate, // Use approval date instead of new Date()
                     paymentStatus: 'Pending',
                     period: 'monthly',
                     createdBy: user._id,

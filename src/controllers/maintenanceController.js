@@ -146,7 +146,7 @@ exports.createMaintenance = async (req, res) => {
 // Update maintenance request
 exports.updateMaintenance = async (req, res) => {
     try {
-        const { financeStatus, amount, paymentMethod, paymentIcon } = req.body;
+        const { financeStatus, amount, paymentMethod, paymentIcon, dateApproved } = req.body;
         
         // Check if financeStatus is being updated to 'approved'
         const maintenance = await Maintenance.findById(req.params.id);
@@ -164,13 +164,14 @@ exports.updateMaintenance = async (req, res) => {
                 const expenseId = await generateUniqueId('EXP');
 
                 // Create expense data
+                const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
                 const expenseData = {
                     expenseId,
                     residence: maintenance.residence,
                     category: 'Maintenance',
                     amount: parseFloat(amount),
                     description: `Maintenance: ${maintenance.issue} - ${maintenance.description}`,
-                    expenseDate: new Date(),
+                    expenseDate: approvalDate,
                     paymentStatus: 'Pending',
                     createdBy: req.user._id,
                     period: 'monthly',

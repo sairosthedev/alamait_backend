@@ -21,7 +21,7 @@ class FinanceController {
     static async approveMaintenanceRequest(req, res) {
         try {
             const { requestId } = req.params;
-            const { approvalNotes } = req.body;
+            const { approvalNotes, dateApproved } = req.body;
 
             console.log('🏗️ Approving maintenance request:', requestId);
 
@@ -39,9 +39,10 @@ class FinanceController {
             }
 
             // Update request status
+            const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
             request.status = 'approved';
             request.approvedBy = req.user._id;
-            request.approvedAt = new Date();
+            request.approvedAt = approvalDate;
             request.approvalNotes = approvalNotes;
             await request.save();
 
@@ -59,7 +60,7 @@ class FinanceController {
                     return sum + (selectedQuotation?.amount || 0);
                 }, 0),
                 description: `Maintenance: ${request.title}`,
-                expenseDate: new Date(),
+                expenseDate: approvalDate,
                 paymentStatus: 'Pending',
                 period: 'monthly',
                 createdBy: req.user._id,
@@ -174,7 +175,7 @@ class FinanceController {
     static async approveSupplyPurchase(req, res) {
         try {
             const { requestId } = req.params;
-            const { approvalNotes } = req.body;
+            const { approvalNotes, dateApproved } = req.body;
 
             console.log('📦 Approving supply purchase:', requestId);
 
@@ -192,9 +193,10 @@ class FinanceController {
             }
 
             // Update request status
+            const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
             request.status = 'approved';
             request.approvedBy = req.user._id;
-            request.approvedAt = new Date();
+            request.approvedAt = approvalDate;
             request.approvalNotes = approvalNotes;
             await request.save();
 
@@ -212,7 +214,7 @@ class FinanceController {
                     return sum + (selectedQuotation?.amount || 0);
                 }, 0),
                 description: `Supplies: ${request.title}`,
-                expenseDate: new Date(),
+                expenseDate: approvalDate,
                 paymentStatus: 'Pending',
                 period: 'monthly',
                 createdBy: req.user._id,
@@ -711,9 +713,10 @@ class FinanceController {
                         // Update expense status and payment information
                         expense.paymentStatus = 'Paid';
                         expense.paymentMethod = 'Petty Cash';
-                        expense.paidDate = new Date();
+                        expense.paidDate = date ? new Date(date) : new Date();
                         expense.paymentReference = `PC-${Date.now()}`;
-                        expense.notes = expense.notes ? `${expense.notes} | Paid with petty cash on ${new Date().toLocaleDateString()}` : `Paid with petty cash on ${new Date().toLocaleDateString()}`;
+                        const paymentDate = date ? new Date(date) : new Date();
+                        expense.notes = expense.notes ? `${expense.notes} | Paid with petty cash on ${paymentDate.toLocaleDateString()}` : `Paid with petty cash on ${paymentDate.toLocaleDateString()}`;
                         
                         await expense.save();
                         expenseUpdateResult = expense;

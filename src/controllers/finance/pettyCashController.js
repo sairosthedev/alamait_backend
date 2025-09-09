@@ -111,7 +111,7 @@ exports.replenishPettyCash = async (req, res) => {
             return res.status(400).json({ errors: errors.array() });
         }
 
-        const { amount, description, receipts } = req.body;
+        const { amount, description, receipts, date } = req.body;
 
         // Get active petty cash fund
         const pettyCash = await PettyCash.findOne({ status: 'active' });
@@ -135,10 +135,11 @@ exports.replenishPettyCash = async (req, res) => {
 
         // Update petty cash balance
         pettyCash.currentBalance += amount;
-        pettyCash.lastReplenished = new Date();
+        const replenishDate = date ? new Date(date) : new Date();
+        pettyCash.lastReplenished = replenishDate;
         pettyCash.replenishmentHistory.push({
             amount: amount,
-            date: new Date(),
+            date: replenishDate,
             description: description,
             receipts: receipts || [],
             replenishedBy: req.user._id
@@ -151,7 +152,7 @@ exports.replenishPettyCash = async (req, res) => {
         
         const transactionEntry = new TransactionEntry({
             transactionId: transactionId,
-            date: new Date(),
+            date: replenishDate,
             description: `Petty Cash Replenishment: ${description || 'Fund Replenishment'}`,
             reference: pettyCash.fundCode,
             entries: [

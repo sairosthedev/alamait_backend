@@ -674,6 +674,27 @@ class FinancialReportsController {
                             management_expenses: { amount: monthData.expenses.management, description: 'Management Fees' },
                         }
                     },
+                    // Add detailed income transactions
+                    income: {
+                        total: monthData.income.total,
+                        rental_income: monthData.income.rental_income,
+                        admin_fees: monthData.income.admin_fees,
+                        deposits: monthData.income.deposits,
+                        utilities: monthData.income.utilities,
+                        advance_payments: monthData.income.advance_payments,
+                        other_income: monthData.income.other_income,
+                        transactions: monthData.income.transactions || [] // Include detailed income transactions
+                    },
+                    // Add detailed expense transactions
+                    expenses: {
+                        total: monthData.expenses.total,
+                        maintenance: monthData.expenses.maintenance,
+                        utilities: monthData.expenses.utilities,
+                        cleaning: monthData.expenses.cleaning,
+                        security: monthData.expenses.security,
+                        management: monthData.expenses.management,
+                        transactions: monthData.expenses.transactions || [] // Include detailed expense transactions
+                    },
                     investing_activities: {
                         inflows: 0,
                         outflows: 0,

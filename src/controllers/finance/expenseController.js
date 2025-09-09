@@ -904,7 +904,8 @@ exports.markExpenseAsPaid = async (req, res) => {
                 paymentMethod: finalPaymentMethod,
                 expenseId: updatedExpense._id,
                 originalAmount: updatedExpense.amount,
-                wasAccrued: wasAccrued
+                wasAccrued: wasAccrued,
+                datePaid: updatedExpense.paidDate // Store the actual payment date for cash flow
             }
         });
         
@@ -1117,9 +1118,10 @@ exports.recordExpensePayment = async (req, res) => {
         // Create double-entry transaction
         const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
         
+        const paymentDate = new Date(); // Use current date as payment date
         const transactionEntry = new TransactionEntry({
             transactionId,
-            date: new Date(),
+            date: paymentDate,
             description: `Payment for Expense ${expense.expenseId} - ${expense.description}`,
             reference: reference || paymentId,
             entries: [
@@ -1151,7 +1153,8 @@ exports.recordExpensePayment = async (req, res) => {
                 expenseId: expense.expenseId,
                 expenseDescription: expense.description,
                 paymentMethod,
-                reference
+                reference,
+                datePaid: paymentDate // Store the actual payment date for cash flow
             }
         });
 

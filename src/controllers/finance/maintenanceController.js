@@ -206,7 +206,7 @@ exports.approveMaintenance = async (req, res) => {
         });
         
         const { id } = req.params;
-        const { notes, amount, maintenanceAccount, apAccount, quotationId } = req.body;
+        const { notes, amount, maintenanceAccount, apAccount, quotationId, dateApproved } = req.body;
 
         if (!validateMongoId(id)) {
             return res.status(400).json({ error: 'Invalid maintenance request ID format' });
@@ -408,6 +408,7 @@ exports.approveMaintenance = async (req, res) => {
             const expenseId = await generateUniqueId('EXP');
             
             // Create expense record
+            const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
             createdExpense = new Expense({
                 expenseId,
                 requestId: updatedMaintenance._id, // Link to maintenance request
@@ -415,12 +416,12 @@ exports.approveMaintenance = async (req, res) => {
                 category: 'Maintenance',
                 amount: approvalAmount,
                 description: `Maintenance: ${updatedMaintenance.issue} - ${updatedMaintenance.description}`,
-                expenseDate: new Date(),
+                expenseDate: approvalDate,
                 paymentStatus: 'Pending',
                 period: 'monthly',
                 createdBy: req.user?._id || null,
                 approvedBy: req.user?._id || null,
-                approvedAt: new Date(),
+                approvedAt: approvalDate,
                 approvedByEmail: req.user?.email || 'finance@alamait.com',
                 maintenanceRequestId: updatedMaintenance._id, // Legacy field for backward compatibility
                 transactionId: txn._id, // Link to the transaction we just created

@@ -1213,10 +1213,10 @@ exports.updateRequest = async (req, res) => { //n
                 // Check if request has items to process
                 if (request.items && request.items.length > 0) {
                     // Handle complex requests with items and quotations
-                    await createItemizedExpensesForRequest(request, user);
+                    await createItemizedExpensesForRequest(request, user, approvalDate);
                 } else {
                     // Handle simple requests without items (legacy maintenance requests)
-                    await createSimpleExpenseForRequest(request, user);
+                    await createSimpleExpenseForRequest(request, user, approvalDate);
                 }
                 
                 // Mark request as converted to expense
@@ -1491,7 +1491,7 @@ exports.financeApproval = async (req, res) => {
                     
                     // Use the proper DoubleEntryAccountingService for maintenance approval
                     const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
-                    financialResult = await DoubleEntryAccountingService.recordMaintenanceApproval(request, user);
+                    financialResult = await DoubleEntryAccountingService.recordMaintenanceApproval(request, user, approvalDate);
                     
                     // Update request with expense reference
                     request.convertedToExpense = true;
@@ -1505,7 +1505,7 @@ exports.financeApproval = async (req, res) => {
                 } else {
                     // Handle simple requests without items (legacy maintenance requests)
                     console.log('📝 Creating simple expense for request without items...');
-                    await createSimpleExpenseForRequest(request, user);
+                    await createSimpleExpenseForRequest(request, user, approvalDate);
                     request.convertedToExpense = true;
                     await request.save();
                     
@@ -1716,7 +1716,7 @@ exports.financeOverrideQuotation = async (req, res) => {
 };
 
 // Helper function to create simple expense for legacy maintenance requests
-async function createSimpleExpenseForRequest(request, user) {
+async function createSimpleExpenseForRequest(request, user, approvalDate) {
     try {
         const Expense = require('../models/finance/Expense');
         
@@ -1890,7 +1890,7 @@ async function createSimpleExpenseForRequest(request, user) {
 }
 
 // Helper function to create itemized expenses for requests with items and quotations
-async function createItemizedExpensesForRequest(request, user) {
+async function createItemizedExpensesForRequest(request, user, approvalDate) {
     try {
         const Expense = require('../models/finance/Expense');
         const Vendor = require('../models/Vendor');
@@ -1970,7 +1970,7 @@ async function createItemizedExpensesForRequest(request, user) {
                         disableDuplicateCheck: true
                     };
 
-                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user, approvalDate);
 
                     // Link expense to transaction
                     if (transactionResult && transactionResult.transaction) {
@@ -2056,7 +2056,7 @@ async function createItemizedExpensesForRequest(request, user) {
                         disableDuplicateCheck: true
                     };
 
-                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+                    const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user, approvalDate);
 
                     // Link expense to transaction
                     if (transactionResult && transactionResult.transaction) {
@@ -2087,7 +2087,7 @@ async function createItemizedExpensesForRequest(request, user) {
 // CEO approval for requests
 exports.ceoApproval = async (req, res) => {
     try {
-        const { approved, notes } = req.body;
+        const { approved, notes, dateApproved } = req.body;
         const user = req.user;
         
         const request = await Request.findById(req.params.id);
@@ -2204,13 +2204,14 @@ exports.ceoApproval = async (req, res) => {
                     }
                 }
                 
+                const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
                 const expense = new Expense({
                     expenseId: generateUniqueId('EXP'),
                     residence: request.residence,
                     category: 'Other',
                     amount: request.amount,
                     description: request.title,
-                    expenseDate: new Date(),
+                    expenseDate: approvalDate,
                     paymentStatus: 'Pending',
                     period: 'monthly',
                     createdBy: user._id,
@@ -2229,8 +2230,9 @@ exports.ceoApproval = async (req, res) => {
         }
         
         // Add to request history
+        const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
         request.requestHistory.push({
-            date: new Date(),
+            date: approvalDate,
             action: 'CEO approval',
             user: user._id,
             changes: [`CEO ${approved ? 'approved' : 'rejected'} the request`]

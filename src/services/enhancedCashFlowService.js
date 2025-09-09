@@ -329,11 +329,22 @@ class EnhancedCashFlowService {
                     
                     if (entry.description) {
                         const desc = entry.description.toLowerCase();
+                        // Check for advance payments first (most specific)
                         if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future')) {
                             category = 'advance_payments';
                             description = 'Advance Payment from Student';
                             isAdvancePayment = true;
-                        } else if (desc.includes('rent')) {
+                        } 
+                        // Check for specific payment allocations
+                        else if (desc.includes('payment allocation: rent')) {
+                            category = 'rental_income';
+                            description = 'Rental Income from Students';
+                        } else if (desc.includes('payment allocation: admin')) {
+                            category = 'admin_fees';
+                            description = 'Administrative Fees';
+                        } 
+                        // Fallback to general keywords
+                        else if (desc.includes('rent')) {
                             category = 'rental_income';
                             description = 'Rental Income from Students';
                         } else if (desc.includes('admin')) {
@@ -348,15 +359,15 @@ class EnhancedCashFlowService {
                         }
                     }
                     
-                    // Check if this is a direct advance payment transaction
-                    if (entry.source === 'advance_payment' || entry.sourceModel === 'AdvancePayment') {
+                    // Check if this is a direct advance payment transaction (only if not already categorized)
+                    if ((entry.source === 'advance_payment' || entry.sourceModel === 'AdvancePayment') && category === 'other_income') {
                         category = 'advance_payments';
                         description = 'Advance Payment Transaction';
                         isAdvancePayment = true;
                     }
                     
-                    // Check if this is an advance payment by looking at payment details
-                    if (correspondingPayment) {
+                    // Check if this is an advance payment by looking at payment details (only if not already categorized)
+                    if (correspondingPayment && category === 'other_income') {
                         const paymentDate = correspondingPayment.date;
                         const paymentMonth = paymentDate.getMonth() + 1; // 1-12
                         const paymentYear = paymentDate.getFullYear();
@@ -400,19 +411,21 @@ class EnhancedCashFlowService {
                                             isAdvancePayment = true;
                                             console.log(`🔍 Advance payment detected (future month): ${incomeAmount} - Transaction: ${entry.transactionId} - Payment: ${correspondingPayment.paymentId} - Allocation: ${matchingAllocation.month}/${matchingAllocation.year}`);
                                         } else {
-                                            // Current month allocation - categorize based on type
-                                            if (matchingAllocation.allocationType === 'rent_settlement') {
-                                                category = 'rental_income';
-                                                description = 'Rental Income from Students';
-                                            } else if (matchingAllocation.allocationType === 'admin_settlement') {
-                                                category = 'admin_fees';
-                                                description = 'Administrative Fees';
-                                            } else if (matchingAllocation.allocationType === 'advance_payment') {
-                                                category = 'advance_payments';
-                                                description = 'Advance Payment for Future Periods';
-                                                isAdvancePayment = true;
+                                            // Current month allocation - categorize based on type (only if not already categorized)
+                                            if (category === 'other_income') {
+                                                if (matchingAllocation.allocationType === 'rent_settlement') {
+                                                    category = 'rental_income';
+                                                    description = 'Rental Income from Students';
+                                                } else if (matchingAllocation.allocationType === 'admin_settlement') {
+                                                    category = 'admin_fees';
+                                                    description = 'Administrative Fees';
+                                                } else if (matchingAllocation.allocationType === 'advance_payment') {
+                                                    category = 'advance_payments';
+                                                    description = 'Advance Payment for Future Periods';
+                                                    isAdvancePayment = true;
+                                                }
                                             }
-                                            console.log(`🔍 Current allocation detected: ${incomeAmount} - Transaction: ${entry.transactionId} - Payment: ${correspondingPayment.paymentId} - Allocation: ${matchingAllocation.month}/${matchingAllocation.year} - Type: ${matchingAllocation.allocationType}`);
+                                            console.log(`🔍 Current allocation detected: ${incomeAmount} - Transaction: ${entry.transactionId} - Payment: ${correspondingPayment.paymentId} - Allocation: ${matchingAllocation.month}/${matchingAllocation.year} - Type: ${matchingAllocation.allocationType} - Final Category: ${category}`);
                                         }
                                     }
                                 }
@@ -445,7 +458,7 @@ class EnhancedCashFlowService {
                                     return false;
                                 });
                                 
-                                if (hasFutureAllocation) {
+                                if (hasFutureAllocation && category === 'other_income') {
                                     category = 'advance_payments';
                                     description = 'Advance Payment for Future Periods';
                                     isAdvancePayment = true;
@@ -464,7 +477,7 @@ class EnhancedCashFlowService {
                                 return false;
                             });
                             
-                            if (hasFutureAllocation) {
+                            if (hasFutureAllocation && category === 'other_income') {
                                 category = 'advance_payments';
                                 description = 'Advance Payment for Future Rent';
                                 isAdvancePayment = true;
@@ -484,7 +497,7 @@ class EnhancedCashFlowService {
                                 );
                                 
                                 // If this transaction amount matches the advance amount, it's an advance payment
-                                if (Math.abs(incomeAmount - advanceAmount) < 0.01) {
+                                if (Math.abs(incomeAmount - advanceAmount) < 0.01 && category === 'other_income') {
                                     category = 'advance_payments';
                                     description = 'Advance Payment for Future Periods';
                                     isAdvancePayment = true;
@@ -505,7 +518,7 @@ class EnhancedCashFlowService {
                             const currentMonthTotal = currentMonthAllocations.reduce((sum, payment) => sum + (payment.amount || 0), 0);
                             
                             // If payment amount is significantly larger than current month allocation, it might be advance
-                            if (correspondingPayment.totalAmount > currentMonthTotal * 1.5) {
+                            if (correspondingPayment.totalAmount > currentMonthTotal * 1.5 && category === 'other_income') {
                                 category = 'advance_payments';
                                 description = 'Advance Payment (Excess Amount)';
                                 isAdvancePayment = true;
@@ -1263,7 +1276,8 @@ class EnhancedCashFlowService {
                     utilities: 0,
                     cleaning: 0,
                     security: 0,
-                    management: 0
+                    management: 0,
+                    transactions: [] // Add detailed expense transactions
                 },
                 net_cash_flow: 0,
                 transaction_count: 0,
@@ -1419,26 +1433,46 @@ class EnhancedCashFlowService {
                             }
                         }
                         
-                        if (isAdvancePayment) {
+                        // Recalculate category for monthly breakdown (same logic as main processing)
+                        let monthlyCategory = 'other_income';
+                        if (entry.description) {
+                            const desc = entry.description.toLowerCase();
+                            // Check for advance payments first (most specific)
+                            if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future')) {
+                                monthlyCategory = 'advance_payments';
+                            } 
+                            // Check for specific payment allocations
+                            else if (desc.includes('payment allocation: rent')) {
+                                monthlyCategory = 'rental_income';
+                            } else if (desc.includes('payment allocation: admin')) {
+                                monthlyCategory = 'admin_fees';
+                            } 
+                            // Fallback to general keywords
+                            else if (desc.includes('rent')) {
+                                monthlyCategory = 'rental_income';
+                            } else if (desc.includes('admin')) {
+                                monthlyCategory = 'admin_fees';
+                            } else if (desc.includes('deposit')) {
+                                monthlyCategory = 'deposits';
+                            } else if (desc.includes('utilit')) {
+                                monthlyCategory = 'utilities';
+                            }
+                        }
+                        
+                        // Apply categorization to monthly breakdown
+                        if (monthlyCategory === 'advance_payments') {
                             months[monthKey].income.advance_payments += incomeAmount;
                             console.log(`💰 Advance payment detected: ${incomeAmount} for ${monthKey} - Transaction: ${entry.transactionId}`);
-                        } else if (entry.description) {
-                            const desc = entry.description.toLowerCase();
-                            if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future')) {
-                                months[monthKey].income.advance_payments += incomeAmount;
-                            } else if (entry.source === 'advance_payment' || entry.sourceModel === 'AdvancePayment') {
-                                months[monthKey].income.advance_payments += incomeAmount;
-                            } else if (desc.includes('rent')) {
-                                months[monthKey].income.rental_income += incomeAmount;
-                            } else if (desc.includes('admin')) {
-                                months[monthKey].income.admin_fees += incomeAmount;
-                            } else if (desc.includes('deposit')) {
-                                months[monthKey].income.deposits += incomeAmount;
-                            } else if (desc.includes('utilit')) {
-                                months[monthKey].income.utilities += incomeAmount;
-                            } else {
-                                months[monthKey].income.other_income += incomeAmount;
-                            }
+                        } else if (monthlyCategory === 'rental_income') {
+                            months[monthKey].income.rental_income += incomeAmount;
+                            console.log(`💰 Rental income detected: ${incomeAmount} for ${monthKey} - Transaction: ${entry.transactionId}`);
+                        } else if (monthlyCategory === 'admin_fees') {
+                            months[monthKey].income.admin_fees += incomeAmount;
+                            console.log(`💰 Admin fees detected: ${incomeAmount} for ${monthKey} - Transaction: ${entry.transactionId}`);
+                        } else if (monthlyCategory === 'deposits') {
+                            months[monthKey].income.deposits += incomeAmount;
+                        } else if (monthlyCategory === 'utilities') {
+                            months[monthKey].income.utilities += incomeAmount;
                         } else {
                             months[monthKey].income.other_income += incomeAmount;
                         }
@@ -1468,27 +1502,52 @@ class EnhancedCashFlowService {
                         
                         months[monthKey].expenses.total += expenseAmount;
                         
-                        // Categorize expenses
+                        // Get residence name
+                        const residenceName = entry.residence?.name || 'Unknown';
+                        
+                        // Create detailed expense transaction
+                        const expenseTransaction = {
+                            transactionId: entry.transactionId,
+                            date: effectiveDate,
+                            amount: expenseAmount,
+                            accountCode: cashCredit.accountCode,
+                            accountName: cashCredit.accountName,
+                            residence: residenceName,
+                            description: entry.description || 'Cash Expense',
+                            source: entry.source || 'Unknown'
+                        };
+                        
+                        // Categorize expenses and add to detailed transactions
                         if (entry.description) {
                             const desc = entry.description.toLowerCase();
                             if (desc.includes('maintenance')) {
                                 months[monthKey].expenses.maintenance += expenseAmount;
+                                expenseTransaction.category = 'maintenance';
                             } else if (desc.includes('utilit')) {
                                 months[monthKey].expenses.utilities += expenseAmount;
+                                expenseTransaction.category = 'utilities';
                             } else if (desc.includes('clean')) {
                                 months[monthKey].expenses.cleaning += expenseAmount;
+                                expenseTransaction.category = 'cleaning';
                             } else if (desc.includes('security')) {
                                 months[monthKey].expenses.security += expenseAmount;
+                                expenseTransaction.category = 'security';
                             } else if (desc.includes('management')) {
                                 months[monthKey].expenses.management += expenseAmount;
+                                expenseTransaction.category = 'management';
                             } else {
                                 // Default to maintenance instead of other_expenses
                                 months[monthKey].expenses.maintenance += expenseAmount;
+                                expenseTransaction.category = 'maintenance';
                             }
                         } else {
                             // Default to maintenance instead of other_expenses
                             months[monthKey].expenses.maintenance += expenseAmount;
+                            expenseTransaction.category = 'maintenance';
                         }
+                        
+                        // Add to detailed transactions
+                        months[monthKey].expenses.transactions.push(expenseTransaction);
                     }
                 }
             }
@@ -1573,27 +1632,51 @@ class EnhancedCashFlowService {
                 const expenseAmount = expense.amount || 0;
                 months[monthKey].expenses.total += expenseAmount;
                 
-                // Categorize expense
+                // Create detailed expense transaction
+                const expenseTransaction = {
+                    transactionId: expense.transactionId || expense._id,
+                    date: expense.expenseDate,
+                    amount: expenseAmount,
+                    accountCode: '5000', // General expense account
+                    accountName: expense.category || 'Other Expense',
+                    residence: expense.residence?.name || 'Unknown',
+                    description: expense.description || 'Expense Payment',
+                    source: 'Expense Model',
+                    vendor: expense.vendorName || 'Unknown Vendor',
+                    category: expense.category || 'maintenance'
+                };
+                
+                // Categorize expense and add to detailed transactions
                 if (expense.category) {
                     const category = expense.category.toLowerCase();
                     if (category.includes('maintenance')) {
                         months[monthKey].expenses.maintenance += expenseAmount;
+                        expenseTransaction.category = 'maintenance';
                     } else if (category.includes('utilit')) {
                         months[monthKey].expenses.utilities += expenseAmount;
+                        expenseTransaction.category = 'utilities';
                     } else if (category.includes('clean')) {
                         months[monthKey].expenses.cleaning += expenseAmount;
+                        expenseTransaction.category = 'cleaning';
                     } else if (category.includes('security')) {
                         months[monthKey].expenses.security += expenseAmount;
+                        expenseTransaction.category = 'security';
                     } else if (category.includes('management')) {
                         months[monthKey].expenses.management += expenseAmount;
+                        expenseTransaction.category = 'management';
                     } else {
                         // Default to maintenance instead of other_expenses
                         months[monthKey].expenses.maintenance += expenseAmount;
+                        expenseTransaction.category = 'maintenance';
                     }
                 } else {
                     // Default to maintenance instead of other_expenses
                     months[monthKey].expenses.maintenance += expenseAmount;
+                    expenseTransaction.category = 'maintenance';
                 }
+                
+                // Add to detailed transactions
+                months[monthKey].expenses.transactions.push(expenseTransaction);
             }
         });
         
@@ -1680,8 +1763,13 @@ class EnhancedCashFlowService {
                 // Use payment date if available, otherwise use transaction date
                 let effectiveDate = entry.date;
                 
+                // For expense payments, prioritize datePaid from metadata
+                if (entry.source === 'expense_payment' && entry.metadata && entry.metadata.datePaid) {
+                    effectiveDate = new Date(entry.metadata.datePaid);
+                    console.log(`💰 Using datePaid from expense payment: ${entry.transactionId} - ${effectiveDate.toISOString().slice(0, 7)}`);
+                }
                 // Try to find corresponding payment for accurate date
-                if (entry.reference) {
+                else if (entry.reference) {
                     // Look for payment by reference
                     const payment = payments.find(p => p._id.toString() === entry.reference);
                     if (payment) {

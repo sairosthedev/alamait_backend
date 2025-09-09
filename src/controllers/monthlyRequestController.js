@@ -4340,6 +4340,8 @@ exports.sendToFinance = async (req, res) => {
 
         // Update template with monthly approval record
         if (!template.monthlyApprovals) {
+
+            
             template.monthlyApprovals = [];
         }
 
