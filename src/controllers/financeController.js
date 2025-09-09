@@ -582,8 +582,8 @@ class FinanceController {
      */
     static async allocatePettyCash(req, res) {
         try {
-            const { userId, amount, description, residence, sourceAccount, targetAccount } = req.body;
-            console.log('💰 Allocating petty cash to user:', userId, 'amount:', amount, 'residence:', residence);
+            const { userId, amount, description, residence, sourceAccount, targetAccount, date } = req.body;
+            console.log('💰 Allocating petty cash to user:', userId, 'amount:', amount, 'residence:', residence, 'date:', date);
 
             // Validate input
             if (!userId || !amount || amount <= 0) {
@@ -621,7 +621,8 @@ class FinanceController {
                 amount, 
                 description || `Petty cash allocation for ${user.firstName} ${user.lastName}`,
                 req.user,
-                residence // Pass validated residence to the service
+                residence, // Pass validated residence to the service
+                date // Pass the date from request body
             );
 
             console.log('✅ Petty cash allocated successfully');
@@ -656,8 +657,8 @@ class FinanceController {
      */
     static async recordPettyCashExpense(req, res) {
         try {
-            const { userId, amount, description, expenseCategory, residence, expenseId } = req.body;
-            console.log('💸 Recording petty cash expense for user:', userId, 'amount:', amount, 'residence:', residence, 'expenseId:', expenseId);
+            const { userId, amount, description, expenseCategory, residence, expenseId, date } = req.body;
+            console.log('💸 Recording petty cash expense for user:', userId, 'amount:', amount, 'residence:', residence, 'expenseId:', expenseId, 'date:', date);
 
             // Validate input
             if (!userId || !amount || amount <= 0 || !description || !expenseCategory) {
@@ -735,7 +736,8 @@ class FinanceController {
                 expenseCategory,
                 req.user,
                 residence, // Pass validated residence to the service
-                expenseId // Pass expenseId to link the transaction
+                expenseId, // Pass expenseId to link the transaction
+                date // Pass the date from request body
             );
 
             console.log('✅ Petty cash expense recorded successfully');

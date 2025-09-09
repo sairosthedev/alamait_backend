@@ -33,9 +33,9 @@ class DoubleEntryAccountingService {
      * Allocate petty cash to a user
      * Residence is REQUIRED for proper financial tracking
      */
-    static async allocatePettyCash(userId, amount, description, allocatedBy, residence = null) {
+    static async allocatePettyCash(userId, amount, description, allocatedBy, residence = null, date = null) {
         try {
-            console.log('💰 Allocating petty cash:', amount, 'to user:', userId, 'residence:', residence);
+            console.log('💰 Allocating petty cash:', amount, 'to user:', userId, 'residence:', residence, 'date:', date);
             
             // Get the user to determine their role and appropriate petty cash account
             const User = require('../models/User');
@@ -74,9 +74,15 @@ class DoubleEntryAccountingService {
             console.log(`💰 Allocating to ${user.role} petty cash account: ${pettyCashAccount.code} - ${pettyCashAccount.name}`);
             
             const transactionId = await this.generateTransactionId();
+            const allocationDate = date ? new Date(date) : new Date();
+            console.log('🔍 Petty Cash Date Debug:', {
+                providedDate: date,
+                allocationDate: allocationDate,
+                usingProvidedDate: !!date
+            });
             const transaction = new Transaction({
                 transactionId,
-                date: new Date(),
+                date: allocationDate,
                 description: `Petty cash allocation: ${description}`,
                 type: 'other', // Changed from 'allocation' to 'other' since 'allocation' is not in enum
                 reference: `PETTY-${userId}`,
@@ -114,7 +120,7 @@ class DoubleEntryAccountingService {
 
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: new Date(),
+                date: allocationDate,
                 description: `Petty cash allocation: ${description}`,
                 reference: `PETTY-${userId}`,
                 entries,
@@ -156,9 +162,9 @@ class DoubleEntryAccountingService {
      * Residence is REQUIRED for proper financial tracking
      * Links to original expense if expenseId provided
      */
-    static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy, residence = null, expenseId = null) {
+    static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy, residence = null, expenseId = null, date = null) {
         try {
-            console.log('💸 Recording petty cash expense:', amount, 'by user:', userId, 'residence:', residence, 'expenseId:', expenseId);
+            console.log('💸 Recording petty cash expense:', amount, 'by user:', userId, 'residence:', residence, 'expenseId:', expenseId, 'date:', date);
             
             // Get the user to determine their role and appropriate petty cash account
             const User = require('../models/User');
@@ -224,9 +230,15 @@ class DoubleEntryAccountingService {
             }
 
             const transactionId = await this.generateTransactionId();
+            const expenseDate = date ? new Date(date) : new Date();
+            console.log('🔍 Petty Cash Expense Date Debug:', {
+                providedDate: date,
+                expenseDate: expenseDate,
+                usingProvidedDate: !!date
+            });
             const transaction = new Transaction({
                 transactionId,
-                date: new Date(),
+                date: expenseDate,
                 description: wasAccrued ? 
                     `Petty cash payment: ${description}` : 
                     `Petty cash expense: ${description}`,
@@ -309,7 +321,7 @@ class DoubleEntryAccountingService {
 
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: new Date(),
+                date: expenseDate,
                 description: wasAccrued ? 
                     `Petty cash payment: ${description}` : 
                     `Petty cash expense: ${description}`,
