@@ -674,6 +674,7 @@ exports.markExpenseAsPaid = async (req, res) => {
             paymentMethod, 
             notes, 
             paidDate,
+            datePaid, // Support datePaid field
             amount, // From PaymentModal
             reference, // From PaymentModal
             recordedBy, // From PaymentModal
@@ -687,6 +688,11 @@ exports.markExpenseAsPaid = async (req, res) => {
         console.log('=== MARK EXPENSE AS PAID DEBUG ===');
         console.log('Expense ID:', id);
         console.log('Request body:', req.body);
+        console.log('🔍 Payment Date Debug:', {
+            datePaid: datePaid,
+            paidDate: paidDate,
+            paymentDate: datePaid ? new Date(datePaid) : (paidDate ? new Date(paidDate) : new Date())
+        });
 
         if (!validateMongoId(id)) {
             return res.status(400).json({ error: 'Invalid expense ID format' });
@@ -723,10 +729,11 @@ exports.markExpenseAsPaid = async (req, res) => {
         const before = expense.toObject();
 
         // Update expense status to Paid
+        const paymentDate = datePaid ? new Date(datePaid) : (paidDate ? new Date(paidDate) : new Date());
         const updateData = {
             paymentStatus: 'Paid',
             updatedBy: req.user._id,
-            paidDate: paidDate ? new Date(paidDate) : new Date(),
+            paidDate: paymentDate,
             notes: notes || expense.notes
         };
 
