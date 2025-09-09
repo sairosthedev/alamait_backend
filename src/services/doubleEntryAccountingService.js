@@ -1134,6 +1134,41 @@ class DoubleEntryAccountingService {
             const studentHasOutstandingDebt = debtor && debtor.currentBalance > 0;
             const hasAccruedRentals = debtor && debtor.currentBalance > 0;
             
+            // 🆕 NEW: Check if payment is made before lease start date (additional advance payment rule)
+            let isPaymentBeforeLeaseStart = false;
+            if (debtor && debtor.startDate) {
+                const leaseStartDate = new Date(debtor.startDate);
+                const paymentDate = new Date(payment.date);
+                
+                if (paymentDate < leaseStartDate) {
+                    isPaymentBeforeLeaseStart = true;
+                    console.log(`📅 Payment made before lease start date:`);
+                    console.log(`   Payment Date: ${paymentDate.toISOString().split('T')[0]}`);
+                    console.log(`   Lease Start: ${leaseStartDate.toISOString().split('T')[0]}`);
+                    console.log(`   ✅ Identified as ADVANCE PAYMENT (before lease start)`);
+                }
+            }
+            
+            // 🆕 NEW: Check if payment date is before allocation month (payment date vs allocation month)
+            let isPaymentDateBeforeAllocationMonth = false;
+            if (paymentMonthDate && payment.date) {
+                const paymentDate = new Date(payment.date);
+                const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
+                
+                if (paymentDateMonth < paymentMonthDate) {
+                    isPaymentDateBeforeAllocationMonth = true;
+                    console.log(`📅 Payment date is before allocation month:`);
+                    console.log(`   Payment Date: ${paymentDate.toISOString().split('T')[0]} (Month: ${paymentDate.getMonth() + 1}/${paymentDate.getFullYear()})`);
+                    console.log(`   Allocation Month: ${paymentMonthDate.toISOString().split('T')[0]} (Month: ${paymentMonthDate.getMonth() + 1}/${paymentMonthDate.getFullYear()})`);
+                    console.log(`   ✅ Identified as ADVANCE PAYMENT (payment date before allocation month)`);
+                }
+            }
+            
+            // Update advance payment flag to include payments before lease start OR payment date before allocation month
+            if (isPaymentBeforeLeaseStart || isPaymentDateBeforeAllocationMonth) {
+                isAdvancePayment = true;
+            }
+            
             // 🆕 CRITICAL: Advance payments should NEVER be treated as debt settlement
             // Even if student has outstanding debt, future month payments go to Deferred Income
             if (isAdvancePayment && studentHasOutstandingDebt) {
@@ -1146,6 +1181,8 @@ class DoubleEntryAccountingService {
             console.log(`     Current Month: ${currentMonth + 1}/${currentYear}`);
             console.log(`     Payment Month: ${payment.paymentMonth}`);
             console.log(`     Is Advance Payment: ${isAdvancePayment}`);
+            console.log(`     Is Payment Before Lease Start: ${isPaymentBeforeLeaseStart}`);
+            console.log(`     Is Payment Date Before Allocation Month: ${isPaymentDateBeforeAllocationMonth}`);
             console.log(`     Is Current Period: ${isCurrentPeriodPayment}`);
             console.log(`     Is Past Due: ${isPastDuePayment}`);
             console.log(`     Has Outstanding Debt: ${studentHasOutstandingDebt}`);
