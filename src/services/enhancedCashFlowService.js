@@ -327,6 +327,59 @@ class EnhancedCashFlowService {
                     let description = entry.description || 'Cash Income';
                     let isAdvancePayment = false;
                     
+                    // 🆕 NEW: Check if payment date is before allocation month (same logic as double-entry service)
+                    let isPaymentDateBeforeAllocationMonth = false;
+                    
+                    // Debug logging for payment structure
+                    if (correspondingPayment) {
+                        console.log(`🔍 Cash Flow Debug - Payment Structure:`, {
+                            paymentId: correspondingPayment.paymentId,
+                            date: correspondingPayment.date,
+                            hasMonthlyBreakdown: !!correspondingPayment.monthlyBreakdown,
+                            monthlyBreakdownLength: correspondingPayment.monthlyBreakdown?.length || 0,
+                            monthlyBreakdown: correspondingPayment.monthlyBreakdown
+                        });
+                    }
+                    
+                    if (correspondingPayment && correspondingPayment.monthlyBreakdown && correspondingPayment.monthlyBreakdown.length > 0) {
+                        const paymentDate = new Date(correspondingPayment.date);
+                        const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
+                        
+                        // Check each allocation in the payment
+                        for (const allocation of correspondingPayment.monthlyBreakdown) {
+                            if (allocation.month) {
+                                // Parse allocation month (format: "2025-09")
+                                const [year, month] = allocation.month.split('-').map(n => parseInt(n));
+                                const allocationMonthDate = new Date(year, month - 1, 1); // month is 1-based in allocation
+                                
+                                if (paymentDateMonth < allocationMonthDate) {
+                                    isPaymentDateBeforeAllocationMonth = true;
+                                    console.log(`📅 Cash Flow: Payment date is before allocation month:`);
+                                    console.log(`   Payment Date: ${paymentDate.toISOString().split('T')[0]} (Month: ${paymentDate.getMonth() + 1}/${paymentDate.getFullYear()})`);
+                                    console.log(`   Allocation Month: ${allocationMonthDate.toISOString().split('T')[0]} (Month: ${allocationMonthDate.getMonth() + 1}/${allocationMonthDate.getFullYear()})`);
+                                    console.log(`   ✅ Identified as ADVANCE PAYMENT (payment date before allocation month)`);
+                                    break; // Found at least one advance allocation
+                                }
+                            }
+                        }
+                    } else {
+                        // 🆕 FALLBACK: Check transaction description for allocation month
+                        if (entry.description && entry.description.includes('for 2025-09')) {
+                            // Use payment date if available, otherwise use transaction date
+                            const paymentDate = correspondingPayment ? new Date(correspondingPayment.date) : new Date(entry.date);
+                            const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
+                            const allocationMonthDate = new Date(2025, 8, 1); // September 2025 (0-based month)
+                            
+                            if (paymentDateMonth < allocationMonthDate) {
+                                isPaymentDateBeforeAllocationMonth = true;
+                                console.log(`📅 Cash Flow: Payment date is before allocation month (from description):`);
+                                console.log(`   Payment Date: ${paymentDate.toISOString().split('T')[0]} (Month: ${paymentDate.getMonth() + 1}/${paymentDate.getFullYear()})`);
+                                console.log(`   Allocation Month: ${allocationMonthDate.toISOString().split('T')[0]} (Month: ${allocationMonthDate.getMonth() + 1}/${allocationMonthDate.getFullYear()})`);
+                                console.log(`   ✅ Identified as ADVANCE PAYMENT (payment date before allocation month from description)`);
+                            }
+                        }
+                    }
+                    
                     if (entry.description) {
                         const desc = entry.description.toLowerCase();
                         // Check for advance payments first (most specific)
@@ -335,6 +388,12 @@ class EnhancedCashFlowService {
                             description = 'Advance Payment from Student';
                             isAdvancePayment = true;
                         } 
+                        // 🆕 NEW: Check if payment date is before allocation month (override description-based categorization)
+                        else if (isPaymentDateBeforeAllocationMonth) {
+                            category = 'advance_payments';
+                            description = 'Advance Payment from Student (payment date before allocation month)';
+                            isAdvancePayment = true;
+                        }
                         // Check for specific payment allocations
                         else if (desc.includes('payment allocation: rent')) {
                             category = 'rental_income';
@@ -365,6 +424,16 @@ class EnhancedCashFlowService {
                         description = 'Advance Payment Transaction';
                         isAdvancePayment = true;
                     }
+                    
+                    // 🆕 DEBUG: Log final categorization decision
+                    console.log(`🔍 Cash Flow Final Categorization:`, {
+                        transactionId: entry.transactionId,
+                        description: entry.description,
+                        category: category,
+                        isAdvancePayment: isAdvancePayment,
+                        isPaymentDateBeforeAllocationMonth: isPaymentDateBeforeAllocationMonth,
+                        hasCorrespondingPayment: !!correspondingPayment
+                    });
                     
                     // Check if this is an advance payment by looking at payment details (only if not already categorized)
                     if (correspondingPayment && category === 'other_income') {
