@@ -208,6 +208,7 @@ const monthlyRequestSchema = new mongoose.Schema({
         approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         approvedAt: { type: Date },
         approvedByEmail: { type: String, trim: true },
+        datePaid: { type: Date },
         items: [{
             title: { type: String, required: true },
             description: { type: String, required: true },
@@ -248,6 +249,13 @@ const monthlyRequestSchema = new mongoose.Schema({
     approvedByEmail: {
         type: String,
         trim: true
+    },
+    dateRequested: {
+        type: Date,
+        default: Date.now
+    },
+    datePaid: {
+        type: Date
     },
     notes: {
         type: String,

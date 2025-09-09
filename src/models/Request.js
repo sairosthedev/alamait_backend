@@ -623,7 +623,14 @@ const requestSchema = new mongoose.Schema({
             ref: 'User'
         },
         changes: [String]
-    }]
+    }],
+    dateRequested: {
+        type: Date,
+        default: Date.now
+    },
+    datePaid: {
+        type: Date
+    }
 }, {
     timestamps: true
 });

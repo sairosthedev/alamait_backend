@@ -581,9 +581,13 @@ class DoubleEntryAccountingService {
             }
             
             const transactionId = await this.generateTransactionId();
+            
+            // Use dateRequested for accrual basis (income statement) - when expense is incurred
+            const accrualDate = request.dateRequested ? new Date(request.dateRequested) : new Date();
+            
             const transaction = new Transaction({
                 transactionId,
-                date: new Date(),
+                date: accrualDate,
                 description: `${request.vendorName || 'Vendor'} maintenance approval`,
                 type: 'approval',
                 reference: request._id.toString(),
@@ -692,7 +696,7 @@ class DoubleEntryAccountingService {
             const totalAmount = entries.reduce((sum, entry) => sum + entry.debit, 0);
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: new Date(),
+                date: accrualDate, // Use same accrual date for consistency
                 description: `Maintenance approval: ${request.title}`,
                 reference: request._id.toString(),
                 entries,
@@ -811,10 +815,21 @@ class DoubleEntryAccountingService {
                 return { transaction: null, transactionEntry: existingTransaction };
             }
             
+            // Get datePaid from monthly request if available
+            let paymentDate = expense.paidDate || expense.date || new Date();
+            if (expense.monthlyRequestId) {
+                const MonthlyRequest = require('../models/MonthlyRequest');
+                const monthlyRequest = await MonthlyRequest.findById(expense.monthlyRequestId);
+                if (monthlyRequest && monthlyRequest.datePaid) {
+                    paymentDate = monthlyRequest.datePaid;
+                    console.log(`📅 Using datePaid from monthly request: ${paymentDate}`);
+                }
+            }
+            
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
                 transactionId,
-                date: expense.paidDate || expense.date || new Date(),
+                date: paymentDate,
                 description: `Payment to ${expense.vendorName || 'Vendor'}`,
                 type: 'payment',
                 reference: expense._id.toString(),
@@ -856,7 +871,7 @@ class DoubleEntryAccountingService {
             const totalAmount = entries.reduce((sum, entry) => sum + entry.debit, 0);
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: expense.paidDate || expense.date || new Date(),
+                date: paymentDate, // Use same payment date for consistency
                 description: `Payment to ${expense.vendorName}`,
                 reference: expense._id.toString(),
                 entries,

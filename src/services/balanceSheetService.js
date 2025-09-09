@@ -19,24 +19,24 @@ class BalanceSheetService {
       const monthKey = `${asOfYear}-${String(asOfMonth).padStart(2, '0')}`;
       
       // For balance sheet, we need to include:
-      // 1. All accruals up to asOf date (these create the obligations)
-      // 2. All payments with monthSettled <= current month (these settle the obligations)
+      // 1. All accruals up to asOf date (rental_accrual, expense_accrual - these create the obligations)
+      // 2. All payments up to asOf date (payment, vendor_payment - these settle the obligations)
       // 3. All other transactions up to asOf date (non-payment transactions)
       
       const accrualQuery = {
-        source: 'rental_accrual',
+        source: { $in: ['rental_accrual', 'expense_accrual'] },
         date: { $lte: asOf },
         status: 'posted'
       };
       
       const paymentQuery = {
-        source: 'payment',
-        'metadata.monthSettled': { $lte: monthKey },
+        source: { $in: ['payment', 'vendor_payment'] },
+        date: { $lte: asOf },
         status: 'posted'
       };
       
       const otherQuery = {
-        source: { $nin: ['rental_accrual', 'payment'] },
+        source: { $nin: ['rental_accrual', 'expense_accrual', 'payment', 'vendor_payment'] },
         date: { $lte: asOf },
         status: 'posted'
       };

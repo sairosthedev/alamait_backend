@@ -281,7 +281,8 @@ exports.createRequest = async (req, res) => {
             tags,
             room,
             category,
-            images
+            images,
+            dateRequested
         } = req.body;
         
         // Parse items if it's a string (from FormData)
@@ -892,7 +893,8 @@ exports.createRequest = async (req, res) => {
             status: 'pending',
             amount: amount || 0,
             dueDate: dueDate ? new Date(dueDate) : null,
-            tags: tags || []
+            tags: tags || [],
+            dateRequested: dateRequested ? new Date(dateRequested) : new Date()
         };
         
         // Add role-specific fields
@@ -939,12 +941,13 @@ exports.createRequest = async (req, res) => {
         
         // For admin requests, set initial admin approval
         if (user.role === 'admin' && type !== 'maintenance' && type !== 'student_maintenance') {
+            const approvalDate = dateRequested ? new Date(dateRequested) : new Date();
             requestData.approval = {
                 admin: {
                     approved: true,
                     approvedBy: user._id,
                     approvedByEmail: user.email,
-                    approvedAt: new Date()
+                    approvedAt: approvalDate
                 },
                 finance: {
                     approved: false
@@ -961,7 +964,7 @@ exports.createRequest = async (req, res) => {
         
         // Add to request history
         request.requestHistory.push({
-            date: new Date(),
+            date: request.dateRequested,
             action: 'Request created',
             user: user._id,
             changes: ['Request submitted']
@@ -1359,8 +1362,16 @@ exports.financeApproval = async (req, res) => {
             notes, 
             reason,  // Support 'reason' field from frontend
             createDoubleEntryTransactions, // Support this field
-            vendorDetails // Support vendor details
+            vendorDetails, // Support vendor details
+            dateApproved // Support dateApproved field
         } = req.body;
+        
+        console.log('🔍 Finance Approval Request Body:', {
+            dateApproved: dateApproved,
+            approved: approved,
+            reason: reason,
+            reqBodyKeys: Object.keys(req.body)
+        });
         
         const user = req.user;
         
@@ -1408,13 +1419,19 @@ exports.financeApproval = async (req, res) => {
         }
         
         // Update finance approval
+        const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
+        console.log('🔍 Finance Approval Debug:', {
+            dateApproved: dateApproved,
+            approvalDate: approvalDate,
+            isApproved: isApproved
+        });
         request.approval.finance = {
             approved: isApproved,
             rejected: isRejected,
             waitlisted: isWaitlisted,
             approvedBy: user._id,
             approvedByEmail: user.email,
-            approvedAt: new Date(),
+            approvedAt: approvalDate,
             notes: notes || reason || '' // Use notes or reason
         };
         
@@ -1452,7 +1469,7 @@ exports.financeApproval = async (req, res) => {
         // Add to request history
         const actionDescription = isApproved ? 'approved' : isRejected ? 'rejected' : isWaitlisted ? 'waitlisted' : 'updated';
         request.requestHistory.push({
-            date: new Date(),
+            date: approvalDate,
             action: `Finance ${actionDescription}`,
             user: user._id,
             changes: [`Finance ${actionDescription} the request`]
@@ -1847,13 +1864,13 @@ async function createSimpleExpenseForRequest(request, user) {
             category: 'Maintenance',
             amount: totalAmount,
             description: request.title || `Request: ${request.issue || 'Maintenance Request'}`,
-            expenseDate: new Date(),
+            expenseDate: approvalDate, // Use dateApproved for expense date
             paymentStatus: 'Pending',
             createdBy: user._id,
             period: 'monthly',
             paymentMethod: 'Cash', // Default to cash for simple maintenance requests
             approvedBy: user._id,
-            approvedAt: new Date(),
+            approvedAt: approvalDate, // Use dateApproved for approval date
             approvedByEmail: user.email,
             vendorId: vendorId, // Link the vendor
             vendorSpecificAccount: vendorSpecificAccount // Store the vendor account code
@@ -1915,13 +1932,13 @@ async function createItemizedExpensesForRequest(request, user) {
                     category: item.category || 'Other',
                     amount: selectedQuotation.amount,
                     description: `${request.title || 'Request'} - ${item.description}`,
-                    expenseDate: new Date(),
+                    expenseDate: approvalDate, // Use dateApproved for expense date
                     paymentStatus: 'Pending',
                     createdBy: user._id,
                     period: 'monthly',
                     paymentMethod: paymentMethod,
                     approvedBy: user._id,
-                    approvedAt: new Date(),
+                    approvedAt: approvalDate, // Use dateApproved for approval date
                     approvedByEmail: user.email,
                     itemIndex: i,
                     quotationId: selectedQuotation._id,
@@ -2006,13 +2023,13 @@ async function createItemizedExpensesForRequest(request, user) {
                     category: item.category || 'Other',
                     amount: item.estimatedCost || item.totalCost || 0,
                     description: `${request.title || 'Request'} - ${item.description}`,
-                    expenseDate: new Date(),
+                    expenseDate: approvalDate, // Use dateApproved for expense date
                     paymentStatus: 'Pending',
                     createdBy: user._id,
                     period: 'monthly',
                     paymentMethod: 'Cash', // Default to cash for items without quotations
                     approvedBy: user._id,
-                    approvedAt: new Date(),
+                    approvedAt: approvalDate, // Use dateApproved for approval date
                     approvedByEmail: user.email,
                     itemIndex: i,
                     expenseAccountCode: expenseAccountCode, // Set expense account code for items without quotations

@@ -683,7 +683,8 @@ exports.createMonthlyRequest = async (req, res) => {
             isTemplate = false,
             historicalData = [], // New: historical cost data for templates
             itemHistory = [], // New: item change history for templates
-            templateDescription
+            templateDescription,
+            dateRequested
         } = req.body;
 
         // Validate required fields
@@ -964,6 +965,7 @@ exports.createMonthlyRequest = async (req, res) => {
             items: processedItems,
             totalEstimatedCost,
             submittedBy: req.user._id,
+            dateRequested: dateRequested ? new Date(dateRequested) : new Date(),
             isTemplate,
             templateVersion: isTemplate ? 1 : undefined,
             lastUpdated: isTemplate ? new Date() : undefined,
@@ -1412,7 +1414,7 @@ exports.submitMonthlyRequest = async (req, res) => {
 exports.approveMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
-        const { approved, notes, month, year, status } = req.body;
+        const { approved, notes, month, year, status, datePaid } = req.body;
 
         // Check permissions - allow admin and finance users to approve
         if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
@@ -1453,6 +1455,11 @@ exports.approveMonthlyRequest = async (req, res) => {
             monthlyApproval.approvedAt = new Date();
             monthlyApproval.approvedByEmail = user.email;
             monthlyApproval.notes = notes || monthlyApproval.notes;
+            
+            // Set datePaid when monthly approval is approved (marked as paid)
+            if (approved) {
+                monthlyApproval.datePaid = datePaid ? new Date(datePaid) : new Date();
+            }
 
             // Add to request history
             monthlyRequest.requestHistory.push({
@@ -1494,6 +1501,11 @@ exports.approveMonthlyRequest = async (req, res) => {
         monthlyRequest.approvedAt = new Date();
         monthlyRequest.approvedByEmail = user.email;
         monthlyRequest.notes = notes || monthlyRequest.notes;
+        
+        // Set datePaid when request is approved (marked as paid)
+        if (approved && (finalStatus === 'approved' || finalStatus === 'completed')) {
+            monthlyRequest.datePaid = datePaid ? new Date(datePaid) : new Date();
+        }
 
         monthlyRequest.requestHistory.push({
             date: new Date(),
@@ -2532,7 +2544,7 @@ async function convertRequestToExpenses(request, user) {
                     description: item.description,
                     amount: item.estimatedCost,
                     category: expenseCategory,
-                    expenseDate: new Date(request.year, request.month - 1, 1),
+                    expenseDate: request.dateRequested ? new Date(request.dateRequested) : new Date(request.year, request.month - 1, 1),
                     period: 'monthly',
                     paymentStatus: 'Pending',
                     paymentMethod: 'Bank Transfer',
@@ -2568,6 +2580,7 @@ async function convertRequestToExpenses(request, user) {
         if (request._id && typeof request.save === 'function') {
             // This is a Mongoose document, update it directly
             request.status = 'completed';
+            request.datePaid = new Date(); // Set datePaid when marking as completed/paid
             request.requestHistory.push({
                 date: new Date(),
                 action: 'Converted to expenses with double-entry transactions',
@@ -2580,6 +2593,7 @@ async function convertRequestToExpenses(request, user) {
             const actualRequest = await MonthlyRequest.findById(request._id);
             if (actualRequest) {
                 actualRequest.status = 'completed';
+                actualRequest.datePaid = new Date(); // Set datePaid when marking as completed/paid
                 actualRequest.requestHistory.push({
                     date: new Date(),
                     action: 'Converted to expenses with double-entry transactions',
@@ -4368,7 +4382,7 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
         const { id } = req.params;
-        const { approved, notes, createExpenses = true } = req.body;
+        const { approved, notes, createExpenses = true, datePaid } = req.body;
 
         // Check permissions - allow admin and finance users to approve
         if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
@@ -4402,6 +4416,11 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
         monthlyRequest.approvedAt = new Date();
         monthlyRequest.approvedByEmail = user.email;
         monthlyRequest.notes = notes || monthlyRequest.notes;
+        
+        // Set datePaid when request is approved (marked as paid)
+        if (approved) {
+            monthlyRequest.datePaid = datePaid ? new Date(datePaid) : new Date();
+        }
 
         // Add to request history
         monthlyRequest.requestHistory.push({
@@ -4453,6 +4472,7 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
                 
                 // Update request status to completed after expense creation
                 monthlyRequest.status = 'completed';
+                monthlyRequest.datePaid = new Date(); // Set datePaid when marking as completed/paid
                 monthlyRequest.requestHistory.push({
                     date: new Date(),
                     action: 'Converted to expenses with double-entry transactions',
