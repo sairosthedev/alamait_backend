@@ -1068,7 +1068,8 @@ class AccountingService {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
                     if (['4000', '4001', '4002', '4020', '4100'].includes(subEntry.accountCode)) {
-                        totalRevenue += subEntry.credit || 0;
+                        // Credits increase revenue, debits decrease revenue (like negotiated discounts)
+                        totalRevenue += (subEntry.credit || 0) - (subEntry.debit || 0);
                     }
                 }
             }

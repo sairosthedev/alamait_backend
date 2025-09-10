@@ -14,7 +14,7 @@ const multer = require('multer');
 const multerS3 = require('multer-s3');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
 const AuditLog = require('../../models/AuditLog');
-const Lease = require('../../models/Lease');
+// const Lease = require('../../models/Lease'); // Removed - leases collection is only for student-uploaded leases
 const bcrypt = require('bcryptjs');
 const { createDebtorForStudent } = require('../../services/debtorService');
 const DebtorTransactionSyncService = require('../../services/debtorTransactionSyncService');
@@ -1442,24 +1442,8 @@ exports.manualAddStudent = async (req, res) => {
 
         await booking.save();
 
-        // Create lease record
-        const lease = new Lease({
-            studentId: student._id,
-            studentName: `${firstName} ${lastName}`,
-            email,
-            residence: residenceId,
-            residenceName: residence.name,
-            startDate,
-            endDate,
-            filename: `lease_${student._id}_${Date.now()}.pdf`,
-            originalname: `Lease_Agreement_${firstName}_${lastName}.pdf`,
-            path: `/uploads/leases/lease_${student._id}_${Date.now()}.pdf`,
-            mimetype: 'application/pdf',
-            size: 0,
-            uploadedAt: new Date()
-        });
-
-        await lease.save();
+        // Note: Lease record is NOT created here - leases collection is only for student-uploaded leases
+        // The lease template is sent via email for the student to download, sign, and upload
 
         // Update student with current booking
         student.currentBooking = booking._id;
@@ -1572,8 +1556,9 @@ exports.manualAddStudent = async (req, res) => {
                 paymentStatus: booking.paymentStatus
             },
             lease: {
-                id: lease._id,
-                filename: lease.filename
+                id: null,
+                filename: null,
+                note: "Lease template sent via email - student must upload signed lease"
             },
             room: {
                 name: roomNumber,

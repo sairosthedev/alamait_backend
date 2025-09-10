@@ -63,6 +63,12 @@ router.post('/create-invoice-payment-transaction', TransactionController.createI
 router.post('/create-double-entry', TransactionController.createDoubleEntryTransaction);
 
 /**
+ * Create negotiated payment transaction
+ * POST /api/finance/transactions/create-negotiated-payment
+ */
+router.post('/create-negotiated-payment', TransactionController.createNegotiatedPayment);
+
+/**
  * Upload CSV for bulk transaction creation
  * POST /api/finance/transactions/upload-csv
  */

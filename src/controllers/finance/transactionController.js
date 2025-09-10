@@ -991,6 +991,9 @@ class TransactionController {
             // Generate transaction ID
             const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
             
+            // Determine transaction source based on account types and description
+            const transactionSource = this.determineTransactionSource(entries, description);
+            
             // Create transaction entry with all the double-entry details
             const transactionEntry = new TransactionEntry({
                 transactionId,
@@ -1007,7 +1010,7 @@ class TransactionController {
                 })),
                 totalDebit,
                 totalCredit,
-                source: 'manual',
+                source: transactionSource,
                 sourceId: null, // No source for manual transactions
                 sourceModel: 'TransactionEntry',
                 residence: residence._id || residence,
@@ -1017,7 +1020,9 @@ class TransactionController {
                     residenceName: residence?.name || 'Unknown',
                     createdBy: req.user.email,
                     transactionType: 'manual_double_entry',
-                    balanced: true
+                    balanced: true,
+                    manualTransaction: true,
+                    originalSource: 'manual'
                 }
             });
             
@@ -1054,6 +1059,303 @@ class TransactionController {
             res.status(500).json({
                 success: false,
                 message: 'Failed to create double-entry transaction',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Create a negotiated payment transaction
+     * Handles scenarios where students negotiate to pay less than the full amount
+     * This works with the accrual system by:
+     * 1. Finding the original accrual entry for the month
+     * 2. Creating an adjustment to reduce the A/R balance
+     * 3. Recording the negotiated discount as other income
+     * 
+     * Example: Student supposed to pay $150 (from accrual) but negotiates to pay $140
+     * This creates:
+     * 1. Credit: Accounts Receivable (reduce A/R by discount amount)
+     * 2. Debit: Other Income - Negotiated Discounts (record the discount)
+     */
+    static async createNegotiatedPayment(req, res) {
+        try {
+            const { 
+                description, 
+                reference, 
+                residence, 
+                date, 
+                studentName,
+                studentId,
+                originalAmount,
+                negotiatedAmount,
+                negotiationReason,
+                residenceId,
+                accrualMonth,
+                accrualYear,
+                accrualTransactionId
+            } = req.body;
+
+            console.log('🔧 Creating negotiated payment transaction:', {
+                description,
+                studentName,
+                studentId,
+                originalAmount,
+                negotiatedAmount,
+                negotiationReason,
+                residenceId,
+                accrualMonth,
+                accrualYear,
+                accrualTransactionId
+            });
+
+            // Validate required fields
+            if (!description || !studentName || !studentId || !originalAmount || !negotiatedAmount) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Description, student name, student ID, original amount, and negotiated amount are required'
+                });
+            }
+
+            // Validate amounts
+            const original = parseFloat(originalAmount);
+            const negotiated = parseFloat(negotiatedAmount);
+
+            if (isNaN(original) || isNaN(negotiated) || original <= 0 || negotiated <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Original amount and negotiated amount must be positive numbers'
+                });
+            }
+
+            if (negotiated >= original) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Negotiated amount must be less than original amount'
+                });
+            }
+
+            const discountAmount = original - negotiated;
+
+            // Find the original accrual transaction if provided
+            let originalAccrual = null;
+            if (accrualTransactionId) {
+                originalAccrual = await TransactionEntry.findById(accrualTransactionId);
+                if (!originalAccrual) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Original accrual transaction not found'
+                    });
+                }
+            } else if (accrualMonth && accrualYear) {
+                // Try to find the accrual by month/year and student
+                // Look for both monthly accruals AND lease start transactions
+                // Support both formats: separate accrualMonth/accrualYear fields and combined month field
+                const monthString = `${accrualYear}-${accrualMonth.toString().padStart(2, '0')}`;
+                
+                originalAccrual = await TransactionEntry.findOne({
+                    'metadata.studentId': studentId,
+                    $and: [
+                        {
+                            $or: [
+                                // Format 1: Separate accrualMonth and accrualYear fields
+                                {
+                                    'metadata.accrualMonth': parseInt(accrualMonth),
+                                    'metadata.accrualYear': parseInt(accrualYear)
+                                },
+                                // Format 2: Combined month field (e.g., "2025-08")
+                                {
+                                    'metadata.month': monthString
+                                }
+                            ]
+                        },
+                        {
+                            $or: [
+                                { 'metadata.type': 'monthly_rent_accrual' },
+                                { 'metadata.type': 'lease_start' }
+                            ]
+                        }
+                    ],
+                    status: 'posted'
+                });
+                
+                if (!originalAccrual) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `No accrual found for student ${studentName} for ${accrualMonth}/${accrualYear}. Please ensure the monthly accrual or lease start transaction has been created first.`
+                    });
+                }
+            }
+
+            // Get or create student-specific A/R account
+            const Account = require('../../models/Account');
+            let studentARAccount = await Account.findOne({
+                code: `1100-${studentId}`,
+                type: 'Asset'
+            });
+
+            if (!studentARAccount) {
+                studentARAccount = new Account({
+                    code: `1100-${studentId}`,
+                    name: `Accounts Receivable - ${studentName}`,
+                    type: 'Asset',
+                    category: 'Current Assets',
+                    description: `Accounts receivable for ${studentName}`,
+                    isActive: true
+                });
+                await studentARAccount.save();
+                console.log(`✅ Created student-specific A/R account: ${studentARAccount.code}`);
+            }
+
+            // Get rental income account
+            let rentalIncomeAccount = await Account.findOne({
+                $or: [
+                    { code: '4001', type: 'Income' },
+                    { code: '4000', type: 'Income' },
+                    { name: /rental income/i, type: 'Income' }
+                ]
+            });
+
+            if (!rentalIncomeAccount) {
+                rentalIncomeAccount = new Account({
+                    code: '4001',
+                    name: 'Rental Income - School Accommodation',
+                    type: 'Income',
+                    category: 'Operating Revenue',
+                    description: 'Income from student accommodation rentals',
+                    isActive: true
+                });
+                await rentalIncomeAccount.save();
+                console.log(`✅ Created rental income account: ${rentalIncomeAccount.code}`);
+            }
+
+            // We'll reduce Rental Income instead of creating Other Income
+            // This maintains proper balance sheet accounting
+
+            // Create the negotiated payment adjustment transaction
+            // This reduces the A/R balance and records the discount
+            // Use the accrual date to maintain proper accounting period matching
+            const accrualDate = originalAccrual ? new Date(originalAccrual.date) : new Date();
+            const transactionData = {
+                description: description || `Negotiated payment adjustment for ${studentName}`,
+                reference: reference || `NEG-${Date.now()}`,
+                date: accrualDate,
+                source: 'manual', // Use 'manual' since 'negotiated_payment' is not in the enum
+                sourceModel: 'TransactionEntry',
+                sourceId: req.user?._id,
+                status: 'posted',
+                createdBy: req.user?._id,
+                transactionId: `NEG-${Date.now()}`,
+                totalDebit: discountAmount, // Only the discount amount
+                totalCredit: discountAmount, // Balanced transaction
+                entries: [
+                    // Debit: Rental Income (reduce rental income by discount amount)
+                    {
+                        accountCode: rentalIncomeAccount.code,
+                        accountName: rentalIncomeAccount.name,
+                        accountType: 'Income',
+                        debit: discountAmount,
+                        credit: 0,
+                        description: `Rental income reduction for negotiated discount - ${studentName}`,
+                        metadata: {
+                            studentName,
+                            studentId,
+                            transactionType: 'negotiated_payment_adjustment',
+                            originalAmount: original,
+                            negotiatedAmount: negotiated,
+                            discountAmount: discountAmount,
+                            negotiationReason: negotiationReason || 'Student negotiation',
+                            originalAccrualId: originalAccrual?._id,
+                            accrualMonth: accrualMonth,
+                            accrualYear: accrualYear,
+                            createdBy: req.user?._id,
+                            createdByEmail: req.user?.email
+                        }
+                    },
+                    // Credit: Student's A/R account (reduce A/R by discount amount)
+                    {
+                        accountCode: studentARAccount.code,
+                        accountName: studentARAccount.name,
+                        accountType: 'Asset',
+                        debit: 0,
+                        credit: discountAmount,
+                        description: `A/R reduction for negotiated discount - ${studentName}`,
+                        metadata: {
+                            studentName,
+                            studentId,
+                            transactionType: 'negotiated_payment_adjustment',
+                            originalAmount: original,
+                            negotiatedAmount: negotiated,
+                            discountAmount: discountAmount,
+                            negotiationReason: negotiationReason || 'Student negotiation',
+                            originalAccrualId: originalAccrual?._id,
+                            accrualMonth: accrualMonth,
+                            accrualYear: accrualYear,
+                            createdBy: req.user?._id,
+                            createdByEmail: req.user?.email
+                        }
+                    }
+                ],
+                metadata: {
+                    studentName,
+                    studentId,
+                    transactionType: 'negotiated_payment_adjustment',
+                    originalAmount: original,
+                    negotiatedAmount: negotiated,
+                    discountAmount: discountAmount,
+                    negotiationReason: negotiationReason || 'Student negotiation',
+                    residence: residenceId,
+                    originalAccrualId: originalAccrual?._id,
+                    accrualMonth: accrualMonth,
+                    accrualYear: accrualYear,
+                    accrualDate: accrualDate, // Include the accrual date for reference
+                    createdBy: req.user?._id,
+                    createdByEmail: req.user?.email,
+                    isNegotiated: true,
+                    isAdjustment: true
+                }
+            };
+
+            const transaction = new TransactionEntry(transactionData);
+            await transaction.save();
+
+            console.log('✅ Negotiated payment transaction created successfully:', transaction._id);
+
+            res.status(201).json({
+                success: true,
+                message: 'Negotiated payment adjustment created successfully',
+                transaction: {
+                    _id: transaction._id,
+                    description: transaction.description,
+                    reference: transaction.reference,
+                    date: transaction.date,
+                    entries: transaction.entries,
+                    metadata: transaction.metadata
+                },
+                originalAccrual: originalAccrual ? {
+                    _id: originalAccrual._id,
+                    description: originalAccrual.description,
+                    date: originalAccrual.date,
+                    accrualMonth: originalAccrual.metadata?.accrualMonth,
+                    accrualYear: originalAccrual.metadata?.accrualYear
+                } : null,
+                summary: {
+                    originalAmount: original,
+                    negotiatedAmount: negotiated,
+                    discountAmount: discountAmount,
+                    discountPercentage: ((discountAmount / original) * 100).toFixed(2) + '%',
+                    accountingImpact: {
+                        arReduction: discountAmount,
+                        otherIncomeIncrease: discountAmount,
+                        netEffect: 'A/R reduced, Other Income increased by discount amount'
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ Error creating negotiated payment transaction:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to create negotiated payment transaction',
                 error: error.message
             });
         }
@@ -1300,6 +1602,58 @@ class TransactionController {
                 error: error.message
             });
         }
+    }
+
+    /**
+     * Determine transaction source based on account types and description
+     * This helps financial statements categorize transactions correctly
+     */
+    static determineTransactionSource(entries, description) {
+        const desc = description.toLowerCase();
+        
+        // Check for specific transaction patterns
+        if (desc.includes('rental') || desc.includes('rent')) {
+            // Check if it's income (credit to revenue) or payment (debit to bank)
+            const hasRevenueCredit = entries.some(entry => 
+                entry.accountType === 'revenue' && entry.credit > 0
+            );
+            const hasBankDebit = entries.some(entry => 
+                (entry.accountCode === '1000' || entry.accountCode === '1001') && entry.debit > 0
+            );
+            
+            if (hasRevenueCredit) {
+                return 'rental_accrual'; // Income when earned
+            } else if (hasBankDebit) {
+                return 'payment'; // Payment received
+            }
+        }
+        
+        if (desc.includes('expense') || desc.includes('maintenance') || desc.includes('utility')) {
+            // Check if it's expense accrual or payment
+            const hasExpenseDebit = entries.some(entry => 
+                entry.accountType === 'expense' && entry.debit > 0
+            );
+            const hasPayableCredit = entries.some(entry => 
+                entry.accountType === 'liability' && entry.credit > 0
+            );
+            
+            if (hasExpenseDebit && hasPayableCredit) {
+                return 'expense_accrual'; // Expense when incurred
+            } else if (hasExpenseDebit) {
+                return 'vendor_payment'; // Direct expense payment
+            }
+        }
+        
+        if (desc.includes('other income') || desc.includes('miscellaneous')) {
+            return 'other_income';
+        }
+        
+        if (desc.includes('refund')) {
+            return 'refund';
+        }
+        
+        // Default to manual for unrecognized patterns
+        return 'manual';
     }
 }
 

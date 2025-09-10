@@ -1,6 +1,9 @@
 const mongoose = require('mongoose');
 const TransactionEntry = require('../models/TransactionEntry');
 
+// Ensure we're using the correct Atlas database connection
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://macdonaldsairos24:macdonald24@cluster0.ulvve.mongodb.net/test?retryWrites=true&w=majority&appName=Cluster0';
+
 class BalanceSheetService {
   /**
    * Generate Balance Sheet for Accrual Basis
@@ -12,10 +15,24 @@ class BalanceSheetService {
     try {
       console.log(`📊 Generating Balance Sheet as of ${asOfDate}`);
       
+      // Ensure we're connected to the correct Atlas database
+      if (mongoose.connection.readyState !== 1) {
+        console.log('🔌 Connecting to Atlas database...');
+        await mongoose.connect(MONGODB_URI, {
+          useNewUrlParser: true,
+          useUnifiedTopology: true,
+        });
+      }
+      console.log(`🗄️ Using database: ${mongoose.connection.db.databaseName}`);
+      
       // Use all transactions up to asOfDate (balance sheet should include all historical transactions)
       const asOf = new Date(asOfDate);
       const asOfMonth = asOf.getMonth() + 1;
       const asOfYear = asOf.getFullYear();
+      
+      // For monthly balance sheets, filter by month to exclude cross-month timezone issues
+      const isMonthlyBalanceSheet = asOfDate.toString().includes('31');
+      console.log(`📅 Month-end balance sheet detected: ${isMonthlyBalanceSheet}`);
       const monthKey = `${asOfYear}-${String(asOfMonth).padStart(2, '0')}`;
       
       // For balance sheet, we need to include:
@@ -23,38 +40,82 @@ class BalanceSheetService {
       // 2. All payments up to asOf date (payment, vendor_payment - these settle the obligations)
       // 3. All other transactions up to asOf date (non-payment transactions)
       
+      // For monthly balance sheets, filter by month to avoid including next month's transactions
+      let dateFilter;
+      if (isMonthlyBalanceSheet) {
+        // Use strict month filtering to exclude next month's transactions
+        const monthStart = new Date(Date.UTC(asOfYear, asOfMonth - 1, 1, 0, 0, 0, 0));
+        const monthEnd = new Date(Date.UTC(asOfYear, asOfMonth, 0, 23, 59, 59, 999)); // Last day of the month
+        dateFilter = { $gte: monthStart, $lte: monthEnd };
+        console.log(`📅 Using strict monthly filter: ${monthStart.toISOString()} to ${monthEnd.toISOString()}`);
+      } else {
+        dateFilter = { $lte: asOf };
+      }
+      
       const accrualQuery = {
         source: { $in: ['rental_accrual', 'expense_accrual'] },
-        date: { $lte: asOf },
-        status: 'posted'
+        date: dateFilter,
+        status: 'posted',
+        voided: { $ne: true } // Exclude voided transactions
       };
       
       const paymentQuery = {
         source: { $in: ['payment', 'vendor_payment'] },
-        date: { $lte: asOf },
-        status: 'posted'
+        date: dateFilter,
+        status: 'posted',
+        voided: { $ne: true } // Exclude voided transactions
       };
       
       const otherQuery = {
         source: { $nin: ['rental_accrual', 'expense_accrual', 'payment', 'vendor_payment'] },
-        date: { $lte: asOf },
-        status: 'posted'
+        date: dateFilter,
+        status: 'posted',
+        voided: { $ne: true } // Exclude voided transactions
+      };
+      
+      // Include manual transactions in the "other" category
+      // This includes negotiated payments, refunds, and other manual adjustments
+      const manualQuery = {
+        source: { $in: ['manual', 'other_income', 'refund', 'negotiated_payment'] },
+        date: dateFilter,
+        status: 'posted',
+        voided: { $ne: true } // Exclude voided transactions
       };
       
       if (residence) {
         accrualQuery.residence = residence;
         paymentQuery.residence = residence;
         otherQuery.residence = residence;
+        manualQuery.residence = residence;
       }
       
       // Get all relevant transactions with timeout optimization
-      const [accrualEntries, paymentEntries, otherEntries] = await Promise.all([
+      const [accrualEntries, paymentEntries, otherEntries, manualEntries] = await Promise.all([
         TransactionEntry.find(accrualQuery).sort({ date: 1 }).maxTimeMS(20000), // 20 second timeout
         TransactionEntry.find(paymentQuery).sort({ date: 1 }).maxTimeMS(20000), // 20 second timeout
-        TransactionEntry.find(otherQuery).sort({ date: 1 }).maxTimeMS(20000) // 20 second timeout
+        TransactionEntry.find(otherQuery).sort({ date: 1 }).maxTimeMS(20000), // 20 second timeout
+        TransactionEntry.find(manualQuery).sort({ date: 1 }).maxTimeMS(20000) // 20 second timeout
       ]);
       
-      const allEntries = [...accrualEntries, ...paymentEntries, ...otherEntries];
+      console.log(`🔍 Found ${accrualEntries.length} accrual entries, ${paymentEntries.length} payment entries, ${otherEntries.length} other entries, ${manualEntries.length} manual entries`);
+      
+      // Check for specific negotiated payment transaction
+      const negotiatedPayment = manualEntries.find(tx => tx.transactionId === 'NEG-1757465405612');
+      if (negotiatedPayment) {
+        console.log(`✅ Found negotiated payment transaction: ${negotiatedPayment.description}`);
+        console.log(`   Date: ${negotiatedPayment.date}`);
+        console.log(`   Status: ${negotiatedPayment.status}`);
+        negotiatedPayment.entries.forEach((entry, index) => {
+          console.log(`   Entry ${index + 1}: ${entry.accountCode} - ${entry.accountName} (${entry.accountType})`);
+          console.log(`     Debit: $${entry.debit}, Credit: $${entry.credit}`);
+          console.log(`     Balance Impact: $${entry.credit - entry.debit}`);
+        });
+        console.log(`🔍 This transaction should reduce AR by $1.84 and reduce income by $1.84`);
+      } else {
+        console.log(`❌ Negotiated payment transaction NEG-1757465405612 not found in manual entries`);
+      }
+      
+      const allEntries = [...accrualEntries, ...paymentEntries, ...otherEntries, ...manualEntries];
       
       // Initialize balance sheet with proper structure
       const balanceSheet = {
@@ -159,11 +220,17 @@ class BalanceSheetService {
         let depositsTotal = 0;
         let deferredTotal = 0;
         
-        // Process accrual entries (AR debits)
+        // Process accrual entries (AR debits, deposits)
         accrualEntries.forEach(tx => {
           tx.entries.forEach(line => {
             if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
               arDebits += Number(line.debit || 0);
+            } else if (line.accountCode && line.accountCode.startsWith('2020')) {
+              // Deposit accounts (created in accrual entries like lease start)
+              depositsTotal += (line.credit || 0) - (line.debit || 0);
+            } else if (line.accountCode && line.accountCode.startsWith('2200')) {
+              // Deferred income accounts
+              deferredTotal += (line.credit || 0) - (line.debit || 0);
             }
           });
         });
@@ -193,15 +260,44 @@ class BalanceSheetService {
           });
         });
         
+        // 🆕 FIX: Process manual entries (like negotiated payments) for A/R adjustments
+        manualEntries.forEach(tx => {
+          console.log(`🔍 Processing manual transaction: ${tx.transactionId} - ${tx.description}`);
+          tx.entries.forEach(line => {
+            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
+              // Manual transactions affect A/R (like negotiated payment discounts)
+              arDebits += Number(line.debit || 0);
+              arCredits += Number(line.credit || 0);
+              console.log(`  📝 A/R Entry: ${line.accountCode} - Debit: $${line.debit}, Credit: $${line.credit}`);
+            }
+          });
+        });
+        
+        // 🆕 FIX: Process other entries for A/R adjustments
+        otherEntries.forEach(tx => {
+          tx.entries.forEach(line => {
+            if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
+              // Other transactions affect A/R
+              arDebits += Number(line.debit || 0);
+              arCredits += Number(line.credit || 0);
+            }
+          });
+        });
+        
         const arByMonthOutstanding = arDebits - arCredits;
         
         // Override account balances with monthSettled values
         Object.values(accountBalances).forEach(account => {
-          if (account.code && (account.code.startsWith('1100-') || account.code === '1100')) {
-            // Override AR accounts with monthSettled calculation
-            account.balance = arByMonthOutstanding;
-            account.debitTotal = arDebits;
-            account.creditTotal = arCredits;
+          if (account.code && account.code.startsWith('1100-')) {
+            // Keep individual AR account balances - don't override with aggregated total
+            // This preserves individual transaction effects (like negotiated discounts)
+            console.log(`🔍 Preserving individual AR account ${account.code} balance: $${account.balance}`);
+          } else if (account.code === '1100') {
+            // Set parent AR account to zero to avoid double counting with individual AR accounts
+            account.balance = 0;
+            account.debitTotal = 0;
+            account.creditTotal = 0;
+            console.log(`📊 Parent AR account 1100 set to zero to avoid double counting with individual AR accounts`);
           } else if (account.code && account.code.match(/^100[0-9]/)) {
             // Override cash accounts with monthSettled calculation
             account.balance = cashByMonth;
@@ -239,7 +335,7 @@ class BalanceSheetService {
             break;
           case 'Income':
             // Income should be positive (credit > debit means income earned)
-            account.balance = Math.max(0, account.creditTotal - account.debitTotal);
+            account.balance = account.creditTotal - account.debitTotal;
             break;
           case 'Expense':
             // Expense should be positive (debit > credit means expense incurred)
@@ -259,14 +355,16 @@ class BalanceSheetService {
         switch (account.type) {
           case 'Asset':
             if (this.isCurrentAsset(account.code, account.name)) {
+              // For AR accounts, allow negative balances to represent legitimate reductions (like negotiated discounts)
+              const assetBalance = account.code.startsWith('1100') ? balance : Math.max(0, balance);
               balanceSheet.assets.current[account.code] = {
                 name: account.name,
-                balance: Math.max(0, balance),
+                balance: assetBalance,
                 description: this.getAssetDescription(account.code, account.name),
                 category: mappedCategory
               };
-              balanceSheet.assets.totalCurrent += Math.max(0, balance);
-              console.log(`✅ Added to current assets: ${account.code} - ${account.name} = $${Math.max(0, balance)}`);
+              balanceSheet.assets.totalCurrent += assetBalance;
+              console.log(`✅ Added to current assets: ${account.code} - ${account.name} = $${assetBalance}`);
             } else {
               balanceSheet.assets.nonCurrent[account.code] = {
                 name: account.name,
@@ -300,19 +398,21 @@ class BalanceSheetService {
             break;
             
           case 'Equity':
-            if (account.code === '3000' || account.name.toLowerCase().includes('capital')) {
-              balanceSheet.equity.capital = Math.abs(balance); // Use absolute value for capital
-            } else if (account.name.toLowerCase().includes('retained') || account.name.toLowerCase().includes('earnings')) {
+            if (account.code === '3000' || account.name.toLowerCase().includes('retained') || account.name.toLowerCase().includes('earnings')) {
               balanceSheet.equity.retainedEarnings += Math.abs(balance); // Use absolute value for retained earnings
+            } else if (account.name.toLowerCase().includes('capital')) {
+              balanceSheet.equity.capital = Math.abs(balance); // Use absolute value for capital
             } else {
               balanceSheet.equity.otherEquity += Math.abs(balance); // Use absolute value for other equity
             }
             break;
             
           case 'Income':
-            // Income increases retained earnings
+            // Retained Earnings = Total Income for the Month - Debits/Refunds/Discounts
+            // For August: Rental Income $133.00 + Admin Fees $20.00 = $153.00
             balanceSheet.equity.retainedEarnings += balance;
             console.log(`📈 Income account ${account.code} (${account.name}): +$${balance.toLocaleString()} → Retained Earnings: $${balanceSheet.equity.retainedEarnings.toLocaleString()}`);
+            console.log(`   Account details: Credits=$${account.creditTotal}, Debits=$${account.debitTotal}, Net=$${balance}`);
             break;
             
           case 'Expense':
@@ -455,20 +555,16 @@ class BalanceSheetService {
       
       const monthPromises = [];
       for (let month = 1; month <= 12; month++) {
-        const monthEndDate = new Date(year, month, 0); // Last day of the month
+        const monthEndDate = new Date(year, month, 0, 23, 59, 59, 999); // Last day of the month with end of day time
         const monthKey = month;
         
         const monthPromise = (async () => {
           try {
           let monthBalanceSheet;
           
-          if (type === 'monthly') {
-            // Calculate monthly activity (change from previous month) - pass filtered accounts
-            monthBalanceSheet = await this.generateMonthlyActivityBalanceSheet(year, month, residence, balanceSheetAccounts);
-          } else {
-            // Calculate cumulative balance as of month end (default behavior)
-            monthBalanceSheet = await this.generateBalanceSheet(monthEndDate, residence);
-          }
+          // Always use cumulative balance calculation to include all transactions up to month end
+          // This ensures negotiated payments and other adjustments are properly included
+          monthBalanceSheet = await this.generateBalanceSheet(monthEndDate, residence);
           
           // Structure the data as expected by the React component with enhanced structure
           monthlyData[monthKey] = {
@@ -508,13 +604,8 @@ class BalanceSheetService {
               total: Math.abs(monthBalanceSheet.liabilities.totalLiabilities)
             },
             equity: {
-              capital: {
-                accountCode: '3000',
-                accountName: 'Owner\'s Capital',
-                amount: monthBalanceSheet.equity.capital // Allow negative values for equity
-              },
               retainedEarnings: {
-                accountCode: '3100',
+                accountCode: '3000',
                 accountName: 'Retained Earnings',
                 amount: monthBalanceSheet.equity.retainedEarnings // Allow negative values for equity
               },
@@ -539,7 +630,7 @@ class BalanceSheetService {
           return {
             month,
             monthKey,
-            monthData,
+            monthData: monthlyData[monthKey],
             monthBalanceSheet,
             annualTotals: {
               totalAssets: monthBalanceSheet.assets.totalAssets,
@@ -896,7 +987,7 @@ class BalanceSheetService {
             break;
           case 'Income':
             // Income should be positive (credit > debit means income earned)
-            account.balance = Math.max(0, account.creditTotal - account.debitTotal);
+            account.balance = account.creditTotal - account.debitTotal;
             break;
           case 'Expense':
             // Expense should be positive (debit > credit means expense incurred)
@@ -962,10 +1053,10 @@ class BalanceSheetService {
             break;
             
           case 'Equity':
-            if (account.code === '3000' || account.name.toLowerCase().includes('capital')) {
-              balanceSheet.equity.capital = Math.abs(balance); // Use absolute value for capital
-            } else if (account.name.toLowerCase().includes('retained') || account.name.toLowerCase().includes('earnings')) {
+            if (account.code === '3000' || account.name.toLowerCase().includes('retained') || account.name.toLowerCase().includes('earnings')) {
               balanceSheet.equity.retainedEarnings += Math.abs(balance); // Use absolute value for retained earnings
+            } else if (account.name.toLowerCase().includes('capital')) {
+              balanceSheet.equity.capital = Math.abs(balance); // Use absolute value for capital
             } else {
               balanceSheet.equity.otherEquity += Math.abs(balance); // Use absolute value for other equity
             }

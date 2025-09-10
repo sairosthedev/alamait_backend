@@ -39,7 +39,7 @@ class FinancialReportingService {
                 // For accrual basis, look at transaction entries with rental_accrual source for income
                 const accrualEntries = await TransactionEntry.find({
                     date: { $gte: startDate, $lte: endDate },
-                    source: 'rental_accrual',
+                    source: { $in: ['rental_accrual', 'manual'] },
                     status: 'posted'
                 });
                 
