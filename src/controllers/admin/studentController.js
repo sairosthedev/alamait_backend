@@ -487,6 +487,80 @@ const findStudentById = async (studentId) => {
             return { student, source: 'User' };
         }
 
+        // If not found in User, try ExpiredStudent collection
+        const ExpiredStudent = require('../../models/ExpiredStudent');
+        const expiredStudent = await ExpiredStudent.findOne({
+            $or: [
+                { 'student._id': studentId },
+                { 'student': studentId },
+                { 'student': new (require('mongoose').Types.ObjectId)(studentId) }
+            ]
+        });
+
+        if (expiredStudent) {
+            // Handle different formats of student data in ExpiredStudent
+            let studentData;
+            
+            // First, try to get student data from application.student (most complete)
+            if (expiredStudent.application && expiredStudent.application.student) {
+                const appStudent = expiredStudent.application.student;
+                studentData = {
+                    _id: studentId,
+                    firstName: appStudent.firstName,
+                    lastName: appStudent.lastName,
+                    email: appStudent.email,
+                    phone: appStudent.phone,
+                    role: appStudent.role,
+                    isExpired: true,
+                    expiredAt: expiredStudent.archivedAt,
+                    expirationReason: expiredStudent.reason
+                };
+            }
+            // If no application.student, check if student field is a full object
+            else if (expiredStudent.student && typeof expiredStudent.student === 'object' && expiredStudent.student.constructor.name !== 'ObjectId') {
+                studentData = {
+                    _id: studentId,
+                    firstName: expiredStudent.student.firstName,
+                    lastName: expiredStudent.student.lastName,
+                    email: expiredStudent.student.email,
+                    phone: expiredStudent.student.phone,
+                    role: expiredStudent.student.role,
+                    isExpired: true,
+                    expiredAt: expiredStudent.archivedAt,
+                    expirationReason: expiredStudent.reason
+                };
+            }
+            // If student is just an ObjectId, try to get name from transaction metadata
+            else {
+                const TransactionEntry = require('../../models/TransactionEntry');
+                const transactionWithName = await TransactionEntry.findOne({
+                    'metadata.studentId': studentId,
+                    'metadata.studentName': { $exists: true, $ne: null }
+                }).sort({ date: -1 });
+
+                let firstName = 'Unknown';
+                let lastName = 'Student';
+                if (transactionWithName && transactionWithName.metadata.studentName) {
+                    const nameParts = transactionWithName.metadata.studentName.split(' ');
+                    firstName = nameParts[0] || 'Unknown';
+                    lastName = nameParts.slice(1).join(' ') || 'Student';
+                }
+
+                studentData = {
+                    _id: studentId,
+                    firstName,
+                    lastName,
+                    email: 'expired@student.com',
+                    role: 'student',
+                    isExpired: true,
+                    expiredAt: expiredStudent.archivedAt,
+                    expirationReason: expiredStudent.reason
+                };
+            }
+
+            return { student: studentData, source: 'ExpiredStudent' };
+        }
+
         // If not found in User, try Application collection
         const application = await Application.findById(studentId).select('firstName lastName email');
         if (application) {

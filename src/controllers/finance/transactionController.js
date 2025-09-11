@@ -269,17 +269,34 @@ class TransactionController {
             
             const total = await TransactionEntry.countDocuments(query);
             
-            // Transform data for frontend
-            const entries = transactionEntries.map(entry => ({
-                _id: entry._id,
-                transactionId: entry.transactionId || `TXN-${entry._id}`,
-                date: entry.date,
-                description: entry.description,
-                type: entry.type || 'transaction',
-                totalDebit: entry.totalDebit || 0,
-                totalCredit: entry.totalCredit || 0,
-                residence: entry.residence, // Include residence info
-                entries: entry.entries || []
+            // Transform data for frontend with student information
+            const { getStudentName, isStudentExpired } = require('../../utils/studentUtils');
+            const entries = await Promise.all(transactionEntries.map(async (entry) => {
+                const entryObj = {
+                    _id: entry._id,
+                    transactionId: entry.transactionId || `TXN-${entry._id}`,
+                    date: entry.date,
+                    description: entry.description,
+                    type: entry.type || 'transaction',
+                    totalDebit: entry.totalDebit || 0,
+                    totalCredit: entry.totalCredit || 0,
+                    residence: entry.residence, // Include residence info
+                    entries: entry.entries || []
+                };
+
+                // Add student information if available
+                if (entry.metadata && entry.metadata.studentId) {
+                    const studentName = await getStudentName(entry.metadata.studentId);
+                    const isExpired = await isStudentExpired(entry.metadata.studentId);
+                    
+                    entryObj.studentInfo = {
+                        studentId: entry.metadata.studentId,
+                        studentName: studentName,
+                        isExpired: isExpired
+                    };
+                }
+
+                return entryObj;
             }));
             
             res.status(200).json({
@@ -1320,6 +1337,56 @@ class TransactionController {
 
             console.log('✅ Negotiated payment transaction created successfully:', transaction._id);
 
+            // Update debtor's totalOwed to reflect the negotiated amount as the new "original outstanding"
+            try {
+                const Debtor = require('../../models/Debtor');
+                let debtor = null;
+                
+                // Try multiple methods to find the debtor (for both active and expired students)
+                // Method 1: Find by user field (for active students)
+                debtor = await Debtor.findOne({ user: studentId });
+                
+                // Method 2: Find by accountCode (for expired students)
+                if (!debtor) {
+                    debtor = await Debtor.findOne({ accountCode: `1100-${studentId}` });
+                }
+                
+                // Method 3: Find by ObjectId user field
+                if (!debtor) {
+                    debtor = await Debtor.findOne({ user: new mongoose.Types.ObjectId(studentId) });
+                }
+                
+                if (debtor) {
+                    // Reduce totalOwed by the discount amount so negotiated amount becomes the new "original outstanding"
+                    const newTotalOwed = Math.max(0, debtor.totalOwed - discountAmount);
+                    const oldTotalOwed = debtor.totalOwed;
+                    
+                    debtor.totalOwed = newTotalOwed;
+                    debtor.currentBalance = Math.max(0, newTotalOwed - debtor.totalPaid);
+                    debtor.overdueAmount = debtor.currentBalance > 0 ? debtor.currentBalance : 0;
+                    
+                    // Add note about the negotiation
+                    const negotiationNote = `[${new Date().toISOString().split('T')[0]}] Negotiated payment: Original $${original} → Negotiated $${negotiated} (Discount: $${discountAmount})`;
+                    debtor.notes = (debtor.notes || '') + '\n' + negotiationNote;
+                    
+                    await debtor.save();
+                    
+                    console.log('✅ Updated debtor totalOwed for negotiated payment:');
+                    console.log(`   Student: ${studentName}`);
+                    console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                    console.log(`   Old Total Owed: $${oldTotalOwed}`);
+                    console.log(`   New Total Owed: $${newTotalOwed}`);
+                    console.log(`   Discount Applied: $${discountAmount}`);
+                    console.log(`   New Current Balance: $${debtor.currentBalance}`);
+                } else {
+                    console.log(`⚠️ No debtor found for student: ${studentName} (${studentId})`);
+                    console.log(`   Tried methods: user field, accountCode, ObjectId`);
+                }
+            } catch (debtorUpdateError) {
+                console.error('❌ Error updating debtor for negotiated payment:', debtorUpdateError);
+                // Don't fail the transaction creation if debtor update fails
+            }
+
             res.status(201).json({
                 success: true,
                 message: 'Negotiated payment adjustment created successfully',
@@ -1347,6 +1414,11 @@ class TransactionController {
                         arReduction: discountAmount,
                         otherIncomeIncrease: discountAmount,
                         netEffect: 'A/R reduced, Other Income increased by discount amount'
+                    },
+                    debtorUpdate: {
+                        totalOwedReduced: discountAmount,
+                        newOriginalOutstanding: negotiated,
+                        note: 'Negotiated amount is now the new "original outstanding" amount'
                     }
                 }
             });

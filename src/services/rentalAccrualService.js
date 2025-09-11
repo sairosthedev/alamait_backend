@@ -329,6 +329,8 @@ class RentalAccrualService {
                     room: application.allocatedRoom,
                     type: 'lease_start',
                     leaseStartDate: application.startDate,
+                    accrualMonth: startDate.getMonth() + 1, // Add accrual month
+                    accrualYear: startDate.getFullYear(), // Add accrual year
                     proratedRent,
                     adminFee,
                     securityDeposit,

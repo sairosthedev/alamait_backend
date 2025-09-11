@@ -131,6 +131,12 @@ transactionEntrySchema.pre('save', function(next) {
 // 🆕 NEW: Auto-update debtor totals when AR transactions are created
 transactionEntrySchema.post('save', async function(doc) {
   try {
+    // Skip security deposit reversal transactions to prevent infinite loops
+    if (doc.metadata && doc.metadata.type === 'security_deposit_reversal') {
+      console.log(`⏭️ Skipping auto-update for security deposit reversal: ${doc.transactionId}`);
+      return;
+    }
+
     // Only process AR transactions (account codes starting with 1100-)
     const arEntries = doc.entries.filter(entry => 
       entry.accountCode && entry.accountCode.startsWith('1100-')

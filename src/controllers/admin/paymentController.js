@@ -86,10 +86,29 @@ const getPayments = async (req, res) => {
 
         const payments = await Payment.find(query)
             .populate('residence', 'name')
-            .populate('student', 'firstName lastName email')
             .sort({ paymentDate: -1 });
 
-        res.status(200).json(payments);
+        // Transform payments to handle expired students
+        const { findStudentById } = require('../finance/paymentController');
+        const transformedPayments = await Promise.all(payments.map(async (payment) => {
+            // Get student information (including expired students)
+            let studentInfo = null;
+            if (payment.student || payment.user) {
+                const studentId = payment.student || payment.user;
+                const studentResult = await findStudentById(studentId);
+                if (studentResult) {
+                    studentInfo = studentResult.student;
+                }
+            }
+
+            return {
+                ...payment.toObject(),
+                student: studentInfo,
+                studentInfo: studentInfo // Include full student info for expired students
+            };
+        }));
+
+        res.status(200).json(transformedPayments);
     } catch (error) {
         console.error('Error fetching payments:', error);
         res.status(500).json({ message: error.message });

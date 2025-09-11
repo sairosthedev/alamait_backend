@@ -590,7 +590,15 @@ class EnhancedPaymentAllocationService {
         return isAllocation || (isPayment && (matchesStudent || touchesAR));
       });
       
-      console.log(`📊 Found ${accruals.length} accrual transactions and ${payments.length} payment transactions`);
+      // 🆕 Include manual transactions (negotiations, reversals, etc.) that affect AR
+      const manualAdjustments = allStudentTransactions.filter(tx => {
+        const isManual = tx.source === 'manual';
+        const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => e.accountCode === arAccountCode && e.accountType === 'Asset');
+        const matchesStudent = tx.metadata?.studentId?.toString() === studentIdString;
+        return isManual && (touchesAR || matchesStudent);
+      });
+      
+      console.log(`📊 Found ${accruals.length} accrual transactions, ${payments.length} payment transactions, and ${manualAdjustments.length} manual adjustments`);
       
       // Debug: Log the accrual transactions found
       console.log(`🔍 Found ${accruals.length} accrual transactions:`);
@@ -759,6 +767,73 @@ class EnhancedPaymentAllocationService {
           const takeDep = Math.min(toApply, owedDep); b.deposit.paid += takeDep; toApply -= takeDep;
           remaining -= take;
         }
+      });
+      
+      // 🆕 Process manual adjustments (negotiations, reversals, etc.)
+      manualAdjustments.forEach(adjustment => {
+        console.log(`🔧 Processing manual adjustment: ${adjustment.transactionId}`);
+        console.log(`   Type: ${adjustment.metadata?.type || 'unknown'}`);
+        console.log(`   Description: ${adjustment.description}`);
+        
+        // Determine which month this adjustment applies to
+        let monthKey;
+        if (adjustment.metadata?.accrualMonth && adjustment.metadata?.accrualYear) {
+          monthKey = `${adjustment.metadata.accrualYear}-${String(adjustment.metadata.accrualMonth).padStart(2, '0')}`;
+        } else if (adjustment.metadata?.monthSettled) {
+          monthKey = adjustment.metadata.monthSettled;
+        } else if (adjustment.metadata?.month) {
+          monthKey = adjustment.metadata.month;
+        } else {
+          // For security deposit reversals, try to find the original transaction
+          if (adjustment.metadata?.type === 'security_deposit_reversal' && adjustment.metadata?.originalTransactionId) {
+            const originalTransaction = allStudentTransactions.find(t => t.transactionId === adjustment.metadata.originalTransactionId);
+            if (originalTransaction && originalTransaction.metadata?.accrualMonth && originalTransaction.metadata?.accrualYear) {
+              monthKey = `${originalTransaction.metadata.accrualYear}-${String(originalTransaction.metadata.accrualMonth).padStart(2, '0')}`;
+            }
+          }
+          
+          // Fallback to transaction date
+          if (!monthKey) {
+            const d = new Date(adjustment.date);
+            monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          }
+        }
+        
+        if (!monthKey || !monthlyOutstanding[monthKey]) {
+          console.log(`   ⚠️ No matching month found for adjustment: ${monthKey}`);
+          return;
+        }
+        
+        console.log(`   📅 Applying to month: ${monthKey}`);
+        
+        // Process AR entries in the adjustment
+        adjustment.entries.forEach(entry => {
+          if (entry.accountCode === arAccountCode && entry.accountType === 'Asset') {
+            const amount = entry.credit || 0;
+            const description = entry.description.toLowerCase();
+            
+            console.log(`   💰 AR adjustment: ${entry.debit > 0 ? 'debit' : 'credit'} $${amount} - ${entry.description}`);
+            
+            if (adjustment.metadata?.type === 'negotiated_payment_adjustment' || adjustment.metadata?.transactionType === 'negotiated_payment_adjustment') {
+              // Negotiated payment reduces rent owed
+              monthlyOutstanding[monthKey].rent.owed = Math.max(0, monthlyOutstanding[monthKey].rent.owed - amount);
+              console.log(`   📉 Negotiated payment: Reduced rent owed by $${amount}`);
+            } else if (adjustment.metadata?.type === 'security_deposit_reversal') {
+              // Security deposit reversal reduces deposit owed
+              monthlyOutstanding[monthKey].deposit.owed = Math.max(0, monthlyOutstanding[monthKey].deposit.owed - amount);
+              console.log(`   📉 Security deposit reversal: Reduced deposit owed by $${amount}`);
+            } else {
+              // Other manual adjustments
+              if (description.includes('admin')) {
+                monthlyOutstanding[monthKey].adminFee.owed = Math.max(0, monthlyOutstanding[monthKey].adminFee.owed - amount);
+              } else if (description.includes('deposit')) {
+                monthlyOutstanding[monthKey].deposit.owed = Math.max(0, monthlyOutstanding[monthKey].deposit.owed - amount);
+              } else {
+                monthlyOutstanding[monthKey].rent.owed = Math.max(0, monthlyOutstanding[monthKey].rent.owed - amount);
+              }
+            }
+          }
+        });
       });
       
       // Calculate outstanding amounts and convert to array

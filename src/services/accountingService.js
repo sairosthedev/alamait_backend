@@ -589,13 +589,34 @@ class AccountingService {
             const monthStart = new Date(year, month - 1, 1);
             const monthEnd = new Date(year, month, 0);
             
-            // Build query for accrual entries
-            // Fix: Use metadata filters instead of date range for accruals
+            // Build query for accrual entries and manual adjustments
+            // Include lease start, rent accruals, and manual adjustments (negotiations, reversals)
             let query = {
-                'metadata.type': 'rent_accrual',
-                'metadata.accrualMonth': month,
-                'metadata.accrualYear': year
-                // Removed date filter - accruals are identified by metadata, not date
+                $or: [
+                    // Lease start transactions
+                    {
+                        'metadata.type': 'lease_start',
+                        'metadata.accrualMonth': month,
+                        'metadata.accrualYear': year
+                    },
+                    // Rent accrual transactions
+                    {
+                        'metadata.type': 'rent_accrual',
+                        'metadata.accrualMonth': month,
+                        'metadata.accrualYear': year
+                    },
+                    // Manual adjustments (negotiated payments, reversals)
+                    {
+                        'metadata.accrualMonth': month,
+                        'metadata.accrualYear': year,
+                        source: 'manual'
+                    },
+                    // Fallback: transactions with income entries in the date range
+                    {
+                        'entries.accountType': 'Income',
+                        date: { $gte: monthStart, $lte: monthEnd }
+                    }
+                ]
             };
             
             // Add residence filtering if specified
@@ -614,10 +635,12 @@ class AccountingService {
             for (const entry of accrualEntries) {
                 if (entry.entries && Array.isArray(entry.entries)) {
                     for (const subEntry of entry.entries) {
-                        if (subEntry.accountCode === '4000') {
-                            totalRentalIncome += subEntry.credit || 0;
-                        } else if (subEntry.accountCode === '4100') {
-                            totalAdminIncome += subEntry.credit || 0;
+                        if (subEntry.accountCode === '4001') {
+                            // For income accounts: credits increase revenue, debits decrease revenue
+                            totalRentalIncome += (subEntry.credit || 0) - (subEntry.debit || 0);
+                        } else if (subEntry.accountCode === '4002') {
+                            // For income accounts: credits increase revenue, debits decrease revenue
+                            totalAdminIncome += (subEntry.credit || 0) - (subEntry.debit || 0);
                         }
                     }
                 }

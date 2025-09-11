@@ -88,15 +88,23 @@ exports.getStudentPayments = async (req, res) => {
 
         // Query the database directly without pagination to better match admin method
         const payments = await Payment.find(query)
-            .populate('student', 'firstName lastName email role')
             .populate('residence', 'name location')
             .populate('createdBy', 'firstName lastName')
             .populate('updatedBy', 'firstName lastName')
             .populate('proofOfPayment.verifiedBy', 'firstName lastName')
             .sort({ date: -1 });
             
-        // Transform payments data
-        const formattedPayments = payments.map(payment => {
+        // Transform payments data and handle expired students
+        const formattedPayments = await Promise.all(payments.map(async (payment) => {
+            // Get student information (including expired students)
+            let studentInfo = null;
+            if (payment.student || payment.user) {
+                const studentId = payment.student || payment.user;
+                const studentResult = await findStudentById(studentId);
+                if (studentResult) {
+                    studentInfo = studentResult.student;
+                }
+            }
             let paymentType = 'Other';
             
             // Improved payment type detection
@@ -122,7 +130,7 @@ exports.getStudentPayments = async (req, res) => {
                 
             return {
                 id: payment.paymentId,
-                student: payment.student ? `${payment.student.firstName} ${payment.student.lastName}` : 'Unknown',
+                student: studentInfo ? `${studentInfo.firstName} ${studentInfo.lastName}` : 'Unknown',
                 admin: admin,
                 residence: payment.residence ? payment.residence.name : 'Unknown',
                 room: payment.room || 'Not Assigned',
@@ -138,12 +146,13 @@ exports.getStudentPayments = async (req, res) => {
                 proof: payment.proofOfPayment?.fileUrl || null,
                 method: payment.method || '',
                 description: payment.description || '',
-                studentId: payment.student ? payment.student._id : null,
+                studentId: studentInfo ? studentInfo._id : null,
                 residenceId: payment.residence ? payment.residence._id : null,
                 applicationStatus: payment.applicationStatus || null,
-                clarificationRequests: payment.clarificationRequests || []
+                clarificationRequests: payment.clarificationRequests || [],
+                studentInfo: studentInfo // Include full student info for expired students
             };
-        });
+        }));
         
         const total = formattedPayments.length;
         const startIndex = (page - 1) * limit;
@@ -378,8 +387,17 @@ exports.getPaymentsByStudent = async (req, res) => {
             .skip(skip)
             .limit(parseInt(limit));
             
-        // Transform payments data
-        const formattedPayments = payments.map(payment => {
+        // Transform payments data and handle expired students
+        const formattedPayments = await Promise.all(payments.map(async (payment) => {
+            // Get student information (including expired students)
+            let studentInfo = null;
+            if (payment.student || payment.user) {
+                const studentId = payment.student || payment.user;
+                const studentResult = await findStudentById(studentId);
+                if (studentResult) {
+                    studentInfo = studentResult.student;
+                }
+            }
             let paymentType = 'Other';
             
             // Improved payment type detection
@@ -405,7 +423,7 @@ exports.getPaymentsByStudent = async (req, res) => {
                 
             return {
                 id: payment.paymentId,
-                student: `${student.firstName} ${student.lastName}`,
+                student: studentInfo ? `${studentInfo.firstName} ${studentInfo.lastName}` : 'Unknown',
                 admin: admin,
                 residence: payment.residence ? payment.residence.name : 'Unknown',
                 room: payment.room || 'Not Assigned',
@@ -421,12 +439,13 @@ exports.getPaymentsByStudent = async (req, res) => {
                 proof: payment.proofOfPayment?.fileUrl || null,
                 method: payment.method || '',
                 description: payment.description || '',
-                studentId: student._id,
+                studentId: studentInfo ? studentInfo._id : null,
                 residenceId: payment.residence ? payment.residence._id : null,
                 applicationStatus: payment.applicationStatus || null,
-                clarificationRequests: payment.clarificationRequests || []
+                clarificationRequests: payment.clarificationRequests || [],
+                studentInfo: studentInfo // Include full student info for expired students
             };
-        });
+        }));
 
         // Calculate summary statistics
         const totalPaid = payments
@@ -477,7 +496,81 @@ const findStudentById = async (studentId) => {
             return { student, source: 'User' };
         }
 
-        // If not found in User, try Application collection
+        // If not found in User, try ExpiredStudent collection
+        const ExpiredStudent = require('../../models/ExpiredStudent');
+        const expiredStudent = await ExpiredStudent.findOne({
+            $or: [
+                { 'student._id': studentId },
+                { 'student': studentId },
+                { 'student': new (require('mongoose').Types.ObjectId)(studentId) }
+            ]
+        });
+
+        if (expiredStudent) {
+            // Handle different formats of student data in ExpiredStudent
+            let studentData;
+            
+            // First, try to get student data from application.student (most complete)
+            if (expiredStudent.application && expiredStudent.application.student) {
+                const appStudent = expiredStudent.application.student;
+                studentData = {
+                    _id: studentId,
+                    firstName: appStudent.firstName,
+                    lastName: appStudent.lastName,
+                    email: appStudent.email,
+                    phone: appStudent.phone,
+                    role: appStudent.role,
+                    isExpired: true,
+                    expiredAt: expiredStudent.archivedAt,
+                    expirationReason: expiredStudent.reason
+                };
+            }
+            // If no application.student, check if student field is a full object
+            else if (expiredStudent.student && typeof expiredStudent.student === 'object' && expiredStudent.student.constructor.name !== 'ObjectId') {
+                studentData = {
+                    _id: studentId,
+                    firstName: expiredStudent.student.firstName,
+                    lastName: expiredStudent.student.lastName,
+                    email: expiredStudent.student.email,
+                    phone: expiredStudent.student.phone,
+                    role: expiredStudent.student.role,
+                    isExpired: true,
+                    expiredAt: expiredStudent.archivedAt,
+                    expirationReason: expiredStudent.reason
+                };
+            }
+            // If student is just an ObjectId, try to get name from transaction metadata
+            else {
+                const TransactionEntry = require('../../models/TransactionEntry');
+                const transactionWithName = await TransactionEntry.findOne({
+                    'metadata.studentId': studentId,
+                    'metadata.studentName': { $exists: true, $ne: null }
+                }).sort({ date: -1 });
+
+                let firstName = 'Unknown';
+                let lastName = 'Student';
+                if (transactionWithName && transactionWithName.metadata.studentName) {
+                    const nameParts = transactionWithName.metadata.studentName.split(' ');
+                    firstName = nameParts[0] || 'Unknown';
+                    lastName = nameParts.slice(1).join(' ') || 'Student';
+                }
+
+                studentData = {
+                    _id: studentId,
+                    firstName,
+                    lastName,
+                    email: 'expired@student.com',
+                    role: 'student',
+                    isExpired: true,
+                    expiredAt: expiredStudent.archivedAt,
+                    expirationReason: expiredStudent.reason
+                };
+            }
+
+            return { student: studentData, source: 'ExpiredStudent' };
+        }
+
+        // If not found in ExpiredStudent, try Application collection
         const application = await Application.findById(studentId).select('firstName lastName email');
         if (application) {
             return { 
@@ -609,4 +702,7 @@ const safeDateFormat = (date) => {
         console.error('Error formatting date:', error);
         return null;
     }
-}; 
+};
+
+// Export the findStudentById function for use in other modules
+module.exports.findStudentById = findStudentById; 

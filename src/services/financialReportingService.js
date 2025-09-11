@@ -60,7 +60,8 @@ class FinancialReportingService {
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
                             if (lineItem.accountType === 'Income') {
-                                const amount = lineItem.credit || 0;
+                                // For income accounts: credits increase revenue, debits decrease revenue
+                                const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
                                 totalRevenue += amount;
                                 
                                 const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
@@ -107,7 +108,8 @@ class FinancialReportingService {
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
                             if (lineItem.accountType === 'Income') {
-                                const amount = lineItem.credit || 0;
+                                // For income accounts: credits increase revenue, debits decrease revenue
+                                const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
                                 if (!monthlyRevenue[monthKey]) {
                                     monthlyRevenue[monthKey] = {};
                                 }
@@ -331,10 +333,10 @@ class FinancialReportingService {
             if (basis === 'accrual') {
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred by month');
                 
-                // For accrual basis, group rental accruals by month
+                // For accrual basis, group rental accruals and manual adjustments by month
                 const accrualQuery = {
                     date: { $gte: startDate, $lte: endDate },
-                    source: 'rental_accrual',
+                    source: { $in: ['rental_accrual', 'manual'] },
                     status: 'posted'
                 };
                 
@@ -391,10 +393,12 @@ class FinancialReportingService {
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
                             if (lineItem.accountType === 'Income') {
-                                const amount = lineItem.credit || 0;
+                                // For income accounts: credits increase revenue, debits decrease revenue
+                                const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
                                 monthlyBreakdown[monthIndex].total_revenue += amount;
                                 
-                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                // Group by account code only to net all transactions for the same account
+                                const key = lineItem.accountCode;
                                 monthlyBreakdown[monthIndex].revenue[key] = 
                                     (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
                             }
@@ -419,7 +423,8 @@ class FinancialReportingService {
                                 const amount = lineItem.debit || 0;
                                 monthlyBreakdown[monthIndex].total_expenses += amount;
                                 
-                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                // Group by account code only to net all transactions for the same account
+                                const key = lineItem.accountCode;
                                 monthlyBreakdown[monthIndex].expenses[key] = 
                                     (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
                         }
@@ -571,7 +576,8 @@ class FinancialReportingService {
                                 const amount = lineItem.debit || 0;
                                 monthlyBreakdown[monthIndex].total_expenses += amount;
                                 
-                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
+                                // Group by account code only to net all transactions for the same account
+                                const key = lineItem.accountCode;
                                 monthlyBreakdown[monthIndex].expenses[key] = 
                                     (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
                             }
@@ -2732,17 +2738,20 @@ class FinancialReportingService {
                         const credit = line.credit || 0;
                         
                         if (accountType === 'Income' || accountType === 'income') {
-                            const amount = line.credit || 0; // Income increases with credit
+                            // For income accounts: credits increase revenue, debits decrease revenue
+                            const amount = (line.credit || 0) - (line.debit || 0);
                             monthlyBreakdown[monthIndex].total_revenue += amount;
                             
-                            const key = `${accountCode} - ${accountName}`;
+                            // Group by account code only to net all transactions for the same account
+                            const key = accountCode;
                             monthlyBreakdown[monthIndex].revenue[key] = 
                                 (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
                         } else if (accountType === 'Expense' || accountType === 'expense') {
                             const amount = line.debit || 0; // Expenses increase with debit
                             monthlyBreakdown[monthIndex].total_expenses += amount;
                             
-                            const key = `${accountCode} - ${accountName}`;
+                            // Group by account code only to net all transactions for the same account
+                            const key = accountCode;
                             monthlyBreakdown[monthIndex].expenses[key] = 
                                 (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
                         }

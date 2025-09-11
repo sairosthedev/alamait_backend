@@ -144,6 +144,30 @@ exports.getAllDebtors = async (req, res) => {
             .skip(skip)
             .limit(parseInt(limit));
 
+        // Enhance debtor data with student information (including expired students)
+        const { getStudentInfo } = require('../../utils/studentUtils');
+        const enhancedDebtors = await Promise.all(debtors.map(async (debtor) => {
+            const debtorObj = debtor.toObject();
+            
+            // Get student info (including expired students)
+            if (debtor.user) {
+                const studentInfo = await getStudentInfo(debtor.user._id);
+                if (studentInfo) {
+                    debtorObj.studentInfo = studentInfo;
+                    // If student is expired, add expiration info
+                    if (studentInfo.isExpired) {
+                        debtorObj.isExpired = true;
+                        debtorObj.expiredAt = studentInfo.expiredAt;
+                        debtorObj.expirationReason = studentInfo.expirationReason;
+                    } else {
+                        debtorObj.isExpired = false;
+                    }
+                }
+            }
+            
+            return debtorObj;
+        }));
+
         // Calculate summary statistics
         const totalOwed = await Debtor.aggregate([
             { $match: query },
@@ -162,7 +186,7 @@ exports.getAllDebtors = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            debtors,
+            debtors: enhancedDebtors,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(total / limit),
@@ -192,6 +216,9 @@ exports.getDebtorById = async (req, res) => {
     try {
         const { id } = req.params;
 
+        // First get the debtor without population to preserve the original user ObjectId
+        const debtorRaw = await Debtor.findById(id);
+        
         const debtor = await Debtor.findById(id)
             .populate('user', 'firstName lastName email phone')
             .populate('residence', 'name address roomPrice')
@@ -208,34 +235,94 @@ exports.getDebtorById = async (req, res) => {
         }
 
         // Get recent transactions
-        const transactions = await TransactionEntry.find({
+        const transactionQuery = {
             $or: [
                 { 'entries.accountCode': debtor.accountCode },
                 { sourceId: debtor._id },
-                { 'metadata.studentId': debtor.user._id.toString() },
                 { 'metadata.debtorId': debtor._id }
             ]
-        })
-        .sort({ date: -1 })
-        .limit(10);
+        };
 
-        // Get recent invoices
-        const invoices = await Invoice.find({
-            student: debtor.user._id
-        })
-        .sort({ createdAt: -1 })
-        .limit(10);
+        // Only add studentId query if user exists and is populated
+        if (debtor.user && debtor.user._id) {
+            transactionQuery.$or.push({ 'metadata.studentId': debtor.user._id.toString() });
+        } else if (debtorRaw.user && typeof debtorRaw.user === 'object' && debtorRaw.user.toString) {
+            // If user is an ObjectId but not populated (expired student), use the ObjectId directly
+            transactionQuery.$or.push({ 'metadata.studentId': debtorRaw.user.toString() });
+        }
 
-        // Get recent payments
-        const payments = await Payment.find({
-            student: debtor.user._id
-        })
-        .sort({ paymentDate: -1 })
-        .limit(10);
+        const transactions = await TransactionEntry.find(transactionQuery)
+        .sort({ date: -1 });
+
+        // Get recent invoices (only if user exists)
+        let invoices = [];
+        if (debtor.user && debtor.user._id) {
+            invoices = await Invoice.find({
+                student: debtor.user._id
+            })
+            .sort({ createdAt: -1 })
+            .limit(10);
+        } else if (debtorRaw.user && typeof debtorRaw.user === 'object' && debtorRaw.user.toString) {
+            // If user is an ObjectId but not populated (expired student), use the ObjectId directly
+            invoices = await Invoice.find({
+                student: debtorRaw.user.toString()
+            })
+            .sort({ createdAt: -1 })
+            .limit(10);
+        }
+
+        // Get recent payments (only if user exists)
+        let payments = [];
+        if (debtor.user && debtor.user._id) {
+            payments = await Payment.find({
+                student: debtor.user._id
+            })
+            .sort({ paymentDate: -1 })
+            .limit(10);
+        } else if (debtorRaw.user && typeof debtorRaw.user === 'object' && debtorRaw.user.toString) {
+            // If user is an ObjectId but not populated (expired student), use the ObjectId directly
+            payments = await Payment.find({
+                student: debtorRaw.user.toString()
+            })
+            .sort({ paymentDate: -1 })
+            .limit(10);
+        }
+
+        // Enhance debtor with student information (including expired students)
+        const { getStudentInfo } = require('../../utils/studentUtils');
+        let enhancedDebtor = debtor.toObject();
+        
+        // Get student info (including expired students) if user exists
+        let studentId = null;
+        if (debtor.user && debtor.user._id) {
+            studentId = debtor.user._id;
+        } else if (debtorRaw.user && typeof debtorRaw.user === 'object' && debtorRaw.user.toString) {
+            // If user is an ObjectId but not populated (expired student), use the ObjectId directly
+            studentId = debtorRaw.user.toString();
+        }
+
+        if (studentId) {
+            const studentInfo = await getStudentInfo(studentId);
+            if (studentInfo) {
+                enhancedDebtor.studentInfo = studentInfo;
+                // If student is expired, add expiration info
+                if (studentInfo.isExpired) {
+                    enhancedDebtor.isExpired = true;
+                    enhancedDebtor.expiredAt = studentInfo.expiredAt;
+                    enhancedDebtor.expirationReason = studentInfo.expirationReason;
+                } else {
+                    enhancedDebtor.isExpired = false;
+                }
+            }
+        } else {
+            // If no user, try to get student info from debtor's accountCode or other identifiers
+            enhancedDebtor.isExpired = true;
+            enhancedDebtor.studentInfo = null;
+        }
 
         res.status(200).json({
             success: true,
-            debtor,
+            debtor: enhancedDebtor,
             transactions,
             invoices,
             payments
@@ -555,43 +642,58 @@ exports.getDebtorComprehensiveData = async (req, res) => {
             });
         }
 
-        // Get all payments for this debtor (student)
-        const payments = await Payment.find({
-            student: debtor.user._id
-        })
-        .populate('residence', 'name address')
-        .populate('student', 'firstName lastName email')
-        .sort({ date: -1 });
+        // Get all payments for this debtor (student) - only if user exists
+        let payments = [];
+        if (debtor.user && debtor.user._id) {
+            payments = await Payment.find({
+                student: debtor.user._id
+            })
+            .populate('residence', 'name address')
+            .populate('student', 'firstName lastName email')
+            .sort({ date: -1 });
+        }
 
         // Get all transactions related to this debtor
-        const transactions = await TransactionEntry.find({
+        const transactionQuery = {
             $or: [
                 { 'entries.accountCode': debtor.accountCode },
                 { sourceId: debtor._id },
-                { 'metadata.studentId': debtor.user._id.toString() },
                 { 'metadata.debtorId': debtor._id }
             ]
-        })
+        };
+
+        // Only add studentId query if user exists
+        if (debtor.user && debtor.user._id) {
+            transactionQuery.$or.push({ 'metadata.studentId': debtor.user._id.toString() });
+        }
+
+        const transactions = await TransactionEntry.find(transactionQuery)
         .sort({ date: -1 });
 
         // Get residence details
         const residence = await Residence.findById(debtor.residence)
             .populate('rooms');
 
-        // Get application data for this student
-        const applications = await Application.find({
-            student: debtor.user._id
-        })
-        .populate('residence', 'name address')
-        .sort({ createdAt: -1 });
+        // Get application data for this student - only if user exists
+        let applications = [];
+        if (debtor.user && debtor.user._id) {
+            applications = await Application.find({
+                student: debtor.user._id
+            })
+            .populate('residence', 'name address')
+            .sort({ createdAt: -1 });
+        }
 
-        // Get booking data for this student
-        const bookings = await Booking.find({
-            student: debtor.user._id
-        })
-        .populate('residence', 'name address')
-        .populate('room')
-        .sort({ startDate: -1 });
+        // Get booking data for this student - only if user exists
+        let bookings = [];
+        if (debtor.user && debtor.user._id) {
+            bookings = await Booking.find({
+                student: debtor.user._id
+            })
+            .populate('residence', 'name address')
+            .populate('room')
+            .sort({ startDate: -1 });
+        }
 
         // Calculate payment statistics
         const paymentStats = calculatePaymentStatistics(payments, months);
@@ -691,44 +793,83 @@ exports.getAllDebtorsComprehensive = async (req, res) => {
             .skip(skip)
             .limit(parseInt(limit));
 
+        // Enhance debtor data with student information (including expired students)
+        const { getStudentInfo } = require('../../utils/studentUtils');
+        const enhancedDebtors = await Promise.all(debtors.map(async (debtor) => {
+            const debtorObj = debtor.toObject();
+            
+            // Get student info (including expired students)
+            if (debtor.user) {
+                const studentInfo = await getStudentInfo(debtor.user._id);
+                if (studentInfo) {
+                    debtorObj.studentInfo = studentInfo;
+                    // If student is expired, add expiration info
+                    if (studentInfo.isExpired) {
+                        debtorObj.isExpired = true;
+                        debtorObj.expiredAt = studentInfo.expiredAt;
+                        debtorObj.expirationReason = studentInfo.expirationReason;
+                    } else {
+                        debtorObj.isExpired = false;
+                    }
+                }
+            }
+            
+            return debtorObj;
+        }));
+
         // If includeDetails is true, fetch additional data for each debtor
-        let debtorsWithDetails = debtors;
+        let debtorsWithDetails = enhancedDebtors;
         if (includeDetails === 'true') {
             debtorsWithDetails = await Promise.all(
-                debtors.map(async (debtor) => {
-                    // Get recent payments (last 5)
-                    const recentPayments = await Payment.find({
-                        student: debtor.user._id
-                    })
-                    .sort({ date: -1 })
-                    .limit(5);
+                enhancedDebtors.map(async (debtor) => {
+                    // Get recent payments (last 5) - only if user exists
+                    let recentPayments = [];
+                    if (debtor.user && debtor.user._id) {
+                        recentPayments = await Payment.find({
+                            student: debtor.user._id
+                        })
+                        .sort({ date: -1 })
+                        .limit(5);
+                    }
 
                     // Get recent transactions (last 5)
-                    const recentTransactions = await TransactionEntry.find({
+                    const transactionQuery = {
                         $or: [
                             { 'entries.accountCode': debtor.accountCode },
                             { sourceId: debtor._id },
-                            { 'metadata.studentId': debtor.user._id.toString() },
                             { 'metadata.debtorId': debtor._id }
                         ]
-                    })
+                    };
+
+                    // Only add studentId query if user exists
+                    if (debtor.user && debtor.user._id) {
+                        transactionQuery.$or.push({ 'metadata.studentId': debtor.user._id.toString() });
+                    }
+
+                    const recentTransactions = await TransactionEntry.find(transactionQuery)
                     .sort({ date: -1 })
                     .limit(5);
 
-                    // Get current application
-                    const currentApplication = await Application.findOne({
-                        student: debtor.user._id,
-                        status: 'approved'
-                    })
-                    .populate('residence', 'name address');
+                    // Get current application - only if user exists
+                    let currentApplication = null;
+                    if (debtor.user && debtor.user._id) {
+                        currentApplication = await Application.findOne({
+                            student: debtor.user._id,
+                            status: 'approved'
+                        })
+                        .populate('residence', 'name address');
+                    }
 
-                    // Get current booking
-                    const currentBooking = await Booking.findOne({
-                        student: debtor.user._id,
-                        status: 'active'
-                    })
-                    .populate('residence', 'name address')
-                    .populate('room');
+                    // Get current booking - only if user exists
+                    let currentBooking = null;
+                    if (debtor.user && debtor.user._id) {
+                        currentBooking = await Booking.findOne({
+                            student: debtor.user._id,
+                            status: 'active'
+                        })
+                        .populate('residence', 'name address')
+                        .populate('room');
+                    }
 
                     return {
                         ...debtor.toObject(),
@@ -890,10 +1031,14 @@ exports.getDebtorTransactions = async (req, res) => {
             $or: [
                 { 'entries.accountCode': debtor.accountCode },
                 { sourceId: debtor._id },
-                { 'metadata.studentId': debtor.user._id.toString() },
                 { 'metadata.debtorId': debtor._id }
             ]
         };
+
+        // Only add studentId query if user exists
+        if (debtor.user && debtor.user._id) {
+            transactionQuery.$or.push({ 'metadata.studentId': debtor.user._id.toString() });
+        }
 
         // Add date filters if provided
         if (startDate || endDate) {
