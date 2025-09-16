@@ -10,8 +10,8 @@ class EnhancedPaymentAllocationService {
    * 
    * Business Rules:
    * 1. Rent → monthly accrual, must never be over-paid (no double pay for same month)
-   * 2. Admin Fee → once-off (not monthly), can only be settled once
-   * 3. Deposit → once-off (not monthly), can only be settled once
+   * 2. Admin Fee → once-off, settles in the month payment was received
+   * 3. Deposit → once-off, settles in the month payment was received
    * 4. Excess rent prepayments → go to Deferred Income, released when accrual is created
    * 
    * @param {Object} paymentData - Payment data including studentId, totalAmount, payments array
@@ -206,25 +206,51 @@ class EnhancedPaymentAllocationService {
             continue; // Skip to next payment type
           }
           
-          // 🆕 FIX: For admin and deposit, always use the first month (lease start month) as monthSettled
+          // 🆕 FIX: Admin fees settle in the month they were received, deposits use lease start month
           let monthWithCharge = null;
           
-          // For admin and deposit payments, always use the first month (lease start month)
-          if (paymentType === 'admin' || paymentType === 'deposit') {
-            // Find the first month (lease start month) - this should be June 2025
-            monthWithCharge = outstandingBalances.find(month => {
-              if (paymentType === 'admin') return month.adminFee.outstanding > 0;
-              if (paymentType === 'deposit') return month.deposit.outstanding > 0;
-              return false;
-            });
+          if (paymentType === 'admin') {
+            // Admin fees settle in the month they were received (payment month)
+            const paymentDate = new Date(paymentData.date);
+            const paymentMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
             
-            // If not found in first month, use the very first month in outstanding balances
-            if (!monthWithCharge && outstandingBalances.length > 0) {
-              monthWithCharge = outstandingBalances[0]; // First month (June 2025)
-              console.log(`🎯 Using first month (${monthWithCharge.monthKey}) for ${paymentType} as fallback`);
+            // Find the payment month for admin fee settlement
+            monthWithCharge = outstandingBalances.find(month => month.monthKey === paymentMonthKey);
+            
+            if (!monthWithCharge) {
+              // If no actual month exists for admin fee settlement, treat as advance admin payment
+              console.log(`🎯 No actual month found for admin fee settlement in ${paymentMonthKey}. Treating as advance admin payment.`);
+              const advanceResult = await this.handleAdvancePayment(
+                paymentData.paymentId, studentId, remainingAmount, paymentData, 'advance_admin'
+              );
+              allocationResults.push(advanceResult);
+              totalAllocated += remainingAmount;
+              remainingAmount = 0;
+              continue; // Skip to next payment type
             }
             
-            console.log(`🎯 Admin/Deposit payment will use monthSettled: ${monthWithCharge?.monthKey} for ${paymentType}`);
+            console.log(`🎯 Admin fee payment will settle in payment month: ${monthWithCharge.monthKey}`);
+          } else if (paymentType === 'deposit') {
+            // Deposits settle in the month they were received (payment month)
+            const paymentDate = new Date(paymentData.date);
+            const paymentMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
+            
+            // Find the payment month for deposit settlement
+            monthWithCharge = outstandingBalances.find(month => month.monthKey === paymentMonthKey);
+            
+            if (!monthWithCharge) {
+              // If no actual month exists for deposit settlement, treat as advance payment
+              console.log(`🎯 No actual month found for deposit settlement in ${paymentMonthKey}. Treating as advance payment.`);
+              const advanceResult = await this.handleAdvancePayment(
+                paymentData.paymentId, studentId, remainingAmount, paymentData, paymentType
+              );
+              allocationResults.push(advanceResult);
+              totalAllocated += remainingAmount;
+              remainingAmount = 0;
+              continue; // Skip to next payment type
+            }
+            
+            console.log(`🎯 Deposit payment will settle in payment month: ${monthWithCharge.monthKey}`);
           } else {
             // For rent payments, use monthAllocated if specified, otherwise find the month with charge
             const paymentWithMonth = paymentsOfType.find(p => p.monthAllocated);

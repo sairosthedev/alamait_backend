@@ -388,6 +388,8 @@ class FinancialReportsController {
                 }, 240000); // 4 minutes timeout (increased to allow parallel processing)
             });
             
+            // Use original balance sheet service (optimized balance sheet had calculation issues)
+            const BalanceSheetService = require('../services/balanceSheetService');
             const balanceSheetPromise = BalanceSheetService.generateMonthlyBalanceSheet(period, residence, type);
             
             const monthlyBalanceSheet = await Promise.race([balanceSheetPromise, timeoutPromise]);

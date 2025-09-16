@@ -601,9 +601,9 @@ class AccountingService {
                     },
                     // Rent accrual transactions
                     {
-                        'metadata.type': 'rent_accrual',
-                        'metadata.accrualMonth': month,
-                        'metadata.accrualYear': year
+                'metadata.type': 'rent_accrual',
+                'metadata.accrualMonth': month,
+                'metadata.accrualYear': year
                     },
                     // Manual adjustments (negotiated payments, reversals)
                     {

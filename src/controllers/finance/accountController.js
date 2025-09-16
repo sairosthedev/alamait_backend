@@ -14,8 +14,8 @@ exports.getAllAccounts = async (req, res) => {
       search, 
       sortBy = 'code', 
       sortOrder = 'asc',
-      page = 1,
-      limit = 50
+      page,
+      limit
     } = req.query;
 
     // Build filter object
@@ -34,34 +34,46 @@ exports.getAllAccounts = async (req, res) => {
       ];
     }
 
-    // Pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    
     // Sorting
     const sort = {};
     sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
 
-    const accounts = await Account.find(filter)
-      .populate('parentAccount', 'code name')
-      .sort(sort)
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Account.countDocuments(filter);
-
-    // If no pagination parameters, return just the accounts array
-    if (req.query.page === undefined && req.query.limit === undefined) {
-      res.status(200).json(accounts);
-    } else {
+    // Check if pagination is requested
+    const usePagination = page !== undefined || limit !== undefined;
+    
+    let accounts;
+    let total;
+    
+    if (usePagination) {
+      // Use pagination
+      const pageNum = parseInt(page) || 1;
+      const limitNum = parseInt(limit) || 50;
+      const skip = (pageNum - 1) * limitNum;
+      
+      accounts = await Account.find(filter)
+        .populate('parentAccount', 'code name')
+        .sort(sort)
+        .skip(skip)
+        .limit(limitNum);
+        
+      total = await Account.countDocuments(filter);
+      
       res.status(200).json({
         accounts,
         pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page: pageNum,
+          limit: limitNum,
           total,
-          pages: Math.ceil(total / parseInt(limit))
+          pages: Math.ceil(total / limitNum)
         }
       });
+    } else {
+      // Return all accounts without pagination
+      accounts = await Account.find(filter)
+        .populate('parentAccount', 'code name')
+        .sort(sort);
+        
+      res.status(200).json(accounts);
     }
   } catch (error) {
     console.error('Error fetching accounts:', error);

@@ -1633,3 +1633,5 @@ class RentalAccrualService {
 }
 
 module.exports = RentalAccrualService;
+
+module.exports = RentalAccrualService;

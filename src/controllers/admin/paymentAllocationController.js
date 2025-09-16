@@ -663,6 +663,7 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
         });
 
         console.log(`🔍 Found ${studentIds.size} unique students with AR transactions`);
+        console.log(`🔍 Student IDs:`, Array.from(studentIds).slice(0, 10)); // Show first 10 IDs
 
         // Get detailed outstanding balances for each student
         const studentsWithOutstanding = [];
@@ -682,7 +683,7 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
                     debtor = await Debtor.findOne({ user: new mongoose.Types.ObjectId(studentId) });
                 }
                 
-                if (debtor && debtor.currentBalance > 0) {
+                if (debtor) {
                     // Get residence information from first transaction
                     const studentTransaction = arTransactions.find(t => 
                         t.entries.some(e => e.accountCode.includes(studentId))
@@ -730,7 +731,55 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
             }
         }
 
-        console.log(`📊 Found ${studentsWithOutstanding.length} students with actual outstanding balances`);
+        console.log(`📊 Found ${studentsWithOutstanding.length} students (including those with $0 balance)`);
+        
+        // Also check for expired students who might have outstanding balances but no AR transactions
+        console.log('🔍 Checking for expired students with outstanding balances...');
+        const ExpiredStudent = require('../../models/ExpiredStudent');
+        const expiredStudents = await ExpiredStudent.find({});
+        
+        for (const expiredStudent of expiredStudents) {
+            try {
+                // Handle cases where student data might be missing
+                const studentData = expiredStudent.student || expiredStudent;
+                const studentId = studentData._id || studentData;
+                
+                if (!studentId) {
+                    console.log('⚠️ Skipping expired student with missing ID');
+                    continue;
+                }
+                
+                const debtor = await Debtor.findOne({ user: studentId });
+                
+                if (debtor && debtor.currentBalance > 0) {
+                    // Check if this student is already in our list
+                    const alreadyIncluded = studentsWithOutstanding.find(s => s.studentId === studentId.toString());
+                    if (!alreadyIncluded) {
+                        const firstName = studentData.firstName || 'Unknown';
+                        const lastName = studentData.lastName || 'Student';
+                        console.log(`🔴 Found expired student with outstanding balance: ${firstName} ${lastName} - $${debtor.currentBalance}`);
+                        
+                        // Get residence information (try to find from any transaction or use default)
+                        const studentTransaction = arTransactions.find(t => 
+                            t.entries.some(e => e.accountCode.includes(studentId))
+                        );
+                        
+                        studentsWithOutstanding.push({
+                            studentId: studentId.toString(),
+                            totalBalance: debtor.currentBalance,
+                            monthlyBalances: debtor.monthlyBalances || [],
+                            residence: studentTransaction?.residence || null,
+                            isExpiredStudent: true // Flag to identify this came from expired students
+                        });
+                    }
+                }
+            } catch (error) {
+                const studentEmail = expiredStudent?.student?.email || expiredStudent?.email || 'Unknown';
+                console.error(`❌ Error processing expired student ${studentEmail}:`, error.message);
+            }
+        }
+        
+        console.log(`📊 Total students with outstanding balances (including expired): ${studentsWithOutstanding.length}`);
 
         // Sort by specified criteria
         const sortMultiplier = sortOrder === 'desc' ? -1 : 1;
@@ -756,6 +805,13 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
         const studentsWithDetails = await Promise.all(
             limitedStudents.map(async (student) => {
                 const studentInfo = await getStudentInfo(student.studentId);
+                console.log(`🔍 Student ${student.studentId}:`, {
+                    found: !!studentInfo,
+                    isExpired: studentInfo?.isExpired,
+                    name: studentInfo ? `${studentInfo.firstName} ${studentInfo.lastName}` : 'Unknown',
+                    email: studentInfo?.email,
+                    balance: student.totalBalance
+                });
                 return {
                     ...student,
                     studentDetails: studentInfo ? {
@@ -771,13 +827,25 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
             })
         );
 
+        // Add debug logging to see what we're returning
+        const expiredCount = studentsWithDetails.filter(s => s.studentDetails?.isExpired).length;
+        const activeCount = studentsWithDetails.filter(s => !s.studentDetails?.isExpired).length;
+        
+        console.log(`📊 Outstanding balances summary: ${studentsWithDetails.length} total students (${activeCount} active, ${expiredCount} expired)`);
+        
         res.status(200).json({
             success: true,
             message: 'Students with outstanding balances retrieved successfully',
             data: {
                 totalStudents: studentsWithDetails.length,
                 totalOutstanding: studentsWithDetails.reduce((sum, s) => sum + s.totalBalance, 0),
-                students: studentsWithDetails
+                students: studentsWithDetails,
+                // Add summary for debugging
+                summary: {
+                    activeStudents: activeCount,
+                    expiredStudents: expiredCount,
+                    totalStudents: studentsWithDetails.length
+                }
             }
         });
 

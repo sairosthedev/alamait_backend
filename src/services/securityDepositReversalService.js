@@ -42,20 +42,34 @@ class SecurityDepositReversalService {
                 
                 // 1. Check if a reversal has already been created for this student (FIRST CHECK)
                 const existingReversal = await TransactionEntry.findOne({
-                    'metadata.studentId': studentId,
-                    'metadata.type': 'security_deposit_reversal',
-                    status: 'posted'
+                    $and: [
+                        {
+                            $or: [
+                                { 'metadata.studentId': studentId },
+                                { 'metadata.studentId': new mongoose.Types.ObjectId(studentId) }
+                            ]
+                        },
+                        { 'metadata.type': 'security_deposit_reversal' },
+                        { status: 'posted' }
+                    ]
                 }).session(session);
 
                 if (existingReversal) {
                     throw new Error(`Security deposit reversal already exists for ${studentName}. Transaction ID: ${existingReversal.transactionId}`);
                 }
                 
-                // 2. Find the lease start transaction that created the deposit liability
+                // 2. Find the lease start transaction that created the deposit liability (handle both string and ObjectId formats)
                 const leaseStartTransaction = await TransactionEntry.findOne({
-                    'metadata.studentId': studentId,
-                    'metadata.type': 'lease_start',
-                    status: 'posted'
+                    $and: [
+                        {
+                            $or: [
+                                { 'metadata.studentId': studentId },
+                                { 'metadata.studentId': new mongoose.Types.ObjectId(studentId) }
+                            ]
+                        },
+                        { 'metadata.type': 'lease_start' },
+                        { status: 'posted' }
+                    ]
                 }).session(session);
 
                 if (!leaseStartTransaction) {
@@ -81,10 +95,17 @@ class SecurityDepositReversalService {
 
                 // 3. Check if the deposit was actually paid
                 const depositPayments = await TransactionEntry.find({
-                    'metadata.studentId': studentId,
-                    'entries.accountCode': { $regex: `^1100-${studentId}` },
-                    'entries.description': { $regex: /deposit.*payment/i },
-                    status: 'posted'
+                    $and: [
+                        {
+                            $or: [
+                                { 'metadata.studentId': studentId },
+                                { 'metadata.studentId': new mongoose.Types.ObjectId(studentId) }
+                            ]
+                        },
+                        { 'entries.accountCode': { $regex: `^1100-${studentId}` } },
+                        { 'entries.description': { $regex: /deposit.*payment/i } },
+                        { status: 'posted' }
+                    ]
                 }).session(session);
 
                 let totalDepositPaid = 0;
@@ -224,11 +245,18 @@ class SecurityDepositReversalService {
             const studentInfo = await getStudentInfo(studentId);
             const studentName = await getStudentName(studentId);
 
-            // Find lease start transaction
+            // Find lease start transaction (handle both string and ObjectId formats)
             const leaseStartTransaction = await TransactionEntry.findOne({
-                'metadata.studentId': studentId,
-                'metadata.type': 'lease_start',
-                status: 'posted'
+                $and: [
+                    {
+                        $or: [
+                            { 'metadata.studentId': studentId },
+                            { 'metadata.studentId': new mongoose.Types.ObjectId(studentId) }
+                        ]
+                    },
+                    { 'metadata.type': 'lease_start' },
+                    { status: 'posted' }
+                ]
             });
 
             if (!leaseStartTransaction) {

@@ -134,20 +134,16 @@ const handleExpiredApplications = async () => {
                 });
                 // Update room status in residence and decrement occupancy if possible
                 if (application.student && application.residence && application.allocatedRoom) {
-                    const residence = await Residence.findById(application.residence);
-                    if (residence) {
-                        const room = residence.rooms.find(r => r.roomNumber === application.allocatedRoom);
-                        if (room) {
-                            room.currentOccupancy = Math.max(0, (room.currentOccupancy || 1) - 1);
-                            if (room.currentOccupancy === 0) {
-                                room.status = 'available';
-                            } else if (room.currentOccupancy < room.capacity) {
-                                room.status = 'reserved';
-                            } else {
-                                room.status = 'occupied';
-                            }
-                            await residence.save();
-                        }
+                    const RoomStatusManager = require('./roomStatusManager');
+                    try {
+                        const roomResult = await RoomStatusManager.updateRoomOnStatusChange(
+                            application._id, 
+                            'expired', 
+                            'Lease end date reached'
+                        );
+                        console.log('✅ Room occupancy updated for expired application:', roomResult);
+                    } catch (roomError) {
+                        console.error('❌ Error updating room for expired application:', roomError);
                     }
                 }
                 if (application.student) {

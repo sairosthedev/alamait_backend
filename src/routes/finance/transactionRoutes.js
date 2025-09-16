@@ -69,6 +69,18 @@ router.post('/create-double-entry', TransactionController.createDoubleEntryTrans
 router.post('/create-negotiated-payment', TransactionController.createNegotiatedPayment);
 
 /**
+ * Forfeit a student (comprehensive no-show handling)
+ * POST /api/finance/transactions/forfeit-student
+ */
+router.post('/forfeit-student', TransactionController.forfeitStudent);
+
+/**
+ * Reverse ALL accrual entries from lease start transaction for forfeiture
+ * POST /api/finance/transactions/reverse-lease-start-accruals
+ */
+router.post('/reverse-lease-start-accruals', TransactionController.reverseLeaseStartAccruals);
+
+/**
  * Upload CSV for bulk transaction creation
  * POST /api/finance/transactions/upload-csv
  */

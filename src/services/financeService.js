@@ -345,4 +345,109 @@ export const getCsvTemplate = async () => {
     console.error('Error getting CSV template:', error);
     throw error;
   }
+};
+
+// Get Balance Sheet Entries (for frontend compatibility)
+export const getBalanceSheetEntries = async (asOf = '2025-12-31', basis = 'cash') => {
+  try {
+    const response = await api.get(`/financial-reports/balance-sheet?asOf=${asOf}&basis=${basis}`);
+    const data = response.data;
+    
+    // Transform the API response to match frontend expectations
+    const transformedData = {
+      assets: [],
+      liabilities: [],
+      equity: [],
+      totalAssets: data.assets?.totalAssets || 0,
+      totalLiabilities: data.liabilities?.totalLiabilities || 0,
+      totalEquity: data.equity?.totalEquity || 0
+    };
+    
+    // Transform current assets
+    if (data.assets?.current) {
+      const currentAssets = data.assets.current;
+      
+      // Cash and Bank accounts
+      if (currentAssets.cashAndBank) {
+        Object.entries(currentAssets.cashAndBank).forEach(([key, account]) => {
+          if (key !== 'total' && account.amount > 0) {
+            transformedData.assets.push({
+              type: 'asset',
+              category: 'current',
+              name: account.accountName || key,
+              value: account.amount,
+              description: `Cash and bank account: ${account.accountName || key}`
+            });
+          }
+        });
+      }
+      
+      // Accounts Receivable
+      if (currentAssets.accountsReceivable && currentAssets.accountsReceivable.amount > 0) {
+        transformedData.assets.push({
+          type: 'asset',
+          category: 'current',
+          name: currentAssets.accountsReceivable.accountName || 'Accounts Receivable',
+          value: currentAssets.accountsReceivable.amount,
+          description: 'Accounts receivable from tenants'
+        });
+      }
+    }
+    
+    // Transform current liabilities
+    if (data.liabilities?.current) {
+      const currentLiabilities = data.liabilities.current;
+      
+      // Accounts Payable
+      if (currentLiabilities.accountsPayable && currentLiabilities.accountsPayable.amount > 0) {
+        transformedData.liabilities.push({
+          type: 'liability',
+          category: 'current',
+          name: currentLiabilities.accountsPayable.accountName || 'Accounts Payable',
+          value: currentLiabilities.accountsPayable.amount,
+          description: 'Amounts owed to suppliers and vendors'
+        });
+      }
+      
+      // Tenant Deposits
+      if (currentLiabilities.tenantDeposits && currentLiabilities.tenantDeposits.amount > 0) {
+        transformedData.liabilities.push({
+          type: 'liability',
+          category: 'current',
+          name: currentLiabilities.tenantDeposits.accountName || 'Tenant Deposits',
+          value: currentLiabilities.tenantDeposits.amount,
+          description: 'Security deposits held from tenants'
+        });
+      }
+      
+      // Deferred Income
+      if (currentLiabilities.deferredIncome && currentLiabilities.deferredIncome.amount > 0) {
+        transformedData.liabilities.push({
+          type: 'liability',
+          category: 'current',
+          name: currentLiabilities.deferredIncome.accountName || 'Deferred Income',
+          value: currentLiabilities.deferredIncome.amount,
+          description: 'Advance payments received from tenants'
+        });
+      }
+    }
+    
+    // Transform equity
+    if (data.equity) {
+      if (data.equity.retainedEarnings && data.equity.retainedEarnings.amount > 0) {
+        transformedData.equity.push({
+          type: 'equity',
+          category: 'retained',
+          name: data.equity.retainedEarnings.accountName || 'Retained Earnings',
+          value: data.equity.retainedEarnings.amount,
+          description: 'Accumulated profits and losses'
+        });
+      }
+    }
+    
+    return transformedData;
+  } catch (error) {
+    console.error('Error fetching balance sheet entries:', error);
+    throw error;
+  }
 }; 

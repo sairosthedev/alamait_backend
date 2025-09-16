@@ -22,9 +22,9 @@ async function syncRoomOccupancy() {
   try {
     ('Starting room occupancy sync...');
     
-    // Get all approved applications with allocated rooms
+    // Get all approved applications with allocated rooms (exclude expired/cancelled)
     const allocatedApplications = await Application.find({
-      status: 'approved',
+      status: { $in: ['approved', 'active'] }, // Only active/approved applications
       allocatedRoom: { $exists: true, $ne: null }
     });
     

@@ -705,4 +705,4 @@ const safeDateFormat = (date) => {
 };
 
 // Export the findStudentById function for use in other modules
-module.exports.findStudentById = findStudentById; 
+module.exports.findStudentById = findStudentById;

@@ -31,9 +31,11 @@ class EnhancedCashFlowService {
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
             
-            // Get all transaction entries for the period
+            // Get all transaction entries for the period (exclude forfeiture transactions - no cash movement)
             const transactionQuery = {
-                date: { $gte: startDate, $lte: endDate }
+                date: { $gte: startDate, $lte: endDate },
+                // Exclude forfeiture transactions as they don't involve cash movement
+                'metadata.isForfeiture': { $ne: true }
             };
             
             if (residenceId) {
@@ -42,7 +44,7 @@ class EnhancedCashFlowService {
             
             if (basis === 'cash') {
                 transactionQuery.source = {
-                    $in: ['payment', 'expense_payment', 'rental_payment', 'manual', 'payment_collection', 'bank_transfer', 'advance_payment']
+                    $in: ['payment', 'expense_payment', 'rental_payment', 'manual', 'payment_collection', 'bank_transfer', 'advance_payment', 'debt_settlement', 'current_payment']
                 };
             }
             
@@ -226,44 +228,69 @@ class EnhancedCashFlowService {
             }
         });
         
+        // Enhanced payment linking - ALWAYS try to find a payment for each transaction
         if (payments.length > 0) {
-            payments.forEach(payment => {
-            // Find transaction entries that correspond to this payment
-            const relatedTransactions = transactionEntries.filter(entry => {
-                // Match by payment ID in description
-                if (entry.description?.includes(payment.paymentId)) {
-                    return true;
+            transactionEntries.forEach(entry => {
+                let correspondingPayment = null;
+                
+                // PRIORITY 1: Reference field (payment ID)
+                if (entry.reference) {
+                    correspondingPayment = payments.find(p => p._id.toString() === entry.reference);
+                    if (correspondingPayment) {
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} by reference with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
+                    }
                 }
                 
-                // Match by payment _id in reference field (this is the key fix!)
-                if (entry.reference && entry.reference === payment._id.toString()) {
-                    return true;
+                // PRIORITY 2: PaymentId in metadata
+                if (!correspondingPayment && entry.metadata && entry.metadata.paymentId) {
+                    correspondingPayment = payments.find(p => p.paymentId === entry.metadata.paymentId);
+                    if (correspondingPayment) {
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} by paymentId with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
+                    }
                 }
                 
-                // Match by amount and date proximity (for cases where payment ID is not in description)
-                // Check if any payment component matches the transaction amount
-                const paymentComponents = payment.payments || [];
-                const amountMatch = paymentComponents.some(comp => 
-                    Math.abs(entry.totalDebit - comp.amount) < 0.01
-                ) || Math.abs(entry.totalDebit - payment.totalAmount) < 0.01;
+                // PRIORITY 3: Student and amount matching for advance transactions
+                if (!correspondingPayment && entry.description && entry.description.toLowerCase().includes('advance')) {
+                    const matchingPayment = payments.find(p => 
+                        p.student && entry.metadata && entry.metadata.studentId && 
+                        p.student.toString() === entry.metadata.studentId.toString() &&
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                    );
+                    if (matchingPayment) {
+                        correspondingPayment = matchingPayment;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked advance transaction ${entry.transactionId} to payment ${matchingPayment.paymentId} by student/amount match with date ${matchingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
                 
-                const dateProximity = Math.abs(entry.date.getTime() - payment.date.getTime()) < 30 * 24 * 60 * 60 * 1000; // Within 30 days
+                // PRIORITY 4: General student and amount matching for any transaction
+                if (!correspondingPayment && entry.metadata && entry.metadata.studentId) {
+                    const matchingPayment = payments.find(p => 
+                        p.student && p.student.toString() === entry.metadata.studentId.toString() &&
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                    );
+                    if (matchingPayment) {
+                        correspondingPayment = matchingPayment;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${matchingPayment.paymentId} by student/amount match with date ${matchingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
                 
-                // Also check if the transaction description contains payment-related keywords
-                const descriptionMatch = entry.description && (
-                    entry.description.toLowerCase().includes('payment') ||
-                    entry.description.toLowerCase().includes('allocation') ||
-                    entry.description.toLowerCase().includes('rent') ||
-                    entry.description.toLowerCase().includes('admin')
-                );
-                
-                return amountMatch && dateProximity && descriptionMatch;
+                // PRIORITY 5: Amount and date proximity matching (within 30 days)
+                if (!correspondingPayment) {
+                    const matchingPayment = payments.find(p => 
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01 &&
+                        Math.abs(new Date(p.date).getTime() - new Date(entry.date).getTime()) < 30 * 24 * 60 * 60 * 1000 // Within 30 days
+                    );
+                    if (matchingPayment) {
+                        correspondingPayment = matchingPayment;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${matchingPayment.paymentId} by amount/date proximity with date ${matchingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
             });
-            
-            relatedTransactions.forEach(transaction => {
-                transactionToPaymentMap.set(transaction.transactionId, payment);
-            });
-        });
         } else {
             console.log('⚠️ No payments found in database. Using transaction dates for cash flow.');
         }
@@ -281,7 +308,64 @@ class EnhancedCashFlowService {
         // Process transaction entries for income
         transactionEntries.forEach(entry => {
             // Get the corresponding payment for accurate date handling
-            const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+            let correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+            
+            // Enhanced payment linking for income processing - same logic as cash breakdown
+            if (!correspondingPayment) {
+                // PRIORITY 1: Reference field (payment ID)
+                if (entry.reference) {
+                    correspondingPayment = payments.find(p => p._id.toString() === entry.reference);
+                    if (correspondingPayment) {
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked income transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} by reference with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
+                // PRIORITY 2: PaymentId in metadata
+                if (!correspondingPayment && entry.metadata && entry.metadata.paymentId) {
+                    correspondingPayment = payments.find(p => p.paymentId === entry.metadata.paymentId);
+                    if (correspondingPayment) {
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked income transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
+                // PRIORITY 3: Student and amount matching for advance transactions
+                if (!correspondingPayment && entry.description && entry.description.toLowerCase().includes('advance')) {
+                    const matchingPayment = payments.find(p => 
+                        p.student && entry.metadata && entry.metadata.studentId && 
+                        p.student.toString() === entry.metadata.studentId.toString() &&
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                    );
+                    if (matchingPayment) {
+                        correspondingPayment = matchingPayment;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked advance income transaction ${entry.transactionId} to payment ${matchingPayment.paymentId} by student/amount match with date ${matchingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
+                // PRIORITY 4: General student and amount matching for any transaction
+                if (!correspondingPayment && entry.metadata && entry.metadata.studentId) {
+                    const matchingPayment = payments.find(p => 
+                        p.student && p.student.toString() === entry.metadata.studentId.toString() &&
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                    );
+                    if (matchingPayment) {
+                        correspondingPayment = matchingPayment;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked income transaction ${entry.transactionId} to payment ${matchingPayment.paymentId} by student/amount match with date ${matchingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
+                // PRIORITY 5: Amount and date proximity matching (within 30 days)
+                if (!correspondingPayment) {
+                    const matchingPayment = payments.find(p => 
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01 &&
+                        Math.abs(new Date(p.date).getTime() - new Date(entry.date).getTime()) < 30 * 24 * 60 * 60 * 1000 // Within 30 days
+                    );
+                    if (matchingPayment) {
+                        correspondingPayment = matchingPayment;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked income transaction ${entry.transactionId} to payment ${matchingPayment.paymentId} by amount/date proximity with date ${matchingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
+            }
             const effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
             
             if (correspondingPayment) {
@@ -364,52 +448,186 @@ class EnhancedCashFlowService {
                         }
                     } else {
                         // 🆕 FALLBACK: Check transaction description for allocation month
-                        if (entry.description && entry.description.includes('for 2025-09')) {
-                            // Use payment date if available, otherwise use transaction date
-                            const paymentDate = correspondingPayment ? new Date(correspondingPayment.date) : new Date(entry.date);
-                            const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
-                            const allocationMonthDate = new Date(2025, 8, 1); // September 2025 (0-based month)
-                            
-                            if (paymentDateMonth < allocationMonthDate) {
-                                isPaymentDateBeforeAllocationMonth = true;
-                                console.log(`📅 Cash Flow: Payment date is before allocation month (from description):`);
+                        if (entry.description && entry.description.includes('for 20')) {
+                            // Extract allocation month from description (format: "for 2025-09")
+                            const match = entry.description.match(/for (\d{4}-\d{2})/);
+                            if (match) {
+                                const allocationMonthStr = match[1];
+                                const [year, month] = allocationMonthStr.split('-').map(n => parseInt(n));
+                                const allocationMonthDate = new Date(year, month - 1, 1); // month is 1-based in description
+                                
+                                // Use payment date if available, otherwise use transaction date
+                                const paymentDate = correspondingPayment ? new Date(correspondingPayment.date) : new Date(entry.date);
+                                const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
+                                
+                                console.log(`🔍 Cash Flow: Checking advance payment detection for ${entry.transactionId}:`);
+                                console.log(`   Description: ${entry.description}`);
                                 console.log(`   Payment Date: ${paymentDate.toISOString().split('T')[0]} (Month: ${paymentDate.getMonth() + 1}/${paymentDate.getFullYear()})`);
                                 console.log(`   Allocation Month: ${allocationMonthDate.toISOString().split('T')[0]} (Month: ${allocationMonthDate.getMonth() + 1}/${allocationMonthDate.getFullYear()})`);
-                                console.log(`   ✅ Identified as ADVANCE PAYMENT (payment date before allocation month from description)`);
+                                
+                                if (paymentDateMonth < allocationMonthDate) {
+                                    isPaymentDateBeforeAllocationMonth = true;
+                                    console.log(`   ✅ Identified as ADVANCE PAYMENT (payment date before allocation month from description)`);
+                                } else {
+                                    console.log(`   ❌ Not an advance payment (payment date is not before allocation month)`);
+                                }
                             }
                         }
                     }
                     
                     if (entry.description) {
                         const desc = entry.description.toLowerCase();
-                        // Check for advance payments first (most specific)
-                        if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future')) {
+                        // Check for admin payments first (exclude from advance payments)
+                        if (desc.includes('admin') || (entry.metadata && entry.metadata.paymentType === 'admin') || (entry.metadata && entry.metadata.paymentType === 'advance_admin')) {
+                            // Admin payments should NOT be categorized as advance payments
+                            category = 'admin_fees';
+                            description = 'Administrative Fees';
+                        }
+                        // Check for advance payments (but exclude admin payments)
+                        else if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future')) {
                             category = 'advance_payments';
                             description = 'Advance Payment from Student';
                             isAdvancePayment = true;
                         } 
                         // 🆕 NEW: Check if payment date is before allocation month (override description-based categorization)
-                        else if (isPaymentDateBeforeAllocationMonth) {
+                        // BUT: Admin fees should always settle in payment month, not be treated as advance payments
+                        else if (isPaymentDateBeforeAllocationMonth && !desc.includes('admin')) {
                             category = 'advance_payments';
                             description = 'Advance Payment from Student (payment date before allocation month)';
                             isAdvancePayment = true;
                         }
                         // Check for specific payment allocations
                         else if (desc.includes('payment allocation: rent')) {
-                            category = 'rental_income';
-                            description = 'Rental Income from Students';
-                        } else if (desc.includes('payment allocation: admin')) {
-                            category = 'admin_fees';
-                            description = 'Administrative Fees';
+                            // Check if this is an advance payment by looking at the payment metadata
+                            const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+                            let isAdvanceRentPayment = false;
+                            
+                            // Check if this payment has advance allocations
+                            if (correspondingPayment && correspondingPayment.monthlyBreakdown) {
+                                const advanceAllocations = correspondingPayment.monthlyBreakdown.filter(
+                                    allocation => allocation.allocationType === 'advance_payment' && allocation.paymentType === 'rent'
+                                );
+                                isAdvanceRentPayment = advanceAllocations.length > 0;
+                            }
+                            
+                            if (isAdvanceRentPayment) {
+                                category = 'advance_payments';
+                                description = 'Advance Rent Payments';
+                            } else {
+                                category = 'rental_income';
+                                description = 'Rental Income from Students';
+                            }
+                        } else if (desc.includes('payment allocation: admin') || desc.includes('admin fee') || desc.includes('administrative')) {
+                            // Check if this is an advance admin payment by looking at the payment metadata
+                            const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+                            let isAdvanceAdminPayment = false;
+                            
+                            // Check if this payment has advance allocations for admin
+                            if (correspondingPayment && correspondingPayment.monthlyBreakdown) {
+                                const advanceAllocations = correspondingPayment.monthlyBreakdown.filter(
+                                    allocation => allocation.allocationType === 'advance_payment' && 
+                                    (allocation.paymentType === 'advance_admin' || allocation.paymentType === 'admin')
+                                );
+                                isAdvanceAdminPayment = advanceAllocations.length > 0;
+                            }
+                            
+                            // Also check if the transaction metadata indicates it's an admin payment
+                            if (entry.metadata && entry.metadata.paymentType === 'admin') {
+                                console.log(`🔍 Found admin payment via metadata: ${entry.transactionId} - $${incomeAmount}`);
+                                if (isAdvanceAdminPayment) {
+                                    category = 'advance_payments';
+                                    description = 'Advance Admin Payments';
+                                } else {
+                                    category = 'admin_fees';
+                                    description = 'Administrative Fees';
+                                }
+                            } else if (isAdvanceAdminPayment) {
+                                category = 'advance_payments';
+                                description = 'Advance Admin Payments';
+                            } else {
+                                category = 'admin_fees';
+                                description = 'Administrative Fees';
+                            }
                         } 
                         // Fallback to general keywords
                         else if (desc.includes('rent')) {
-                            category = 'rental_income';
-                            description = 'Rental Income from Students';
-                        } else if (desc.includes('admin')) {
-                            category = 'admin_fees';
-                            description = 'Administrative Fees';
+                            // Check if this is an advance payment by looking at the payment metadata
+                            const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+                            let isAdvanceRentPayment = false;
+                            
+                            // Check if this payment has advance allocations
+                            if (correspondingPayment && correspondingPayment.monthlyBreakdown) {
+                                const advanceAllocations = correspondingPayment.monthlyBreakdown.filter(
+                                    allocation => allocation.allocationType === 'advance_payment' && allocation.paymentType === 'rent'
+                                );
+                                isAdvanceRentPayment = advanceAllocations.length > 0;
+                            }
+                            
+                            if (isAdvanceRentPayment) {
+                                category = 'advance_payments';
+                                description = 'Advance Rent Payments';
+                            } else {
+                                category = 'rental_income';
+                                description = 'Rental Income from Students';
+                            }
+                        } else if (desc.includes('admin') || (entry.metadata && entry.metadata.paymentType === 'admin') || (entry.metadata && entry.metadata.paymentType === 'advance_admin')) {
+                            // For admin fees, ALWAYS use payment date for categorization (NOT allocation month)
+                            const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+                            
+                            if (correspondingPayment) {
+                                // Use payment date for admin fee categorization (when cash was received)
+                                const paymentDate = new Date(correspondingPayment.date);
+                                effectiveDate = paymentDate;
+                                const paymentMonth = paymentDate.toISOString().slice(0, 7);
+                                console.log(`💰 Admin fee using PAYMENT DATE (not allocation month): ${paymentMonth} - Transaction: ${entry.transactionId}`);
+                                
+                                // Admin fees should always be categorized as regular admin fees in the payment month
+                                // regardless of when they were allocated
+                                category = 'admin_fees';
+                                description = 'Administrative Fees';
+                                
+                                console.log(`💰 Admin fee categorized in PAYMENT MONTH: ${paymentMonth} - Amount: ${incomeAmount}`);
+                            } else {
+                                // Fallback to transaction date if no payment found
+                                category = 'admin_fees';
+                                description = 'Administrative Fees';
+                                console.log(`💰 Admin fee (no payment found): ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                            }
+                            
+                            // Log detection of admin fee
+                            console.log(`🔍 Admin fee detected: ${entry.transactionId} - $${incomeAmount}`);
+                            console.log(`   Description: ${entry.description}`);
+                            console.log(`   Metadata paymentType: ${entry.metadata?.paymentType || 'none'}`);
+                            console.log(`   Is advance payment: ${isAdvanceAdminPayment}`);
+                            console.log(`   Should use payment date: ${shouldUsePaymentDate}`);
+                            
+                            if (isAdvanceAdminPayment) {
+                                category = 'advance_payments';
+                                description = 'Advance Admin Payments';
+                            } else {
+                                category = 'admin_fees';
+                                description = 'Administrative Fees';
+                            }
+                            
+                            // If we should use payment date, update the effective date
+                            if (shouldUsePaymentDate && correspondingPayment) {
+                                effectiveDate = correspondingPayment.date;
+                                console.log(`🔍 Updated effective date for admin fee to payment date: ${effectiveDate.toISOString().slice(0, 7)}`);
+                            }
                         } else if (desc.includes('deposit')) {
+                            // For deposits, ALWAYS use payment date for categorization (NOT allocation month)
+                            const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+                            
+                            if (correspondingPayment) {
+                                // Use payment date for deposit categorization (when cash was received)
+                                const paymentDate = new Date(correspondingPayment.date);
+                                effectiveDate = paymentDate;
+                                const paymentMonth = paymentDate.toISOString().slice(0, 7);
+                                console.log(`💰 Deposit using PAYMENT DATE (not allocation month): ${paymentMonth} - Transaction: ${entry.transactionId}`);
+                                
+                                console.log(`💰 Deposit categorized in PAYMENT MONTH: ${paymentMonth} - Amount: ${incomeAmount}`);
+                            }
+                            
                             category = 'deposits';
                             description = 'Security Deposits';
                         } else if (desc.includes('utilit')) {
@@ -649,6 +867,7 @@ class EnhancedCashFlowService {
                             incomeBreakdown.advance_payments.by_month[monthKey] = 0;
                         }
                         incomeBreakdown.advance_payments.by_month[monthKey] += incomeAmount;
+                        
                     }
                     
                     // Group by residence
@@ -1321,6 +1540,71 @@ class EnhancedCashFlowService {
     }
     
     /**
+     * Initialize month data structure
+     */
+    static initializeMonthData(monthKey) {
+        return {
+            income: {
+                total: 0,
+                rental_income: 0,
+                admin_fees: 0,
+                deposits: 0,
+                utilities: 0,
+                advance_payments: 0,
+                other_income: 0,
+                transactions: []
+            },
+            expenses: {
+                total: 0,
+                maintenance: 0,
+                utilities: 0,
+                cleaning: 0,
+                security: 0,
+                management: 0,
+                transactions: []
+            },
+            operating_activities: {
+                inflows: 0,
+                outflows: 0,
+                net: 0,
+                breakdown: {
+                    rental_income: { amount: 0, description: "Rental Income from Students" },
+                    admin_fees: { amount: 0, description: "Administrative Fees" },
+                    deposits: { amount: 0, description: "Security Deposits" },
+                    utilities_income: { amount: 0, description: "Utilities Income" },
+                    advance_payments: { amount: 0, description: "Advance Payments from Students" },
+                    other_income: { amount: 0, description: "Other Income Sources" },
+                    maintenance_expenses: { amount: 0, description: "Property Maintenance" },
+                    utilities_expenses: { amount: 0, description: "Utility Bills" },
+                    cleaning_expenses: { amount: 0, description: "Cleaning Services" },
+                    security_expenses: { amount: 0, description: "Security Services" },
+                    management_expenses: { amount: 0, description: "Management Fees" }
+                }
+            },
+            investing_activities: {
+                inflows: 0,
+                outflows: 0,
+                net: 0,
+                breakdown: {}
+            },
+            financing_activities: {
+                inflows: 0,
+                outflows: 0,
+                net: 0,
+                breakdown: {}
+            },
+            net_cash_flow: 0,
+            opening_balance: 0,
+            closing_balance: 0,
+            transaction_details: {
+                transaction_count: 0,
+                payment_count: 0,
+                expense_count: 0
+            }
+        };
+    }
+
+    /**
      * Generate monthly breakdown
      */
     static generateMonthlyBreakdown(transactionEntries, payments, expenses, period) {
@@ -1358,44 +1642,69 @@ class EnhancedCashFlowService {
         // Create a map of transaction entries to their corresponding payments for accurate date handling
         const transactionToPaymentMap = new Map();
         
+        // Enhanced payment linking - ALWAYS try to find a payment for each transaction
         if (payments.length > 0) {
-            payments.forEach(payment => {
-            // Find transaction entries that correspond to this payment
-            const relatedTransactions = transactionEntries.filter(entry => {
-                // Match by payment ID in description
-                if (entry.description?.includes(payment.paymentId)) {
-                    return true;
+            transactionEntries.forEach(entry => {
+                let correspondingPayment = null;
+                
+                // PRIORITY 1: Reference field (payment ID)
+                if (entry.reference) {
+                    correspondingPayment = payments.find(p => p._id.toString() === entry.reference);
+                    if (correspondingPayment) {
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} by reference with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
+                    }
                 }
                 
-                // Match by payment _id in reference field (this is the key fix!)
-                if (entry.reference && entry.reference === payment._id.toString()) {
-                    return true;
+                // PRIORITY 2: PaymentId in metadata
+                if (!correspondingPayment && entry.metadata && entry.metadata.paymentId) {
+                    correspondingPayment = payments.find(p => p.paymentId === entry.metadata.paymentId);
+                    if (correspondingPayment) {
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} by paymentId with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
+                    }
                 }
                 
-                // Match by amount and date proximity (for cases where payment ID is not in description)
-                // Check if any payment component matches the transaction amount
-                const paymentComponents = payment.payments || [];
-                const amountMatch = paymentComponents.some(comp => 
-                    Math.abs(entry.totalDebit - comp.amount) < 0.01
-                ) || Math.abs(entry.totalDebit - payment.totalAmount) < 0.01;
+                // PRIORITY 3: Student and amount matching for advance transactions
+                if (!correspondingPayment && entry.description && entry.description.toLowerCase().includes('advance')) {
+                    const matchingPayment = payments.find(p => 
+                        p.student && entry.metadata && entry.metadata.studentId && 
+                        p.student.toString() === entry.metadata.studentId.toString() &&
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                    );
+                    if (matchingPayment) {
+                        correspondingPayment = matchingPayment;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked advance transaction ${entry.transactionId} to payment ${matchingPayment.paymentId} by student/amount match with date ${matchingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
                 
-                const dateProximity = Math.abs(entry.date.getTime() - payment.date.getTime()) < 30 * 24 * 60 * 60 * 1000; // Within 30 days
+                // PRIORITY 4: General student and amount matching for any transaction
+                if (!correspondingPayment && entry.metadata && entry.metadata.studentId) {
+                    const matchingPayment = payments.find(p => 
+                        p.student && p.student.toString() === entry.metadata.studentId.toString() &&
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                    );
+                    if (matchingPayment) {
+                        correspondingPayment = matchingPayment;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${matchingPayment.paymentId} by student/amount match with date ${matchingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
                 
-                // Also check if the transaction description contains payment-related keywords
-                const descriptionMatch = entry.description && (
-                    entry.description.toLowerCase().includes('payment') ||
-                    entry.description.toLowerCase().includes('allocation') ||
-                    entry.description.toLowerCase().includes('rent') ||
-                    entry.description.toLowerCase().includes('admin')
-                );
-                
-                return amountMatch && dateProximity && descriptionMatch;
+                // PRIORITY 5: Amount and date proximity matching (within 30 days)
+                if (!correspondingPayment) {
+                    const matchingPayment = payments.find(p => 
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01 &&
+                        Math.abs(new Date(p.date).getTime() - new Date(entry.date).getTime()) < 30 * 24 * 60 * 60 * 1000 // Within 30 days
+                    );
+                    if (matchingPayment) {
+                        correspondingPayment = matchingPayment;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${matchingPayment.paymentId} by amount/date proximity with date ${matchingPayment.date.toISOString().slice(0, 7)}`);
+                    }
+                }
             });
-            
-            relatedTransactions.forEach(transaction => {
-                transactionToPaymentMap.set(transaction.transactionId, payment);
-            });
-        });
         } else {
             console.log('⚠️ No payments found in database. Using transaction dates for cash flow.');
         }
@@ -1506,8 +1815,13 @@ class EnhancedCashFlowService {
                         let monthlyCategory = 'other_income';
                         if (entry.description) {
                             const desc = entry.description.toLowerCase();
-                            // Check for advance payments first (most specific)
-                            if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future')) {
+                            // Check for admin payments first (exclude from advance payments)
+                            if (desc.includes('admin') || (entry.metadata && entry.metadata.paymentType === 'admin') || (entry.metadata && entry.metadata.paymentType === 'advance_admin')) {
+                                // Admin payments should NOT be categorized as advance payments
+                                monthlyCategory = 'admin_fees';
+                            }
+                            // Check for advance payments (but exclude admin payments)
+                            else if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future')) {
                                 monthlyCategory = 'advance_payments';
                             } 
                             // Check for specific payment allocations
@@ -1538,6 +1852,163 @@ class EnhancedCashFlowService {
                         } else if (monthlyCategory === 'admin_fees') {
                             months[monthKey].income.admin_fees += incomeAmount;
                             console.log(`💰 Admin fees detected: ${incomeAmount} for ${monthKey} - Transaction: ${entry.transactionId}`);
+                            
+                            // Special handling for admin fees: if they were paid in July but allocated to August, also add them to July
+                            if (correspondingPayment) {
+                                const paymentDate = new Date(correspondingPayment.date);
+                                const transactionDate = new Date(entry.date);
+                                const paymentMonth = paymentDate.toISOString().slice(0, 7);
+                                const transactionMonth = transactionDate.toISOString().slice(0, 7);
+                                
+                                // If payment was made in July but transaction is in August, also add to July
+                                if (paymentMonth === '2025-07' && transactionMonth === '2025-08') {
+                                    const julyKey = '2025-07';
+                                    if (!months[julyKey]) {
+                                        months[julyKey] = this.initializeMonthData('2025-07');
+                                    }
+                                    months[julyKey].income.admin_fees += incomeAmount;
+                                    months[julyKey].operating_activities.inflows += incomeAmount;
+                                    months[julyKey].operating_activities.net += incomeAmount;
+                                    months[julyKey].operating_activities.breakdown.admin_fees.amount += incomeAmount;
+                                    console.log(`💰 Admin fees also added to July: ${incomeAmount} for ${julyKey} - Transaction: ${entry.transactionId}`);
+                                }
+                            }
+                            
+                            // CRITICAL: ALL admin fees (advance or regular) should show in the month they were PAID
+                            if (correspondingPayment) {
+                                const paymentDate = new Date(correspondingPayment.date);
+                                const paymentMonth = paymentDate.toISOString().slice(0, 7);
+                                
+                                // Check if this is an admin-related payment (regular admin or advance admin)
+                                const isAdminRelated = entry.description.includes('admin') || 
+                                                      (entry.metadata && entry.metadata.paymentType === 'admin') ||
+                                                      (entry.metadata && entry.metadata.paymentType === 'advance_admin') ||
+                                                      entry.description.includes('advance_admin');
+                                
+                                // If it's admin-related, ALWAYS categorize in the payment month as admin_fees
+                                if (isAdminRelated) {
+                                    // Use paymentMonth directly (YYYY-MM format) for internal months object
+                                    const paymentMonthKey = paymentMonth; // e.g., "2025-07"
+                                    
+                                    // Ensure payment month exists
+                                    if (!months[paymentMonthKey]) {
+                                        months[paymentMonthKey] = this.initializeMonthData(paymentMonthKey);
+                                    }
+                                    
+                                    // Ensure original month exists
+                                    if (!months[monthKey]) {
+                                        months[monthKey] = this.initializeMonthData(monthKey);
+                                    }
+                                    
+                                    // Add to payment month as admin fee
+                                    if (months[paymentMonthKey] && months[paymentMonthKey].income && months[paymentMonthKey].operating_activities) {
+                                        months[paymentMonthKey].income.admin_fees += incomeAmount;
+                                        months[paymentMonthKey].operating_activities.inflows += incomeAmount;
+                                        months[paymentMonthKey].operating_activities.net += incomeAmount;
+                                        if (months[paymentMonthKey].operating_activities.breakdown && months[paymentMonthKey].operating_activities.breakdown.admin_fees) {
+                                            months[paymentMonthKey].operating_activities.breakdown.admin_fees.amount += incomeAmount;
+                                        }
+                                    }
+                                    
+                                    // Remove from original month - ONLY from the category it was initially placed in
+                                    if (months[monthKey] && months[monthKey].income && months[monthKey].operating_activities) {
+                                        // Determine which category this transaction was initially placed in
+                                        const originalCategory = monthlyCategory; // This was set earlier in the logic
+                                        
+                                        if (originalCategory === 'admin_fees') {
+                                            months[monthKey].income.admin_fees -= incomeAmount;
+                                            if (months[monthKey].operating_activities.breakdown && months[monthKey].operating_activities.breakdown.admin_fees) {
+                                                months[monthKey].operating_activities.breakdown.admin_fees.amount -= incomeAmount;
+                                            }
+                                        } else if (originalCategory === 'advance_payments') {
+                                            months[monthKey].income.advance_payments -= incomeAmount;
+                                            if (months[monthKey].operating_activities.breakdown && months[monthKey].operating_activities.breakdown.advance_payments) {
+                                                months[monthKey].operating_activities.breakdown.advance_payments.amount -= incomeAmount;
+                                            }
+                                        }
+                                        
+                                        // Always adjust the totals
+                                        months[monthKey].operating_activities.inflows -= incomeAmount;
+                                        months[monthKey].operating_activities.net -= incomeAmount;
+                                    }
+                                    
+                                    console.log(`💰 Admin fee moved to PAYMENT MONTH ${paymentMonth}: ${incomeAmount} - Transaction: ${entry.transactionId} - Payment: ${correspondingPayment.paymentId} - Original category: ${monthlyCategory}`);
+                                }
+                            }
+                            
+                            // Additional check: if this is an admin fee transaction, try to find the payment by student and amount
+                            if (monthlyCategory === 'admin_fees' && !correspondingPayment) {
+                                // Try to find payment by student and amount for admin fees
+                                const matchingPayment = payments.find(p => 
+                                    p.student && entry.metadata && entry.metadata.student &&
+                                    p.student.toLowerCase().includes(entry.metadata.student.toLowerCase()) &&
+                                    Math.abs(p.totalAmount - incomeAmount) < 0.01
+                                );
+                                
+                                if (matchingPayment) {
+                                    const paymentDate = new Date(matchingPayment.date);
+                                    const paymentMonth = paymentDate.toISOString().slice(0, 7);
+                                    
+                                    // If payment was made in July, categorize in July instead of August
+                                    if (paymentMonth === '2025-07') {
+                                        const julyKey = '2025-07';
+                                        if (!months[julyKey]) {
+                                            months[julyKey] = this.initializeMonthData('2025-07');
+                                        }
+                                        
+                                        // Add to July
+                                        months[julyKey].income.admin_fees += incomeAmount;
+                                        months[julyKey].operating_activities.inflows += incomeAmount;
+                                        months[julyKey].operating_activities.net += incomeAmount;
+                                        months[julyKey].operating_activities.breakdown.admin_fees.amount += incomeAmount;
+                                        
+                                        // Remove from August
+                                        months[monthKey].income.admin_fees -= incomeAmount;
+                                        months[monthKey].operating_activities.inflows -= incomeAmount;
+                                        months[monthKey].operating_activities.net -= incomeAmount;
+                                        months[monthKey].operating_activities.breakdown.admin_fees.amount -= incomeAmount;
+                                        
+                                        console.log(`💰 Admin fee moved from August to July via student/amount matching: ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                                    }
+                                }
+                            }
+                            
+                            // Final check: if this is an admin fee transaction, try to find the payment by amount and date proximity
+                            if (monthlyCategory === 'admin_fees' && !correspondingPayment) {
+                                // Try to find payment by amount and date proximity for admin fees
+                                const matchingPayment = payments.find(p => 
+                                    Math.abs(p.totalAmount - incomeAmount) < 0.01 &&
+                                    p.date && entry.date &&
+                                    Math.abs(new Date(p.date).getTime() - new Date(entry.date).getTime()) < 30 * 24 * 60 * 60 * 1000 // Within 30 days
+                                );
+                                
+                                if (matchingPayment) {
+                                    const paymentDate = new Date(matchingPayment.date);
+                                    const paymentMonth = paymentDate.toISOString().slice(0, 7);
+                                    
+                                    // If payment was made in July, categorize in July instead of August
+                                    if (paymentMonth === '2025-07') {
+                                        const julyKey = '2025-07';
+                                        if (!months[julyKey]) {
+                                            months[julyKey] = this.initializeMonthData('2025-07');
+                                        }
+                                        
+                                        // Add to July
+                                        months[julyKey].income.admin_fees += incomeAmount;
+                                        months[julyKey].operating_activities.inflows += incomeAmount;
+                                        months[julyKey].operating_activities.net += incomeAmount;
+                                        months[julyKey].operating_activities.breakdown.admin_fees.amount += incomeAmount;
+                                        
+                                        // Remove from August
+                                        months[monthKey].income.admin_fees -= incomeAmount;
+                                        months[monthKey].operating_activities.inflows -= incomeAmount;
+                                        months[monthKey].operating_activities.net -= incomeAmount;
+                                        months[monthKey].operating_activities.breakdown.admin_fees.amount -= incomeAmount;
+                                        
+                                        console.log(`💰 Admin fee moved from August to July via amount/date matching: ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                                    }
+                                }
+                            }
                         } else if (monthlyCategory === 'deposits') {
                             months[monthKey].income.deposits += incomeAmount;
                         } else if (monthlyCategory === 'utilities') {
@@ -1829,27 +2300,75 @@ class EnhancedCashFlowService {
         // Process transaction entries to calculate cash flows
         transactionEntries.forEach(entry => {
             if (entry.entries && entry.entries.length > 0) {
-                // Use payment date if available, otherwise use transaction date
+                // ALWAYS prioritize payment date from payments collection for cash flow accuracy
                 let effectiveDate = entry.date;
+                let correspondingPayment = null;
                 
                 // For expense payments, prioritize datePaid from metadata
                 if (entry.source === 'expense_payment' && entry.metadata && entry.metadata.datePaid) {
                     effectiveDate = new Date(entry.metadata.datePaid);
                     console.log(`💰 Using datePaid from expense payment: ${entry.transactionId} - ${effectiveDate.toISOString().slice(0, 7)}`);
                 }
-                // Try to find corresponding payment for accurate date
+                // Try to find corresponding payment for accurate date - PRIORITY 1: Reference
                 else if (entry.reference) {
                     // Look for payment by reference
-                    const payment = payments.find(p => p._id.toString() === entry.reference);
-                    if (payment) {
-                        effectiveDate = payment.date;
-                        transactionToPaymentMap.set(entry.transactionId, payment);
-                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${payment.paymentId} with date ${payment.date.toISOString().slice(0, 7)}`);
+                    correspondingPayment = payments.find(p => p._id.toString() === entry.reference);
+                    if (correspondingPayment) {
+                        effectiveDate = correspondingPayment.date;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
                     } else {
                         console.log(`⚠️ No payment found for reference ${entry.reference} in transaction ${entry.transactionId} - using transaction date`);
-                        // Use transaction date if payment reference is invalid
                         effectiveDate = entry.date;
                     }
+                }
+                // PRIORITY 2: PaymentId in metadata
+                else if (entry.metadata && entry.metadata.paymentId) {
+                    correspondingPayment = payments.find(p => p.paymentId === entry.metadata.paymentId);
+                    if (correspondingPayment) {
+                        effectiveDate = correspondingPayment.date;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
+                    } else {
+                        console.log(`⚠️ No payment found for paymentId ${entry.metadata.paymentId} in transaction ${entry.transactionId} - using transaction date`);
+                        effectiveDate = entry.date;
+                    }
+                }
+                // PRIORITY 3: Student and amount matching for advance transactions
+                else if (entry.description && entry.description.toLowerCase().includes('advance')) {
+                    correspondingPayment = payments.find(p => 
+                        p.student && entry.metadata && entry.metadata.studentId && 
+                        p.student.toString() === entry.metadata.studentId.toString() &&
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                    );
+                    if (correspondingPayment) {
+                        effectiveDate = correspondingPayment.date;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked advance transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} by student/amount match with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
+                    } else {
+                        console.log(`⚠️ No matching payment found for advance transaction ${entry.transactionId} - using transaction date`);
+                        effectiveDate = entry.date;
+                    }
+                }
+                // PRIORITY 4: General student and amount matching for any transaction
+                else if (entry.metadata && entry.metadata.studentId) {
+                    correspondingPayment = payments.find(p => 
+                        p.student && p.student.toString() === entry.metadata.studentId.toString() &&
+                        Math.abs(p.totalAmount - (entry.totalDebit || entry.totalCredit || 0)) < 0.01
+                    );
+                    if (correspondingPayment) {
+                        effectiveDate = correspondingPayment.date;
+                        transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
+                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} by student/amount match with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
+                    } else {
+                        console.log(`⚠️ No matching payment found for transaction ${entry.transactionId} - using transaction date`);
+                        effectiveDate = entry.date;
+                    }
+                }
+                
+                // Store the corresponding payment for later use
+                if (correspondingPayment) {
+                    transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
                 }
                 
                 const monthKey = effectiveDate.toISOString().slice(0, 7);

@@ -37,9 +37,10 @@ class FinancialReportingService {
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred');
                 
                 // For accrual basis, look at transaction entries with rental_accrual source for income
+                // Also include forfeiture transactions and reversals (which are debits to income accounts)
                 const accrualEntries = await TransactionEntry.find({
                     date: { $gte: startDate, $lte: endDate },
-                    source: { $in: ['rental_accrual', 'manual'] },
+                    source: { $in: ['rental_accrual', 'manual', 'payment', 'rental_accrual_reversal'] },
                     status: 'posted'
                 });
                 
@@ -55,7 +56,7 @@ class FinancialReportingService {
                 const revenueByAccount = {};
             const residences = new Set();
             
-                // Process rental accruals (income when earned)
+                // Process rental accruals (income when earned) and forfeitures (income when forfeited)
                 accrualEntries.forEach(entry => {
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
@@ -66,6 +67,14 @@ class FinancialReportingService {
                                 
                                 const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
                                 revenueByAccount[key] = (revenueByAccount[key] || 0) + amount;
+                                
+                                // Log forfeiture and reversal transactions for debugging
+                                if (entry.metadata && entry.metadata.isForfeiture) {
+                                    console.log(`🔄 Forfeiture transaction: ${entry.transactionId}, Amount: ${amount}, Account: ${lineItem.accountName}`);
+                                }
+                                if (entry.source === 'rental_accrual_reversal') {
+                                    console.log(`🔄 Reversal transaction: ${entry.transactionId}, Amount: ${amount}, Account: ${lineItem.accountName}`);
+                                }
                             }
                         });
                     }
@@ -333,10 +342,10 @@ class FinancialReportingService {
             if (basis === 'accrual') {
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred by month');
                 
-                // For accrual basis, group rental accruals and manual adjustments by month
+                // For accrual basis, group rental accruals, manual adjustments, and reversals by month
                 const accrualQuery = {
                     date: { $gte: startDate, $lte: endDate },
-                    source: { $in: ['rental_accrual', 'manual'] },
+                    source: { $in: ['rental_accrual', 'manual', 'rental_accrual_reversal'] },
                     status: 'posted'
                 };
                 
@@ -1028,9 +1037,14 @@ class FinancialReportingService {
                             'manual',              // Manual cash transactions
                             'payment_collection',  // Cash payments
                             'bank_transfer',       // Bank transfers
-                            'payment'              // Cash payments (rent, deposits, etc.)
+                            'payment',             // Cash payments (rent, deposits, etc.)
+                            'advance_payment',     // Advance payments from students
+                            'debt_settlement',     // Debt settlement payments
+                            'current_payment'      // Current period payments
                         ]
-                    }
+                    },
+                    // Exclude forfeiture transactions as they don't involve cash movement
+                    'metadata.isForfeiture': { $ne: true }
                 };
                 
                 const paymentEntries = await TransactionEntry.find(paymentQuery).populate('entries');
@@ -1049,7 +1063,16 @@ class FinancialReportingService {
                         }
                     }
                     
-                    // If not found by sourceId, try to find by metadata.paymentId
+                    // If not found by sourceId, try to find by reference (payment ID)
+                    if (!payment && entry.reference) {
+                        try {
+                            payment = await Payment.findById(entry.reference);
+                        } catch (error) {
+                            console.log(`⚠️ Could not find payment by reference for entry ${entry._id}:`, error.message);
+                        }
+                    }
+                    
+                    // If not found by reference, try to find by metadata.paymentId
                     if (!payment && entry.metadata && entry.metadata.paymentId) {
                         try {
                             payment = await Payment.findById(entry.metadata.paymentId);
@@ -1093,10 +1116,12 @@ class FinancialReportingService {
                 }
                 
             } else {
-                // Accrual basis: include all transactions with original dates
+                // Accrual basis: include all transactions with original dates (exclude forfeiture transactions - no cash movement)
                 console.log('🔵 ACCRUAL BASIS: Including all transactions');
                 const query = {
-                    date: { $gte: startDate, $lte: endDate }
+                    date: { $gte: startDate, $lte: endDate },
+                    // Exclude forfeiture transactions as they don't involve cash movement
+                    'metadata.isForfeiture': { $ne: true }
                 };
                 entries = await TransactionEntry.find(query).populate('entries');
             }
@@ -1162,18 +1187,13 @@ class FinancialReportingService {
                     const debit = line.debit || 0;
                     const credit = line.credit || 0;
                     
-                    // For cash basis, ONLY include actual CASH accounts (1000-1999)
-                    if (basis === 'cash') {
-                        const isCashAccount = /^10/.test(accountCode);
-                        
-                        // Skip non-cash accounts completely - they don't represent cash flow
-                        // This includes:
-                        // - Revenue accounts (4000-4999) - these are earned, not cash received
-                        // - Expense accounts (5000-5999) - these are incurred, not cash paid
-                        // - Non-cash assets (1100-1999 except cash accounts)
-                        if (!isCashAccount) {
-                            return;
-                        }
+                    // For cash basis, we need to show the cash impact of all transactions
+                    // The key is that we're already filtering by payment sources above,
+                    // so these transactions represent actual cash movements
+                    
+                    // Skip accrual-only transactions (like rental_accrual) for cash basis
+                    if (basis === 'cash' && entry.source === 'rental_accrual') {
+                        return;
                     }
                     
                     // Determine activity type and cash flow
@@ -1192,10 +1212,22 @@ class FinancialReportingService {
                                     inflows: 0, 
                                     outflows: 0,
                                     accountName: accountName, // Store the name for display
-                                    accountCode: accountCode  // Store the code for display
+                                    accountCode: accountCode,  // Store the code for display
+                                    transactionDetails: [] // Store individual transaction details
                                 };
                             }
                             monthlyCashFlow[monthName].operating_activities.breakdown[key].inflows += cashFlow;
+                            
+                            // Add transaction detail for drill-down functionality
+                            monthlyCashFlow[monthName].operating_activities.breakdown[key].transactionDetails.push({
+                                transactionId: entry.transactionId,
+                                date: entry.date,
+                                amount: cashFlow,
+                                description: entry.description,
+                                debtorName: line.accountName.includes('-') ? line.accountName.split('-')[1]?.trim() : 'N/A',
+                                reference: entry.reference,
+                                type: 'inflow'
+                            });
                         } else {
                             monthlyCashFlow[monthName].operating_activities.outflows += Math.abs(cashFlow);
                             // Track account breakdown for outflows - use account code as primary key to avoid duplicates
@@ -1204,10 +1236,23 @@ class FinancialReportingService {
                                 monthlyCashFlow[monthName].operating_activities.breakdown[key] = { 
                                     inflows: 0, 
                                     outflows: 0,
-                                    accountName: accountName // Store the name for display
+                                    accountName: accountName, // Store the name for display
+                                    accountCode: accountCode,  // Store the code for display
+                                    transactionDetails: [] // Store individual transaction details
                                 };
                             }
                             monthlyCashFlow[monthName].operating_activities.breakdown[key].outflows += Math.abs(cashFlow);
+                            
+                            // Add transaction detail for drill-down functionality
+                            monthlyCashFlow[monthName].operating_activities.breakdown[key].transactionDetails.push({
+                                transactionId: entry.transactionId,
+                                date: entry.date,
+                                amount: Math.abs(cashFlow),
+                                description: entry.description,
+                                debtorName: line.accountName.includes('-') ? line.accountName.split('-')[1]?.trim() : 'N/A',
+                                reference: entry.reference,
+                                type: 'outflow'
+                            });
                         }
                         monthlyCashFlow[monthName].operating_activities.net += cashFlow;
                     } else if (activityType === 'investing') {
@@ -1321,11 +1366,17 @@ class FinancialReportingService {
                             inflows: 0, 
                             outflows: 0,
                             accountName: amounts.accountName, // Preserve account name
-                            accountCode: amounts.accountCode  // Preserve account code
+                            accountCode: amounts.accountCode,  // Preserve account code
+                            transactionDetails: [] // Initialize transaction details array
                         };
                     }
                     yearlyTotals.operating_activities.breakdown[account].inflows += amounts.inflows;
                     yearlyTotals.operating_activities.breakdown[account].outflows += amounts.outflows;
+                    
+                    // Aggregate transaction details
+                    if (amounts.transactionDetails) {
+                        yearlyTotals.operating_activities.breakdown[account].transactionDetails.push(...amounts.transactionDetails);
+                    }
                 });
                 
                 // Aggregate investing activities
@@ -2000,9 +2051,11 @@ class FinancialReportingService {
             
             console.log(`Generating cash flow statement for ${period}`);
             
-            // Get all transaction entries for the period
+            // Get all transaction entries for the period (exclude forfeiture transactions - no cash movement)
             const entries = await TransactionEntry.find({
-                date: { $gte: startDate, $lte: endDate }
+                date: { $gte: startDate, $lte: endDate },
+                // Exclude forfeiture transactions as they don't involve cash movement
+                'metadata.isForfeiture': { $ne: true }
             }).populate('entries');
             
             console.log(`Found ${entries.length} transaction entries for ${period}`);
@@ -2381,7 +2434,9 @@ class FinancialReportingService {
         try {
             const entries = await TransactionEntry.find({
                 date: { $gte: startDate, $lte: endDate },
-                source: { $in: ['payment', 'expense_payment'] }
+                source: { $in: ['payment', 'expense_payment'] },
+                // Exclude forfeiture transactions as they don't involve cash movement
+                'metadata.isForfeiture': { $ne: true }
             }).populate('entries');
             
             let cashReceived = 0;
@@ -2436,7 +2491,9 @@ class FinancialReportingService {
     static async getCashBalanceAtDate(date, basis) {
         try {
             const entries = await TransactionEntry.find({
-                date: { $lte: date }
+                date: { $lte: date },
+                // Exclude forfeiture transactions as they don't involve cash movement
+                'metadata.isForfeiture': { $ne: true }
             }).populate('entries');
             
             let cashBalance = 0;
@@ -2668,16 +2725,25 @@ class FinancialReportingService {
             // Skip non-cash assets (like Accounts Receivable, Property, Equipment)
             return 0;
         } else if (accountType === 'Liability' || accountType === 'liability') {
-            // Only include cash-related liabilities (like bank loans, cash advances)
-            if (accountCode && /^20/.test(accountCode)) {
-                return debit - credit; // Liability increase = cash inflow (+), Liability decrease = cash outflow (-)
-            }
-            // Skip non-cash liabilities
+            // For cash basis, we need to show the cash impact of liability changes
+            // But we should only show this if it represents actual cash movement
+            // For advance payments, the cash is already captured in the Cash account entry
+            // So we skip liability entries to avoid double-counting
+            return 0;
+        } else if (accountType === 'Income' || accountType === 'income') {
+            // For cash basis, income accounts represent cash received
+            // But we should only show this if it represents actual cash movement
+            // The cash is already captured in the Cash account entry
+            // So we skip income entries to avoid double-counting
+            return 0;
+        } else if (accountType === 'Expense' || accountType === 'expense') {
+            // For cash basis, expense accounts represent cash paid
+            // But we should only show this if it represents actual cash movement
+            // The cash is already captured in the Cash account entry
+            // So we skip expense entries to avoid double-counting
             return 0;
         }
-        // DO NOT include Income or Expense accounts in cashflow
-        // Income/Expense accounts represent revenue earned/expenses incurred, not cash movements
-        // Cashflow should only show when cash actually changes hands
+        
         return 0;
     }
 

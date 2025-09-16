@@ -412,7 +412,7 @@ class DebtorTransactionSyncService {
                     if (processedCount % 10 === 0) {
                         console.log(`   Processed ${processedCount}/${debtors.length} debtors...`);
                     }
-        } catch (error) {
+                } catch (error) {
                     console.error(`❌ Error processing debtor ${debtor.debtorCode}:`, error.message);
                     errorCount++;
                 }

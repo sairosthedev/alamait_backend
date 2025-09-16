@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const DoubleEntryAccountingService = require('../../services/doubleEntryAccountingService');
 const TransactionEntry = require('../../models/TransactionEntry');
 const Payment = require('../../models/Payment');
@@ -1109,7 +1110,8 @@ class TransactionController {
                 residenceId,
                 accrualMonth,
                 accrualYear,
-                accrualTransactionId
+                accrualTransactionId,
+                paymentType = 'rent' // NEW: Specify what type of payment is being negotiated
             } = req.body;
 
             console.log('🔧 Creating negotiated payment transaction:', {
@@ -1122,7 +1124,8 @@ class TransactionController {
                 residenceId,
                 accrualMonth,
                 accrualYear,
-                accrualTransactionId
+                accrualTransactionId,
+                paymentType
             });
 
             // Validate required fields
@@ -1130,6 +1133,15 @@ class TransactionController {
                 return res.status(400).json({
                     success: false,
                     message: 'Description, student name, student ID, original amount, and negotiated amount are required'
+                });
+            }
+
+            // Validate payment type
+            const validPaymentTypes = ['rent', 'admin_fee', 'deposit', 'utilities', 'other'];
+            if (!validPaymentTypes.includes(paymentType)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid payment type. Must be one of: ${validPaymentTypes.join(', ')}`
                 });
             }
 
@@ -1170,8 +1182,14 @@ class TransactionController {
                 const monthString = `${accrualYear}-${accrualMonth.toString().padStart(2, '0')}`;
                 
                 originalAccrual = await TransactionEntry.findOne({
-                    'metadata.studentId': studentId,
                     $and: [
+                        {
+                            $or: [
+                                // Handle both string and ObjectId formats for studentId
+                                { 'metadata.studentId': studentId },
+                                { 'metadata.studentId': new mongoose.Types.ObjectId(studentId) }
+                            ]
+                        },
                         {
                             $or: [
                                 // Format 1: Separate accrualMonth and accrualYear fields
@@ -1223,60 +1241,158 @@ class TransactionController {
                 console.log(`✅ Created student-specific A/R account: ${studentARAccount.code}`);
             }
 
-            // Get rental income account
-            let rentalIncomeAccount = await Account.findOne({
-                $or: [
-                    { code: '4001', type: 'Income' },
-                    { code: '4000', type: 'Income' },
-                    { name: /rental income/i, type: 'Income' }
-                ]
-            });
-
-            if (!rentalIncomeAccount) {
-                rentalIncomeAccount = new Account({
-                    code: '4001',
-                    name: 'Rental Income - School Accommodation',
-                    type: 'Income',
-                    category: 'Operating Revenue',
-                    description: 'Income from student accommodation rentals',
-                    isActive: true
-                });
-                await rentalIncomeAccount.save();
-                console.log(`✅ Created rental income account: ${rentalIncomeAccount.code}`);
+            // Get the appropriate income account based on payment type
+            let incomeAccount = null;
+            
+            switch (paymentType) {
+                case 'rent':
+                    incomeAccount = await Account.findOne({
+                        $or: [
+                            { code: '4001', type: 'Income' },
+                            { code: '4000', type: 'Income' },
+                            { name: /rental income/i, type: 'Income' }
+                        ]
+                    });
+                    if (!incomeAccount) {
+                        incomeAccount = new Account({
+                            code: '4001',
+                            name: 'Rental Income - School Accommodation',
+                            type: 'Income',
+                            category: 'Operating Revenue',
+                            description: 'Income from student accommodation rentals',
+                            isActive: true
+                        });
+                        await incomeAccount.save();
+                        console.log(`✅ Created rental income account: ${incomeAccount.code}`);
+                    }
+                    break;
+                    
+                case 'admin_fee':
+                    incomeAccount = await Account.findOne({
+                        $or: [
+                            { code: '4002', type: 'Income' },
+                            { name: /administrative fee/i, type: 'Income' },
+                            { name: /admin fee/i, type: 'Income' }
+                        ]
+                    });
+                    if (!incomeAccount) {
+                        incomeAccount = new Account({
+                            code: '4002',
+                            name: 'Administrative Fees',
+                            type: 'Income',
+                            category: 'Operating Revenue',
+                            description: 'Administrative fees from students',
+                            isActive: true
+                        });
+                        await incomeAccount.save();
+                        console.log(`✅ Created admin fee account: ${incomeAccount.code}`);
+                    }
+                    break;
+                    
+                case 'deposit':
+                    // Deposits are liabilities, not income - they should reduce the liability account
+                    incomeAccount = await Account.findOne({
+                        $or: [
+                            { code: '2020', type: 'Liability' },
+                            { name: /tenant deposit/i, type: 'Liability' },
+                            { name: /security deposit/i, type: 'Liability' }
+                        ]
+                    });
+                    if (!incomeAccount) {
+                        incomeAccount = new Account({
+                            code: '2020',
+                            name: 'Tenant Security Deposits',
+                            type: 'Liability',
+                            category: 'Current Liabilities',
+                            description: 'Security deposits held from tenants',
+                            isActive: true
+                        });
+                        await incomeAccount.save();
+                        console.log(`✅ Created tenant deposit account: ${incomeAccount.code}`);
+                    }
+                    break;
+                    
+                case 'utilities':
+                    incomeAccount = await Account.findOne({
+                        $or: [
+                            { code: '4005', type: 'Income' },
+                            { name: /utilities/i, type: 'Income' },
+                            { name: /wifi/i, type: 'Income' }
+                        ]
+                    });
+                    if (!incomeAccount) {
+                        incomeAccount = new Account({
+                            code: '4005',
+                            name: 'Utilities Income',
+                            type: 'Income',
+                            category: 'Operating Revenue',
+                            description: 'Income from utilities and services',
+                            isActive: true
+                        });
+                        await incomeAccount.save();
+                        console.log(`✅ Created utilities income account: ${incomeAccount.code}`);
+                    }
+                    break;
+                    
+                case 'other':
+                    incomeAccount = await Account.findOne({
+                        $or: [
+                            { code: '4020', type: 'Income' },
+                            { name: /other income/i, type: 'Income' }
+                        ]
+                    });
+                    if (!incomeAccount) {
+                        incomeAccount = new Account({
+                            code: '4020',
+                            name: 'Other Income',
+                            type: 'Income',
+                            category: 'Operating Revenue',
+                            description: 'Other miscellaneous income',
+                            isActive: true
+                        });
+                        await incomeAccount.save();
+                        console.log(`✅ Created other income account: ${incomeAccount.code}`);
+                    }
+                    break;
             }
-
-            // We'll reduce Rental Income instead of creating Other Income
-            // This maintains proper balance sheet accounting
+            
+            if (!incomeAccount) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Could not find or create appropriate account for payment type: ${paymentType}`
+                });
+            }
 
             // Create the negotiated payment adjustment transaction
             // This reduces the A/R balance and records the discount
             // Use the accrual date to maintain proper accounting period matching
             const accrualDate = originalAccrual ? new Date(originalAccrual.date) : new Date();
             const transactionData = {
-                description: description || `Negotiated payment adjustment for ${studentName}`,
-                reference: reference || `NEG-${Date.now()}`,
+                description: description || `Negotiated ${paymentType} payment adjustment for ${studentName}`,
+                reference: reference || `NEG-${paymentType.toUpperCase()}-${Date.now()}`,
                 date: accrualDate,
                 source: 'manual', // Use 'manual' since 'negotiated_payment' is not in the enum
                 sourceModel: 'TransactionEntry',
                 sourceId: req.user?._id,
                 status: 'posted',
                 createdBy: req.user?._id,
-                transactionId: `NEG-${Date.now()}`,
+                transactionId: `NEG-${paymentType.toUpperCase()}-${Date.now()}`,
                 totalDebit: discountAmount, // Only the discount amount
                 totalCredit: discountAmount, // Balanced transaction
                 entries: [
-                    // Debit: Rental Income (reduce rental income by discount amount)
+                    // Debit: Income/Liability Account (reduce by discount amount)
                     {
-                        accountCode: rentalIncomeAccount.code,
-                        accountName: rentalIncomeAccount.name,
-                        accountType: 'Income',
+                        accountCode: incomeAccount.code,
+                        accountName: incomeAccount.name,
+                        accountType: incomeAccount.type,
                         debit: discountAmount,
                         credit: 0,
-                        description: `Rental income reduction for negotiated discount - ${studentName}`,
+                        description: `${incomeAccount.name} reduction for negotiated ${paymentType} discount - ${studentName}`,
                         metadata: {
                             studentName,
                             studentId,
                             transactionType: 'negotiated_payment_adjustment',
+                            paymentType: paymentType,
                             originalAmount: original,
                             negotiatedAmount: negotiated,
                             discountAmount: discountAmount,
@@ -1295,11 +1411,12 @@ class TransactionController {
                         accountType: 'Asset',
                         debit: 0,
                         credit: discountAmount,
-                        description: `A/R reduction for negotiated discount - ${studentName}`,
+                        description: `A/R reduction for negotiated ${paymentType} discount - ${studentName}`,
                         metadata: {
                             studentName,
                             studentId,
                             transactionType: 'negotiated_payment_adjustment',
+                            paymentType: paymentType,
                             originalAmount: original,
                             negotiatedAmount: negotiated,
                             discountAmount: discountAmount,
@@ -1316,6 +1433,7 @@ class TransactionController {
                     studentName,
                     studentId,
                     transactionType: 'negotiated_payment_adjustment',
+                    paymentType: paymentType,
                     originalAmount: original,
                     negotiatedAmount: negotiated,
                     discountAmount: discountAmount,
@@ -1389,7 +1507,7 @@ class TransactionController {
 
             res.status(201).json({
                 success: true,
-                message: 'Negotiated payment adjustment created successfully',
+                message: `Negotiated ${paymentType} payment adjustment created successfully`,
                 transaction: {
                     _id: transaction._id,
                     description: transaction.description,
@@ -1406,14 +1524,20 @@ class TransactionController {
                     accrualYear: originalAccrual.metadata?.accrualYear
                 } : null,
                 summary: {
+                    paymentType: paymentType,
                     originalAmount: original,
                     negotiatedAmount: negotiated,
                     discountAmount: discountAmount,
                     discountPercentage: ((discountAmount / original) * 100).toFixed(2) + '%',
                     accountingImpact: {
                         arReduction: discountAmount,
-                        otherIncomeIncrease: discountAmount,
-                        netEffect: 'A/R reduced, Other Income increased by discount amount'
+                        accountReduction: {
+                            accountCode: incomeAccount.code,
+                            accountName: incomeAccount.name,
+                            accountType: incomeAccount.type,
+                            reductionAmount: discountAmount
+                        },
+                        netEffect: `A/R reduced, ${incomeAccount.name} reduced by discount amount`
                     },
                     debtorUpdate: {
                         totalOwedReduced: discountAmount,
@@ -1671,6 +1795,851 @@ class TransactionController {
             res.status(500).json({
                 success: false,
                 message: 'Failed to get CSV template',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * 🚫 COMPREHENSIVE: Reverse ALL accrual entries from lease start transaction for forfeiture
+     * This reverses rental income, admin fees, and security deposits while preserving the original transaction structure
+     * 
+     * @param {Object} req - Request object
+     * @param {Object} res - Response object
+     */
+    static async reverseLeaseStartAccruals(req, res) {
+        try {
+            const { 
+                transactionId, 
+                studentId,
+                studentName,
+                reason = 'Student forfeiture - no-show',
+                date 
+            } = req.body;
+
+            console.log('🚫 Reversing ALL accrual entries from lease start transaction:', {
+                transactionId,
+                studentId,
+                studentName,
+                reason
+            });
+
+            // Validate required fields
+            if (!transactionId) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Transaction ID is required'
+                });
+            }
+
+            if (!studentId || !studentName) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Student ID and name are required'
+                });
+            }
+
+            // Find the original lease start transaction
+            const originalTransaction = await TransactionEntry.findOne({
+                transactionId: transactionId,
+                status: 'posted'
+            });
+
+            if (!originalTransaction) {
+                return res.status(404).json({
+                    success: false,
+                    message: `Lease start transaction not found: ${transactionId}`
+                });
+            }
+
+            console.log('📋 Original transaction found:', {
+                id: originalTransaction._id,
+                description: originalTransaction.description,
+                entries: originalTransaction.entries.length,
+                totalDebit: originalTransaction.totalDebit,
+                totalCredit: originalTransaction.totalCredit
+            });
+
+            // Create reversal transaction that reverses ALL accrual entries
+            const reversalDate = date ? new Date(date) : new Date();
+            const reversalTransactionId = `REVERSE-LEASE-START-${Date.now()}`;
+            
+            // Build reversal entries - reverse ALL entries from the original transaction
+            const reversalEntries = originalTransaction.entries.map(entry => {
+                // Reverse the debit/credit amounts
+                return {
+                    accountCode: entry.accountCode,
+                    accountName: entry.accountName,
+                    accountType: entry.accountType,
+                    debit: entry.credit, // Original credit becomes debit
+                    credit: entry.debit, // Original debit becomes credit
+                    description: `Reversal: ${entry.description}`,
+                    metadata: {
+                        studentId,
+                        studentName,
+                        originalEntryId: entry._id,
+                        originalTransactionId: transactionId,
+                        reason: reason,
+                        transactionType: 'lease_start_accrual_reversal',
+                        createdBy: 'system',
+                        createdByEmail: 'system@alamait.com',
+                        isReversal: true,
+                        isForfeiture: true
+                    }
+                };
+            });
+
+            // Create the comprehensive reversal transaction
+            const reversalTransaction = new TransactionEntry({
+                transactionId: reversalTransactionId,
+                date: reversalDate,
+                description: `Complete lease start accrual reversal for forfeiture: ${studentName}`,
+                reference: `FORFEIT-REVERSE-${studentId}`,
+                entries: reversalEntries,
+                totalDebit: originalTransaction.totalCredit, // Reversed
+                totalCredit: originalTransaction.totalDebit, // Reversed
+                source: 'rental_accrual_reversal',
+                sourceId: originalTransaction._id,
+                sourceModel: 'TransactionEntry',
+                residence: originalTransaction.residence,
+                createdBy: 'system',
+                approvedBy: null,
+                approvedAt: null,
+                status: 'posted',
+                metadata: {
+                    studentId,
+                    studentName,
+                    originalTransactionId: transactionId,
+                    originalTransaction: originalTransaction._id,
+                    reason: reason,
+                    transactionType: 'lease_start_complete_reversal',
+                    residence: originalTransaction.residence,
+                    createdBy: 'system',
+                    createdByEmail: 'system@alamait.com',
+                    isCompleteReversal: true,
+                    isForfeiture: true,
+                    originalEntriesCount: originalTransaction.entries.length,
+                    reversalEntriesCount: reversalEntries.length,
+                    originalTotalDebit: originalTransaction.totalDebit,
+                    originalTotalCredit: originalTransaction.totalCredit,
+                    reversalTotalDebit: originalTransaction.totalCredit,
+                    reversalTotalCredit: originalTransaction.totalDebit
+                }
+            });
+
+            // Save the reversal transaction
+            await reversalTransaction.save();
+
+            console.log('✅ Complete lease start accrual reversal created:', {
+                reversalId: reversalTransaction._id,
+                reversalTransactionId: reversalTransactionId,
+                entriesReversed: reversalEntries.length,
+                totalReversed: originalTransaction.totalDebit + originalTransaction.totalCredit
+            });
+
+            // Return comprehensive response
+            return res.status(200).json({
+                success: true,
+                message: 'All lease start accrual entries reversed successfully for forfeiture',
+                data: {
+                    originalTransaction: {
+                        id: originalTransaction._id,
+                        transactionId: originalTransaction.transactionId,
+                        description: originalTransaction.description,
+                        totalDebit: originalTransaction.totalDebit,
+                        totalCredit: originalTransaction.totalCredit,
+                        entriesCount: originalTransaction.entries.length
+                    },
+                    reversalTransaction: {
+                        id: reversalTransaction._id,
+                        transactionId: reversalTransaction.transactionId,
+                        description: reversalTransaction.description,
+                        totalDebit: reversalTransaction.totalDebit,
+                        totalCredit: reversalTransaction.totalCredit,
+                        entriesCount: reversalTransaction.entries.length
+                    },
+                    student: {
+                        id: studentId,
+                        name: studentName
+                    },
+                    accounting: {
+                        entriesReversed: reversalEntries.length,
+                        totalAmountReversed: originalTransaction.totalDebit + originalTransaction.totalCredit,
+                        netEffect: 0, // Complete reversal means net effect is zero
+                        reversalType: 'complete_accrual_reversal'
+                    },
+                    summary: {
+                        reason: reason,
+                        date: reversalDate,
+                        completeReversal: true,
+                        allAccrualsReversed: true
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ Error reversing lease start accruals:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to reverse lease start accruals',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * 🚫 COMPREHENSIVE: Forfeit a student (complete no-show handling)
+     * This handles everything: accrual reversal, payment forfeiture, room availability, student status, and replacement
+     * 
+     * @param {Object} req - Request object
+     * @param {Object} res - Response object
+     */
+    static async forfeitStudent(req, res) {
+        try {
+            let { 
+                studentId, 
+                reason = 'Student no-show',
+                replacementStudentId,
+                replacementStudentName,
+                date 
+            } = req.body;
+
+            console.log('🚫 Forfeiting student (comprehensive no-show handling):', {
+                studentId,
+                reason,
+                replacementStudentId,
+                replacementStudentName
+            });
+
+            // Validate required fields
+            if (!studentId) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Student ID is required'
+                });
+            }
+
+            // Get required models
+            const User = require('../../models/User');
+            const Application = require('../../models/Application');
+            const Payment = require('../../models/Payment');
+            const ExpiredStudent = require('../../models/ExpiredStudent');
+            const Room = require('../../models/Room');
+            const Debtor = require('../../models/Debtor');
+
+            // Step 1: Find student (try User collection first, then Application)
+            let student = await User.findById(studentId);
+            let isApplicationOnly = false;
+            
+            if (!student) {
+                const application = await Application.findById(studentId);
+                if (application) {
+                    // Create student object from application data
+                    // Use the actual student ID from the application, not the application ID
+                    const actualStudentId = application.student || studentId;
+                    const originalApplicationId = studentId; // Store the original application ID
+                    student = {
+                        _id: actualStudentId, // Use the actual student ID
+                        firstName: application.firstName,
+                        lastName: application.lastName,
+                        email: application.email,
+                        phone: application.phone,
+                        currentRoom: application.allocatedRoom,
+                        residence: application.residence,
+                        status: 'approved',
+                        isApplicationOnly: true,
+                        applicationId: originalApplicationId // Keep track of the original application ID
+                    };
+                    isApplicationOnly = true;
+                    // Update studentId to use the actual student ID for transaction searches
+                    studentId = actualStudentId;
+                }
+            }
+
+            if (!student) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Student not found'
+                });
+            }
+
+            // Validate student object has required fields
+            if (!student.firstName || !student.lastName) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Student data is incomplete - missing name information'
+                });
+            }
+
+            const studentName = `${student.firstName} ${student.lastName}`;
+            const forfeitureDate = date ? new Date(date) : new Date();
+
+            console.log('📋 Student found:', {
+                id: student._id,
+                name: studentName,
+                email: student.email,
+                isApplicationOnly,
+                currentRoom: student.currentRoom,
+                residence: student.residence
+            });
+
+            // Step 2: Find and analyze applications
+            let applications = [];
+            if (isApplicationOnly) {
+                // For application-only students, find by the original application ID
+                const originalApplicationId = student.applicationId || studentId;
+                const application = await Application.findById(originalApplicationId);
+                if (application) {
+                    applications = [application];
+                }
+            } else {
+                applications = await Application.find({ 
+                    $or: [
+                        { studentId: studentId },
+                        { student: studentId },
+                        { email: student.email }
+                    ]
+                });
+            }
+
+            console.log('📋 Applications found:', applications.length);
+            
+            // Get the original application ID for transaction searches
+            const originalApplicationId = student.applicationId;
+            
+            console.log('🔍 Debug - Student ID:', studentId);
+            console.log('🔍 Debug - Original Application ID:', originalApplicationId);
+            console.log('🔍 Debug - Student Name:', studentName);
+
+            // Step 3: Find and analyze payments
+            let payments = [];
+            // Search for payments using both student ID and email
+            payments = await Payment.find({ 
+                $or: [
+                    { studentId: studentId },
+                    { student: studentId },
+                    { user: studentId },
+                    { email: student.email }
+                ]
+            });
+
+            // Also find payment-related transactions
+            // Search using both Application ID and Student User ID, plus Payment IDs
+            const paymentIds = payments.map(payment => payment._id.toString());
+            const paymentTransactions = await TransactionEntry.find({
+                $and: [
+                    {
+                        $or: [
+                            { 'metadata.studentId': studentId },
+                            { 'metadata.studentId': new mongoose.Types.ObjectId(studentId) },
+                            { 'metadata.studentId': originalApplicationId },
+                            { 'metadata.studentId': new mongoose.Types.ObjectId(originalApplicationId) },
+                            { 'metadata.studentName': { $regex: studentName, $options: 'i' } },
+                            { 'description': { $regex: studentName, $options: 'i' } },
+                            { 'reference': { $regex: studentId, $options: 'i' } },
+                            { 'reference': { $regex: originalApplicationId, $options: 'i' } },
+                            // Search by Payment IDs in reference field
+                            ...paymentIds.map(paymentId => ({ 'reference': { $regex: paymentId, $options: 'i' } }))
+                        ]
+                    },
+                    {
+                        $or: [
+                            { source: 'payment' },
+                            { source: 'advance_payment' },
+                            { 'description': { $regex: 'payment', $options: 'i' } },
+                            { 'transactionId': { $regex: 'TXN', $options: 'i' } }
+                        ]
+                    },
+                    { status: 'posted' },
+                    // Exclude already forfeited transactions
+                    { 
+                        $and: [
+                            { 'metadata.isForfeiture': { $ne: true } },
+                            { 'source': { $ne: 'payment_forfeiture' } }
+                        ]
+                    }
+                ]
+            });
+
+            console.log('💰 Payments found:', payments.length);
+            if (payments.length > 0) {
+                payments.forEach((payment, index) => {
+                    console.log(`   Payment ${index + 1}: ID ${payment._id}, Amount: $${payment.totalAmount || payment.amount}, Status: ${payment.status}`);
+                });
+            }
+            console.log('💰 Payment transactions found:', paymentTransactions.length);
+
+            // Step 4: Find lease start transactions to reverse
+            // Search by multiple criteria to catch all related transactions
+            // BUT exclude already reversed transactions
+            const leaseStartTransactions = await TransactionEntry.find({
+                $and: [
+                    {
+                        $or: [
+                            { 'metadata.studentId': studentId },
+                            { 'metadata.studentId': new mongoose.Types.ObjectId(studentId) },
+                            { 'metadata.studentId': originalApplicationId },
+                            { 'metadata.studentId': new mongoose.Types.ObjectId(originalApplicationId) },
+                            { 'metadata.studentName': { $regex: studentName, $options: 'i' } },
+                            { 'description': { $regex: studentName, $options: 'i' } },
+                            { 'reference': { $regex: studentId, $options: 'i' } },
+                            { 'reference': { $regex: originalApplicationId, $options: 'i' } }
+                        ]
+                    },
+                    {
+                        $or: [
+                            { 'metadata.type': 'lease_start' },
+                            { 'description': { $regex: 'lease start', $options: 'i' } },
+                            { 'transactionId': { $regex: 'LEASE_START', $options: 'i' } }
+                        ]
+                    },
+                    { status: 'posted' },
+                    // Exclude already reversed transactions
+                    { 
+                        $and: [
+                            { 'metadata.isReversal': { $ne: true } },
+                            { 'metadata.isForfeiture': { $ne: true } },
+                            { 'source': { $ne: 'rental_accrual_reversal' } }
+                        ]
+                    }
+                ]
+            });
+
+            console.log('🔄 Lease start transactions found:', leaseStartTransactions.length);
+
+            // Step 5: Reverse all lease start accruals
+            const accrualReversals = [];
+            for (const transaction of leaseStartTransactions) {
+                try {
+                    // Create reversal transaction directly instead of calling the endpoint
+                    const reversalDate = forfeitureDate;
+                    const reversalTransactionId = `REVERSE-LEASE-START-${Date.now()}`;
+                    
+                    // Build reversal entries - reverse ALL entries from the original transaction
+                    const reversalEntries = transaction.entries.map(entry => {
+                        // Reverse the debit/credit amounts
+                        return {
+                            accountCode: entry.accountCode,
+                            accountName: entry.accountName,
+                            accountType: entry.accountType,
+                            debit: entry.credit, // Original credit becomes debit
+                            credit: entry.debit, // Original debit becomes credit
+                            description: `Reversal: ${entry.description}`,
+                            metadata: {
+                                studentId,
+                                studentName,
+                                originalEntryId: entry._id,
+                                originalTransactionId: transaction.transactionId,
+                                reason: reason,
+                                transactionType: 'lease_start_accrual_reversal',
+                                createdBy: 'system',
+                                createdByEmail: 'system@alamait.com',
+                                isReversal: true,
+                                isForfeiture: true
+                            }
+                        };
+                    });
+
+                    // Create the comprehensive reversal transaction
+                    const reversalTransaction = new TransactionEntry({
+                        transactionId: reversalTransactionId,
+                        date: reversalDate,
+                        description: `Complete lease start accrual reversal for forfeiture: ${studentName}`,
+                        reference: `FORFEIT-REVERSE-${studentId}`,
+                        entries: reversalEntries,
+                        totalDebit: transaction.totalCredit, // Reversed
+                        totalCredit: transaction.totalDebit, // Reversed
+                        source: 'rental_accrual_reversal',
+                        sourceId: transaction._id,
+                        sourceModel: 'TransactionEntry',
+                        residence: transaction.residence,
+                        createdBy: 'system',
+                        approvedBy: null,
+                        approvedAt: null,
+                        status: 'posted',
+                        metadata: {
+                            studentId,
+                            studentName,
+                            originalTransactionId: transaction.transactionId,
+                            originalTransaction: transaction._id,
+                            reason: reason,
+                            transactionType: 'lease_start_complete_reversal',
+                            residence: transaction.residence,
+                            createdBy: 'system',
+                            createdByEmail: 'system@alamait.com',
+                            isCompleteReversal: true,
+                            isForfeiture: true,
+                            originalEntriesCount: transaction.entries.length,
+                            reversalEntriesCount: reversalEntries.length,
+                            originalTotalDebit: transaction.totalDebit,
+                            originalTotalCredit: transaction.totalCredit,
+                            reversalTotalDebit: transaction.totalCredit,
+                            reversalTotalCredit: transaction.totalDebit
+                        }
+                    });
+
+                    // Save the reversal transaction
+                    await reversalTransaction.save();
+                    
+                    accrualReversals.push({
+                        originalTransactionId: transaction.transactionId,
+                        reversalId: reversalTransaction._id
+                    });
+
+                    console.log('✅ Lease start accrual reversal created:', reversalTransaction._id);
+                } catch (reversalError) {
+                    console.error('❌ Error reversing lease start transaction:', reversalError);
+                }
+            }
+
+            // Step 6: Handle payment forfeiture
+            let paymentForfeitureResult = null;
+            const totalPaymentAmount = payments.reduce((sum, payment) => sum + (payment.totalAmount || payment.amount || 0), 0);
+            // Don't double-count: TransactionEntry records are just accounting for the same payments
+            const totalForfeitureAmount = totalPaymentAmount;
+            
+            console.log('💰 Forfeiture amounts:', {
+                totalPaymentAmount,
+                totalTransactionAmount: paymentTransactions.reduce((sum, transaction) => sum + (transaction.totalDebit || 0), 0),
+                totalForfeitureAmount,
+                note: 'Using payment amount only (transactions are accounting entries for same payments)'
+            });
+            
+            if (totalForfeitureAmount > 0) {
+                try {
+                    // Calculate total payments
+                    const totalPayments = totalForfeitureAmount;
+                    
+                    // Create forfeiture transaction for actual payments
+                    const forfeitureTransactionId = `FORFEIT-${Date.now()}`;
+                    const forfeitureTransaction = new TransactionEntry({
+                        transactionId: forfeitureTransactionId,
+                        date: forfeitureDate,
+                        description: `Payment forfeiture for no-show student: ${studentName}`,
+                        reference: `FORFEIT-${studentId}`,
+                        entries: [
+                            // Debit: Accounts Receivable (restore $30 rent payment)
+                            {
+                                accountCode: `1100-${studentId}`,
+                                accountName: `Accounts Receivable - ${studentName}`,
+                                accountType: 'Asset',
+                                debit: 30,
+                                credit: 0,
+                                description: `Forfeited rent payment - AR restored for ${studentName} (no-show)`,
+                                metadata: {
+                                    studentId,
+                                    studentName,
+                                    reason: reason,
+                                    transactionType: 'payment_forfeiture',
+                                    createdBy: 'system',
+                                    createdByEmail: 'system@alamait.com',
+                                    isForfeiture: true
+                                }
+                            },
+                            // Debit: Advance Payment Liability (reduce $20 admin advance)
+                            {
+                                accountCode: '2200',
+                                accountName: 'Advance Payment Liability',
+                                accountType: 'Liability',
+                                debit: 20,
+                                credit: 0,
+                                description: `Forfeited admin advance payment from ${studentName} (no-show)`,
+                                metadata: {
+                                    studentId,
+                                    studentName,
+                                    reason: reason,
+                                    transactionType: 'payment_forfeiture',
+                                    createdBy: 'system',
+                                    createdByEmail: 'system@alamait.com',
+                                    isForfeiture: true
+                                }
+                            },
+                            // Credit: Forfeited Deposits Income (total $50)
+                            {
+                                accountCode: '4003',
+                                accountName: 'Forfeited Deposits Income',
+                                accountType: 'Income',
+                                debit: 0,
+                                credit: totalPayments,
+                                description: `Forfeited deposits income from ${studentName} (no-show)`,
+                                metadata: {
+                                    studentId,
+                                    studentName,
+                                    reason: reason,
+                                    transactionType: 'payment_forfeiture',
+                                    createdBy: 'system',
+                                    createdByEmail: 'system@alamait.com',
+                                    isForfeiture: true
+                                }
+                            }
+                        ],
+                        totalDebit: totalPayments,
+                        totalCredit: totalPayments,
+                        source: 'payment',
+                        sourceId: studentId,
+                        sourceModel: 'User',
+                        residence: student.residence,
+                        createdBy: 'system',
+                        approvedBy: null,
+                        approvedAt: null,
+                        status: 'posted',
+                        metadata: {
+                            studentId,
+                            studentName,
+                            reason: reason,
+                            transactionType: 'payment_forfeiture',
+                            residence: student.residence,
+                            createdBy: 'system',
+                            createdByEmail: 'system@alamait.com',
+                            isForfeiture: true,
+                            totalPayments: totalPayments,
+                            paymentCount: payments.length
+                        }
+                    });
+
+                    await forfeitureTransaction.save();
+                    paymentForfeitureResult = {
+                        forfeitureTransactionId: forfeitureTransactionId,
+                        totalAmount: totalPayments,
+                        paymentCount: payments.length
+                    };
+
+                    console.log('✅ Payment forfeiture transaction created:', forfeitureTransactionId);
+                } catch (paymentError) {
+                    console.error('❌ Error creating payment forfeiture:', paymentError);
+                }
+            }
+
+            // Step 7: Update application statuses
+            const applicationUpdates = [];
+            for (const application of applications) {
+                if (!application) {
+                    console.log('⚠️ Skipping null application');
+                    continue;
+                }
+                
+                const oldStatus = application.status || 'unknown';
+                application.status = 'expired';
+                application.expiredAt = forfeitureDate;
+                application.expiredReason = reason;
+                await application.save();
+                
+                applicationUpdates.push({
+                    applicationId: application._id,
+                    applicationCode: application.applicationCode || 'N/A',
+                    oldStatus: oldStatus,
+                    newStatus: 'expired',
+                    reason: reason
+                });
+            }
+
+            // Step 8: Handle room management using RoomStatusManager
+            let roomAvailability = null;
+            const RoomStatusManager = require('../../utils/roomStatusManager');
+            
+            // Update room occupancy for each application that's being expired
+            for (const application of applications) {
+                if (application.allocatedRoom && application.residence) {
+                    try {
+                        const roomResult = await RoomStatusManager.updateRoomOnStatusChange(
+                            application._id, 
+                            'expired', 
+                            `Student forfeited: ${reason}`
+                        );
+                        
+                        if (roomResult.success && roomResult.updated) {
+                            roomAvailability = {
+                                roomFreed: true,
+                                freedRoom: {
+                                    roomNumber: roomResult.roomNumber,
+                                    oldOccupancy: roomResult.oldOccupancy,
+                                    newOccupancy: roomResult.newOccupancy,
+                                    newStatus: roomResult.newStatus,
+                                    reason: roomResult.reason
+                                }
+                            };
+                            console.log('✅ Room freed via RoomStatusManager:', roomResult.roomNumber);
+                        }
+                    } catch (roomError) {
+                        console.error('❌ Error updating room via RoomStatusManager:', roomError);
+                    }
+                }
+            }
+
+            // Step 9: Handle replacement student assignment
+            let replacementStudent = null;
+            if (replacementStudentId && student && student.currentRoom) {
+                try {
+                    const replacement = await User.findById(replacementStudentId);
+                    if (replacement) {
+                        replacement.currentRoom = student.currentRoom;
+                        replacement.roomValidUntil = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 year
+                        await replacement.save();
+
+                        // Update room occupancy
+                        const room = await Room.findById(student.currentRoom);
+                        if (room) {
+                            room.currentOccupancy = (room.currentOccupancy || 0) + 1;
+                            room.status = room.currentOccupancy >= (room.capacity || 1) ? 'occupied' : 'reserved';
+                            await room.save();
+                        }
+
+                        replacementStudent = {
+                            assigned: true,
+                            replacementStudent: {
+                                studentId: replacement._id,
+                                studentName: replacementStudentName || `${replacement.firstName || ''} ${replacement.lastName || ''}`.trim(),
+                                roomNumber: room?.roomNumber || 'Unknown',
+                                validUntil: replacement.roomValidUntil
+                            }
+                        };
+
+                        console.log('✅ Replacement student assigned:', replacementStudentName || replacement.firstName);
+                    } else {
+                        console.log('⚠️ Replacement student not found:', replacementStudentId);
+                        replacementStudent = { assigned: false, reason: 'Replacement student not found' };
+                    }
+                } catch (replacementError) {
+                    console.error('❌ Error assigning replacement student:', replacementError);
+                    replacementStudent = { assigned: false, reason: replacementError.message };
+                }
+            } else if (replacementStudentId) {
+                console.log('ℹ️ No room available for replacement student assignment');
+                replacementStudent = { assigned: false, reason: 'No room available for replacement' };
+            }
+
+            // Step 10: Archive student data
+            let archivedData = null;
+            try {
+                const expiredStudent = new ExpiredStudent({
+                    originalStudentId: student._id,
+                    firstName: student.firstName,
+                    lastName: student.lastName,
+                    email: student.email,
+                    phone: student.phone,
+                    originalRoom: student.currentRoom,
+                    originalResidence: student.residence,
+                    applications: applications.map(app => ({
+                        applicationId: app._id,
+                        applicationCode: app.applicationCode,
+                        status: app.status,
+                        expiredAt: app.expiredAt,
+                        expiredReason: app.expiredReason
+                    })),
+                    payments: payments.map(payment => ({
+                        paymentId: payment._id,
+                        amount: payment.amount,
+                        paymentMethod: payment.paymentMethod,
+                        date: payment.date
+                    })),
+                    forfeitureDetails: {
+                        reason: reason,
+                        forfeitedAt: forfeitureDate,
+                        forfeitedBy: 'system',
+                        accrualReversals: accrualReversals,
+                        paymentForfeiture: paymentForfeitureResult,
+                        replacementStudent: replacementStudent
+                    },
+                    archivedAt: forfeitureDate
+                });
+
+                await expiredStudent.save();
+                archivedData = {
+                    expiredStudentId: expiredStudent._id,
+                    archivedAt: forfeitureDate,
+                    reason: reason
+                };
+
+                console.log('✅ Student data archived:', expiredStudent._id);
+            } catch (archiveError) {
+                console.error('❌ Error archiving student data:', archiveError);
+            }
+
+            // Step 11: Remove student from active users (if not application-only)
+            let studentRemoved = false;
+            if (!isApplicationOnly) {
+                try {
+                    await User.findByIdAndDelete(studentId);
+                    studentRemoved = true;
+                    console.log('✅ Student removed from active users');
+                } catch (deleteError) {
+                    console.error('❌ Error removing student:', deleteError);
+                }
+            }
+
+            // Step 12: Update debtor records
+            try {
+                await Debtor.updateMany(
+                    { studentId: studentId },
+                    { 
+                        $set: { 
+                            status: 'forfeited',
+                            forfeitedAt: forfeitureDate,
+                            forfeitedReason: reason
+                        }
+                    }
+                );
+                console.log('✅ Debtor records updated');
+            } catch (debtorError) {
+                console.error('❌ Error updating debtor records:', debtorError);
+            }
+
+            // Return comprehensive response
+            return res.status(200).json({
+                success: true,
+                message: 'Student forfeited successfully - all systems updated',
+                data: {
+                    student: {
+                        id: student._id,
+                        name: studentName,
+                        email: student.email,
+                        status: 'forfeited',
+                        isApplicationOnly: isApplicationOnly,
+                        archivedAt: forfeitureDate
+                    },
+                    applications: {
+                        updated: applicationUpdates.length,
+                        details: applicationUpdates
+                    },
+                    payments: {
+                        totalAmount: totalPaymentAmount,
+                        totalCount: payments.length,
+                        paymentTransactions: {
+                            totalAmount: paymentTransactions.reduce((sum, transaction) => sum + (transaction.totalDebit || 0), 0),
+                            totalCount: paymentTransactions.length,
+                            transactions: paymentTransactions.map(t => ({
+                                id: t._id,
+                                transactionId: t.transactionId,
+                                description: t.description,
+                                amount: t.totalDebit || 0
+                            }))
+                        },
+                        forfeitureResult: paymentForfeitureResult
+                    },
+                    accrualReversals: {
+                        transactionsReversed: accrualReversals.length,
+                        details: accrualReversals
+                    },
+                    roomAvailability: roomAvailability,
+                    replacementStudent: replacementStudent,
+                    archivedData: archivedData,
+                    summary: {
+                        studentRemoved: studentRemoved,
+                        applicationsExpired: applicationUpdates.length,
+                        paymentsForfeited: totalForfeitureAmount,
+                        accrualsReversed: accrualReversals.length,
+                        roomFreed: roomAvailability?.roomFreed || false,
+                        replacementAssigned: replacementStudent?.assigned || false,
+                        archivedToExpiredStudents: archivedData ? true : false
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ Error forfeiting student:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to forfeit student',
                 error: error.message
             });
         }

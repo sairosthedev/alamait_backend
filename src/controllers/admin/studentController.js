@@ -1120,9 +1120,59 @@ exports.manualAddStudent = async (req, res) => {
             return res.status(404).json({ error: 'Room not found in this residence' });
         }
 
-        // Check room availability
+        // Check room availability using date-based booking logic
+        const Booking = require('../../models/Booking');
+        const isRoomAvailable = await Booking.checkAvailability(residenceId, roomNumber, startDate, endDate);
+        
+        if (!isRoomAvailable) {
+            const roomCapacity = room.capacity || 1;
+            if (roomCapacity === 1) {
+                return res.status(400).json({ 
+                    error: 'Room is not available for the specified dates',
+                    details: 'Another booking already exists for this room during the requested period'
+                });
+            } else {
+                return res.status(400).json({ 
+                    error: 'Room is at full capacity for the specified dates',
+                    details: `Room has reached its maximum capacity of ${roomCapacity} students during the requested period`
+                });
+            }
+        }
+        
+        // Also check current occupancy as a secondary check
         if (room.currentOccupancy >= room.capacity) {
-            return res.status(400).json({ error: 'Room is at full capacity' });
+            console.log(`⚠️ Room ${roomNumber} is at full capacity (${room.currentOccupancy}/${room.capacity}), but checking if it will be available by lease start date`);
+            
+            // If room is at capacity, check if any current occupants will be leaving before the lease starts
+            const leaseStartDate = new Date(startDate);
+            const currentDate = new Date();
+            
+            if (leaseStartDate > currentDate) {
+                // Check if any current bookings end before the new lease starts
+                const currentBookings = await Booking.find({
+                    residence: residenceId,
+                    'room.roomNumber': roomNumber,
+                    status: { $nin: ['cancelled', 'completed'] },
+                    endDate: { $lt: leaseStartDate }
+                });
+                
+                const roomsFreeingUp = currentBookings.length;
+                const projectedOccupancy = Math.max(0, room.currentOccupancy - roomsFreeingUp);
+                
+                if (projectedOccupancy >= room.capacity) {
+                    return res.status(400).json({ 
+                        error: 'Room will not be available by the lease start date',
+                        details: `Room will still be at capacity (${projectedOccupancy}/${room.capacity}) when lease starts`
+                    });
+                }
+                
+                console.log(`✅ Room will be available by lease start date. Current: ${room.currentOccupancy}, Freeing up: ${roomsFreeingUp}, Projected: ${projectedOccupancy}`);
+            } else {
+                return res.status(400).json({ 
+                    error: 'Room is at full capacity and lease starts immediately',
+                    details: 'Cannot allocate room that is currently at full capacity'
+                });
+            }
         }
 
         // Validate all required variables are defined
@@ -2812,6 +2862,65 @@ exports.backfillAllTransactions = async (req, res) => {
             error: error.message
         });
     }
+};
+
+/**
+ * Manual backfill transactions for a specific debtor
+ * @route POST /api/admin/students/:debtorId/backfill-transactions
+ * @access Private (Admin only)
+ */
+exports.backfillDebtorTransactions = async (req, res) => {
+	try {
+		const { debtorId } = req.params;
+		console.log(`🔄 Manual backfill request for debtor: ${debtorId}`);
+		
+		const Debtor = require('../../models/Debtor');
+		const { backfillTransactionsForDebtor } = require('../../services/transactionBackfillService');
+		
+		// Find the debtor
+		const debtor = await Debtor.findById(debtorId)
+			.populate('user', 'firstName lastName email')
+			.populate('application', 'applicationCode startDate endDate');
+		
+		if (!debtor) {
+			return res.status(404).json({
+				success: false,
+				message: 'Debtor not found'
+			});
+		}
+		
+		const bulk = (req.query.bulk === 'true') || (req.body && req.body.bulk === true);
+		const manual = (req.query.manual === 'true') || (req.body && req.body.manual === true);
+		const result = await backfillTransactionsForDebtor(debtor, { bulk, manual });
+		
+		if (result.success) {
+			res.json({
+				success: true,
+				message: 'Backfill completed successfully',
+				leaseStartCreated: result.leaseStartCreated,
+				monthlyTransactionsCreated: result.monthlyTransactionsCreated,
+				duplicatesRemoved: result.duplicatesRemoved
+			});
+		} else if (result.skipped) {
+			res.status(200).json({
+				success: true,
+				message: `Backfill skipped: ${result.reason || 'not in bulk mode'}`
+			});
+		} else {
+			res.status(500).json({
+				success: false,
+				message: 'Backfill failed',
+				error: result.error
+			});
+		}
+	} catch (error) {
+		console.error('❌ Manual backfill failed:', error);
+		res.status(500).json({
+			success: false,
+			message: 'Backfill operation failed',
+			error: error.message
+		});
+	}
 };
 
 /**

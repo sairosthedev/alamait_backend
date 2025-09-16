@@ -38,7 +38,7 @@ const applicationSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'approved', 'rejected', 'waitlisted', 'expired'],
+        enum: ['pending', 'approved', 'rejected', 'waitlisted', 'expired', 'forfeited'],
         default: 'pending'
     },
     paymentStatus: {

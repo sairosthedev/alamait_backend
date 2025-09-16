@@ -46,6 +46,7 @@ const adminRequestRoutes = require('./routes/admin/requestRoutes');
 const financeResidenceRoutes = require('./routes/finance/residenceRoutes');
 const leaseTemplateRoutes = require('./routes/admin/leaseTemplateRoutes');
 const adminLeaseRoutes = require('./routes/admin/leaseRoutes');
+const studentStatusRoutes = require('./routes/admin/studentStatusRoutes');
 
 // CEO routes
 const ceoRoutes = require('./routes/ceo/index');
@@ -93,6 +94,10 @@ const app = express();
 
 // Initialize cron jobs
 initCronJobs();
+
+// Initialize student status job
+const StudentStatusJob = require('./jobs/studentStatusJob');
+StudentStatusJob.initialize();
 
 // Start monthly accrual cron service
 const monthlyAccrualCronService = require('./services/monthlyAccrualCronService');
@@ -264,6 +269,7 @@ app.use('/api/admin/events', adminEventRoutes);
 app.use('/api/admin/requests', adminRequestRoutes);
 app.use('/api/admin/lease-templates', leaseTemplateRoutes);
 app.use('/api/admin/leases', adminLeaseRoutes);
+app.use('/api/admin/students', studentStatusRoutes);
 
 // Payment Allocation routes (FIFO-based payment allocation system)
 const adminPaymentAllocationRoutes = require('./routes/admin/paymentAllocationRoutes');

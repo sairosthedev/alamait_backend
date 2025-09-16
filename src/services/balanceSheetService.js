@@ -550,16 +550,15 @@ class BalanceSheetService {
       );
       console.log(`📊 Filtered to ${balanceSheetAccounts.length} balance sheet relevant accounts`);
       
-      // 🚀 OPTIMIZATION: Process months in parallel instead of sequentially
-      console.log(`⚡ Processing all 12 months in parallel for faster generation... [DEPLOYED]`);
+      // 🚀 OPTIMIZATION: Process months sequentially to avoid database overload
+      console.log(`⚡ Processing months sequentially to prevent database timeout... [DEPLOYED]`);
       
-      const monthPromises = [];
       for (let month = 1; month <= 12; month++) {
         const monthEndDate = new Date(year, month, 0, 23, 59, 59, 999); // Last day of the month with end of day time
         const monthKey = month;
         
-        const monthPromise = (async () => {
-          try {
+        try {
+          console.log(`📅 Processing month ${month}/${year}...`);
           let monthBalanceSheet;
           
           // Always use cumulative balance calculation to include all transactions up to month end
@@ -644,42 +643,9 @@ class BalanceSheetService {
             error: null
           };
           
-          } catch (monthError) {
-            console.error(`❌ Error generating balance sheet for month ${month}:`, monthError);
-            return { 
-              month, 
-              monthKey, 
-              monthData: null, 
-              monthBalanceSheet: null, 
-              annualTotals: null, 
-              error: monthError 
-            };
-          }
-        })();
-        
-        monthPromises.push(monthPromise);
-      }
-      
-      // Wait for all months to complete with progress tracking
-      console.log(`⏳ Waiting for all 12 months to complete...`);
-      const startTime = Date.now();
-      
-      // Use Promise.allSettled to handle individual month failures gracefully
-      const monthResults = await Promise.allSettled(monthPromises);
-      
-      const endTime = Date.now();
-      const duration = (endTime - startTime) / 1000;
-      console.log(`✅ All months processed in ${duration.toFixed(2)} seconds`);
-      
-      // Process results from Promise.allSettled
-      for (let i = 0; i < monthResults.length; i++) {
-        const result = monthResults[i];
-        const month = i + 1;
-        const monthKey = month;
-        
-        if (result.status === 'rejected') {
+        } catch (monthError) {
+          console.error(`❌ Error generating balance sheet for month ${month}:`, monthError);
           // Handle error case
-          console.error(`❌ Error generating balance sheet for month ${month}:`, result.reason);
           monthlyData[monthKey] = {
             month: monthKey,
             monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
@@ -708,61 +674,21 @@ class BalanceSheetService {
               debtToEquity: 0 
             }
           };
-          continue;
         }
         
-        const { month: resultMonth, monthKey: resultMonthKey, monthData, monthBalanceSheet, annualTotals, error } = result.value;
-        
-        if (error) {
-          // Handle error case from the promise result
-          console.error(`❌ Error generating balance sheet for month ${resultMonth}:`, error);
-          monthlyData[monthKey] = {
-            month: monthKey,
-            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
-            assets: {
-              current: { cashAndBank: {}, accountsReceivable: {}, inventory: {}, prepaidExpenses: {}, total: 0 }, 
-              nonCurrent: { propertyPlantEquipment: {}, accumulatedDepreciation: 0, total: 0 }, 
-              total: 0 
-            },
-            liabilities: {
-              current: { accountsPayable: {}, accruedExpenses: {}, tenantDeposits: {}, taxesPayable: {}, total: 0 }, 
-              nonCurrent: { longTermLoans: {}, otherLongTermLiabilities: {}, total: 0 }, 
-              total: 0 
-            },
-            equity: {
-              capital: { accountCode: '3000', accountName: 'Owner\'s Capital', amount: 0 }, 
-              retainedEarnings: { accountCode: '3100', accountName: 'Retained Earnings', amount: 0 }, 
-              otherEquity: { accountCode: '3200', accountName: 'Other Equity', amount: 0 }, 
-              total: 0 
-            },
-            summary: {
-              totalAssets: 0, 
-              totalLiabilities: 0, 
-              totalEquity: 0, 
-              workingCapital: 0, 
-              currentRatio: 0, 
-              debtToEquity: 0 
-            }
-          };
-          continue;
-        }
-        
-        if (monthData) {
-          // Use the pre-structured month data from the promise
-          monthlyData[monthKey] = monthData;
-          
-          // Accumulate annual totals from the promise result
-          if (annualTotals) {
-            annualSummary.totalAnnualAssets += annualTotals.totalAssets || 0;
-            annualSummary.totalAnnualLiabilities += annualTotals.totalLiabilities || 0;
-            annualSummary.totalAnnualEquity += annualTotals.totalEquity || 0;
-            annualSummary.totalAnnualCurrentAssets += annualTotals.totalCurrentAssets || 0;
-            annualSummary.totalAnnualNonCurrentAssets += annualTotals.totalNonCurrentAssets || 0;
-            annualSummary.totalAnnualCurrentLiabilities += annualTotals.totalCurrentLiabilities || 0;
-            annualSummary.totalAnnualNonCurrentLiabilities += annualTotals.totalNonCurrentLiabilities || 0;
-          }
+        // Accumulate annual totals for this month
+        if (monthlyData[monthKey] && monthlyData[monthKey].summary) {
+          annualSummary.totalAnnualAssets += monthlyData[monthKey].summary.totalAssets || 0;
+          annualSummary.totalAnnualLiabilities += monthlyData[monthKey].summary.totalLiabilities || 0;
+          annualSummary.totalAnnualEquity += monthlyData[monthKey].summary.totalEquity || 0;
+          annualSummary.totalAnnualCurrentAssets += monthlyData[monthKey].assets?.current?.total || 0;
+          annualSummary.totalAnnualNonCurrentAssets += monthlyData[monthKey].assets?.nonCurrent?.total || 0;
+          annualSummary.totalAnnualCurrentLiabilities += monthlyData[monthKey].liabilities?.current?.total || 0;
+          annualSummary.totalAnnualNonCurrentLiabilities += monthlyData[monthKey].liabilities?.nonCurrent?.total || 0;
         }
       }
+      
+      console.log(`✅ All 12 months processed sequentially`);
       
       // Calculate annual averages (divide by 12 for monthly average)
       annualSummary.totalAnnualAssets = Math.round(annualSummary.totalAnnualAssets / 12);
