@@ -881,14 +881,17 @@ class AccountingService {
         };
         
         const paymentQuery = {
-            source: 'payment',
+            source: { $in: ['payment', 'expense_payment', 'vendor_payment'] },
             'entries.accountCode': accountCode,
-            'metadata.monthSettled': { $lte: monthKey },
+            $or: [
+                { 'metadata.monthSettled': { $lte: monthKey } }, // For rental payments
+                { date: { $lte: asOfDate } } // For expense payments (use transaction date)
+            ],
             status: 'posted'
         };
         
         const otherQuery = {
-            source: { $nin: ['rental_accrual', 'payment'] },
+            source: { $nin: ['rental_accrual', 'payment', 'expense_payment', 'vendor_payment'] },
             'entries.accountCode': accountCode,
             date: { $lte: asOfDate },
             status: 'posted'
@@ -915,10 +918,12 @@ class AccountingService {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
                     if (subEntry.accountCode === accountCode) {
-                        // Special handling for tenant deposits (liability account)
-                        if (accountCode === '2020') {
+                        // Calculate balance based on account type
+                        if (accountCode === '2020' || accountCode === '2000') {
+                            // Liability accounts: credits increase balance, debits decrease balance
                             balance += (subEntry.credit || 0) - (subEntry.debit || 0);
                         } else {
+                            // Asset accounts: debits increase balance, credits decrease balance
                             balance += (subEntry.debit || 0) - (subEntry.credit || 0);
                         }
                     }

@@ -134,4 +134,21 @@ router.get('/financial-summary', FinancialReportsController.getFinancialSummary)
  */
 router.post('/export', FinancialReportsController.exportFinancialReport);
 
+/**
+ * Balance Sheet Drill-down Routes
+ */
+const balanceSheetController = require('../controllers/finance/balanceSheetController');
+
+/**
+ * Balance Sheet Account Details (Drill-down)
+ * GET /api/financial-reports/balance-sheet/account-details?period=2025&month=july&accountCode=1000
+ */
+router.get('/balance-sheet/account-details', balanceSheetController.getAccountTransactionDetails);
+
+/**
+ * Balance Sheet with Drill-down Links
+ * GET /api/financial-reports/balance-sheet/with-drilldown?period=2025&basis=cash
+ */
+router.get('/balance-sheet/with-drilldown', balanceSheetController.getBalanceSheetWithDrillDown);
+
 module.exports = router; 

@@ -242,6 +242,11 @@ vendorSchema.pre('save', async function(next) {
             this.vendorCode = await generateVendorCode();
         }
         
+        // Generate vendorId if not provided (required for unique constraint)
+        if (!this.vendorId) {
+            this.vendorId = this.vendorCode; // Use vendorCode as vendorId
+        }
+        
         // Also generate chart of accounts code if not provided
         if (!this.chartOfAccountsCode) {
             const vendorCount = await mongoose.model('Vendor').countDocuments();

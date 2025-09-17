@@ -450,4 +450,88 @@ export const getBalanceSheetEntries = async (asOf = '2025-12-31', basis = 'cash'
     console.error('Error fetching balance sheet entries:', error);
     throw error;
   }
-}; 
+};
+
+// Cash Flow Drill-down Methods
+export const getCashFlowWithDrillDown = async (period, basis = 'cash', residenceId = '') => {
+  try {
+    const params = new URLSearchParams();
+    params.append('period', period);
+    params.append('basis', basis);
+    if (residenceId) {
+      params.append('residenceId', residenceId);
+    }
+    
+    const response = await api.get(`/finance/cashflow/with-drilldown?${params.toString()}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching cash flow with drill-down:', error);
+    throw error;
+  }
+};
+
+export const getAccountTransactionDetails = async (period, month, accountCode, residenceId = '') => {
+  try {
+    const params = new URLSearchParams();
+    params.append('period', period);
+    params.append('month', month);
+    params.append('accountCode', accountCode);
+    if (residenceId) {
+      params.append('residenceId', residenceId);
+    }
+    
+    const response = await api.get(`/finance/cashflow/account-details?${params.toString()}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching account transaction details:', error);
+    throw error;
+  }
+};
+
+// Get residences for filtering
+export const getResidences = async () => {
+  try {
+    const response = await api.get('/residences');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching residences:', error);
+    throw error;
+  }
+};
+
+// Default export with all methods
+const financeService = {
+  getTransactionEntries,
+  getAllTransactions,
+  getTransactionSummary,
+  getTransactionById,
+  getTransactionEntriesById,
+  getIncomeStatement,
+  getMonthlyIncomeStatement,
+  getMonthlyBalanceSheet,
+  getMonthlyCashFlow,
+  getBalanceSheet,
+  getCashFlowStatement,
+  getTrialBalance,
+  getGeneralLedger,
+  getAccountBalances,
+  getFinancialSummary,
+  exportFinancialReport,
+  getIncomeTransactions,
+  getCashFlowData,
+  getTrialBalanceData,
+  getMonthlyExpenses,
+  createDoubleEntryTransaction,
+  getTransactionAccounts,
+  updateTransactionEntry,
+  deleteTransactionEntry,
+  updateTransactionEntries,
+  uploadCsvTransactions,
+  getCsvTemplate,
+  getBalanceSheetEntries,
+  getCashFlowWithDrillDown,
+  getAccountTransactionDetails,
+  getResidences
+};
+
+export default financeService; 

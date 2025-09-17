@@ -5,6 +5,8 @@ const Asset = require('../../models/finance/Asset');
 const Liability = require('../../models/finance/Liability');
 const Equity = require('../../models/finance/Equity');
 const AuditLog = require('../../models/AuditLog');
+const FinancialReportingService = require('../../services/financialReportingService');
+const TransactionEntry = require('../../models/TransactionEntry');
 
 // Get all balance sheets
 exports.getAllBalanceSheets = async (req, res) => {
@@ -986,6 +988,404 @@ exports.deleteEquity = async (req, res) => {
     } catch (error) {
         console.error('Error deleting equity:', error);
         res.status(500).json({ error: 'Failed to delete equity' });
+    }
+};
+
+/**
+ * Helper function to get account display name for balance sheet drill-down
+ */
+const getAccountDisplayName = (accountCode) => {
+    const accountNames = {
+        // Asset Accounts (1000s)
+        '1000': 'Cash',
+        '1001': 'Bank Account',
+        '1100': 'Accounts Receivable',
+        '1200': 'Prepaid Expenses',
+        '1300': 'Fixed Assets',
+        '1400': 'Accumulated Depreciation',
+        
+        // Liability Accounts (2000s)
+        '2000': 'Accounts Payable',
+        '2020': 'Tenant Security Deposits',
+        '2200': 'Advance Payment Liability',
+        '2300': 'Accrued Expenses',
+        '2400': 'Deferred Income',
+        
+        // Equity Accounts (3000s)
+        '3000': 'Owner\'s Capital',
+        '3100': 'Retained Earnings',
+        '3200': 'Current Year Earnings'
+    };
+    
+    return accountNames[accountCode] || `Account ${accountCode}`;
+};
+
+/**
+ * Get detailed transactions for a specific account and month for balance sheet drill-down
+ * GET /api/finance/balance-sheet/account-details?period=2025&month=july&accountCode=1000
+ */
+exports.getAccountTransactionDetails = async (req, res) => {
+    try {
+        const { period, month, accountCode, residenceId, sourceType } = req.query;
+        
+        console.log(`📋 Balance Sheet Drill-down Query parameters:`, { period, month, accountCode, residenceId, sourceType });
+        
+        if (!period || !month || !accountCode) {
+            return res.status(400).json({
+                success: false,
+                message: 'Period, month, and accountCode parameters are required'
+            });
+        }
+        
+        // Convert month name to month number
+        const monthNames = {
+            'january': 0, 'february': 1, 'march': 2, 'april': 3,
+            'may': 4, 'june': 5, 'july': 6, 'august': 7,
+            'september': 8, 'october': 9, 'november': 10, 'december': 11
+        };
+        
+        const monthNumber = monthNames[month.toLowerCase()];
+        if (monthNumber === undefined) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid month name. Use full month names like "january", "february", etc.'
+            });
+        }
+        
+        // For balance sheet, we need cumulative data up to the end of the selected month
+        // This shows the balance as of that month-end date
+        const asOfDate = new Date(parseInt(period), monthNumber + 1, 0, 23, 59, 59, 999); // Last day of the month
+        
+        console.log(`🔍 Searching for transactions for account ${accountCode} as of ${asOfDate.toLocaleDateString()}`);
+        
+        // Check if this is a parent account that should include child accounts
+        const Account = require('../../models/Account');
+        const mainAccount = await Account.findOne({ code: accountCode });
+        let childAccounts = [];
+        let allAccountCodes = [accountCode];
+        
+        if (mainAccount && accountCode === '1100') {
+            console.log(`🔗 Found parent account ${accountCode}, looking for child accounts...`);
+            
+            // For account 1100, we specifically want student-specific AR accounts
+            // Find accounts with codes that start with 1100- (student-specific AR accounts)
+            childAccounts = await Account.find({
+                code: { $regex: `^1100-` },
+                isActive: true,
+                type: 'Asset'
+            }).select('code name type category');
+            
+            // Add child account codes to the search
+            allAccountCodes = [accountCode, ...childAccounts.map(child => child.code)];
+            
+            console.log(`📊 Found ${childAccounts.length} student-specific AR accounts for ${accountCode}:`, 
+                childAccounts.map(c => `${c.code} - ${c.name}`));
+        }
+        
+        // Build query for cumulative transactions up to the selected month
+        const query = {
+            date: { $lte: asOfDate },
+            'entries.accountCode': { $in: allAccountCodes },
+            status: 'posted'
+        };
+        
+        if (residenceId) {
+            query.residence = residenceId;
+        }
+        
+        console.log(`📊 Balance Sheet Query:`, JSON.stringify(query, null, 2));
+        
+        // Find all relevant transactions
+        const transactions = await TransactionEntry.find(query)
+            .populate('residence')
+            .sort({ date: 1 });
+        
+        console.log(`📈 Found ${transactions.length} transactions for account ${accountCode} and ${childAccounts.length} child accounts`);
+        
+        // Extract account-specific transactions (including child accounts)
+        const accountTransactions = [];
+        let totalDebits = 0;
+        let totalCredits = 0;
+        const uniqueStudents = new Set();
+        const accountBreakdown = {}; // Track transactions by account code
+        
+        transactions.forEach(transaction => {
+            // Filter entries for all relevant account codes (parent + children)
+            const relevantEntries = transaction.entries.filter(entry => 
+                allAccountCodes.includes(entry.accountCode)
+            );
+            
+            relevantEntries.forEach(entry => {
+                const debitAmount = entry.debit || 0;
+                const creditAmount = entry.credit || 0;
+                
+                // Apply sourceType filtering if specified
+                if (sourceType) {
+                    const description = transaction.description?.toLowerCase() || '';
+                    const sourceTypeLower = sourceType.toLowerCase();
+                    
+                    let shouldInclude = false;
+                    
+                    if (sourceTypeLower === 'deposits' || sourceTypeLower === 'security deposits') {
+                        shouldInclude = description.includes('deposit') || description.includes('security');
+                    } else if (sourceTypeLower === 'payables' || sourceTypeLower === 'accounts payable') {
+                        shouldInclude = description.includes('payable') || description.includes('vendor') || 
+                                      description.includes('supplier') || description.includes('bill') ||
+                                      description.includes('expense');
+                    } else if (sourceTypeLower === 'receivables' || sourceTypeLower === 'accounts receivable') {
+                        shouldInclude = description.includes('receivable') || description.includes('rent') ||
+                                      description.includes('rental') || description.includes('outstanding');
+                    } else if (sourceTypeLower === 'cash') {
+                        shouldInclude = description.includes('payment') || description.includes('receipt') ||
+                                      description.includes('cash') || description.includes('bank');
+                    }
+                    
+                    if (!shouldInclude) {
+                        return; // Skip this transaction if it doesn't match the sourceType filter
+                    }
+                }
+                
+                totalDebits += debitAmount;
+                totalCredits += creditAmount;
+                
+                // Track breakdown by account code
+                if (!accountBreakdown[entry.accountCode]) {
+                    accountBreakdown[entry.accountCode] = {
+                        totalDebits: 0,
+                        totalCredits: 0,
+                        transactionCount: 0
+                    };
+                }
+                accountBreakdown[entry.accountCode].totalDebits += debitAmount;
+                accountBreakdown[entry.accountCode].totalCredits += creditAmount;
+                accountBreakdown[entry.accountCode].transactionCount += 1;
+                
+                // Get student information if available
+                let studentName = 'N/A';
+                let debtorName = 'N/A';
+                
+                if (transaction.metadata?.studentName) {
+                    studentName = transaction.metadata.studentName;
+                    uniqueStudents.add(studentName);
+                } else if (transaction.metadata?.debtorName) {
+                    debtorName = transaction.metadata.debtorName;
+                    uniqueStudents.add(debtorName);
+                }
+                
+                // Determine if this is a child account transaction
+                const isChildAccount = entry.accountCode !== accountCode;
+                const childAccountInfo = childAccounts.find(child => child.code === entry.accountCode);
+                
+                accountTransactions.push({
+                    transactionId: transaction.transactionId || transaction._id,
+                    date: transaction.date,
+                    amount: debitAmount || creditAmount,
+                    type: debitAmount > 0 ? 'debit' : 'credit',
+                    description: transaction.description,
+                    accountCode: entry.accountCode,
+                    accountName: entry.accountName,
+                    debtorName,
+                    studentName,
+                    reference: transaction.reference,
+                    source: transaction.source,
+                    // Additional balance sheet specific fields
+                    balance: debitAmount - creditAmount, // Net effect on account
+                    debit: debitAmount,
+                    credit: creditAmount,
+                    // Child account information
+                    isChildAccount,
+                    childAccountName: isChildAccount ? (childAccountInfo?.name || 'Unknown Child Account') : null,
+                    parentAccountCode: isChildAccount ? accountCode : null
+                });
+            });
+        });
+        
+        // Sort transactions by date (newest first for balance sheet view)
+        accountTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        // Calculate running balance for balance sheet accounts
+        let runningBalance = 0;
+        const isAssetOrExpense = accountCode.startsWith('1') || accountCode.startsWith('5');
+        
+        // For balance sheet, calculate the final balance based on account type
+        accountTransactions.reverse(); // Reverse to calculate from oldest to newest
+        accountTransactions.forEach(transaction => {
+            if (isAssetOrExpense) {
+                // Assets and Expenses: Debit increases, Credit decreases
+                runningBalance += (transaction.debit || 0) - (transaction.credit || 0);
+            } else {
+                // Liabilities, Equity, Revenue: Credit increases, Debit decreases
+                runningBalance += (transaction.credit || 0) - (transaction.debit || 0);
+            }
+            transaction.runningBalance = runningBalance;
+        });
+        accountTransactions.reverse(); // Reverse back to newest first for display
+        
+        // Calculate child account summary
+        const childAccountSummary = childAccounts.map(child => {
+            const breakdown = accountBreakdown[child.code] || { totalDebits: 0, totalCredits: 0, transactionCount: 0 };
+            return {
+                accountCode: child.code,
+                accountName: child.name,
+                totalDebits: breakdown.totalDebits,
+                totalCredits: breakdown.totalCredits,
+                transactionCount: breakdown.transactionCount,
+                netBalance: breakdown.totalDebits - breakdown.totalCredits
+            };
+        });
+        
+        const summary = {
+            totalTransactions: accountTransactions.length,
+            totalAmount: Math.abs(totalDebits - totalCredits),
+            totalDebits,
+            totalCredits,
+            finalBalance: runningBalance,
+            uniqueStudents: uniqueStudents.size,
+            dateRange: {
+                start: period + '-01-01',
+                end: asOfDate.toISOString().split('T')[0]
+            },
+            // Child account information
+            hasChildAccounts: childAccounts.length > 0,
+            childAccountCount: childAccounts.length,
+            childAccountSummary,
+            accountBreakdown
+        };
+        
+        console.log(`📊 Balance Sheet Summary for ${accountCode}:`, summary);
+        
+        res.json({
+            success: true,
+            data: {
+                accountCode,
+                accountName: getAccountDisplayName(accountCode),
+                month,
+                period,
+                asOfDate: asOfDate.toISOString().split('T')[0],
+                sourceType: sourceType || null,
+                summary,
+                transactions: accountTransactions,
+                // Additional child account information
+                childAccounts: childAccounts.map(child => ({
+                    code: child.code,
+                    name: child.name,
+                    type: child.type,
+                    category: child.category
+                })),
+                isParentAccount: childAccounts.length > 0,
+                parentAccountInfo: childAccounts.length > 0 ? {
+                    code: accountCode,
+                    name: getAccountDisplayName(accountCode),
+                    totalChildAccounts: childAccounts.length,
+                    aggregatedBalance: runningBalance
+                } : null
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error getting balance sheet account transaction details:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving account transaction details',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get balance sheet with drill-down links
+ * GET /api/finance/balance-sheet/with-drilldown?period=2025&basis=cash
+ */
+exports.getBalanceSheetWithDrillDown = async (req, res) => {
+    try {
+        const { period, basis, residenceId, asOf } = req.query;
+        
+        let balanceSheetData;
+        
+        if (period) {
+            // Generate comprehensive monthly balance sheet
+            balanceSheetData = await FinancialReportingService.generateComprehensiveMonthlyBalanceSheet(
+                period || new Date().getFullYear().toString(),
+                basis || 'cash',
+                residenceId
+            );
+            
+            // Add drill-down URLs to each account in monthly breakdown
+            const addDrillDownLinks = (accounts, month) => {
+                Object.keys(accounts).forEach(accountKey => {
+                    const account = accounts[accountKey];
+                    if (account.code && (account.balance !== 0 || account.amount !== 0)) {
+                        const monthName = typeof month === 'string' ? month.toLowerCase() : 
+                                        ['january', 'february', 'march', 'april', 'may', 'june',
+                                         'july', 'august', 'september', 'october', 'november', 'december'][month];
+                        
+                        account.drillDownUrl = `/api/finance/balance-sheet/account-details?period=${period}&month=${monthName}&accountCode=${account.code}${residenceId ? `&residenceId=${residenceId}` : ''}`;
+                    }
+                });
+            };
+            
+            // Add drill-down links to monthly breakdowns
+            if (balanceSheetData.monthly_breakdown) {
+                Object.keys(balanceSheetData.monthly_breakdown).forEach(monthIndex => {
+                    const monthData = balanceSheetData.monthly_breakdown[monthIndex];
+                    addDrillDownLinks(monthData.assets, monthData.month);
+                    addDrillDownLinks(monthData.liabilities, monthData.month);
+                    addDrillDownLinks(monthData.equity, monthData.month);
+                });
+            }
+            
+        } else if (asOf) {
+            // Generate single-date balance sheet
+            balanceSheetData = await FinancialReportingService.generateBalanceSheet(asOf, basis || 'cash');
+            
+            // Add drill-down URLs for single-date balance sheet
+            const addDrillDownLinksToSection = (section, sectionName) => {
+                if (section && typeof section === 'object') {
+                    Object.keys(section).forEach(key => {
+                        const item = section[key];
+                        if (item && typeof item === 'object' && item.amount !== undefined) {
+                            // Extract account code from the key or item
+                            const accountCode = item.code || key.split(' - ')[0];
+                            if (accountCode && item.amount !== 0) {
+                                const asOfDate = new Date(asOf);
+                                const monthName = asOfDate.toLocaleDateString('en-US', { month: 'long' }).toLowerCase();
+                                item.drillDownUrl = `/api/finance/balance-sheet/account-details?period=${asOfDate.getFullYear()}&month=${monthName}&accountCode=${accountCode}${residenceId ? `&residenceId=${residenceId}` : ''}`;
+                            }
+                        }
+                    });
+                }
+            };
+            
+            if (balanceSheetData.assets) {
+                addDrillDownLinksToSection(balanceSheetData.assets.current, 'current_assets');
+                addDrillDownLinksToSection(balanceSheetData.assets.nonCurrent, 'non_current_assets');
+            }
+            if (balanceSheetData.liabilities) {
+                addDrillDownLinksToSection(balanceSheetData.liabilities.current, 'current_liabilities');
+                addDrillDownLinksToSection(balanceSheetData.liabilities.nonCurrent, 'non_current_liabilities');
+            }
+            if (balanceSheetData.equity) {
+                addDrillDownLinksToSection(balanceSheetData.equity, 'equity');
+            }
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: 'Either period or asOf parameter is required'
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: balanceSheetData
+        });
+        
+    } catch (error) {
+        console.error('Error getting balance sheet with drill-down:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error generating balance sheet',
+            error: error.message
+        });
     }
 };
 

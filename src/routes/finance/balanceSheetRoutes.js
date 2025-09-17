@@ -45,4 +45,18 @@ router.get('/report/generate',
     FinancialReportsController.generateBalanceSheet
 );
 
+// Balance sheet drill-down functionality
+// GET /api/finance/balance-sheets/account-details?period=2025&month=july&accountCode=1000
+router.get('/account-details', 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    balanceSheetController.getAccountTransactionDetails
+);
+
+// Balance sheet with drill-down links
+// GET /api/finance/balance-sheets/with-drilldown?period=2025&basis=cash
+router.get('/with-drilldown', 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
+    balanceSheetController.getBalanceSheetWithDrillDown
+);
+
 module.exports = router;

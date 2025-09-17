@@ -44,9 +44,10 @@ class FinancialReportingService {
                     status: 'posted'
                 });
                 
-                // For accrual basis, look at expenses when they are incurred (all expense-related sources)
+                // For accrual basis, look at expenses when they are incurred (expense-related sources)
                 const expenseEntries = await TransactionEntry.find({
                     date: { $gte: startDate, $lte: endDate },
+                    source: { $in: ['expense_accrual', 'expense_payment', 'vendor_payment', 'manual'] },
                     status: 'posted'
                 });
                 
@@ -357,10 +358,10 @@ class FinancialReportingService {
                 
                 const accrualEntries = await TransactionEntry.find(accrualQuery);
                 
-                // For accrual basis, also get expense entries
+                // For accrual basis, also get expense entries (all expense-related sources)
                 const expenseQuery = {
                     date: { $gte: startDate, $lte: endDate },
-                    source: { $in: ['expense_accrual', 'manual'] },
+                    source: { $in: ['expense_accrual', 'expense_payment', 'vendor_payment', 'manual'] },
                     status: 'posted'
                 };
                 
@@ -384,14 +385,15 @@ class FinancialReportingService {
                     monthlyBreakdown[index] = {
                         month,
                         monthNumber: index + 1,
-                    revenue: {},
-                    expenses: {},
-                    total_revenue: 0,
-                    total_expenses: 0,
-                    net_income: 0,
+                        revenue: {},
+                        expenses: {},
+                        expense_details: [], // Array to store individual expense transactions
+                        total_revenue: 0,
+                        total_expenses: 0,
+                        net_income: 0,
                         residences: [],
-                    transaction_count: 0
-                };
+                        transaction_count: 0
+                    };
                 });
                 
                 // Process accrual entries by month
@@ -432,13 +434,26 @@ class FinancialReportingService {
                                 const amount = lineItem.debit || 0;
                                 monthlyBreakdown[monthIndex].total_expenses += amount;
                                 
-                                // Group by account code only to net all transactions for the same account
-                                const key = lineItem.accountCode;
+                                // Group by account code and name for totals
+                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
                                 monthlyBreakdown[monthIndex].expenses[key] = 
                                     (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
-                        }
-                    });
-                }
+                                
+                                // Add individual expense detail
+                                monthlyBreakdown[monthIndex].expense_details.push({
+                                    transactionId: entry.transactionId,
+                                    date: entry.date,
+                                    description: entry.description,
+                                    accountCode: lineItem.accountCode,
+                                    accountName: lineItem.accountName,
+                                    amount: amount,
+                                    source: entry.source,
+                                    reference: entry.reference,
+                                    lineItemDescription: lineItem.description
+                                });
+                            }
+                        });
+                    }
                     
                     if (entry.residence) {
                         monthlyBreakdown[monthIndex].residences.push(entry.residence.toString());
@@ -1193,7 +1208,7 @@ class FinancialReportingService {
                     
                     // Skip accrual-only transactions (like rental_accrual) for cash basis
                     if (basis === 'cash' && entry.source === 'rental_accrual') {
-                        return;
+                            return;
                     }
                     
                     // Determine activity type and cash flow
@@ -1205,14 +1220,43 @@ class FinancialReportingService {
                     if (activityType === 'operating') {
                         if (cashFlow > 0) {
                             monthlyCashFlow[monthName].operating_activities.inflows += cashFlow;
-                            // Track account breakdown for inflows - use account code as primary key to avoid duplicates
-                            const key = `${accountCode}`;
+                            
+                            // Determine the appropriate account code based on transaction description
+                            let categoryAccountCode = accountCode;
+                            let categoryAccountName = accountName;
+                            
+                            // For cash accounts, determine the actual income/expense category
+                            if (accountCode === '1000' && entry.description) {
+                                const desc = entry.description.toLowerCase();
+                                if (desc.includes('admin') || desc.includes('advance_admin')) {
+                                    categoryAccountCode = '4002'; // Administrative Fees
+                                    categoryAccountName = 'Administrative Fees';
+                                } else if (desc.includes('rent') || desc.includes('rental') || desc.includes('accommodation')) {
+                                    categoryAccountCode = '4001'; // Rental Income
+                                    categoryAccountName = 'Rental Income';
+                                } else if (desc.includes('deposit') || desc.includes('security')) {
+                                    categoryAccountCode = '2020'; // Tenant Security Deposits
+                                    categoryAccountName = 'Tenant Security Deposits';
+                                } else if (desc.includes('advance') || desc.includes('prepayment')) {
+                                    categoryAccountCode = '2200'; // Advance Payment Liability
+                                    categoryAccountName = 'Advance Payment Liability';
+                                } else if (desc.includes('utilities') || desc.includes('electricity') || desc.includes('water')) {
+                                    categoryAccountCode = '4004'; // Utilities Income
+                                    categoryAccountName = 'Utilities Income';
+                                } else if (desc.includes('forfeit') || desc.includes('no-show')) {
+                                    categoryAccountCode = '4003'; // Forfeited Deposits Income
+                                    categoryAccountName = 'Forfeited Deposits Income';
+                                }
+                            }
+                            
+                            // Track account breakdown for inflows - use category account code as primary key
+                            const key = `${categoryAccountCode}`;
                             if (!monthlyCashFlow[monthName].operating_activities.breakdown[key]) {
                                 monthlyCashFlow[monthName].operating_activities.breakdown[key] = { 
                                     inflows: 0, 
                                     outflows: 0,
-                                    accountName: accountName, // Store the name for display
-                                    accountCode: accountCode,  // Store the code for display
+                                    accountName: categoryAccountName, // Store the category name for display
+                                    accountCode: categoryAccountCode,  // Store the category code for display
                                     transactionDetails: [] // Store individual transaction details
                                 };
                             }
@@ -1230,14 +1274,55 @@ class FinancialReportingService {
                             });
                         } else {
                             monthlyCashFlow[monthName].operating_activities.outflows += Math.abs(cashFlow);
-                            // Track account breakdown for outflows - use account code as primary key to avoid duplicates
-                            const key = `${accountCode}`;
+                            
+                            // Determine the appropriate account code based on transaction description for outflows
+                            let categoryAccountCode = accountCode;
+                            let categoryAccountName = accountName;
+                            
+                            // For cash accounts, determine the actual expense category
+                            if (accountCode === '1000' && entry.description) {
+                                const desc = entry.description.toLowerCase();
+                                if (desc.includes('maintenance') || desc.includes('repair') || desc.includes('service')) {
+                                    categoryAccountCode = '5001'; // Maintenance Expenses
+                                    categoryAccountName = 'Maintenance Expenses';
+                                } else if (desc.includes('utilities') || desc.includes('electricity') || desc.includes('water')) {
+                                    categoryAccountCode = '5002'; // Utilities Expenses
+                                    categoryAccountName = 'Utilities Expenses';
+                                } else if (desc.includes('cleaning') || desc.includes('housekeeping')) {
+                                    categoryAccountCode = '5003'; // Cleaning Expenses
+                                    categoryAccountName = 'Cleaning Expenses';
+                                } else if (desc.includes('security') || desc.includes('guard')) {
+                                    categoryAccountCode = '5004'; // Security Expenses
+                                    categoryAccountName = 'Security Expenses';
+                                } else if (desc.includes('management') || desc.includes('admin')) {
+                                    categoryAccountCode = '5005'; // Management Expenses
+                                    categoryAccountName = 'Management Expenses';
+                                } else if (desc.includes('insurance')) {
+                                    categoryAccountCode = '5006'; // Insurance Expenses
+                                    categoryAccountName = 'Insurance Expenses';
+                                } else if (desc.includes('tax')) {
+                                    categoryAccountCode = '5007'; // Property Tax Expenses
+                                    categoryAccountName = 'Property Tax Expenses';
+                                } else if (desc.includes('marketing') || desc.includes('advertising')) {
+                                    categoryAccountCode = '5008'; // Marketing Expenses
+                                    categoryAccountName = 'Marketing Expenses';
+                                } else if (desc.includes('professional') || desc.includes('legal') || desc.includes('consulting')) {
+                                    categoryAccountCode = '5009'; // Professional Fees
+                                    categoryAccountName = 'Professional Fees';
+                                } else if (desc.includes('office') || desc.includes('supplies')) {
+                                    categoryAccountCode = '5010'; // Office Expenses
+                                    categoryAccountName = 'Office Expenses';
+                                }
+                            }
+                            
+                            // Track account breakdown for outflows - use category account code as primary key
+                            const key = `${categoryAccountCode}`;
                             if (!monthlyCashFlow[monthName].operating_activities.breakdown[key]) {
                                 monthlyCashFlow[monthName].operating_activities.breakdown[key] = { 
                                     inflows: 0, 
                                     outflows: 0,
-                                    accountName: accountName, // Store the name for display
-                                    accountCode: accountCode,  // Store the code for display
+                                    accountName: categoryAccountName, // Store the category name for display
+                                    accountCode: categoryAccountCode,  // Store the category code for display
                                     transactionDetails: [] // Store individual transaction details
                                 };
                             }
@@ -1491,13 +1576,16 @@ class FinancialReportingService {
                 };
                 
                 const paymentQuery = {
-                    source: 'payment',
-                    'metadata.monthSettled': { $lte: monthKey },
+                    source: { $in: ['payment', 'expense_payment', 'vendor_payment'] },
+                    $or: [
+                        { 'metadata.monthSettled': { $lte: monthKey } }, // For rental payments
+                        { date: { $lte: monthEndDate } } // For expense payments (use transaction date)
+                    ],
                     status: 'posted'
                 };
                 
                 const otherQuery = {
-                    source: { $nin: ['rental_accrual', 'payment'] },
+                    source: { $nin: ['rental_accrual', 'payment', 'expense_payment', 'vendor_payment'] },
                     date: { $lte: monthEndDate },
                     status: 'posted'
                 };

@@ -594,9 +594,11 @@ class DoubleEntryAccountingService {
             
             const transactionId = await this.generateTransactionId();
             
-            // Use approval date if provided, otherwise fall back to dateRequested, then current date
-            const accrualDate = approvalDate ? new Date(approvalDate) : 
-                               (request.dateRequested ? new Date(request.dateRequested) : new Date());
+            // Use the month the request is FOR (not the approval date) for proper accrual accounting
+            const accrualDate = request.year && request.month ? 
+                               new Date(request.year, request.month - 1, 1) : // Use request month (e.g., July 2025)
+                               (approvalDate ? new Date(approvalDate) : 
+                               (request.dateRequested ? new Date(request.dateRequested) : new Date()));
             
             const transaction = new Transaction({
                 transactionId,

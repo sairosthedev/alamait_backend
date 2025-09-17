@@ -636,7 +636,6 @@ class FinancialReportsController {
             }
             
             // Use the Enhanced Cash Flow Service for detailed breakdowns
-            const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
             const detailedCashFlow = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             
             // Transform the data to match the expected format while adding detailed breakdowns
@@ -858,10 +857,17 @@ class FinancialReportsController {
             
         } catch (error) {
             console.error('Error generating enhanced monthly cash flow:', error);
+            console.error('Error stack:', error.stack);
+            console.error('Error details:', {
+                name: error.name,
+                message: error.message,
+                code: error.code
+            });
             res.status(500).json({
                 success: false,
                 message: 'Error generating enhanced monthly cash flow',
-                error: error.message
+                error: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
             });
         }
     }

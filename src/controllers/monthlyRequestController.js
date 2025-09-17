@@ -2544,7 +2544,7 @@ async function convertRequestToExpenses(request, user) {
                     description: item.description,
                     amount: item.estimatedCost,
                     category: expenseCategory,
-                    expenseDate: request.dateRequested ? new Date(request.dateRequested) : new Date(request.year, request.month - 1, 1),
+                    expenseDate: new Date(request.year, request.month - 1, 1), // Use request month (e.g., July 2025)
                     period: 'monthly',
                     paymentStatus: 'Pending',
                     paymentMethod: 'Bank Transfer',

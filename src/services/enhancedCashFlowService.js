@@ -366,7 +366,7 @@ class EnhancedCashFlowService {
                     }
                 }
             }
-            const effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
+            let effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
             
             if (correspondingPayment) {
                 console.log(`💰 Processing transaction ${entry.transactionId} with payment date ${effectiveDate.toISOString().slice(0, 7)} (was ${entry.date.toISOString().slice(0, 7)})`);
@@ -1713,7 +1713,7 @@ class EnhancedCashFlowService {
         transactionEntries.forEach(entry => {
             // Get the corresponding payment for accurate date handling
             const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
-            const effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
+            let effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
             const monthKey = effectiveDate.toISOString().slice(0, 7);
             
             if (months[monthKey]) {

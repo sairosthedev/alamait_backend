@@ -76,3 +76,4 @@ async function fixRoomOccupancy() {
 // Run the fix function
 fixRoomOccupancy();
 
+

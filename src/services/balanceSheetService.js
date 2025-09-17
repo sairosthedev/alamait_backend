@@ -60,14 +60,14 @@ class BalanceSheetService {
       };
       
       const paymentQuery = {
-        source: { $in: ['payment', 'vendor_payment'] },
+        source: { $in: ['payment', 'vendor_payment', 'expense_payment'] },
         date: dateFilter,
         status: 'posted',
         voided: { $ne: true } // Exclude voided transactions
       };
       
       const otherQuery = {
-        source: { $nin: ['rental_accrual', 'expense_accrual', 'payment', 'vendor_payment'] },
+        source: { $nin: ['rental_accrual', 'expense_accrual', 'payment', 'vendor_payment', 'expense_payment'] },
         date: dateFilter,
         status: 'posted',
         voided: { $ne: true } // Exclude voided transactions

@@ -98,3 +98,4 @@ async function fixExtension1Occupancy() {
 // Run the fix
 fixExtension1Occupancy();
 
+

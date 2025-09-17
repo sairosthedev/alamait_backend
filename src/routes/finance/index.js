@@ -14,6 +14,7 @@ const studentARBalancesRoutes = require('./studentARBalancesRoutes');
 const transactionAccountsRoutes = require('./transactionAccountsRoutes');
 const { getAllStudentAccounts } = require('../../controllers/finance/studentAccountController');
 const SecurityDepositController = require('../../controllers/finance/securityDepositController');
+const CashFlowController = require('../../controllers/finance/cashFlowController');
 const Lease = require('../../models/Lease');
 const Payment = require('../../models/Payment');
 const FinanceController = require('../../controllers/financeController');
@@ -33,6 +34,10 @@ router.use('/transaction-accounts', transactionAccountsRoutes);
 router.get('/security-deposits/status/:studentId', SecurityDepositController.getDepositStatus);
 router.get('/security-deposits/students', SecurityDepositController.getAllStudents);
 router.post('/security-deposits/reverse', SecurityDepositController.reverseUnpaidDeposit);
+
+// Cash Flow Drill-down Routes
+router.get('/cashflow/account-details', CashFlowController.getAccountTransactionDetails);
+router.get('/cashflow/with-drilldown', CashFlowController.getCashFlowWithDrillDown);
 
 // Get all users (for finance)
 router.get('/users', async (req, res) => {

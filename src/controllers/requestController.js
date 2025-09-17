@@ -1055,7 +1055,7 @@ exports.updateRequest = async (req, res) => { //n
         const allowedFields = [
             'status', 'assignedTo', 'adminResponse', 'priority', 
             'category', 'description', 'title', 'selectedQuotation',
-            'estimatedCompletion', 'amount', 'financeStatus'
+            'estimatedCompletion', 'amount', 'financeStatus', 'dateApproved'
         ];
 
         const updates = {};
@@ -1209,6 +1209,10 @@ exports.updateRequest = async (req, res) => { //n
         if (updateData.financeStatus === 'approved' && !request.convertedToExpense) {
             try {
                 console.log('💰 Creating expenses for approved request:', request._id);
+                
+                // Use the actual approval date from dateApproved field, fallback to finance approval date, then current date
+                const approvalDate = request.dateApproved ? new Date(request.dateApproved) : 
+                                   (request.approval?.finance?.approvedAt ? new Date(request.approval.finance.approvedAt) : new Date());
                 
                 // Check if request has items to process
                 if (request.items && request.items.length > 0) {
@@ -1434,6 +1438,12 @@ exports.financeApproval = async (req, res) => {
             approvedAt: approvalDate,
             notes: notes || reason || '' // Use notes or reason
         };
+        
+        // Set dateApproved field on the request object for expense creation
+        if (isApproved && dateApproved) {
+            request.dateApproved = dateApproved;
+            console.log('✅ Set dateApproved field on request:', dateApproved);
+        }
         
         // Update finance status ONLY (do not change overall request status)
         if (isApproved) {
