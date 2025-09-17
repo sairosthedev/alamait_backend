@@ -13,6 +13,7 @@ const Transaction = require('../../models/Transaction');
 const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
 const Debtor = require('../../models/Debtor');
+const Receipt = require('../../models/Receipt');
 const { sendEmail } = require('../../utils/email');
 
 // Configure multer for S3 file uploads
@@ -1641,6 +1642,238 @@ const getAvailablePaymentMonths = async (req, res) => {
     }
 };
 
+/**
+ * Delete payment and all associated transaction entries
+ */
+const deletePayment = async (req, res) => {
+    const session = await mongoose.startSession();
+    
+    try {
+        const { id } = req.params;
+        const { deleteRelatedEntries = true, deleteTransactionEntries = true, cascadeDelete = true } = req.body;
+        
+        console.log('🗑️ Deleting payment:', id, 'with options:', {
+            deleteRelatedEntries,
+            deleteTransactionEntries,
+            cascadeDelete
+        });
+        
+        // Start transaction
+        await session.startTransaction();
+        
+        let deletionSummary = {
+            payment: null,
+            transactionEntries: 0,
+            accountingEntries: 0,
+            relatedRecords: 0
+        };
+        
+        // Find the payment
+        const payment = await Payment.findById(id).session(session);
+        if (!payment) {
+            await session.abortTransaction();
+            return res.status(404).json({
+                success: false,
+                message: 'Payment not found'
+            });
+        }
+        
+        deletionSummary.payment = {
+            paymentId: payment.paymentId,
+            amount: payment.totalAmount || payment.amount,
+            student: payment.student || payment.user,
+            residence: payment.residence
+        };
+        
+        // Delete related transaction entries if requested
+        if (deleteTransactionEntries || deleteRelatedEntries) {
+            console.log(`🔍 Searching for transaction entries for payment: ${payment.paymentId} (ID: ${payment._id})`);
+            
+            // Find transaction entries related to this payment with comprehensive search
+            const transactionEntries = await TransactionEntry.find({
+                $or: [
+                    { 'metadata.paymentId': payment.paymentId },
+                    { 'metadata.sourceId': payment._id.toString() },
+                    { 'reference': payment.paymentId },
+                    { 'source': 'payment', 'sourceId': payment._id.toString() },
+                    { 'source': 'payment', 'sourceId': payment._id },
+                    { 'metadata.paymentId': payment._id.toString() },
+                    { 'metadata.paymentId': payment._id }
+                ]
+            }).session(session);
+            
+            console.log(`🔍 Found ${transactionEntries.length} transaction entries to delete`);
+            
+            // Log details of found entries for debugging
+            if (transactionEntries.length > 0) {
+                console.log('📋 Transaction entries found:');
+                transactionEntries.forEach((entry, index) => {
+                    console.log(`   ${index + 1}. ID: ${entry._id}`);
+                    console.log(`      Reference: ${entry.reference}`);
+                    console.log(`      Source: ${entry.source}`);
+                    console.log(`      SourceId: ${entry.sourceId}`);
+                    console.log(`      Metadata.paymentId: ${entry.metadata?.paymentId}`);
+                    console.log(`      Metadata.sourceId: ${entry.metadata?.sourceId}`);
+                });
+            } else {
+                console.log('⚠️ No transaction entries found. Trying alternative search patterns...');
+                
+                // Try searching by student ID as fallback
+                const studentId = payment.student || payment.user;
+                if (studentId) {
+                    console.log(`🔍 Searching by student ID: ${studentId}`);
+                    const studentEntries = await TransactionEntry.find({
+                        $or: [
+                            { 'metadata.studentId': studentId.toString() },
+                            { 'metadata.studentId': studentId },
+                            { 'student': studentId },
+                            { 'user': studentId }
+                        ]
+                    }).session(session);
+                    
+                    console.log(`🔍 Found ${studentEntries.length} transaction entries by student ID`);
+                    
+                    if (studentEntries.length > 0) {
+                        // Filter to only include entries that seem related to this payment
+                        const relatedEntries = studentEntries.filter(entry => {
+                            const entryDate = new Date(entry.date);
+                            const paymentDate = new Date(payment.paymentDate || payment.createdAt);
+                            const timeDiff = Math.abs(entryDate - paymentDate);
+                            const daysDiff = timeDiff / (1000 * 60 * 60 * 24);
+                            
+                            // If entry is within 7 days of payment and has similar amount, consider it related
+                            return daysDiff <= 7 && Math.abs((entry.debit || 0) + (entry.credit || 0) - (payment.totalAmount || payment.amount)) < 100;
+                        });
+                        
+                        console.log(`🔍 ${relatedEntries.length} entries appear related to this payment`);
+                        
+                        if (relatedEntries.length > 0) {
+                            const deleteResult = await TransactionEntry.deleteMany({
+                                _id: { $in: relatedEntries.map(te => te._id) }
+                            }).session(session);
+                            
+                            deletionSummary.transactionEntries = deleteResult.deletedCount;
+                            console.log(`✅ Deleted ${deleteResult.deletedCount} related transaction entries`);
+                        }
+                    }
+                }
+                
+                // Debug: Check if there are any transaction entries at all
+                const allEntries = await TransactionEntry.find({}).limit(5).session(session);
+                console.log(`📊 Total transaction entries in database: ${await TransactionEntry.countDocuments({}).session(session)}`);
+                if (allEntries.length > 0) {
+                    console.log('📋 Sample transaction entry structure:');
+                    console.log(JSON.stringify(allEntries[0], null, 2));
+                }
+            }
+            
+            // Delete transaction entries
+            if (transactionEntries.length > 0) {
+                const deleteResult = await TransactionEntry.deleteMany({
+                    _id: { $in: transactionEntries.map(te => te._id) }
+                }).session(session);
+                
+                deletionSummary.transactionEntries = deleteResult.deletedCount;
+                console.log(`✅ Deleted ${deleteResult.deletedCount} transaction entries`);
+            } else {
+                console.log('⚠️ No transaction entries to delete');
+            }
+            
+            // Also delete any transactions that reference this payment
+            const transactions = await Transaction.find({
+                $or: [
+                    { 'metadata.paymentId': payment.paymentId },
+                    { 'reference': payment.paymentId }
+                ]
+            }).session(session);
+            
+            if (transactions.length > 0) {
+                const deleteTransactionResult = await Transaction.deleteMany({
+                    _id: { $in: transactions.map(t => t._id) }
+                }).session(session);
+                
+                deletionSummary.accountingEntries = deleteTransactionResult.deletedCount;
+                console.log(`✅ Deleted ${deleteTransactionResult.deletedCount} transactions`);
+            }
+        }
+        
+        // Delete related records if cascade delete is requested
+        if (cascadeDelete) {
+            // Delete receipts
+            const receipts = await Receipt.find({ payment: payment._id }).session(session);
+            if (receipts.length > 0) {
+                await Receipt.deleteMany({ payment: payment._id }).session(session);
+                deletionSummary.relatedRecords += receipts.length;
+                console.log(`✅ Deleted ${receipts.length} receipts`);
+            }
+            
+            // Update debtor accounts if they exist
+            if (payment.student || payment.user) {
+                const studentId = payment.student || payment.user;
+                const debtor = await Debtor.findOne({ user: studentId }).session(session);
+                if (debtor) {
+                    // Reduce debtor balance by payment amount
+                    const paymentAmount = payment.totalAmount || payment.amount || 0;
+                    debtor.balance = Math.max(0, debtor.balance - paymentAmount);
+                    await debtor.save({ session });
+                    console.log(`✅ Updated debtor balance for student ${studentId}`);
+                }
+            }
+        }
+        
+        // Finally, delete the payment itself
+        await Payment.findByIdAndDelete(id).session(session);
+        console.log(`✅ Deleted payment: ${payment.paymentId}`);
+        
+        // Log the deletion for audit purposes
+        await AuditLog.create([{
+            action: 'DELETE_PAYMENT',
+            collection: 'Payment',
+            recordId: payment._id,
+            before: {
+                paymentId: payment.paymentId,
+                amount: payment.totalAmount || payment.amount,
+                student: payment.student || payment.user,
+                residence: payment.residence,
+                status: payment.status
+            },
+            after: null, // After deletion, record is null
+            user: req.user._id,
+            timestamp: new Date(),
+            details: `Payment ${payment.paymentId} deleted with ${deletionSummary.transactionEntries} transaction entries`,
+            metadata: {
+                deletionSummary,
+                deleteOptions: {
+                    deleteRelatedEntries,
+                    deleteTransactionEntries,
+                    cascadeDelete
+                }
+            }
+        }], { session });
+        
+        // Commit transaction
+        await session.commitTransaction();
+        
+        res.json({
+            success: true,
+            message: 'Payment and associated data deleted successfully',
+            deletedData: deletionSummary
+        });
+        
+    } catch (error) {
+        console.error('❌ Error deleting payment:', error);
+        await session.abortTransaction();
+        
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete payment',
+            error: error.message
+        });
+    } finally {
+        await session.endSession();
+    }
+};
+
 // Export all functions
 module.exports = {
     getPayments,
@@ -1653,5 +1886,6 @@ module.exports = {
     sendReceiptEmail,
     uploadReceipt: uploadReceiptHandler,
     getStudentsWhoPaidInMonth,
-    getAvailablePaymentMonths
+    getAvailablePaymentMonths,
+    deletePayment
 }; 

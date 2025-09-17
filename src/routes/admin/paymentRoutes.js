@@ -8,7 +8,8 @@ const {
     updatePaymentStatus,
     uploadProofOfPayment,
     verifyProofOfPayment,
-    getPaymentTotals
+    getPaymentTotals,
+    deletePayment
 } = require('../../controllers/admin/paymentController');
 const Payment = require('../../models/Payment');
 
@@ -122,6 +123,7 @@ router.post('/', checkRole('admin', 'finance_admin', 'finance_user'), async (req
     }
 });
 router.put('/:paymentId/status', checkRole('admin', 'finance_admin', 'finance_user'), updateStatusValidation, updatePaymentStatus);
+router.delete('/:id', checkRole('admin', 'finance_admin'), deletePayment);
 router.get('/total', checkRole('admin', 'finance_admin', 'finance_user'), getPaymentTotals);
 
 // Routes accessible to all authenticated users (POP related)
