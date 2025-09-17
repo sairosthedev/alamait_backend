@@ -40,17 +40,13 @@ class BalanceSheetService {
       // 2. All payments up to asOf date (payment, vendor_payment - these settle the obligations)
       // 3. All other transactions up to asOf date (non-payment transactions)
       
-      // For monthly balance sheets, filter by month to avoid including next month's transactions
-      let dateFilter;
-      if (isMonthlyBalanceSheet) {
-        // Use strict month filtering to exclude next month's transactions
-        const monthStart = new Date(Date.UTC(asOfYear, asOfMonth - 1, 1, 0, 0, 0, 0));
-        const monthEnd = new Date(Date.UTC(asOfYear, asOfMonth, 0, 23, 59, 59, 999)); // Last day of the month
-        dateFilter = { $gte: monthStart, $lte: monthEnd };
-        console.log(`📅 Using strict monthly filter: ${monthStart.toISOString()} to ${monthEnd.toISOString()}`);
-      } else {
-        dateFilter = { $lte: asOf };
-      }
+      // For balance sheets, always use cumulative filtering (all transactions up to as-of date)
+      // Balance sheets should show cumulative balances, not just monthly transactions
+      let dateFilter = { $lte: asOf };
+      console.log(`📅 Using cumulative filter: up to ${asOf.toISOString()}`);
+      
+      // Note: Removed strict monthly filtering as it was causing balance sheet discrepancies
+      // Balance sheets must include all historical transactions to show accurate cumulative balances
       
       const accrualQuery = {
         source: { $in: ['rental_accrual', 'expense_accrual'] },
@@ -293,11 +289,20 @@ class BalanceSheetService {
             // This preserves individual transaction effects (like negotiated discounts)
             console.log(`🔍 Preserving individual AR account ${account.code} balance: $${account.balance}`);
           } else if (account.code === '1100') {
-            // Set parent AR account to zero to avoid double counting with individual AR accounts
-            account.balance = 0;
-            account.debitTotal = 0;
+            // Calculate total AR balance from all individual student AR accounts
+            let totalARBalance = 0;
+            Object.values(accountBalances).forEach(arAccount => {
+              if (arAccount.code && arAccount.code.startsWith('1100-') && arAccount.code !== '1100') {
+                totalARBalance += arAccount.balance;
+                console.log(`🔍 Preserving individual AR account ${arAccount.code} balance: $${arAccount.balance}`);
+              }
+            });
+            
+            // Set parent AR account to the aggregated total
+            account.balance = totalARBalance;
+            account.debitTotal = totalARBalance;
             account.creditTotal = 0;
-            console.log(`📊 Parent AR account 1100 set to zero to avoid double counting with individual AR accounts`);
+            console.log(`📊 Parent AR account 1100 aggregated from individual accounts: $${totalARBalance}`);
           } else if (account.code && account.code.match(/^100[0-9]/)) {
             // Override cash accounts with monthSettled calculation
             account.balance = cashByMonth;
@@ -354,6 +359,12 @@ class BalanceSheetService {
         
         switch (account.type) {
           case 'Asset':
+            // Skip individual AR accounts (1100-*) as they are aggregated under parent AR account (1100)
+            if (account.code && account.code.startsWith('1100-')) {
+              console.log(`⏭️ Skipping individual AR account ${account.code} - aggregated under parent AR account 1100`);
+              break;
+            }
+            
             if (this.isCurrentAsset(account.code, account.name)) {
               // For AR accounts, allow negative balances to represent legitimate reductions (like negotiated discounts)
               const assetBalance = account.code.startsWith('1100') ? balance : Math.max(0, balance);

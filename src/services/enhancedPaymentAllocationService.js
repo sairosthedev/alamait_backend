@@ -680,7 +680,7 @@ class EnhancedPaymentAllocationService {
         // Categorize the debt by type
         accrual.entries.forEach(entry => {
           if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0) {
-            const description = entry.description.toLowerCase();
+            const description = (entry.description || '').toLowerCase();
             
             if (description.includes('admin fee') || description.includes('administrative')) {
               monthlyOutstanding[monthKey].adminFee.owed += entry.debit;
@@ -714,7 +714,7 @@ class EnhancedPaymentAllocationService {
             
             // Now categorize based on the income/liability entries
             accrual.entries.forEach(entry => {
-              const description = entry.description.toLowerCase();
+              const description = (entry.description || '').toLowerCase();
               
               // Admin fee entry (account 4002)
               if (entry.accountCode === '4002' && entry.accountType === 'Income' && entry.credit > 0) {
@@ -836,7 +836,7 @@ class EnhancedPaymentAllocationService {
         adjustment.entries.forEach(entry => {
           if (entry.accountCode === arAccountCode && entry.accountType === 'Asset') {
             const amount = entry.credit || 0;
-            const description = entry.description.toLowerCase();
+            const description = (entry.description || '').toLowerCase();
             
             console.log(`   💰 AR adjustment: ${entry.debit > 0 ? 'debit' : 'credit'} $${amount} - ${entry.description}`);
             

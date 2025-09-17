@@ -410,7 +410,7 @@ class PaymentAllocationService {
         // Categorize the debt by type
         accrual.entries.forEach(entry => {
           if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0) {
-            const description = entry.description.toLowerCase();
+            const description = (entry.description || '').toLowerCase();
             
             if (description.includes('admin fee') || description.includes('administrative')) {
               monthlyOutstanding[monthKey].adminFee.owed += entry.debit;
@@ -432,7 +432,7 @@ class PaymentAllocationService {
           payment.entries.forEach(entry => {
             if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.credit > 0) {
               // Determine what type of payment this is
-              const description = entry.description.toLowerCase();
+              const description = (entry.description || '').toLowerCase();
               
               if (description.includes('admin fee') || description.includes('administrative')) {
                 monthlyOutstanding[paymentMonth].adminFee.paid += entry.credit;
