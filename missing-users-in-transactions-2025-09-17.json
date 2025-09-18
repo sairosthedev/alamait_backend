@@ -1,0 +1,156 @@
+{
+  "generatedAt": "2025-09-17T12:09:17.609Z",
+  "scannedTransactions": 28,
+  "missingUsers": [
+    {
+      "userId": "68a329b1b62bf91f2c8e5451",
+      "occurrences": [
+        {
+          "transactionId": "68a329b1b62bf91f2c8e5452",
+          "transactionRef": "RENTAL_ACCRUAL_January_2025_1755523505544",
+          "date": "2025-01-01T00:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Rent accrual: John Doe - January 2025"
+        }
+      ]
+    },
+    {
+      "userId": "68a48385a9fe036b8a208756",
+      "occurrences": [
+        {
+          "transactionId": "68a48385a9fe036b8a208757",
+          "transactionRef": "RENTAL_ACCRUAL_January_2025_1755612037992",
+          "date": "2025-01-01T00:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Rent accrual: John Doe - January 2025"
+        }
+      ]
+    },
+    {
+      "userId": "68a329b1b62bf91f2c8e545b",
+      "occurrences": [
+        {
+          "transactionId": "68a329b1b62bf91f2c8e545c",
+          "transactionRef": "RENTAL_ACCRUAL_February_2025_1755523505599",
+          "date": "2025-02-01T00:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Rent accrual: Jane Smith - February 2025"
+        }
+      ]
+    },
+    {
+      "userId": "68a48386a9fe036b8a20875b",
+      "occurrences": [
+        {
+          "transactionId": "68a48386a9fe036b8a20875c",
+          "transactionRef": "RENTAL_ACCRUAL_February_2025_1755612038111",
+          "date": "2025-02-01T00:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Rent accrual: Jane Smith - February 2025"
+        }
+      ]
+    },
+    {
+      "userId": "68a329b1b62bf91f2c8e5460",
+      "occurrences": [
+        {
+          "transactionId": "68a329b1b62bf91f2c8e5461",
+          "transactionRef": "RENTAL_ACCRUAL_March_2025_1755523505604",
+          "date": "2025-03-01T00:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Rent accrual: Mike Johnson - March 2025"
+        }
+      ]
+    },
+    {
+      "userId": "68a48386a9fe036b8a208760",
+      "occurrences": [
+        {
+          "transactionId": "68a48386a9fe036b8a208761",
+          "transactionRef": "RENTAL_ACCRUAL_March_2025_1755612038117",
+          "date": "2025-03-01T00:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Rent accrual: Mike Johnson - March 2025"
+        }
+      ]
+    },
+    {
+      "userId": "68aeaf7b8d70befd6ad29b1a",
+      "occurrences": [
+        {
+          "transactionId": "68af2fa232757f1ee6be7002",
+          "transactionRef": "TXN1756278652637YPVJD",
+          "date": "2025-05-13T00:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Lease start accounting entries: Cindy Gwekwerere"
+        },
+        {
+          "transactionId": "68af2fa232757f1ee6be700b",
+          "transactionRef": "TXN17562786531887UR4F",
+          "date": "2025-05-31T22:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Monthly rent accrual: Cindy Gwekwerere - 6/2025"
+        },
+        {
+          "transactionId": "68af2fa232757f1ee6be7010",
+          "transactionRef": "TXN1756278653598QH8XH",
+          "date": "2025-06-30T22:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Monthly rent accrual: Cindy Gwekwerere - 7/2025"
+        },
+        {
+          "transactionId": "68af2fa232757f1ee6be7015",
+          "transactionRef": "TXN1756278654049XV95W",
+          "date": "2025-07-31T22:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Monthly rent accrual: Cindy Gwekwerere - 8/2025"
+        }
+      ]
+    },
+    {
+      "userId": "68aeaf7a8d70befd6ad29b18",
+      "occurrences": [
+        {
+          "transactionId": "68af2fa232757f1ee6be7002",
+          "transactionRef": "TXN1756278652637YPVJD",
+          "date": "2025-05-13T00:00:00.000Z",
+          "source": "rental_accrual",
+          "description": "Lease start accounting entries: Cindy Gwekwerere"
+        },
+        {
+          "transactionId": "68af30e75fc2627cf15ca8e1",
+          "transactionRef": "TXN1756302559753ELP7K",
+          "date": "2025-08-27T13:49:19.753Z",
+          "source": "payment",
+          "description": "Payment allocation: $110.3225806451613 rent for 2025-05"
+        },
+        {
+          "transactionId": "68af30e75fc2627cf15ca8e6",
+          "transactionRef": "TXN17563025601307GW5N",
+          "date": "2025-08-27T13:49:20.130Z",
+          "source": "advance_payment",
+          "description": "Deposit received (liability)"
+        }
+      ]
+    },
+    {
+      "userId": "68af0cdf81525178c4f81ef3",
+      "occurrences": [
+        {
+          "transactionId": "68af30e75fc2627cf15ca8e1",
+          "transactionRef": "TXN1756302559753ELP7K",
+          "date": "2025-08-27T13:49:19.753Z",
+          "source": "payment",
+          "description": "Payment allocation: $110.3225806451613 rent for 2025-05"
+        },
+        {
+          "transactionId": "68af30e75fc2627cf15ca8e6",
+          "transactionRef": "TXN17563025601307GW5N",
+          "date": "2025-08-27T13:49:20.130Z",
+          "source": "advance_payment",
+          "description": "Deposit received (liability)"
+        }
+      ]
+    }
+  ]
+}

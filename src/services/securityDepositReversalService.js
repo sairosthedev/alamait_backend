@@ -125,11 +125,15 @@ class SecurityDepositReversalService {
                     throw new Error(`Deposit was already paid ($${totalDepositPaid} >= $${depositAmount}). No reversal needed.`);
                 }
 
-                // 4. Create reversal transaction
+                // 4. Create reversal transaction (use the original lease start date so reversal falls in accrual month)
                 const reversalAmount = depositAmount - totalDepositPaid;
                 console.log(`🔄 Creating reversal for unpaid amount: $${reversalAmount}`);
 
                 const reversalTransactionId = `DEPOSIT_REVERSAL_${Date.now()}`;
+                const reversalDate = new Date(leaseStartTransaction.date);
+                const accrualYear = reversalDate.getFullYear();
+                const accrualMonth = reversalDate.getMonth() + 1;
+                const monthKey = `${accrualYear}-${String(accrualMonth).padStart(2, '0')}`;
                 
                 const reversalEntries = [
                     {
@@ -152,7 +156,7 @@ class SecurityDepositReversalService {
 
                 const reversalTransaction = new TransactionEntry({
                     transactionId: reversalTransactionId,
-                    date: new Date(),
+                    date: reversalDate,
                     description: `Security deposit reversal - ${studentName} (${reason})`,
                     reference: reversalTransactionId,
                     entries: reversalEntries,
@@ -163,7 +167,7 @@ class SecurityDepositReversalService {
                     sourceModel: 'User',
                     createdBy: adminUser.id,
                     approvedBy: adminUser.id,
-                    approvedAt: new Date(),
+                    approvedAt: reversalDate,
                     status: 'posted',
                     metadata: {
                         type: 'security_deposit_reversal',
@@ -173,7 +177,10 @@ class SecurityDepositReversalService {
                         paidAmount: totalDepositPaid,
                         reversalAmount: reversalAmount,
                         reason: reason,
-                        originalTransactionId: leaseStartTransaction.transactionId
+                        originalTransactionId: leaseStartTransaction.transactionId,
+                        accrualYear,
+                        accrualMonth,
+                        monthSettled: monthKey
                     }
                 });
 

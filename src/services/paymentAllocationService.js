@@ -950,7 +950,7 @@ class PaymentAllocationService {
       // Create advance payment transaction
       const advanceTransaction = new TransactionEntry({
         transactionId: `TXN${Date.now()}ADV${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-        date: new Date(),
+        date: paymentData.date ? new Date(paymentData.date) : new Date(),
         description: `Advance payment from ${paymentData.paymentId}`,
         reference: paymentId,
         entries: [
@@ -1036,11 +1036,15 @@ class PaymentAllocationService {
         throw new Error(`Payment allocation exceeds AR balance. Current: $${currentBalance}, Payment: $${paymentAmount}`);
       }
       
+      // Derive paid date and month from the actual payment date (never "current" if provided)
+      const paidDate = paymentData.date ? new Date(paymentData.date) : new Date();
+      const paidMonthKey = `${paidDate.getFullYear()}-${String(paidDate.getMonth() + 1).padStart(2, '0')}`;
+
       // Create a new payment allocation transaction
       const paymentAllocationTransaction = new TransactionEntry({
         transactionId: `PAY-ALLOC-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        date: new Date(),
-        description: `Payment allocation: $${paymentAmount.toFixed(2)} from ${paymentData.paymentId}`,
+        date: paidDate,
+        description: `Payment allocation: $${paymentAmount.toFixed(2)} for ${paidMonthKey}`,
         reference: `AR-${transactionId}`,
         entries: [
           // Credit the AR account (reducing the receivable)
@@ -1050,7 +1054,7 @@ class PaymentAllocationService {
             accountType: arEntry.accountType,
             debit: 0,
             credit: paymentAmount,
-            description: `Payment allocation for ${paymentData.paymentMonth || 'month'}`
+            description: `Payment allocation for ${paidMonthKey}`
           },
           // Debit the cash/bank account (increasing cash)
           {
@@ -1059,13 +1063,13 @@ class PaymentAllocationService {
             accountType: 'asset',
             debit: paymentAmount,
             credit: 0,
-            description: `Payment received from ${paymentData.paymentId}`
+            description: `Payment received on ${paidMonthKey}`
           }
         ],
         totalDebit: paymentAmount,
         totalCredit: paymentAmount,
-        source: 'manual', // Use 'manual' instead of 'payment' for test scenarios
-        sourceModel: 'TransactionEntry', // Use TransactionEntry as the source model
+        source: 'payment',
+        sourceModel: 'Payment',
         // sourceId is optional for manual transactions
         createdBy: 'system',
         metadata: {
@@ -1073,10 +1077,11 @@ class PaymentAllocationService {
             originalTransactionId: transactionId,
             paymentId: paymentData.paymentId,
             amount: paymentAmount,
-            date: new Date(),
+            date: paidDate,
             allocatedBy: 'system',
             studentId: paymentData.studentId
-          }
+          },
+          paymentMonth: paidMonthKey
         }
       });
       
@@ -1098,7 +1103,7 @@ class PaymentAllocationService {
       originalTransaction.metadata.paymentAllocations.push({
         paymentId: paymentData.paymentId,
         amount: paymentAmount,
-        date: new Date(),
+        date: paidDate,
         allocatedBy: 'system',
         allocationTransactionId: paymentAllocationTransaction._id
       });

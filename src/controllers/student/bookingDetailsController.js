@@ -640,10 +640,16 @@ exports.requestRoomChange = async (req, res) => {
         const capacity = requestedRoom.capacity || 1;
         
         if (currentOccupancy >= capacity) {
-            return res.status(400).json({
-                success: false,
-                message: 'Room is at full capacity'
-            });
+            // Re-check using accurate occupancy and sync once if needed
+            const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
+            const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(requestedRoom.residence, requestedRoom.roomNumber || requestedRoom.name);
+            if (occ.currentOccupancy >= occ.capacity) {
+                await RoomOccupancyUtils.updateRoomOccupancy(requestedRoom.residence, requestedRoom.roomNumber || requestedRoom.name);
+                const occ2 = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(requestedRoom.residence, requestedRoom.roomNumber || requestedRoom.name);
+                if (occ2.currentOccupancy >= occ2.capacity) {
+                    return res.status(400).json({ success: false, message: 'Room is at full capacity' });
+                }
+            }
         }
 
         // Create application for room change

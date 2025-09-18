@@ -786,11 +786,17 @@ const createPayment = async (req, res) => {
             console.log(`   Date: ${payment.date}`);
             
             // Prepare data for Smart FIFO allocation
+            // Ensure each payment component has a paid date; default to top-level payment.date
+            const normalizedPayments = (payment.payments || []).map(p => ({
+                ...p,
+                date: p?.date || payment.date
+            }));
+
             const allocationData = {
                 paymentId: payment._id.toString(),
                 studentId: payment.student,
                 totalAmount: payment.totalAmount,
-                payments: payment.payments || [],
+                payments: normalizedPayments,
                 residence: payment.residence,
                 paymentMonth: payment.paymentMonth,
                 rentAmount: payment.rentAmount || 0,

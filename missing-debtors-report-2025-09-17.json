@@ -1,0 +1,85 @@
+{
+  "generatedAt": "2025-09-17T12:10:09.512Z",
+  "scannedTransactions": 5,
+  "missingStudents": [
+    {
+      "studentId": "68aeaf7a8d70befd6ad29b18",
+      "accountCodes": [
+        "1100-68aeaf7a8d70befd6ad29b18"
+      ],
+      "transactions": [
+        {
+          "transactionId": "68af2fa232757f1ee6be7002",
+          "transactionRef": "TXN1756278652637YPVJD",
+          "date": "2025-05-13T00:00:00.000Z",
+          "description": "Lease start accounting entries: Cindy Gwekwerere",
+          "arAccountCode": "1100-68aeaf7a8d70befd6ad29b18",
+          "debit": 110.3225806451613,
+          "credit": 0
+        },
+        {
+          "transactionId": "68af2fa232757f1ee6be7002",
+          "transactionRef": "TXN1756278652637YPVJD",
+          "date": "2025-05-13T00:00:00.000Z",
+          "description": "Lease start accounting entries: Cindy Gwekwerere",
+          "arAccountCode": "1100-68aeaf7a8d70befd6ad29b18",
+          "debit": 20,
+          "credit": 0
+        },
+        {
+          "transactionId": "68af2fa232757f1ee6be7002",
+          "transactionRef": "TXN1756278652637YPVJD",
+          "date": "2025-05-13T00:00:00.000Z",
+          "description": "Lease start accounting entries: Cindy Gwekwerere",
+          "arAccountCode": "1100-68aeaf7a8d70befd6ad29b18",
+          "debit": 180,
+          "credit": 0
+        },
+        {
+          "transactionId": "68af30e75fc2627cf15ca8e1",
+          "transactionRef": "TXN1756302559753ELP7K",
+          "date": "2025-08-27T13:49:19.753Z",
+          "description": "Payment allocation: $110.3225806451613 rent for 2025-05",
+          "arAccountCode": "1100-68aeaf7a8d70befd6ad29b18",
+          "debit": 0,
+          "credit": 110.3225806451613
+        }
+      ]
+    },
+    {
+      "studentId": "68aeaf7b8d70befd6ad29b1a",
+      "accountCodes": [
+        "1100-68aeaf7b8d70befd6ad29b1a"
+      ],
+      "transactions": [
+        {
+          "transactionId": "68af2fa232757f1ee6be700b",
+          "transactionRef": "TXN17562786531887UR4F",
+          "date": "2025-05-31T22:00:00.000Z",
+          "description": "Monthly rent accrual: Cindy Gwekwerere - 6/2025",
+          "arAccountCode": "1100-68aeaf7b8d70befd6ad29b1a",
+          "debit": 180,
+          "credit": 0
+        },
+        {
+          "transactionId": "68af2fa232757f1ee6be7010",
+          "transactionRef": "TXN1756278653598QH8XH",
+          "date": "2025-06-30T22:00:00.000Z",
+          "description": "Monthly rent accrual: Cindy Gwekwerere - 7/2025",
+          "arAccountCode": "1100-68aeaf7b8d70befd6ad29b1a",
+          "debit": 180,
+          "credit": 0
+        },
+        {
+          "transactionId": "68af2fa232757f1ee6be7015",
+          "transactionRef": "TXN1756278654049XV95W",
+          "date": "2025-07-31T22:00:00.000Z",
+          "description": "Monthly rent accrual: Cindy Gwekwerere - 8/2025",
+          "arAccountCode": "1100-68aeaf7b8d70befd6ad29b1a",
+          "debit": 180,
+          "credit": 0
+        }
+      ]
+    }
+  ]
+}

@@ -2307,77 +2307,45 @@ class TransactionController {
             
             if (totalForfeitureAmount > 0) {
                 try {
-                    // Calculate total payments
-                    const totalPayments = totalForfeitureAmount;
-                    
-                    // Create forfeiture transaction for actual payments
+                    // Use earliest paid date among payments; fallback to forfeiture date
+                    const paidDates = payments
+                        .map(p => p.date)
+                        .filter(Boolean)
+                        .map(d => new Date(d))
+                        .filter(d => !isNaN(d.getTime()));
+                    const paidDate = paidDates.length ? new Date(Math.min(...paidDates.map(d => d.getTime()))) : forfeitureDate;
+
                     const forfeitureTransactionId = `FORFEIT-${Date.now()}`;
                     const forfeitureTransaction = new TransactionEntry({
                         transactionId: forfeitureTransactionId,
-                        date: forfeitureDate,
-                        description: `Payment forfeiture for no-show student: ${studentName}`,
+                        date: paidDate,
+                        description: `Payment forfeiture (reclassify advance to income): ${studentName}`,
                         reference: `FORFEIT-${studentId}`,
                         entries: [
-                            // Debit: Accounts Receivable (restore $30 rent payment)
-                            {
-                                accountCode: `1100-${studentId}`,
-                                accountName: `Accounts Receivable - ${studentName}`,
-                                accountType: 'Asset',
-                                debit: 30,
-                                credit: 0,
-                                description: `Forfeited rent payment - AR restored for ${studentName} (no-show)`,
-                                metadata: {
-                                    studentId,
-                                    studentName,
-                                    reason: reason,
-                                    transactionType: 'payment_forfeiture',
-                                    createdBy: 'system',
-                                    createdByEmail: 'system@alamait.com',
-                                    isForfeiture: true
-                                }
-                            },
-                            // Debit: Advance Payment Liability (reduce $20 admin advance)
                             {
                                 accountCode: '2200',
                                 accountName: 'Advance Payment Liability',
                                 accountType: 'Liability',
-                                debit: 20,
+                                debit: totalForfeitureAmount,
                                 credit: 0,
-                                description: `Forfeited admin advance payment from ${studentName} (no-show)`,
-                                metadata: {
-                                    studentId,
-                                    studentName,
-                                    reason: reason,
-                                    transactionType: 'payment_forfeiture',
-                                    createdBy: 'system',
-                                    createdByEmail: 'system@alamait.com',
-                                    isForfeiture: true
-                                }
+                                description: `Remove liability for forfeited payment from ${studentName}`,
+                                metadata: { studentId, studentName, reason: reason, transactionType: 'payment_forfeiture', createdBy: 'system', createdByEmail: 'system@alamait.com', isForfeiture: true }
                             },
-                            // Credit: Forfeited Deposits Income (total $50)
                             {
                                 accountCode: '4003',
                                 accountName: 'Forfeited Deposits Income',
                                 accountType: 'Income',
                                 debit: 0,
-                                credit: totalPayments,
-                                description: `Forfeited deposits income from ${studentName} (no-show)`,
-                                metadata: {
-                                    studentId,
-                                    studentName,
-                                    reason: reason,
-                                    transactionType: 'payment_forfeiture',
-                                    createdBy: 'system',
-                                    createdByEmail: 'system@alamait.com',
-                                    isForfeiture: true
-                                }
+                                credit: totalForfeitureAmount,
+                                description: `Recognize forfeited payment as income from ${studentName}`,
+                                metadata: { studentId, studentName, reason: reason, transactionType: 'payment_forfeiture', createdBy: 'system', createdByEmail: 'system@alamait.com', isForfeiture: true }
                             }
                         ],
-                        totalDebit: totalPayments,
-                        totalCredit: totalPayments,
-                        source: 'payment',
-                        sourceId: studentId,
-                        sourceModel: 'User',
+                        totalDebit: totalForfeitureAmount,
+                        totalCredit: totalForfeitureAmount,
+                        source: 'payment_forfeiture',
+                        sourceId: null,
+                        sourceModel: 'TransactionEntry',
                         residence: student.residence,
                         createdBy: 'system',
                         approvedBy: null,
@@ -2392,7 +2360,7 @@ class TransactionController {
                             createdBy: 'system',
                             createdByEmail: 'system@alamait.com',
                             isForfeiture: true,
-                            totalPayments: totalPayments,
+                            totalPayments: totalForfeitureAmount,
                             paymentCount: payments.length
                         }
                     });
@@ -2400,13 +2368,13 @@ class TransactionController {
                     await forfeitureTransaction.save();
                     paymentForfeitureResult = {
                         forfeitureTransactionId: forfeitureTransactionId,
-                        totalAmount: totalPayments,
+                        totalAmount: totalForfeitureAmount,
                         paymentCount: payments.length
                     };
 
-                    console.log('✅ Payment forfeiture transaction created:', forfeitureTransactionId);
+                    console.log('✅ Payment forfeiture reclassification created:', forfeitureTransactionId);
                 } catch (paymentError) {
-                    console.error('❌ Error creating payment forfeiture:', paymentError);
+                    console.error('❌ Error creating payment forfeiture reclassification:', paymentError);
                 }
             }
 

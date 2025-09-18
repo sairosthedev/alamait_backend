@@ -246,22 +246,28 @@ const autoAllocatePayment = async (req, res) => {
             });
         }
 
-        // Prepare payment data for allocation
-        const paymentData = {
+        // Prepare payment data for ENHANCED allocation (normalize per-item dates)
+        const normalizedPayments = Array.isArray(payment.payments)
+            ? payment.payments.map(p => ({ ...p.toObject?.() || p, date: p?.date || payment.date }))
+            : [];
+
+        const allocationData = {
             paymentId: payment._id.toString(),
-            totalAmount: payment.totalAmount,
             studentId: payment.student.toString(),
-            residenceId: payment.residence.toString(),
+            totalAmount: payment.totalAmount,
+            payments: normalizedPayments,
+            residence: payment.residence?.toString?.() || payment.residence,
             paymentMonth: payment.paymentMonth,
-            date: payment.date,
-            method: payment.method,
             rentAmount: payment.rentAmount || 0,
             adminFee: payment.adminFee || 0,
-            deposit: payment.deposit || 0
+            deposit: payment.deposit || 0,
+            method: payment.method,
+            date: payment.date
         };
 
-        // Auto-allocate the payment
-        const allocationResult = await PaymentAllocationService.autoAllocatePayment(paymentData);
+        // Use Enhanced allocator so TransactionEntry dates/months come from paid dates
+        const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
+        const allocationResult = await EnhancedPaymentAllocationService.smartFIFOAllocation(allocationData);
 
         if (!allocationResult.success) {
             return res.status(400).json({

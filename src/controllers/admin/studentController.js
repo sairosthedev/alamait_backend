@@ -1168,10 +1168,23 @@ exports.manualAddStudent = async (req, res) => {
                 
                 console.log(`✅ Room will be available by lease start date. Current: ${room.currentOccupancy}, Freeing up: ${roomsFreeingUp}, Projected: ${projectedOccupancy}`);
             } else {
-                return res.status(400).json({ 
-                    error: 'Room is at full capacity and lease starts immediately',
-                    details: 'Cannot allocate room that is currently at full capacity'
-                });
+                // Re-check using accurate occupancy (exclude expired/forfeited/cancelled), and try sync once
+                const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
+                const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(residence._id, room.roomNumber);
+                if (occ.currentOccupancy < occ.capacity) {
+                    console.log('✅ Accurate occupancy allows allocation:', occ);
+                } else {
+                    await RoomOccupancyUtils.updateRoomOccupancy(residence._id, room.roomNumber);
+                    const occ2 = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(residence._id, room.roomNumber);
+                    if (occ2.currentOccupancy < occ2.capacity) {
+                        console.log('✅ After sync, room available:', occ2);
+                    } else {
+                        return res.status(400).json({ 
+                            error: 'Room is at full capacity and lease starts immediately',
+                            details: 'Cannot allocate room that is currently at full capacity'
+                        });
+                    }
+                }
             }
         }
 

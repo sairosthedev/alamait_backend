@@ -281,10 +281,17 @@ exports.updateApplicationStatus = async (req, res) => {
                     return res.status(404).json({ error: 'Room not found in this residence' });
                 }
 
-                // Check room availability
-                if (room.currentOccupancy >= room.capacity) {
-                    console.log('❌ Room at full capacity:', roomNumber);
-                    return res.status(400).json({ error: 'Room is at full capacity' });
+                // Check room availability using accurate occupancy (exclude expired/forfeited/cancelled)
+                const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
+                const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(residence._id, roomNumber);
+                if (occ.currentOccupancy >= occ.capacity) {
+                    console.log('❌ Room at full capacity (accurate):', roomNumber, occ);
+                    // Try to sync occupancy just in case and re-evaluate once
+                    await RoomOccupancyUtils.updateRoomOccupancy(residence._id, roomNumber);
+                    const occ2 = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(residence._id, roomNumber);
+                    if (occ2.currentOccupancy >= occ2.capacity) {
+                        return res.status(400).json({ error: 'Room is at full capacity' });
+                    }
                 }
 
                 console.log('✅ Room validation passed:', {
@@ -764,10 +771,11 @@ exports.updatePaymentStatus = async (req, res) => {
 
         const room = residence.rooms[roomIndex];
         
-        // Only check capacity for non-approved applications
+        // Only check capacity for non-approved applications (use accurate occupancy)
         if (application.status !== 'approved') {
-            const currentOccupancy = room.currentOccupancy || 0;
-            if (currentOccupancy >= room.capacity) {
+            const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
+            const occ = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(residence._id, application.allocatedRoom);
+            if (occ.currentOccupancy >= occ.capacity) {
                 return res.status(400).json({ error: 'Room is at full capacity' });
             }
         }

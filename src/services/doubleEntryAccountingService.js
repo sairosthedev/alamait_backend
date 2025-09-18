@@ -452,7 +452,7 @@ class DoubleEntryAccountingService {
 
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: new Date(),
+                date: new Date(), // Replenishment date should be current date
                 description: `Petty cash replenishment: ${description}`,
                 reference: `PETTY-REP-${userId}`,
                 entries,
@@ -974,7 +974,7 @@ class DoubleEntryAccountingService {
             const totalAmount = entries.reduce((sum, entry) => sum + entry.debit, 0);
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: new Date(),
+                date: request.approvedAt || request.createdAt || new Date(),
                 description: `Supply purchase approval: ${request.title}`,
                 reference: request._id.toString(),
                 entries,
@@ -2122,7 +2122,7 @@ class DoubleEntryAccountingService {
             // Create transaction entry
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: new Date(),
+                date: invoice.invoiceDate || new Date(),
                 description: `Invoice issued to ${invoice.student?.firstName || 'Student'}`,
                 reference: invoice._id.toString(),
                 entries,
@@ -2198,7 +2198,7 @@ class DoubleEntryAccountingService {
             // Create transaction entry
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
-                date: new Date(),
+                date: invoice.paymentDate || new Date(),
                 description: `Payment from ${invoice.student?.firstName || 'Student'} for Invoice`,
                 reference: invoice._id.toString(),
                 entries,
