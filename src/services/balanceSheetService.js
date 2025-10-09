@@ -1418,7 +1418,10 @@ class BalanceSheetService {
         isActive: true,
         $or: [
           { name: { $regex: /accounts payable/i } },
-          { code: { $regex: '^21' } } // Include 2100, 2101, 2102, etc.
+          { code: { $regex: '^20' } }, // Include 2000-2099 (all 20xx accounts)
+          { code: { $regex: '^21' } }, // Include 2100-2199 (all 21xx accounts)
+          { code: { $regex: '^22' } }, // Include 2200-2299 (all 22xx accounts)
+          { code: { $regex: '^25' } }  // Include 2500-2599 (all 25xx accounts)
         ],
         parentAccount: { $ne: mainAPAccount._id }
       });
@@ -1439,19 +1442,12 @@ class BalanceSheetService {
         console.log(`   Main account 2000: $${balanceSheet.liabilities.current['2000'].balance}`);
       }
       
-      // Add all AP account balances (including children and orphaned accounts)
-      for (const apAccount of allAPAccounts) {
-        // Skip the main account 2000 as we already added it above
-        if (apAccount.code === '2000') {
-          continue;
-        }
-        
-        if (balanceSheet.liabilities.current[apAccount.code]) {
-          const accountBalance = balanceSheet.liabilities.current[apAccount.code].balance;
+      // Add only child account balances to the main account 2000
+      for (const childAccount of childAccounts) {
+        if (balanceSheet.liabilities.current[childAccount.code]) {
+          const accountBalance = balanceSheet.liabilities.current[childAccount.code].balance;
           totalAPBalance += accountBalance;
-          const isChild = apAccount.parentAccount && apAccount.parentAccount.toString() === mainAPAccount._id.toString();
-          const status = isChild ? 'CHILD' : 'ORPHANED';
-          console.log(`   ${status} account ${apAccount.code}: $${accountBalance}`);
+          console.log(`   CHILD account ${childAccount.code}: $${accountBalance}`);
         }
       }
       
@@ -1459,12 +1455,25 @@ class BalanceSheetService {
       
       // Update the main account 2000 with the aggregated total
       if (balanceSheet.liabilities.current['2000']) {
+        const originalMainBalance = balanceSheet.liabilities.current['2000'].balance;
         balanceSheet.liabilities.current['2000'].balance = totalAPBalance;
         balanceSheet.liabilities.current['2000'].aggregated = true;
         balanceSheet.liabilities.current['2000'].childAccounts = childAccounts.map(c => c.code);
         balanceSheet.liabilities.current['2000'].totalWithChildren = totalAPBalance;
+        balanceSheet.liabilities.current['2000'].originalBalance = originalMainBalance;
         
-        console.log(`✅ Updated account 2000 with aggregated balance: $${totalAPBalance}`);
+        console.log(`✅ Updated account 2000: Original $${originalMainBalance} + Children $${totalAPBalance - originalMainBalance} = Total $${totalAPBalance}`);
+      }
+      
+      // 🆕 FIX: Set only child account balances to 0 to avoid double-counting
+      for (const childAccount of childAccounts) {
+        if (balanceSheet.liabilities.current[childAccount.code]) {
+          const originalBalance = balanceSheet.liabilities.current[childAccount.code].balance;
+          balanceSheet.liabilities.current[childAccount.code].balance = 0;
+          balanceSheet.liabilities.current[childAccount.code].aggregatedInto = '2000';
+          balanceSheet.liabilities.current[childAccount.code].originalBalance = originalBalance;
+          console.log(`   Set CHILD ${childAccount.code} balance to $0 (was $${originalBalance}) - aggregated into 2000`);
+        }
       }
       
       // Recalculate total current liabilities

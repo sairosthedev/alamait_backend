@@ -1,7 +1,7 @@
 const Expense = require('../../models/finance/Expense');
 const mongoose = require('mongoose');
 const { generateUniqueId } = require('../../utils/idGenerator');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const Maintenance = require('../../models/Maintenance');
 const Transaction = require('../../models/Transaction');
 const TransactionEntry = require('../../models/TransactionEntry');

@@ -2,7 +2,7 @@ const Event = require('../../models/Event');
 const User = require('../../models/User');
 const Booking = require('../../models/Booking');
 const Application = require('../../models/Application');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const { validationResult } = require('express-validator');
 
 // Helper function to get student's residence ID

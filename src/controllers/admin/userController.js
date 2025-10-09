@@ -67,7 +67,7 @@ exports.deleteUser = async (req, res) => {
 
         // Decrement room occupancy if user has a currentRoom and residence
         if (user.currentRoom && user.residence) {
-            const Residence = require('../../models/Residence');
+            const { Residence } = require('../../models/Residence');
             const residence = await Residence.findById(user.residence);
             if (residence) {
                 const room = residence.rooms.find(r => r.roomNumber === user.currentRoom);

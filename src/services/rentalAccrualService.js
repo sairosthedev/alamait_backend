@@ -17,6 +17,79 @@ const { logTransactionOperation, logSystemOperation } = require('../utils/auditL
  */
 class RentalAccrualService {
     /**
+     * Calculate fees based on residence payment configuration
+     * @param {Object} residence - Residence object with paymentConfiguration
+     * @param {Object} room - Room object with price
+     * @returns {Object} - Object containing calculated fees
+     */
+    static calculateFeesFromPaymentConfig(residence, room) {
+        const paymentConfig = residence.paymentConfiguration || {};
+        const fees = {
+            adminFee: 0,
+            securityDeposit: 0,
+            utilities: 0,
+            maintenance: 0
+        };
+
+        console.log('🔍 Payment Config Debug:', {
+            residenceName: residence.name,
+            paymentConfig: paymentConfig,
+            roomPrice: room.price
+        });
+
+        // Calculate admin fee
+        if (paymentConfig.adminFee && paymentConfig.adminFee.enabled === true) {
+            if (paymentConfig.adminFee.calculation === 'fixed' || paymentConfig.adminFee.amount) {
+                fees.adminFee = paymentConfig.adminFee.amount || 0;
+            } else if (paymentConfig.adminFee.calculation === 'percentage') {
+                fees.adminFee = (room.price * (paymentConfig.adminFee.percentage || 0)) / 100;
+            }
+        }
+
+        // Calculate security deposit
+        console.log('🔍 Deposit Config Check:', {
+            hasDepositConfig: !!paymentConfig.deposit,
+            depositEnabled: paymentConfig.deposit?.enabled,
+            depositCalculation: paymentConfig.deposit?.calculation,
+            depositAmount: paymentConfig.deposit?.amount
+        });
+        
+        if (paymentConfig.deposit && paymentConfig.deposit.enabled === true) {
+            if (paymentConfig.deposit.calculation === 'one_month_rent') {
+                fees.securityDeposit = room.price;
+            } else if (paymentConfig.deposit.calculation === 'fixed') {
+                fees.securityDeposit = paymentConfig.deposit.amount || 0;
+            } else if (paymentConfig.deposit.calculation === 'percentage') {
+                fees.securityDeposit = (room.price * (paymentConfig.deposit.percentage || 100)) / 100;
+            }
+            console.log('💰 Security Deposit Calculated:', fees.securityDeposit);
+        } else {
+            console.log('🚫 Security Deposit Disabled or Not Configured');
+        }
+
+        // Calculate utilities (if configured)
+        if (paymentConfig.utilities && paymentConfig.utilities.enabled === true) {
+            if (paymentConfig.utilities.calculation === 'fixed') {
+                fees.utilities = paymentConfig.utilities.amount || 0;
+            } else if (paymentConfig.utilities.calculation === 'percentage') {
+                fees.utilities = (room.price * (paymentConfig.utilities.percentage || 0)) / 100;
+            }
+        }
+
+        // Calculate maintenance (if configured)
+        if (paymentConfig.maintenance && paymentConfig.maintenance.enabled === true) {
+            if (paymentConfig.maintenance.calculation === 'fixed') {
+                fees.maintenance = paymentConfig.maintenance.amount || 0;
+            } else if (paymentConfig.maintenance.calculation === 'percentage') {
+                fees.maintenance = (room.price * (paymentConfig.maintenance.percentage || 0)) / 100;
+            }
+        }
+
+        console.log('✅ Final Calculated Fees:', fees);
+        return fees;
+    }
+
+    /**
      * Ensure a student-specific AR child account exists and return it
      */
     static async ensureStudentARAccount(studentId, studentName) {
@@ -100,7 +173,7 @@ class RentalAccrualService {
                         console.log(`📄 Creating missing lease start invoice for application ${application.applicationCode}...`);
                         
                         // Get residence and room details for pricing
-                        const Residence = require('../models/Residence');
+                        const { Residence } = require('../models/Residence');
                         const residence = await Residence.findById(application.residence);
                         if (!residence) {
                             throw new Error('Residence not found for invoice creation');
@@ -125,8 +198,10 @@ class RentalAccrualService {
                             proratedRent = (room.price / daysInMonth) * proratedDays;
                         }
                         
-                        const adminFee = 20; // Standard admin fee
-                        const securityDeposit = room.price; // Security deposit equals monthly rent
+                        // Calculate fees based on residence payment configuration
+                        const fees = this.constructor.calculateFeesFromPaymentConfig(residence, room);
+                        const adminFee = fees.adminFee;
+                        const securityDeposit = fees.securityDeposit;
                         
                         const invoice = await this.createAndSendLeaseStartInvoice(application, proratedRent, adminFee, securityDeposit);
                         console.log(`📄 Lease start invoice created and sent: ${invoice.invoiceNumber}`);
@@ -159,7 +234,7 @@ class RentalAccrualService {
             }
             
             // Get residence and room details for pricing
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const residence = await Residence.findById(application.residence);
             if (!residence) {
                 throw new Error('Residence not found');
@@ -193,11 +268,10 @@ class RentalAccrualService {
                 console.log(`   Prorated rent: $${proratedRent} (${room.price} × ${proratedDays}/${daysInMonth})`);
             }
             
-            // Determine admin fee (only for St Kilda)
-            const adminFee = residence.name.toLowerCase().includes('st kilda') ? 20 : 0;
-            
-            // Security deposit (typically 1 month rent)
-            const securityDeposit = room.price;
+            // Calculate fees based on residence payment configuration
+            const fees = this.constructor.calculateFeesFromPaymentConfig(residence, room);
+            const adminFee = fees.adminFee;
+            const securityDeposit = fees.securityDeposit;
             
             console.log(`   Room Price: $${room.price}`);
             console.log(`   Prorated Rent (${proratedDays} days): $${proratedRent.toFixed(2)}`);
@@ -632,7 +706,7 @@ class RentalAccrualService {
             }
             
             // Get residence and room details for pricing
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const residence = await Residence.findById(student.residence);
             if (!residence) {
                 throw new Error('Residence not found');
@@ -886,7 +960,7 @@ class RentalAccrualService {
         try {
             const Invoice = require('../models/Invoice');
             const User = require('../models/User');
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const { sendEmail } = require('../utils/email');
             
             // Get student and residence details
@@ -998,7 +1072,7 @@ class RentalAccrualService {
         try {
             const Invoice = require('../models/Invoice');
             const User = require('../models/User');
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             
             // Get residence details
             const residence = await Residence.findById(student.residence);
@@ -1403,29 +1477,20 @@ class RentalAccrualService {
                     
                     if (roomData && roomData.price) {
                         rentAmount = roomData.price;
-                        // Add admin fee based on residence type
-                        if (residence.name.includes('St Kilda')) {
-                            adminFee = 20; // $20/month for St Kilda
-                        } else if (residence.name.includes('Belvedere')) {
-                            adminFee = 25; // $25/month for Belvedere
-                        } else if (residence.name.includes('Newlands')) {
-                            adminFee = 15; // $15/month for Newlands
-                        } else if (residence.name.includes('1ACP')) {
-                            adminFee = 15; // $15/month for 1ACP
-                        } else if (residence.name.includes('Fife Avenue')) {
-                            adminFee = 30; // $30/month for Fife Avenue
-                        } else {
-                            adminFee = 20; // Default admin fee
-                        }
+                        // Calculate admin fee based on residence payment configuration
+                        const fees = this.constructor.calculateFeesFromPaymentConfig(residence, roomData);
+                        adminFee = fees.adminFee;
                     } else {
                         // Fallback pricing if room not found
                         rentAmount = 200;
-                        adminFee = 20;
+                        // Check payment config for admin fee even in fallback
+                        const fees = this.constructor.calculateFeesFromPaymentConfig(residence, { price: 200 });
+                        adminFee = fees.adminFee;
                     }
             } else {
                     // Fallback pricing if residence not found
                     rentAmount = 200;
-                    adminFee = 20;
+                    adminFee = 0; // No admin fee if residence not found
                 }
                 
                 totalRentAccrued += rentAmount;

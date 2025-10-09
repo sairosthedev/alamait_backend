@@ -1,5 +1,5 @@
 const Transaction = require('../../models/Transaction');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const Account = require('../../models/Account');
 
 /**

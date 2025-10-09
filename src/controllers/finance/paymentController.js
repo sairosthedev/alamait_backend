@@ -1,7 +1,7 @@
 const { validationResult } = require('express-validator');
 const Payment = require('../../models/Payment');
 const User = require('../../models/User');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const Application = require('../../models/Application');
 const Lease = require('../../models/Lease');
 const Debtor = require('../../models/Debtor');

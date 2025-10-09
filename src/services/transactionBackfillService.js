@@ -71,7 +71,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 
         console.log(`🔄 Backfilling transactions for debtor: ${debtor.debtorCode}`);
         const Debtor = require('../models/Debtor');
-        const Residence = require('../models/Residence');
+        const { Residence } = require('../models/Residence');
         
         let invoiceQueue = []; // Queue for FIFO invoice processing
 
@@ -111,9 +111,53 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
         const endDate = debtor.endDate || debtor.billingPeriod?.endDate || new Date(new Date().setMonth(new Date().getMonth() + 6));
         const applicationCode = debtor.applicationCode || 'MANUAL';
         
-        // Get admin fee
-		const adminFee = debtor.financialBreakdown?.adminFee;
-		const depositAmount = calculateDepositAmount(monthlyRent) || 0;
+        // Get residence and payment configuration
+        const residence = await Residence.findById(debtor.residence);
+        let adminFee = debtor.financialBreakdown?.adminFee || 0;
+        let depositAmount = 0;
+        
+        if (residence && residence.paymentConfiguration) {
+            const paymentConfig = residence.paymentConfiguration;
+            
+            console.log('🔍 Transaction Backfill - Payment Config Debug:', {
+                residenceName: residence.name,
+                paymentConfig: paymentConfig,
+                monthlyRent: monthlyRent
+            });
+            
+            // Calculate admin fee based on configuration
+            if (paymentConfig.adminFee && paymentConfig.adminFee.enabled === true) {
+                if (paymentConfig.adminFee.calculation === 'fixed' || paymentConfig.adminFee.amount) {
+                    adminFee = paymentConfig.adminFee.amount || 0;
+                } else if (paymentConfig.adminFee.calculation === 'percentage') {
+                    adminFee = (monthlyRent * (paymentConfig.adminFee.percentage || 0)) / 100;
+                }
+            }
+            
+            // Calculate deposit based on configuration
+            console.log('🔍 Deposit Config Check (Backfill):', {
+                hasDepositConfig: !!paymentConfig.deposit,
+                depositEnabled: paymentConfig.deposit?.enabled,
+                depositCalculation: paymentConfig.deposit?.calculation
+            });
+            
+            if (paymentConfig.deposit && paymentConfig.deposit.enabled === true) {
+                if (paymentConfig.deposit.calculation === 'one_month_rent') {
+                    depositAmount = monthlyRent;
+                } else if (paymentConfig.deposit.calculation === 'fixed') {
+                    depositAmount = paymentConfig.deposit.amount || 0;
+                } else if (paymentConfig.deposit.calculation === 'percentage') {
+                    depositAmount = (monthlyRent * (paymentConfig.deposit.percentage || 100)) / 100;
+                }
+                console.log('💰 Security Deposit Calculated (Backfill):', depositAmount);
+            } else {
+                console.log('🚫 Security Deposit Disabled (Backfill)');
+            }
+        } else {
+            // Fallback to old behavior if no payment config
+            console.log('⚠️ No payment configuration found, using fallback deposit calculation');
+            depositAmount = calculateDepositAmount(monthlyRent) || 0;
+        }
         
         let leaseStartCreated = false;
         let monthlyTransactionsCreated = 0;

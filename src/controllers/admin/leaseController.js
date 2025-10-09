@@ -1,5 +1,5 @@
 const Lease = require('../../models/Lease');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const { generateSignedUrl, getKeyFromUrl } = require('../../config/s3');
 
 // GET /api/admin/leases - fetch all leases from all students

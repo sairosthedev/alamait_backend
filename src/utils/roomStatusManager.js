@@ -5,7 +5,7 @@
  * change status to expired, forfeited, or cancelled.
  */
 
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const Application = require('../models/Application');
 const User = require('../models/User');
 

@@ -1,6 +1,6 @@
 const Invoice = require('../models/Invoice');
 const User = require('../models/User');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const Payment = require('../models/Payment');
 const mongoose = require('mongoose');
 

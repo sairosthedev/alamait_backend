@@ -1,6 +1,6 @@
 const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const mongoose = require('mongoose');
 
 /**

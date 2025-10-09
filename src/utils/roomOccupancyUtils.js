@@ -7,7 +7,7 @@
 
 const User = require('../models/User');
 const Application = require('../models/Application');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 
 class RoomOccupancyUtils {
     

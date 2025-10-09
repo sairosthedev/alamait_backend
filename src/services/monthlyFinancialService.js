@@ -68,6 +68,11 @@ class MonthlyFinancialService {
                     }
                 });
                 
+                // 🆕 Calculate Alamait Management Fee (25% of rental income)
+                const managementFee = monthlyData[monthName].total_revenue * 0.25;
+                monthlyData[monthName].expenses['5001 - Alamait Management Fees'] = managementFee;
+                monthlyData[monthName].total_expenses += managementFee;
+                
                 // Calculate net income for this month
                 monthlyData[monthName].net_income = 
                     monthlyData[monthName].total_revenue - monthlyData[monthName].total_expenses;

@@ -1,5 +1,5 @@
 const Booking = require('../../models/Booking');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const { validationResult } = require('express-validator');
 const EmailNotificationService = require('../../services/emailNotificationService');
 

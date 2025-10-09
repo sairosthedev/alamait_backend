@@ -1,6 +1,6 @@
 const Application = require('../../models/Application');
 const User = require('../../models/User');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence'); // <-- FIXED
 const { validationResult } = require('express-validator');
 const { sendEmail } = require('../../utils/email');
 const path = require('path');
@@ -929,7 +929,7 @@ exports.syncRoomOccupancy = async (req, res) => {
     try {
         console.log('🔄 Syncing room occupancy with allocations...');
         
-        const Residence = require('../../models/Residence');
+        const { Residence } = require('../../models/Residence');
         const residences = await Residence.find({});
         
         let updatedRooms = 0;
@@ -1064,4 +1064,4 @@ exports.getExpiredStudents = async (req, res) => {
         console.error('❌ Error getting expired students:', error);
         res.status(500).json({ error: 'Server error' });
     }
-}; 
+};

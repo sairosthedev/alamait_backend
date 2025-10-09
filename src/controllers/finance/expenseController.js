@@ -1065,6 +1065,35 @@ exports.recordExpensePayment = async (req, res) => {
             }
         }
 
+        // If still not resolved, try to infer the vendor-specific AP from the original accrual entry
+        if (!finalReceivingAccount || finalReceivingAccount === '2000') {
+            try {
+                const accrualQuery = {
+                    source: 'expense_accrual',
+                    status: 'posted',
+                    $or: [
+                        { sourceId: expense.requestId },
+                        { reference: expense.requestId },
+                        { reference: expense.expenseId }
+                    ].filter(Boolean)
+                };
+                const inferredAccrual = await TransactionEntry.findOne(accrualQuery).sort({ date: -1 });
+                if (inferredAccrual && Array.isArray(inferredAccrual.entries)) {
+                    const liabilityLine = inferredAccrual.entries.find(e => e.accountType === 'Liability' && (e.accountCode || '').startsWith('2'));
+                    if (liabilityLine && liabilityLine.accountCode) {
+                        // Use the same AP account used on accrual (e.g., Accounts Payable: Guardsmen)
+                        const inferredAP = await Account.findOne({ code: liabilityLine.accountCode });
+                        if (inferredAP) {
+                            finalReceivingAccount = liabilityLine.accountCode;
+                            console.log(`Inferred AP from accrual: ${finalReceivingAccount} (${inferredAP.name})`);
+                        }
+                    }
+                }
+            } catch (inferErr) {
+                console.log('Could not infer AP account from accrual:', inferErr.message);
+            }
+        }
+
         // Validate accounts exist
         const payingAcc = await Account.findOne({ code: payingAccount });
         const receivingAcc = await Account.findOne({ code: finalReceivingAccount });
@@ -1118,7 +1147,10 @@ exports.recordExpensePayment = async (req, res) => {
         // Create double-entry transaction
         const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
         
-        const paymentDate = new Date(); // Use current date as payment date
+        // Always use the actual paid date for accounting
+        const paymentDate = expense.paidDate || req.body.paidDate || req.body.paymentDate || new Date();
+        // Compute settled month key for reporting (e.g., 2025-07)
+        const monthSettled = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
         const transactionEntry = new TransactionEntry({
             transactionId,
             date: paymentDate,
@@ -1137,8 +1169,8 @@ exports.recordExpensePayment = async (req, res) => {
                     accountCode: payingAccount,
                     accountName: payingAcc.name,
                     accountType: payingAcc.type,
-                    debit: parseFloat(amount), // ✅ FIXED: DEBIT when paying expense (money going OUT)
-                    credit: 0,
+                    debit: 0,
+                    credit: parseFloat(amount),
                     description: `Payment made for expense ${expense.expenseId}`
                 }
             ],
@@ -1154,7 +1186,8 @@ exports.recordExpensePayment = async (req, res) => {
                 expenseDescription: expense.description,
                 paymentMethod,
                 reference,
-                datePaid: paymentDate // Store the actual payment date for cash flow
+                datePaid: paymentDate, // Store the actual payment date for cash flow
+                monthSettled
             }
         });
 

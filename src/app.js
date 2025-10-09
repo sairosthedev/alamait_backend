@@ -139,9 +139,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// Parse JSON bodies
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Parse JSON bodies with increased limits
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Add timeout middleware for file upload routes
 app.use('/api/student/payments', (req, res, next) => {
@@ -260,6 +260,10 @@ app.use('/api/admin/income', adminIncomeRoutes);
 app.use('/api/admin/users', adminUserRoutes);
 app.use('/api/admin/reports', adminReportRoutes);
 app.use('/api/admin/residences', adminResidenceRoutes);
+
+// Residence Payment Configuration routes
+const residencePaymentRoutes = require('./routes/admin/residencePaymentRoutes');
+app.use('/api/admin/residence-payments', residencePaymentRoutes);
 app.use('/api/admin/students', adminStudentRoutes);
 app.use('/api/admin/applications', adminApplicationRoutes);
 app.use('/api/admin/payments', adminPaymentRoutes);

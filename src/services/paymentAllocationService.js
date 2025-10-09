@@ -328,7 +328,7 @@ class PaymentAllocationService {
       }
       
       // Get residence details for pricing
-      const Residence = require('../models/Residence');
+      const { Residence } = require('../models/Residence');
       const residence = await Residence.findById(application.residence);
       if (!residence) {
         throw new Error('Residence not found');

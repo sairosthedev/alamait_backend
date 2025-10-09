@@ -2,7 +2,7 @@ const TransactionEntry = require('../models/TransactionEntry');
 const Payment = require('../models/Payment');
 const Expense = require('../models/finance/Expense');
 const Account = require('../models/Account');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const mongoose = require('mongoose');
 
 /**
@@ -1322,18 +1322,21 @@ class EnhancedCashFlowService {
                 processedExpenses.has(expense.reference) ||
                 processedExpenses.has(expense.expenseId) || // Check expenseId field
                 Array.from(processedExpenses).some(processedId => {
-                    // Check if the processed expense ID matches this expense in any way
-                    return processedId.includes(expenseId) || 
-                        expenseId.includes(processedId) ||
-                        (expense.reference && processedId.includes(expense.reference)) ||
-                        (expense.reference && expense.reference.includes(processedId)) ||
-                        // Check if the processed expense ID is in the expense's reference field
-                        (expense.reference && expense.reference.includes(processedId)) ||
+                    // Safely coerce to strings before using .includes to avoid TypeError
+                    const pid = (processedId !== undefined && processedId !== null) ? String(processedId) : '';
+                    const expId = (expenseId !== undefined && expenseId !== null) ? String(expenseId) : '';
+                    const ref = (expense.reference !== undefined && expense.reference !== null) ? String(expense.reference) : '';
+                    const expExpenseId = (expense.expenseId !== undefined && expense.expenseId !== null) ? String(expense.expenseId) : '';
+
+                    return (pid && expId && pid.includes(expId)) ||
+                        (expId && pid && expId.includes(pid)) ||
+                        (ref && pid.includes(ref)) ||
+                        (ref && ref.includes(pid)) ||
                         // Check if this expense's reference is in any processed expense ID
-                        (expense.reference && Array.from(processedExpenses).some(p => p.includes(expense.reference))) ||
+                        (ref && Array.from(processedExpenses).some(p => String(p ?? '').includes(ref))) ||
                         // Check if this expense's expenseId matches any processed expense ID
-                        (expense.expenseId && processedId.includes(expense.expenseId)) ||
-                        (expense.expenseId && expense.expenseId.includes(processedId));
+                        (expExpenseId && pid.includes(expExpenseId)) ||
+                        (expExpenseId && expExpenseId.includes(pid));
                 });
             
             if (isAlreadyProcessed) {

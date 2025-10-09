@@ -1,7 +1,7 @@
 const Payment = require('../../models/Payment');
 const User = require('../../models/User');
 const Booking = require('../../models/Booking');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const Application = require('../../models/Application');
 const multer = require('multer');
 const multerS3 = require('multer-s3');

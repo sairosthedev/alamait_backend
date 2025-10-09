@@ -1,4 +1,4 @@
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const { validationResult } = require('express-validator');
 
 // Get St Kilda residence

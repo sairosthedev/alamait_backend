@@ -1,7 +1,7 @@
 const Maintenance = require('../../models/Maintenance');
 const { validationResult } = require('express-validator');
 const User = require('../../models/User');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Helper function to map status for students

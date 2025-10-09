@@ -1,6 +1,6 @@
 const Payment = require('../../models/Payment');
 const Expense = require('../../models/finance/Expense');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const User = require('../../models/User');
 const { validateMongoId } = require('../../utils/validators');
 

@@ -55,7 +55,7 @@ class DoubleEntryAccountingService {
             }
             
             // Validate residence exists
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const residenceDoc = await Residence.findById(residence);
             if (!residenceDoc) {
                 throw new Error(`Invalid residence ID: ${residence}`);
@@ -184,7 +184,7 @@ class DoubleEntryAccountingService {
             }
             
             // Validate residence exists
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const residenceDoc = await Residence.findById(residence);
             if (!residenceDoc) {
                 throw new Error(`Invalid residence ID: ${residence}`);
@@ -395,7 +395,7 @@ class DoubleEntryAccountingService {
             }
             
             // Validate residence exists
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const residenceDoc = await Residence.findById(residence);
             if (!residenceDoc) {
                 throw new Error(`Invalid residence ID: ${residence}`);
@@ -594,11 +594,13 @@ class DoubleEntryAccountingService {
             
             const transactionId = await this.generateTransactionId();
             
-            // Use the month the request is FOR (not the approval date) for proper accrual accounting
-            const accrualDate = request.year && request.month ? 
-                               new Date(request.year, request.month - 1, 1) : // Use request month (e.g., July 2025)
-                               (approvalDate ? new Date(approvalDate) : 
-                               (request.dateRequested ? new Date(request.dateRequested) : new Date()));
+            // Always use the incurred/expense date for accruals
+            // Priority: explicit expenseDate -> request.year/month -> dateRequested -> approvalDate -> createdAt
+            const accrualDate = request.expenseDate ? new Date(request.expenseDate)
+                               : (request.year && request.month ? new Date(request.year, request.month - 1, 1)
+                               : (request.dateRequested ? new Date(request.dateRequested)
+                               : (approvalDate ? new Date(approvalDate)
+                               : (request.createdAt ? new Date(request.createdAt) : new Date()))));
             
             const transaction = new Transaction({
                 transactionId,
@@ -727,6 +729,7 @@ class DoubleEntryAccountingService {
                     requestType: 'maintenance',
                     vendorName: request.vendorName,
                     itemCount: request.items.length,
+                    expenseDate: accrualDate,
                     ...(request && request.itemIndex !== undefined ? { itemIndex: request.itemIndex } : {})
                 }
             });
@@ -2765,7 +2768,7 @@ class DoubleEntryAccountingService {
      */
     static async getDefaultResidence() {
         try {
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const defaultResidence = await Residence.findOne().sort({ createdAt: 1 });
             return defaultResidence?._id || null;
         } catch (error) {

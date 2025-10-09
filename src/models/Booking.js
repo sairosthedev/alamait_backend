@@ -102,7 +102,7 @@ bookingSchema.methods.addPayment = function(payment) {
 
 // Check if booking dates overlap with existing bookings
 bookingSchema.statics.checkAvailability = async function(residenceId, roomNumber, startDate, endDate, excludeBookingId = null) {
-    const Residence = require('./Residence');
+    const { Residence } = require('./Residence');
     const User = require('./User');
     
     // Get room capacity

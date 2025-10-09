@@ -6,35 +6,6 @@ const { logTransactionOperation, logSystemOperation } = require('../utils/auditL
 
 class EnhancedPaymentAllocationService {
   /**
-   * Resolve the effective date for a specific payment component type
-   * Order of precedence:
-   *  - matching item in paymentData.payments with date/datePaid/paidDate
-   *  - top-level paymentData.date
-   *  - current date (fallback)
-   */
-  static getComponentDate(paymentData, componentType) {
-    try {
-      const items = Array.isArray(paymentData?.payments) ? paymentData.payments : [];
-      const match = items.find(p => p && p.type === componentType);
-      const raw = match?.date || match?.datePaid || match?.paidDate || paymentData?.date;
-      
-      if (raw) {
-        // Fix malformed dates like "0225-07-07" -> "2025-07-07"
-        let fixedDate = raw.toString();
-        if (fixedDate.match(/^0\d{3}-\d{2}-\d{2}/)) {
-          fixedDate = '2' + fixedDate;
-        }
-        
-        const d = new Date(fixedDate);
-        if (!isNaN(d.getTime())) return d;
-      }
-      
-      return new Date();
-    } catch (_) {
-      return new Date();
-    }
-  }
-  /**
    * 🎯 ENHANCED Smart FIFO Payment Allocation with Business Rules
    * 
    * Business Rules:
@@ -140,41 +111,30 @@ class EnhancedPaymentAllocationService {
       // Group payment components by type for efficient allocation
       const paymentByType = {};
       payments.forEach(payment => {
-        // Handle Mongoose subdocuments properly
-        const paymentData = payment._doc || payment;
-        const paymentType = paymentData.type;
-        const paymentAmount = paymentData.amount;
-        
-        if (paymentType && paymentAmount) {
-          if (!paymentByType[paymentType]) {
-            paymentByType[paymentType] = 0;
-          }
-          paymentByType[paymentType] += paymentAmount;
+        if (!paymentByType[payment.type]) {
+          paymentByType[payment.type] = 0;
         }
+        paymentByType[payment.type] += payment.amount;
       });
       
       console.log('📊 Payment breakdown by type:', paymentByType);
       
       // 🆕 FIX: Auto-determine monthAllocated for admin fees and deposits if missing
       const enhancedPayments = payments.map(payment => {
-        // Handle Mongoose subdocuments properly
-        const paymentData = payment._doc || payment;
-        const paymentType = paymentData.type;
-        
-        if ((paymentType === 'admin' || paymentType === 'deposit') && !paymentData.monthAllocated) {
+        if ((payment.type === 'admin' || payment.type === 'deposit') && !payment.monthAllocated) {
           // Find the month that has this charge outstanding
           const monthWithCharge = outstandingBalances.find(month => {
-            if (paymentType === 'admin') return month.adminFee.outstanding > 0;
-            if (paymentType === 'deposit') return month.deposit.outstanding > 0;
+            if (payment.type === 'admin') return month.adminFee.outstanding > 0;
+            if (payment.type === 'deposit') return month.deposit.outstanding > 0;
             return false;
           });
           
           if (monthWithCharge) {
-            console.log(`🔧 Auto-assigning ${paymentType} payment to month: ${monthWithCharge.monthKey}`);
-            return { ...paymentData, monthAllocated: monthWithCharge.monthKey };
+            console.log(`🔧 Auto-assigning ${payment.type} payment to month: ${monthWithCharge.monthKey}`);
+            return { ...payment, monthAllocated: monthWithCharge.monthKey };
           }
         }
-        return paymentData;
+        return payment;
       });
       
       console.log('📊 Enhanced payments with auto-assigned months:', enhancedPayments);
@@ -186,10 +146,7 @@ class EnhancedPaymentAllocationService {
         let remainingAmount = totalAmount;
         
         // 🆕 FIX: Get the specific payment entries for this type to access monthAllocated
-        const paymentsOfType = enhancedPayments.filter(p => {
-          const paymentData = p._doc || p;
-          return paymentData.type === paymentType;
-        });
+        const paymentsOfType = enhancedPayments.filter(p => p.type === paymentType);
         
         // 🆕 BUSINESS RULE: Handle once-off charges (Admin Fee, Deposit)
         if (paymentType === 'admin' || paymentType === 'deposit') {
@@ -228,14 +185,9 @@ class EnhancedPaymentAllocationService {
               allocationResults.push(advanceResult);
               totalAllocated += remainingAmount;
             }
-            // For admin fees, still allocate to payment month even if already paid
-            if (paymentType === 'admin' && remainingAmount > 0) {
-              console.log(`🎯 Admin fee already paid, but still allocating to payment month for proper accounting`);
-              // Continue with normal admin allocation logic below
-            } else {
-              remainingAmount = 0;
-              continue; // Skip to next payment type
-            }
+            // If admin already paid, ignore extra (no advance for once-off income)
+            remainingAmount = 0;
+            continue; // Skip to next payment type
           }
           
           // If no charges at all, treat as advance payment
@@ -258,79 +210,30 @@ class EnhancedPaymentAllocationService {
           let monthWithCharge = null;
           
           if (paymentType === 'admin') {
-            // Check if admin fee has already been fully settled (one-time charge)
-            // Use actual outstanding balances instead of debtor.isPaid flag
-            const totalOutstandingAdmin = outstandingBalances.reduce((sum, month) => sum + month.adminFee.outstanding, 0);
-            if (totalOutstandingAdmin <= 0) {
-              console.log(`✅ Admin fee already fully settled - treating $${remainingAmount} as advance payment`);
-              if (remainingAmount > 0) {
-                const advanceResult = await this.handleAdvancePayment(
-                  paymentData.paymentId, studentId, remainingAmount, paymentData, paymentType
-                );
-                allocationResults.push(advanceResult);
-                totalAllocated += remainingAmount;
-              }
-              remainingAmount = 0;
-              continue; // Skip admin fee allocation
-            }
-            
-            // Admin fees settle in the month they were received (strictly by paid date)
-            const componentDate = EnhancedPaymentAllocationService.getComponentDate(paymentData, 'admin');
-            if (!(componentDate && !isNaN(componentDate.getTime()))) {
-              throw new Error('Missing or invalid paid date for admin component');
-            }
-            const year = componentDate.getFullYear();
-            const month = String(componentDate.getMonth() + 1).padStart(2, '0');
-            const paymentMonthKey = `${year}-${month}`;
+            // Admin fees settle in the month they were received (payment month)
+            const paymentDate = new Date(paymentData.date);
+            const paymentMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
             
             // Find the payment month for admin fee settlement
             monthWithCharge = outstandingBalances.find(month => month.monthKey === paymentMonthKey);
             
             if (!monthWithCharge) {
-              // If no actual AR month exists, still settle admin fee in the payment month
-              console.log(`🎯 No AR month found for admin fee in ${paymentMonthKey}. Allocating to payment month without AR link.`);
-              if (remainingAmount > 0) {
-                const paymentTransaction = await this.createPaymentAllocationTransaction(
-                  paymentData.paymentId,
-                  studentId,
-                  remainingAmount,
-                  { ...paymentData, paymentType: 'admin', studentName: paymentData.studentName || 'Student', componentDate },
-                  'admin',
-                  paymentMonthKey,
-                  null // No AR transaction to link
-                );
-
-                // Update debtor once-off charge flags
-                await this.updateDebtorOnceOffCharge(debtor._id, 'admin', remainingAmount, paymentData.paymentId);
-
-                allocationResults.push({
-                  month: paymentMonthKey,
-                  monthName: paymentMonthKey,
-                  year: Number(paymentMonthKey.split('-')[0]),
-                  paymentType: 'admin',
-                  amountAllocated: remainingAmount,
-                  originalOutstanding: 0,
-                  newOutstanding: 0,
-                  allocationType: 'admin_settlement',
-                  transactionId: paymentTransaction._id
-                });
-
-                totalAllocated += remainingAmount;
-                remainingAmount = 0;
-              }
+              // If no actual month exists for admin fee settlement, treat as advance admin payment
+              console.log(`🎯 No actual month found for admin fee settlement in ${paymentMonthKey}. Treating as advance admin payment.`);
+              const advanceResult = await this.handleAdvancePayment(
+                paymentData.paymentId, studentId, remainingAmount, paymentData, 'advance_admin'
+              );
+              allocationResults.push(advanceResult);
+              totalAllocated += remainingAmount;
+              remainingAmount = 0;
               continue; // Skip to next payment type
             }
             
             console.log(`🎯 Admin fee payment will settle in payment month: ${monthWithCharge.monthKey}`);
           } else if (paymentType === 'deposit') {
-            // Deposits settle in the month they were received (strictly by paid date)
-            const componentDate = EnhancedPaymentAllocationService.getComponentDate(paymentData, 'deposit');
-            if (!(componentDate && !isNaN(componentDate.getTime()))) {
-              throw new Error('Missing or invalid paid date for deposit component');
-            }
-            const year = componentDate.getFullYear();
-            const month = String(componentDate.getMonth() + 1).padStart(2, '0');
-            const paymentMonthKey = `${year}-${month}`;
+            // Deposits settle in the month they were received (payment month)
+            const paymentDate = new Date(paymentData.date);
+            const paymentMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
             
             // Find the payment month for deposit settlement
             monthWithCharge = outstandingBalances.find(month => month.monthKey === paymentMonthKey);
@@ -375,12 +278,11 @@ class EnhancedPaymentAllocationService {
               console.log(`🎯 Allocating $${amountToAllocate} ${paymentType} to ${monthWithCharge.monthKey}`);
               
               // Create payment allocation transaction with proper double-entry accounting
-              const componentDate = EnhancedPaymentAllocationService.getComponentDate(paymentData, paymentType);
               const paymentTransaction = await this.createPaymentAllocationTransaction(
                 paymentData.paymentId,
                 studentId,
                 amountToAllocate,
-                { ...paymentData, paymentType, studentName: paymentData.studentName || 'Student', componentDate },
+                { ...paymentData, paymentType, studentName: paymentData.studentName || 'Student' },
                 paymentType,
                 monthWithCharge.monthKey,
                 monthWithCharge.transactionId
@@ -390,7 +292,7 @@ class EnhancedPaymentAllocationService {
               await this.updateARTransaction(
                 monthWithCharge.transactionId,
                 amountToAllocate,
-                { ...paymentData, paymentType, monthKey: monthWithCharge.monthKey, componentDate },
+                { ...paymentData, paymentType, monthKey: monthWithCharge.monthKey },
                 paymentType === 'admin' ? monthWithCharge.adminFee.outstanding : monthWithCharge.deposit.outstanding
               );
               
@@ -535,136 +437,67 @@ class EnhancedPaymentAllocationService {
         if (paymentType === 'rent') {
           console.log(`🏠 Processing rent payment: $${remainingAmount}`);
           
-          // 🆕 DYNAMIC ALLOCATION: Use "month for" field to determine allocation priority
-          let targetMonth = null;
-          
-          // Check if payment has a specific "month for" field
-          if (paymentData.paymentMonth) {
-            targetMonth = outstandingBalances.find(month => month.monthKey === paymentData.paymentMonth);
-            console.log(`🎯 Payment specifies month for: ${paymentData.paymentMonth}`);
-          }
-          
-          // If no specific month or month not found, use FIFO (oldest first)
-          if (!targetMonth) {
-            targetMonth = outstandingBalances.find(month => 
-              month.rent.outstanding > 0 && 
-              !month.isVirtualMonth && 
-              month.transactionId
-            );
-            console.log(`🎯 Using FIFO allocation to: ${targetMonth?.monthKey || 'none'}`);
-          }
-          
-          // Allocate to target month first
-          if (targetMonth && remainingAmount > 0) {
-            const amountToAllocate = Math.min(remainingAmount, targetMonth.rent.outstanding);
+          // Allocate rent to oldest outstanding months first (FIFO)
+          for (const month of outstandingBalances) {
+            if (remainingAmount <= 0) break;
+            
+            // Skip months that already have full rent paid
+            if (month.rent.outstanding <= 0) {
+              console.log(`ℹ️ No outstanding rent for ${month.monthKey}, moving to next month`);
+              continue;
+            }
+            
+            // Skip virtual months (they don't have actual AR transactions to allocate to)
+            if (month.isVirtualMonth || !month.transactionId) {
+              console.log(`ℹ️ Skipping virtual month ${month.monthKey} (no actual AR transaction), moving to next month`);
+              continue;
+            }
+            
+            const amountToAllocate = Math.min(remainingAmount, month.rent.outstanding);
             
             if (amountToAllocate > 0) {
-              console.log(`🎯 Allocating $${amountToAllocate} rent to ${targetMonth.monthKey} (target month)`);
+              console.log(`🎯 Allocating $${amountToAllocate} rent to ${month.monthKey}`);
               
               // Create payment allocation transaction with proper double-entry accounting
-              const componentDate = EnhancedPaymentAllocationService.getComponentDate(paymentData, 'rent');
               const paymentTransaction = await this.createPaymentAllocationTransaction(
                 paymentData.paymentId,
                 studentId,
                 amountToAllocate,
-                { ...paymentData, paymentType: 'rent', studentName: paymentData.studentName || 'Student', componentDate },
+                { ...paymentData, paymentType: 'rent', studentName: paymentData.studentName || 'Student' },
                 'rent',
-                targetMonth.monthKey,
-                targetMonth.transactionId
+                month.monthKey,
+                month.transactionId
               );
               
               // Update AR transaction status
               await this.updateARTransaction(
-                targetMonth.transactionId,
+                month.transactionId,
                 amountToAllocate,
-                { ...paymentData, paymentType: 'rent', monthKey: targetMonth.monthKey, componentDate },
-                targetMonth.rent.outstanding
+                { ...paymentData, paymentType: 'rent', monthKey: month.monthKey },
+                month.rent.outstanding
               );
               
               allocationResults.push({
-                month: targetMonth.monthKey,
-                monthName: targetMonth.monthName,
-                year: targetMonth.year,
+                month: month.monthKey,
+                monthName: month.monthName,
+                year: month.year,
                 paymentType: 'rent',
                 amountAllocated: amountToAllocate,
-                originalOutstanding: targetMonth.rent.outstanding,
-                newOutstanding: targetMonth.rent.outstanding - amountToAllocate,
+                originalOutstanding: month.rent.outstanding,
+                newOutstanding: month.rent.outstanding - amountToAllocate,
                 allocationType: 'rent_settlement',
-                transactionId: targetMonth.transactionId
+                transactionId: month.transactionId
               });
               
               // Update month outstanding balance
-              targetMonth.rent.outstanding = Math.max(0, targetMonth.rent.outstanding - amountToAllocate);
-              targetMonth.rent.paid += amountToAllocate;
-              targetMonth.totalOutstanding = targetMonth.rent.outstanding + targetMonth.adminFee.outstanding + targetMonth.deposit.outstanding;
+              month.rent.outstanding = Math.max(0, month.rent.outstanding - amountToAllocate);
+              month.rent.paid += amountToAllocate;
+              month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding;
               
               remainingAmount -= amountToAllocate;
               totalAllocated += amountToAllocate;
               
-              console.log(`✅ Allocated $${amountToAllocate} rent to ${targetMonth.monthKey}, remaining: $${remainingAmount}`);
-            }
-          }
-          
-          // 🆕 ALLOCATE REMAINING TO NEXT ACCRUAL (if any)
-          if (remainingAmount > 0) {
-            console.log(`🔄 Allocating remaining $${remainingAmount} to next accrual...`);
-            
-            // Find next month with outstanding rent (after target month)
-            const nextMonth = outstandingBalances.find(month => 
-              month.rent.outstanding > 0 && 
-              !month.isVirtualMonth && 
-              month.transactionId &&
-              month.monthKey !== targetMonth?.monthKey
-            );
-            
-            if (nextMonth) {
-              const amountToAllocate = Math.min(remainingAmount, nextMonth.rent.outstanding);
-              
-              if (amountToAllocate > 0) {
-                console.log(`🎯 Allocating $${amountToAllocate} rent to ${nextMonth.monthKey} (next accrual)`);
-                
-                // Create payment allocation transaction
-                const componentDate = EnhancedPaymentAllocationService.getComponentDate(paymentData, 'rent');
-                const paymentTransaction = await this.createPaymentAllocationTransaction(
-                  paymentData.paymentId,
-                  studentId,
-                  amountToAllocate,
-                  { ...paymentData, paymentType: 'rent', studentName: paymentData.studentName || 'Student', componentDate },
-                  'rent',
-                  nextMonth.monthKey,
-                  nextMonth.transactionId
-                );
-                
-                // Update AR transaction status
-                await this.updateARTransaction(
-                  nextMonth.transactionId,
-                  amountToAllocate,
-                  { ...paymentData, paymentType: 'rent', monthKey: nextMonth.monthKey, componentDate },
-                  nextMonth.rent.outstanding
-                );
-                
-                allocationResults.push({
-                  month: nextMonth.monthKey,
-                  monthName: nextMonth.monthName,
-                  year: nextMonth.year,
-                  paymentType: 'rent',
-                  amountAllocated: amountToAllocate,
-                  originalOutstanding: nextMonth.rent.outstanding,
-                  newOutstanding: nextMonth.rent.outstanding - amountToAllocate,
-                  allocationType: 'rent_settlement',
-                  transactionId: nextMonth.transactionId
-                });
-                
-                // Update month outstanding balance
-                nextMonth.rent.outstanding = Math.max(0, nextMonth.rent.outstanding - amountToAllocate);
-                nextMonth.rent.paid += amountToAllocate;
-                nextMonth.totalOutstanding = nextMonth.rent.outstanding + nextMonth.adminFee.outstanding + nextMonth.deposit.outstanding;
-                
-                remainingAmount -= amountToAllocate;
-                totalAllocated += amountToAllocate;
-                
-                console.log(`✅ Allocated $${amountToAllocate} rent to ${nextMonth.monthKey}, remaining: $${remainingAmount}`);
-              }
+              console.log(`✅ Allocated $${amountToAllocate} rent to ${month.monthKey}, remaining: $${remainingAmount}`);
             }
           }
           
@@ -915,60 +748,51 @@ class EnhancedPaymentAllocationService {
        // Do NOT create virtual months as they don't have real AR transactions to allocate to
        console.log(`📊 Working with ${Object.keys(monthlyOutstanding).length} actual accrual months for student ${studentId}`);
       
-      // Process payments to calculate what's been paid
+      // 🆕 Process payments: subtract by monthSettled; fallback to FIFO if missing
       payments.forEach(payment => {
-        const paymentMonth = payment.metadata?.monthSettled;
-        if (paymentMonth && monthlyOutstanding[paymentMonth]) {
-          // This payment was allocated to a specific month
-          payment.entries.forEach(entry => {
-            if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.credit > 0) {
-              // Determine what type of payment this is
-              const description = (entry.description || '').toLowerCase();
-              
-              if (description.includes('admin fee') || description.includes('administrative') || description.includes('admin')) {
-                monthlyOutstanding[paymentMonth].adminFee.paid += entry.credit;
-              } else if (description.includes('security deposit') || description.includes('deposit')) {
-                monthlyOutstanding[paymentMonth].deposit.paid += entry.credit;
-              } else {
-                // Default to rent
-                monthlyOutstanding[paymentMonth].rent.paid += entry.credit;
-              }
-            }
-          });
-        }
-      });
-      
-      // 🆕 DYNAMIC FIX: Calculate correct payment application based on actual transaction history
-      // Instead of hardcoding, we'll recalculate based on what payments were actually made
-      Object.keys(monthlyOutstanding).forEach(monthKey => {
-        const month = monthlyOutstanding[monthKey];
+        // Look for monthSettled in metadata for payment allocation transactions
+        const monthSettled = payment.metadata?.monthSettled;
+        const paymentType = payment.metadata?.paymentType;
+        const arEntry = Array.isArray(payment.entries) && payment.entries.find(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
+        const amount = arEntry?.credit || 0;
+        if (amount <= 0) return;
         
-        // Reset paid amounts to 0 first
-        month.rent.paid = 0;
-        month.adminFee.paid = 0;
-        month.deposit.paid = 0;
-        
-        // Recalculate based on actual payment transactions
-        payments.forEach(payment => {
-          const paymentMonth = payment.metadata?.monthSettled;
-          if (paymentMonth === monthKey) {
-            payment.entries.forEach(entry => {
-              if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.credit > 0) {
-                const description = (entry.description || '').toLowerCase();
-                
-                if (description.includes('admin fee') || description.includes('administrative') || description.includes('admin')) {
-                  month.adminFee.paid += entry.credit;
-                } else if (description.includes('security deposit') || description.includes('deposit')) {
-                  month.deposit.paid += entry.credit;
-                } else {
-                  month.rent.paid += entry.credit;
-                }
-              }
-            });
+        if (monthSettled && monthlyOutstanding[monthSettled]) {
+          console.log(`💰 Applying payment to ${monthSettled}: $${amount} (${paymentType})`);
+          if (paymentType === 'admin') {
+            monthlyOutstanding[monthSettled].adminFee.paid += amount;
+          } else if (paymentType === 'deposit') {
+            monthlyOutstanding[monthSettled].deposit.paid += amount;
+          } else if (paymentType === 'rent') {
+            monthlyOutstanding[monthSettled].rent.paid += amount;
+          } else {
+            // Fallback by description hint
+            const desc = (arEntry?.description || '').toLowerCase();
+            if (desc.includes('admin')) monthlyOutstanding[monthSettled].adminFee.paid += amount;
+            else if (desc.includes('deposit')) monthlyOutstanding[monthSettled].deposit.paid += amount;
+            else monthlyOutstanding[monthSettled].rent.paid += amount;
           }
-        });
-        
-        console.log(`📊 ${monthKey}: Rent $${month.rent.paid} paid, Admin $${month.adminFee.paid} paid, Deposit $${month.deposit.paid} paid`);
+          return;
+        }
+
+        // FIFO fallback: apply to oldest months with outstanding
+        let remaining = amount;
+        const ordered = Object.keys(monthlyOutstanding).sort();
+        for (const mk of ordered) {
+          if (remaining <= 0) break;
+          const b = monthlyOutstanding[mk];
+          const owedRent = Math.max(0, b.rent.owed - b.rent.paid);
+          const owedAdmin = Math.max(0, b.adminFee.owed - b.adminFee.paid);
+          const owedDep = Math.max(0, b.deposit.owed - b.deposit.paid);
+          let need = owedRent + owedAdmin + owedDep;
+          if (need <= 0) continue;
+          const take = Math.min(remaining, need);
+          let toApply = take;
+          const takeRent = Math.min(toApply, owedRent); b.rent.paid += takeRent; toApply -= takeRent;
+          const takeAdmin = Math.min(toApply, owedAdmin); b.adminFee.paid += takeAdmin; toApply -= takeAdmin;
+          const takeDep = Math.min(toApply, owedDep); b.deposit.paid += takeDep; toApply -= takeDep;
+          remaining -= take;
+        }
       });
       
       // 🆕 Process manual adjustments (negotiations, reversals, etc.)
@@ -1045,7 +869,6 @@ class EnhancedPaymentAllocationService {
         month.adminFee.outstanding = Math.max(0, month.adminFee.owed - month.adminFee.paid);
         month.deposit.outstanding = Math.max(0, month.deposit.owed - month.deposit.paid);
         
-        
         // Calculate total outstanding for this month
         month.totalOutstanding = month.rent.outstanding + month.adminFee.outstanding + month.deposit.outstanding;
         
@@ -1090,8 +913,7 @@ class EnhancedPaymentAllocationService {
       // Get the AR transaction
       const arTransaction = await TransactionEntry.findById(transactionId);
       if (!arTransaction) {
-        console.log(`⚠️ AR transaction ${transactionId} not found. Skipping update.`);
-        return null; // Return null if no AR transaction found
+        throw new Error(`AR transaction ${transactionId} not found`);
       }
       
       // 🆕 VERIFICATION: Ensure the AR transaction belongs to the correct student
@@ -1147,10 +969,8 @@ class EnhancedPaymentAllocationService {
         arTransaction.metadata.paymentAllocations = [];
       }
       
-      // Use the actual paid date when recording allocation metadata
-      const metaComponentDate = paymentData.componentDate ? new Date(paymentData.componentDate) : (paymentData.date ? new Date(paymentData.date) : new Date());
       arTransaction.metadata.paymentAllocations.push({
-        date: metaComponentDate,
+        date: new Date(),
         amount: paymentAmount,
         remainingOutstanding: Math.max(0, originalOutstanding - paymentAmount)
       });
@@ -1200,7 +1020,6 @@ class EnhancedPaymentAllocationService {
   static async createAdvancePaymentTransaction(paymentId, studentId, amount, paymentData, paymentType) {
     try {
       console.log(`💳 Creating advance payment transaction for $${amount} ${paymentType}`);
-      console.log(`📅 Payment data date: ${paymentData.date} (type: ${typeof paymentData.date})`);
       
       // Determine liability account based on type
       const isDeposit = paymentType === 'deposit';
@@ -1225,14 +1044,9 @@ class EnhancedPaymentAllocationService {
         }
       }
 
-      const advanceComponentDate = paymentData.componentDate ? new Date(paymentData.componentDate) : null;
-      const advancePaymentDate = advanceComponentDate && !isNaN(advanceComponentDate.getTime())
-        ? advanceComponentDate
-        : (paymentData.date ? new Date(paymentData.date) : new Date());
-
       const advanceTransaction = new TransactionEntry({
         transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-        date: advancePaymentDate,
+        date: new Date(),
         description: isDeposit ? 'Deposit received (liability)' : `Advance ${paymentType} payment for future periods`,
         reference: paymentId,
         entries: [
@@ -1313,10 +1127,7 @@ class EnhancedPaymentAllocationService {
       }
 
       // Create payment allocation transaction with proper payment date
-      const componentDate = paymentData.componentDate ? new Date(paymentData.componentDate) : null;
-      const paymentDate = componentDate && !isNaN(componentDate.getTime())
-        ? componentDate
-        : (paymentData.date ? new Date(paymentData.date) : new Date());
+      const paymentDate = paymentData.date ? new Date(paymentData.date) : new Date();
       const paymentTransaction = new TransactionEntry({
         transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
         date: paymentDate, // Use actual payment date for accurate cashflow

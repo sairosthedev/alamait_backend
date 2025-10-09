@@ -1,6 +1,7 @@
 const Student = require('../models/Student');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const Payment = require('../models/Payment');
+const ResidencePaymentService = require('../services/residencePaymentService');
 const mongoose = require('mongoose');
 
 // Helper: get months between two dates (inclusive of start month)
@@ -48,11 +49,6 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
   const room = residence.rooms.find(r => r.roomNumber === (rental.room || student.room));
   if (!room) throw new Error('Room not found');
 
-  // Determine residence type for payment requirements
-  const residenceName = residence.name.trim().toLowerCase();
-  const isStKilda = residenceName.includes('st kilda');
-  const isBelvedere = residenceName.includes('belvedere');
-
   // 5. Calculate stay duration (months)
   const stayMonths = monthsBetween(new Date(rental.startDate), new Date(rental.endDate));
 
@@ -63,39 +59,40 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
     date: { $gte: new Date(rental.startDate), $lte: new Date(rental.endDate) }
   });
 
-  let rentPaid = 0, adminFeePaid = 0, depositPaid = 0;
+  let rentPaid = 0, adminFeePaid = 0, depositPaid = 0, utilitiesPaid = 0, maintenancePaid = 0;
   payments.forEach(p => {
     rentPaid += p.rentAmount || 0;
     adminFeePaid += p.adminFee || 0;
     depositPaid += p.deposit || 0;
+    utilitiesPaid += p.utilities || 0;
+    maintenancePaid += p.maintenance || 0;
   });
 
-  // 7. Calculate what is due this month
-  const rentDue = room.price;
-  let adminFeeDue = 0, depositDue = 0;
+  // 7. Calculate what is due this month using configurable system
+  const currentDateObj = new Date(currentDate);
+  const currentMonth = currentDateObj.getMonth() + 1;
+  const currentYear = currentDateObj.getFullYear();
   
-  if (isStKilda) {
-    // St Kilda: Admin fee + Deposit required
-    adminFeeDue = Math.max(20 - adminFeePaid, 0);
-    const totalDeposit = room.price;
-    const depositLeft = Math.max(totalDeposit - depositPaid, 0);
-    const monthsElapsed = monthsBetween(new Date(rental.startDate), currentDate);
-    const minDepositShouldHavePaid = Math.min(Math.ceil((monthsElapsed / stayMonths) * totalDeposit), totalDeposit);
-    const minDepositThisMonth = Math.max(minDepositShouldHavePaid - depositPaid, 0);
-    depositDue = depositLeft > 0 ? Math.min(depositLeft, minDepositThisMonth) : 0;
-  } else if (!isBelvedere) {
-    // Other residences (not St Kilda, not Belvedere): Deposit required, no admin fee
-    const totalDeposit = room.price;
-    const depositLeft = Math.max(totalDeposit - depositPaid, 0);
-    const monthsElapsed = monthsBetween(new Date(rental.startDate), currentDate);
-    const minDepositShouldHavePaid = Math.min(Math.ceil((monthsElapsed / stayMonths) * totalDeposit), totalDeposit);
-    const minDepositThisMonth = Math.max(minDepositShouldHavePaid - depositPaid, 0);
-    depositDue = depositLeft > 0 ? Math.min(depositLeft, minDepositThisMonth) : 0;
-  }
-  // Belvedere: No deposit, no admin fee (both remain 0)
+  const paymentBreakdown = await ResidencePaymentService.calculatePaymentAmounts(
+    residence._id,
+    room,
+    rental.startDate,
+    rental.endDate,
+    currentMonth,
+    currentYear
+  );
+  
+  const rentDue = room.price;
+  let adminFeeDue = 0, depositDue = 0, utilitiesDue = 0, maintenanceDue = 0;
+  
+  // Calculate remaining amounts after payments
+  adminFeeDue = Math.max(paymentBreakdown.amounts.adminFee - adminFeePaid, 0);
+  depositDue = Math.max(paymentBreakdown.amounts.deposit - depositPaid, 0);
+  utilitiesDue = Math.max(paymentBreakdown.amounts.utilities - utilitiesPaid, 0);
+  maintenanceDue = Math.max(paymentBreakdown.amounts.maintenance - maintenancePaid, 0);
 
   // 8. Total due
-  const totalDue = rentDue + adminFeeDue + depositDue;
+  const totalDue = rentDue + adminFeeDue + depositDue + utilitiesDue + maintenanceDue;
 
   // 9. Due date and overdue logic
   const dueDate = getDueDate(currentDate);
@@ -107,6 +104,8 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
     rent: rentDue,
     adminFeeDue,
     depositDue,
+    utilitiesDue,
+    maintenanceDue,
     totalDue,
     dueDate,
     isOverdue,
@@ -115,12 +114,13 @@ async function getRequiredPaymentForStudent(studentId, currentDate = new Date())
       rent: rentDue,
       adminFeeDue,
       depositDue,
-      alreadyPaid: { rentPaid, adminFeePaid, depositPaid },
+      utilitiesDue,
+      maintenanceDue,
+      alreadyPaid: { rentPaid, adminFeePaid, depositPaid, utilitiesPaid, maintenancePaid },
       stayMonths,
-      isStKilda,
-      isBelvedere,
-      room: room.name,
-      residence: residence.name
+      room: room.name || room.roomNumber,
+      residence: residence.name,
+      paymentConfiguration: paymentBreakdown
     }
   };
 }

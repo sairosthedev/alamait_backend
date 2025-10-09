@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const Debtor = require('../models/Debtor');
 const User = require('../models/User');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 
 class PaymentService {
     /**

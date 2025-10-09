@@ -2,7 +2,7 @@ const TransactionEntry = require('../models/TransactionEntry');
 const Transaction = require('../models/Transaction');
 const Account = require('../models/Account');
 const Maintenance = require('../models/Maintenance');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const mongoose = require('mongoose');
 
 /**
@@ -44,10 +44,10 @@ class FinancialReportingService {
                     status: 'posted'
                 });
                 
-                // For accrual basis, look at expenses when they are incurred (expense-related sources)
+                // For accrual basis, include only expense accruals (and optionally manual adjustments)
                 const expenseEntries = await TransactionEntry.find({
                     date: { $gte: startDate, $lte: endDate },
-                    source: { $in: ['expense_accrual', 'expense_payment', 'vendor_payment', 'manual'] },
+                    source: { $in: ['expense_accrual', 'manual'] },
                     status: 'posted'
                 });
                 
@@ -107,7 +107,15 @@ class FinancialReportingService {
                     }
             });
             
-            const netIncome = totalRevenue - totalExpenses;
+            // 🆕 Calculate Alamait Management Fee (25% of rental income)
+            const managementFee = totalRevenue * 0.25;
+            console.log(`💰 Alamait Management Fee (25% of rental income): $${managementFee.toFixed(2)}`);
+            
+            // Add management fee to expenses
+            expensesByAccount['5001 - Alamait Management Fees'] = managementFee;
+            const totalExpensesWithManagementFee = totalExpenses + managementFee;
+            
+            const netIncome = totalRevenue - totalExpensesWithManagementFee;
             
                 // Create monthly breakdown for revenue
                 const monthlyRevenue = {};
@@ -163,11 +171,12 @@ class FinancialReportingService {
                 expenses: {
                         ...expensesByAccount,
                         monthly: monthlyExpenses,
-                        total_expenses: totalExpenses
+                        total_expenses: totalExpensesWithManagementFee,
+                        managementFee: managementFee
                     },
                     net_income: netIncome,
-                    gross_profit: totalRevenue - totalExpenses,
-                    operating_income: totalRevenue - totalExpenses,
+                    gross_profit: totalRevenue - totalExpensesWithManagementFee,
+                    operating_income: totalRevenue - totalExpensesWithManagementFee,
                     residences_included: residences.size > 0,
                     residences_processed: Array.from(residences),
                     transaction_count: accrualEntries.length + expenseEntries.length,
@@ -285,6 +294,19 @@ class FinancialReportingService {
                                 
                                 const key = `Cash Outflow - ${entry.description}`;
                                 monthlyExpenses[monthKey][key] = (monthlyExpenses[monthKey][key] || 0) + amount;
+
+                                // Record individual expense detail using the actual paid date
+                                if (!monthlyBreakdown[monthKey - 1].expense_details) {
+                                    monthlyBreakdown[monthKey - 1].expense_details = [];
+                                }
+                                monthlyBreakdown[monthKey - 1].expense_details.push({
+                                    transactionId: entry.transactionId,
+                                    date: entry.date,
+                                    description: entry.description,
+                                    accountCode: lineItem.accountCode,
+                                    accountName: lineItem.accountName,
+                                    amount
+                                });
                             }
                         });
                     }
@@ -423,10 +445,30 @@ class FinancialReportingService {
                     monthlyBreakdown[monthIndex].transaction_count++;
                 });
                 
-                // Process expense entries by month
+                // Helper: parse month/year from description like "for July 2025"
+                const parseMonthYearFromDescription = (desc) => {
+                    if (!desc || typeof desc !== 'string') return null;
+                    const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+                    const regex = /(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/i;
+                    const match = desc.match(regex);
+                    if (!match) return null;
+                    const monthIndex = monthNames.indexOf(match[1].toLowerCase());
+                    const year = parseInt(match[2], 10);
+                    if (monthIndex < 0 || isNaN(year)) return null;
+                    return new Date(year, monthIndex, 1);
+                };
+
+                // Process expense entries by month (use incurred/expense date when available)
                 expenseEntries.forEach(entry => {
-                    const entryDate = new Date(entry.date);
-                    const monthIndex = entryDate.getMonth();
+                    let incurredDate = (entry.metadata && (entry.metadata.expenseDate || entry.metadata.dueDate))
+                        ? new Date(entry.metadata.expenseDate || entry.metadata.dueDate)
+                        : null;
+                    if (!incurredDate || isNaN(incurredDate)) {
+                        // Fallback: parse month/year from description (e.g., "for July 2025")
+                        const parsed = parseMonthYearFromDescription(entry.description);
+                        incurredDate = parsed || new Date(entry.date);
+                    }
+                    const monthIndex = incurredDate.getMonth();
                     
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach(lineItem => {
@@ -439,10 +481,10 @@ class FinancialReportingService {
                                 monthlyBreakdown[monthIndex].expenses[key] = 
                                     (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
                                 
-                                // Add individual expense detail
+                                // Add individual expense detail with incurred date
                                 monthlyBreakdown[monthIndex].expense_details.push({
                                     transactionId: entry.transactionId,
-                                    date: entry.date,
+                                    date: incurredDate,
                                     description: entry.description,
                                     accountCode: lineItem.accountCode,
                                     accountName: lineItem.accountName,
@@ -462,6 +504,30 @@ class FinancialReportingService {
                     monthlyBreakdown[monthIndex].transaction_count++;
             });
             
+                // Add Alamait Management Fee (25% of monthly revenue) as an expense (Accrual basis)
+                monthNames.forEach((month, index) => {
+                    const managementFee = (monthlyBreakdown[index].total_revenue || 0) * 0.25;
+                    if (managementFee > 0) {
+                        const feeKey = '5001 - Alamait Management Fees';
+                        monthlyBreakdown[index].expenses[feeKey] = (monthlyBreakdown[index].expenses[feeKey] || 0) + managementFee;
+                        monthlyBreakdown[index].total_expenses += managementFee;
+
+                        // Ensure expense_details exists (it does for accrual branch)
+                        const feeDate = new Date(parseInt(period), index + 1, 0); // Month end
+                        monthlyBreakdown[index].expense_details.push({
+                            transactionId: 'MGMT-FEE',
+                            date: feeDate,
+                            description: 'Alamait Management Fee (25% of revenue)',
+                            accountCode: '5001',
+                            accountName: 'Alamait Management Fees',
+                            amount: managementFee,
+                            source: 'system',
+                            reference: null,
+                            lineItemDescription: 'Auto-calculated management fee'
+                        });
+                    }
+                });
+
             // Calculate net income for each month
                 monthNames.forEach((month, index) => {
                     monthlyBreakdown[index].net_income = monthlyBreakdown[index].total_revenue - monthlyBreakdown[index].total_expenses;
@@ -611,6 +677,33 @@ class FinancialReportingService {
                     monthlyBreakdown[monthIndex].transaction_count++;
                 });
                 
+                // Add Alamait Management Fee (25% of monthly cash revenue) as an expense (Cash basis)
+                monthNames.forEach((month, index) => {
+                    const managementFee = (monthlyBreakdown[index].total_revenue || 0) * 0.25;
+                    if (managementFee > 0) {
+                        const feeKey = '5001 - Alamait Management Fees';
+                        monthlyBreakdown[index].expenses[feeKey] = (monthlyBreakdown[index].expenses[feeKey] || 0) + managementFee;
+                        monthlyBreakdown[index].total_expenses += managementFee;
+
+                        // Ensure expense details array exists for cash branch too
+                        if (!monthlyBreakdown[index].expense_details) {
+                            monthlyBreakdown[index].expense_details = [];
+                        }
+                        const feeDate = new Date(parseInt(period), index + 1, 0); // Month end
+                        monthlyBreakdown[index].expense_details.push({
+                            transactionId: 'MGMT-FEE',
+                            date: feeDate,
+                            description: 'Alamait Management Fee (25% of revenue)',
+                            accountCode: '5001',
+                            accountName: 'Alamait Management Fees',
+                            amount: managementFee,
+                            source: 'system',
+                            reference: null,
+                            lineItemDescription: 'Auto-calculated management fee'
+                        });
+                    }
+                });
+
                 // Calculate net income for each month
                 monthNames.forEach((month, index) => {
                     monthlyBreakdown[index].net_income = 
@@ -793,10 +886,35 @@ class FinancialReportingService {
             
             console.log(`Generating residence-filtered monthly income statement for ${period}, residence: ${residenceId}`);
             
+            // Handle residence parameter - could be ObjectId or residence name
+            let actualResidenceId = residenceId;
+            let residenceInfo = null;
+            
+            // Check if residenceId is a valid ObjectId
+            if (!mongoose.Types.ObjectId.isValid(residenceId)) {
+                // If not a valid ObjectId, treat it as a residence name and look it up
+                console.log(`Residence parameter "${residenceId}" is not a valid ObjectId, searching by name...`);
+                residenceInfo = await Residence.findOne({ name: { $regex: new RegExp(residenceId, 'i') } });
+                
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found: ${residenceId}`);
+                }
+                
+                actualResidenceId = residenceInfo._id;
+                console.log(`Found residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            } else {
+                // If it's a valid ObjectId, get residence info for logging
+                residenceInfo = await Residence.findById(residenceId).select('name');
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found with ID: ${residenceId}`);
+                }
+                console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            }
+            
             // Get all transaction entries for the period, filtered by residence
             const entries = await TransactionEntry.find({
                 date: { $gte: startDate, $lte: endDate },
-                residence: residenceId // Direct residence filtering
+                residence: actualResidenceId // Use actual ObjectId
             }).populate('entries');
             
             console.log(`Found ${entries.length} transaction entries for the period and residence ${residenceId}`);
@@ -887,14 +1005,15 @@ class FinancialReportingService {
             
             yearlyTotals.net_income = yearlyTotals.total_revenue - yearlyTotals.total_expenses;
             
-            // Get residence info
-            const residenceInfo = await Residence.findById(residenceId).select('name address').lean();
-            
             console.log(`Residence: ${residenceInfo?.name}, Yearly Revenue: $${yearlyTotals.total_revenue}, Expenses: $${yearlyTotals.total_expenses}, Net Income: $${yearlyTotals.net_income}`);
             
             return {
                 period,
-                residence: residenceInfo,
+                residence: {
+                    id: actualResidenceId,
+                    name: residenceInfo?.name || 'Unknown',
+                    originalParameter: residenceId
+                },
                 basis,
                 monthly_breakdown: monthlyData,
                 yearly_totals: {
@@ -1717,6 +1836,23 @@ class FinancialReportingService {
                     }
                 });
 
+                // 🆕 FIX: Aggregate Accounts Payable with child accounts
+                let accountsPayableTotal = 0;
+                const apMainAccount = Object.values(accountBalances).find(acc => acc.code === '2000');
+                if (apMainAccount) {
+                    accountsPayableTotal += apMainAccount.balance;
+                    
+                    // Add child account balances
+                    const apChildAccounts = Object.values(accountBalances).filter(acc => 
+                        acc.code && acc.code.startsWith('2000') && acc.code !== '2000'
+                    );
+                    apChildAccounts.forEach(child => {
+                        accountsPayableTotal += child.balance;
+                    });
+                    
+                    console.log(`📊 AP Aggregation for ${monthName}: Main $${apMainAccount.balance} + Children $${apChildAccounts.reduce((sum, child) => sum + child.balance, 0)} = Total $${accountsPayableTotal}`);
+                }
+
                 // Override standardized lines with monthSettled rollups
                 if (!monthlyBalanceSheet[monthName].assets.current) monthlyBalanceSheet[monthName].assets.current = {};
                 if (!monthlyBalanceSheet[monthName].liabilities.current) monthlyBalanceSheet[monthName].liabilities.current = {};
@@ -1724,6 +1860,21 @@ class FinancialReportingService {
                 monthlyBalanceSheet[monthName].liabilities.current['Tenant Deposits Held (2020)'] = depositsTotal;
                 monthlyBalanceSheet[monthName].liabilities.current['Deferred Income - Tenant Advances (2200)'] = deferredTotal;
                 
+                // 🆕 FIX: Override Accounts Payable with aggregated total
+                monthlyBalanceSheet[monthName].liabilities.current['Accounts Payable (2000)'] = accountsPayableTotal;
+                
+                // 🆕 FIX: Recalculate total liabilities with aggregated AP
+                const originalAPBalance = Object.values(accountBalances).find(acc => acc.code === '2000')?.balance || 0;
+                const apChildBalances = Object.values(accountBalances).filter(acc => 
+                    acc.code && acc.code.startsWith('2000') && acc.code !== '2000'
+                ).reduce((sum, child) => sum + child.balance, 0);
+                const apAdjustment = accountsPayableTotal - originalAPBalance;
+                
+                // Adjust total liabilities to account for AP aggregation
+                monthlyBalanceSheet[monthName].liabilities.total += apAdjustment;
+                
+                console.log(`📊 AP Total Adjustment for ${monthName}: Original $${originalAPBalance} + Children $${apChildBalances} = New Total $${accountsPayableTotal}, Adjustment: $${apAdjustment}`);
+
                 // Calculate net worth
                 monthlyBalanceSheet[monthName].total_assets = monthlyBalanceSheet[monthName].assets.total;
                 monthlyBalanceSheet[monthName].total_liabilities = monthlyBalanceSheet[monthName].liabilities.total;
@@ -2849,10 +3000,35 @@ class FinancialReportingService {
             
             console.log(`Generating residence-filtered income statement for ${period}, residence: ${residenceId}`);
             
+            // Handle residence parameter - could be ObjectId or residence name
+            let actualResidenceId = residenceId;
+            let residenceInfo = null;
+            
+            // Check if residenceId is a valid ObjectId
+            if (!mongoose.Types.ObjectId.isValid(residenceId)) {
+                // If not a valid ObjectId, treat it as a residence name and look it up
+                console.log(`Residence parameter "${residenceId}" is not a valid ObjectId, searching by name...`);
+                residenceInfo = await Residence.findOne({ name: { $regex: new RegExp(residenceId, 'i') } });
+                
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found: ${residenceId}`);
+                }
+                
+                actualResidenceId = residenceInfo._id;
+                console.log(`Found residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            } else {
+                // If it's a valid ObjectId, get residence info for logging
+                residenceInfo = await Residence.findById(residenceId).select('name');
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found with ID: ${residenceId}`);
+                }
+                console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            }
+            
             // Get transaction entries for the specific residence
             const entries = await TransactionEntry.find({
                 date: { $gte: startDate, $lte: endDate },
-                residence: residenceId
+                residence: actualResidenceId
             }).populate('residence');
             
             console.log(`Found ${entries.length} transaction entries for residence ${residenceId}`);
@@ -2931,7 +3107,11 @@ class FinancialReportingService {
             return {
                 period,
                 basis,
-                residence: residenceId,
+                residence: {
+                    id: actualResidenceId,
+                    name: residenceInfo?.name || 'Unknown',
+                    originalParameter: residenceId
+                },
                 monthly_breakdown: monthlyBreakdown,
                 year_totals: yearTotals,
                 month_names: monthNames,
@@ -2941,7 +3121,7 @@ class FinancialReportingService {
                     basis_type: basis === 'cash' ? 'cash_basis' : 'accrual_basis',
                     includes_rental_accruals: basis === 'accrual',
                     includes_cash_payments: basis === 'cash',
-                    source_filter: `Filtered by residence: ${residenceId}`,
+                    source_filter: `Filtered by residence: ${residenceInfo?.name || residenceId}`,
                     note: `Based on ${basis} basis entries from transactionentries collection for specific residence`
                 }
             };
@@ -2961,10 +3141,35 @@ class FinancialReportingService {
             
             console.log(`Generating residence-filtered balance sheet as of ${asOfDate}, residence: ${residenceId}`);
             
+            // Handle residence parameter - could be ObjectId or residence name
+            let actualResidenceId = residenceId;
+            let residenceInfo = null;
+            
+            // Check if residenceId is a valid ObjectId
+            if (!mongoose.Types.ObjectId.isValid(residenceId)) {
+                // If not a valid ObjectId, treat it as a residence name and look it up
+                console.log(`Residence parameter "${residenceId}" is not a valid ObjectId, searching by name...`);
+                residenceInfo = await Residence.findOne({ name: { $regex: new RegExp(residenceId, 'i') } });
+                
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found: ${residenceId}`);
+                }
+                
+                actualResidenceId = residenceInfo._id;
+                console.log(`Found residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            } else {
+                // If it's a valid ObjectId, get residence info for logging
+                residenceInfo = await Residence.findById(residenceId).select('name');
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found with ID: ${residenceId}`);
+                }
+                console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            }
+            
             // Get transaction entries for the specific residence up to the date
             const entries = await TransactionEntry.find({
                 date: { $lte: asOfDate },
-                residence: residenceId
+                residence: actualResidenceId
             }).populate('residence');
             
             console.log(`Found ${entries.length} transaction entries for residence ${residenceId}`);
@@ -3073,7 +3278,11 @@ class FinancialReportingService {
             return {
                 asOf,
                 basis,
-                residence: residenceId,
+                residence: {
+                    id: actualResidenceId,
+                    name: residenceInfo?.name || 'Unknown',
+                    originalParameter: residenceId
+                },
                 assets: {
                     ...assets,
                     total_assets: totalAssets
@@ -3120,10 +3329,35 @@ class FinancialReportingService {
             
             console.log(`Generating residence-filtered cash flow statement for ${period}, residence: ${residenceId}`);
             
+            // Handle residence parameter - could be ObjectId or residence name
+            let actualResidenceId = residenceId;
+            let residenceInfo = null;
+            
+            // Check if residenceId is a valid ObjectId
+            if (!mongoose.Types.ObjectId.isValid(residenceId)) {
+                // If not a valid ObjectId, treat it as a residence name and look it up
+                console.log(`Residence parameter "${residenceId}" is not a valid ObjectId, searching by name...`);
+                residenceInfo = await Residence.findOne({ name: { $regex: new RegExp(residenceId, 'i') } });
+                
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found: ${residenceId}`);
+                }
+                
+                actualResidenceId = residenceInfo._id;
+                console.log(`Found residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            } else {
+                // If it's a valid ObjectId, get residence info for logging
+                residenceInfo = await Residence.findById(residenceId).select('name');
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found with ID: ${residenceId}`);
+                }
+                console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            }
+            
             // Get transaction entries for the specific residence
             const entries = await TransactionEntry.find({
                 date: { $gte: startDate, $lte: endDate },
-                residence: residenceId
+                residence: actualResidenceId
             }).populate('residence');
             
             console.log(`Found ${entries.length} transaction entries for residence ${residenceId}`);
@@ -3310,7 +3544,11 @@ class FinancialReportingService {
             return {
                 period,
                 basis,
-                residence: residenceId,
+                residence: {
+                    id: actualResidenceId,
+                    name: residenceInfo?.name || 'Unknown',
+                    originalParameter: residenceId
+                },
                 monthly_breakdown: monthlyBreakdown,
                 yearly_totals: yearlyTotals,
                 net_cash_flow: netCashFlow,

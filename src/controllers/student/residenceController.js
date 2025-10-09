@@ -1,4 +1,4 @@
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const { validationResult } = require('express-validator');
 const Application = require('../../models/Application');
 const User = require('../../models/User');

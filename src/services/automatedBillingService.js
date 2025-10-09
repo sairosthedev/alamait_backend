@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const Invoice = require('../models/Invoice');
 const User = require('../models/User');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const emailService = require('./emailService');
 const whatsappService = require('./whatsappService');
 

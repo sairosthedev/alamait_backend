@@ -680,9 +680,17 @@ class AccountingService {
             
             console.log(`📊 Month ${month}/${year} expenses: $${totalExpenses} (${Object.keys(expenseBreakdown).length} categories)`);
             
-            const netIncome = totalRevenue - totalExpenses;
+            // 🆕 Calculate Alamait Management Fee (25% of rental income)
+            const managementFee = totalRevenue * 0.25;
+            console.log(`💰 Alamait Management Fee (25% of rental income): $${managementFee.toFixed(2)}`);
             
-            console.log(`📊 Calculated: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total $${totalRevenue}`);
+            // Add management fee to expenses
+            expenseBreakdown['5001 - Alamait Management Fees'] = managementFee;
+            const totalExpensesWithManagementFee = totalExpenses + managementFee;
+            
+            const netIncome = totalRevenue - totalExpensesWithManagementFee;
+            
+            console.log(`📊 Calculated: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total Revenue $${totalRevenue}, Management Fee $${managementFee.toFixed(2)}, Net Income $${netIncome.toFixed(2)}`);
             
             return {
                 month,
@@ -695,8 +703,9 @@ class AccountingService {
                     total: totalRevenue
                 },
                 expenses: {
-                    total: totalExpenses,
-                    breakdown: expenseBreakdown
+                    total: totalExpensesWithManagementFee,
+                    breakdown: expenseBreakdown,
+                    managementFee: managementFee
                 },
                 netIncome,
                 basis: 'accrual',
@@ -704,7 +713,8 @@ class AccountingService {
                 summary: {
                     totalNetIncome: netIncome,
                     totalRevenue: totalRevenue,
-                    totalExpenses: totalExpenses
+                    totalExpenses: totalExpensesWithManagementFee,
+                    managementFee: managementFee
                 }
             };
             
@@ -919,7 +929,7 @@ class AccountingService {
                 for (const subEntry of entry.entries) {
                     if (subEntry.accountCode === accountCode) {
                         // Calculate balance based on account type
-                        if (accountCode === '2020' || accountCode === '2000') {
+                        if (accountCode === '2020' || accountCode === '2000' || accountCode.startsWith('2000')) {
                             // Liability accounts: credits increase balance, debits decrease balance
                             balance += (subEntry.credit || 0) - (subEntry.debit || 0);
                         } else {

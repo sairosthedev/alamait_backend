@@ -1,5 +1,12 @@
 const mongoose = require('mongoose');
 
+const ResidenceType = {
+  RESIDENTIAL: 'residential',
+  COMMERCIAL: 'commercial',
+  MIXED_USE: 'mixed_use',
+  OTHER: 'other'
+};
+
 const residenceSchema = new mongoose.Schema({
     name: {
         type: String,
@@ -54,7 +61,7 @@ const residenceSchema = new mongoose.Schema({
         },
         type: {
             type: String,
-            enum: ['single', 'double', 'studio', 'apartment', 'triple', 'tripple', 'quad', 'Six-person room', 'six', 'fife'],
+            enum: ['single', 'double', 'studio', 'apartment', 'triple', 'tripple', 'quad', 'Six-person room', 'six', 'fife', 'pool', 'common', 'shared', 'suite', 'dormitory'],
             required: true
         },
         capacity: {
@@ -163,6 +170,105 @@ const residenceSchema = new mongoose.Schema({
         },
         phone: String,
         website: String
+    },
+    paymentConfiguration: {
+        adminFee: {
+            enabled: {
+                type: Boolean,
+                default: false
+            },
+            amount: {
+                type: Number,
+                default: 0,
+                min: 0
+            },
+            description: {
+                type: String,
+                default: 'Administration fee'
+            },
+            application: {
+                type: String,
+                enum: ['first_month', 'every_month', 'upfront', 'last_month'],
+                default: 'first_month'
+            }
+        },
+        deposit: {
+            enabled: {
+                type: Boolean,
+                default: true
+            },
+            amount: {
+                type: Number,
+                default: 0,
+                min: 0
+            },
+            calculation: {
+                type: String,
+                enum: ['fixed_amount', 'one_month_rent', 'percentage_of_rent', 'custom'],
+                default: 'one_month_rent'
+            },
+            percentage: {
+                type: Number,
+                default: 100,
+                min: 0,
+                max: 1000
+            },
+            description: {
+                type: String,
+                default: 'Security deposit'
+            },
+            application: {
+                type: String,
+                enum: ['upfront', 'last_month', 'split_months', 'first_month'],
+                default: 'upfront'
+            }
+        },
+        utilities: {
+            enabled: {
+                type: Boolean,
+                default: false
+            },
+            amount: {
+                type: Number,
+                default: 0,
+                min: 0
+            },
+            description: {
+                type: String,
+                default: 'Utilities fee'
+            },
+            application: {
+                type: String,
+                enum: ['every_month', 'first_month', 'last_month', 'upfront'],
+                default: 'every_month'
+            }
+        },
+        maintenance: {
+            enabled: {
+                type: Boolean,
+                default: false
+            },
+            amount: {
+                type: Number,
+                default: 0,
+                min: 0
+            },
+            description: {
+                type: String,
+                default: 'Maintenance fee'
+            },
+            application: {
+                type: String,
+                enum: ['every_month', 'first_month', 'last_month', 'upfront'],
+                default: 'every_month'
+            }
+        }
+    },
+    type: {
+        type: String,
+        enum: Object.values(ResidenceType),
+        required: true,
+        default: ResidenceType.RESIDENTIAL
     }
 }, {
     timestamps: true
@@ -198,4 +304,7 @@ residenceSchema.methods.addMaintenanceRequest = async function(roomNumber, maint
 
 const Residence = mongoose.model('Residence', residenceSchema, 'residences');
 
-module.exports = Residence; 
+module.exports = {
+  Residence,
+  ResidenceType
+};

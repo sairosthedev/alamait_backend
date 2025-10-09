@@ -1080,6 +1080,21 @@ exports.getAccountTransactionDetails = async (req, res) => {
             
             console.log(`📊 Found ${childAccounts.length} student-specific AR accounts for ${accountCode}:`, 
                 childAccounts.map(c => `${c.code} - ${c.name}`));
+        } else if (mainAccount && accountCode === '2000') {
+            console.log(`🔗 Found parent account ${accountCode}, looking for child accounts...`);
+            
+            // For account 2000, we want its direct child accounts
+            childAccounts = await Account.find({
+                parentAccount: mainAccount._id,
+                isActive: true,
+                type: 'Liability'
+            }).select('code name type category');
+            
+            // Add child account codes to the search
+            allAccountCodes = [accountCode, ...childAccounts.map(child => child.code)];
+            
+            console.log(`📊 Found ${childAccounts.length} child AP accounts for ${accountCode}:`, 
+                childAccounts.map(c => `${c.code} - ${c.name}`));
         }
         
         // Build query for cumulative transactions up to the selected month
@@ -1265,13 +1280,35 @@ exports.getAccountTransactionDetails = async (req, res) => {
                 sourceType: sourceType || null,
                 summary,
                 transactions: accountTransactions,
-                // Additional child account information
-                childAccounts: childAccounts.map(child => ({
-                    code: child.code,
-                    name: child.name,
-                    type: child.type,
-                    category: child.category
-                })),
+                // Additional child account information with balances
+                childAccounts: childAccounts.map(child => {
+                    // Calculate balance for this child account
+                    let childBalance = 0;
+                    let childDebits = 0;
+                    let childCredits = 0;
+                    
+                    transactions.forEach(transaction => {
+                        transaction.entries.forEach(entry => {
+                            if (entry.accountCode === child.code) {
+                                if (entry.accountType === 'Liability') {
+                                    childBalance += (entry.credit || 0) - (entry.debit || 0);
+                                    childDebits += entry.debit || 0;
+                                    childCredits += entry.credit || 0;
+                                }
+                            }
+                        });
+                    });
+                    
+                    return {
+                        code: child.code,
+                        name: child.name,
+                        type: child.type,
+                        category: child.category,
+                        balance: childBalance,
+                        debits: childDebits,
+                        credits: childCredits
+                    };
+                }),
                 isParentAccount: childAccounts.length > 0,
                 parentAccountInfo: childAccounts.length > 0 ? {
                     code: accountCode,

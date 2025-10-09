@@ -1,5 +1,5 @@
 const Lease = require('../../models/Lease');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const User = require('../../models/User');
 
 // Get all leases (for finance)

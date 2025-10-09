@@ -351,7 +351,7 @@ class StudentStatusManager {
             
             // Handle room availability
             if (student.currentRoom && student.residence) {
-                const Residence = require('../models/Residence');
+                const { Residence } = require('../models/Residence');
                 const residence = await Residence.findById(student.residence);
                 if (residence) {
                     const room = residence.rooms.find(r => r.roomNumber === student.currentRoom);

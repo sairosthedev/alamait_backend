@@ -1,7 +1,7 @@
 const User = require('../models/User');
 const Application = require('../models/Application');
 const { sendEmail } = require('./email');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const ExpiredStudent = require('../models/ExpiredStudent');
 const Booking = require('../models/Booking');
 const Lease = require('../models/Lease');

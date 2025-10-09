@@ -1,4 +1,5 @@
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
+const User = require('../../models/User');
 
 // Get all residences (for finance)
 exports.getAllResidences = async (req, res) => {
