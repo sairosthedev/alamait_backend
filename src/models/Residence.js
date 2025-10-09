@@ -262,6 +262,61 @@ const residenceSchema = new mongoose.Schema({
                 enum: ['every_month', 'first_month', 'last_month', 'upfront'],
                 default: 'every_month'
             }
+        },
+        // Rent Proration configuration
+        rentProration: {
+            enabled: {
+                type: Boolean,
+                default: false
+            },
+            policy: {
+                type: String,
+                enum: ['daily_calculation', 'full_month_only', 'weekly_basis', 'custom_period', 'full_month'],
+                default: 'daily_calculation'
+            },
+            dailyRateMethod: {
+                type: String,
+                enum: ['monthly_rent_calendar_days', 'monthly_rent_30_days', 'fixed_daily_rate', 'business_days_only', 'auto_calendar_days'],
+                default: 'monthly_rent_calendar_days'
+            },
+            fixedDailyRate: {
+                type: Number,
+                default: 0,
+                min: 0
+            },
+            minimumDays: {
+                type: Number,
+                default: 0,
+                min: 0,
+                max: 31
+            },
+            customPeriodDays: {
+                type: Number,
+                default: 0,
+                min: 0,
+                max: 62
+            },
+            prorateAfterDay: {
+                type: Number,
+                default: 0,
+                min: 0,
+                max: 31
+            },
+            startDate: {
+                type: Date
+            },
+            rules: {
+                type: String,
+                default: ''
+            },
+            prorateFirstMonth: {
+                type: Boolean,
+                default: true
+            },
+            prorateLastMonth: {
+                type: Boolean,
+                default: true
+            }
         }
     },
     type: {

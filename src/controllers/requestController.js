@@ -938,6 +938,32 @@ exports.createRequest = async (req, res) => {
         if (images && Array.isArray(images)) {
             requestData.images = images;
         }
+
+        // Auto-categorize salaries for financial type
+        try {
+            if (type === 'financial') {
+                const text = `${title || ''} ${description || ''}`.toLowerCase();
+                const hasSalaryKeyword = /(salary|salaries|payroll|wages|stipend)/i.test(text);
+                if (!requestData.category && hasSalaryKeyword) {
+                    requestData.category = 'salaries';
+                }
+            }
+        } catch (_) {}
+
+        // Auto finance-approve financial requests
+        if (type === 'financial') {
+            const approvalDate = dateRequested ? new Date(dateRequested) : new Date();
+            requestData.financeStatus = 'approved';
+            requestData.approval = requestData.approval || {};
+            requestData.approval.finance = {
+                approved: true,
+                approvedBy: user._id,
+                approvedByEmail: user.email,
+                approvedAt: approvalDate,
+                rejected: false,
+                waitlisted: false
+            };
+        }
         
         // For admin requests, set initial admin approval
         if (user.role === 'admin' && type !== 'maintenance' && type !== 'student_maintenance') {
@@ -961,6 +987,13 @@ exports.createRequest = async (req, res) => {
         
         const request = new Request(requestData);
         await request.save();
+
+        // Notify CEOs for all requests on creation
+        try {
+            await EmailNotificationService.sendRequestToCEO(request, user);
+        } catch (notifyErr) {
+            console.error('Error sending salaries financial request to CEO:', notifyErr.message);
+        }
         
         // Add to request history
         request.requestHistory.push({
@@ -1206,7 +1239,10 @@ exports.updateRequest = async (req, res) => { //n
         }
 
         // Create expenses if financeStatus is being set to 'approved'
-        if (updateData.financeStatus === 'approved' && !request.convertedToExpense) {
+        // IMPORTANT: For financial requests, conversion should ONLY happen after CEO approval
+        if (updateData.financeStatus === 'approved' 
+            && !request.convertedToExpense 
+            && request.type !== 'financial') {
             try {
                 console.log('💰 Creating expenses for approved request:', request._id);
                 
@@ -1231,6 +1267,49 @@ exports.updateRequest = async (req, res) => { //n
             } catch (expenseError) {
                 console.error('❌ Error creating expenses for request:', expenseError);
                 // Don't fail the update if expense creation fails
+            }
+        }
+
+        // Create expense if CEO approval is present for financial requests (fallback)
+        if (
+            request.type === 'financial' &&
+            !request.convertedToExpense &&
+            ((request.approval && request.approval.ceo && request.approval.ceo.approved === true) || updateData?.approval?.ceo?.approved === true || updateData?.status === 'completed')
+        ) {
+            try {
+                console.log('💰 Creating expense for CEO-approved financial request:', request._id);
+                const approvalDate = request.approval?.ceo?.approvedAt ? new Date(request.approval.ceo.approvedAt) : new Date();
+                await createSimpleExpenseForRequest(request, user, approvalDate);
+                request.convertedToExpense = true;
+                await request.save();
+                console.log('✅ Expense created for CEO-approved financial request:', request._id);
+            } catch (expenseError) {
+                console.error('❌ Error creating expense for CEO-approved financial request:', expenseError);
+            }
+        }
+
+        // Handle ceoStatus field from clients that use it directly
+        if (
+            request.type === 'financial' &&
+            !request.convertedToExpense &&
+            updateData && updateData.ceoStatus === 'approved'
+        ) {
+            try {
+                console.log('💼 ceoStatus=approved detected. Marking CEO approval and creating expense:', request._id);
+                const approvalDate = new Date();
+                request.approval = request.approval || {};
+                request.approval.ceo = request.approval.ceo || {};
+                request.approval.ceo.approved = true;
+                request.approval.ceo.approvedBy = user._id;
+                request.approval.ceo.approvedByEmail = user.email;
+                request.approval.ceo.approvedAt = approvalDate;
+                request.status = 'completed';
+                await createSimpleExpenseForRequest(request, user, approvalDate);
+                request.convertedToExpense = true;
+                await request.save();
+                console.log('✅ Expense created via ceoStatus flow:', request._id);
+            } catch (expenseError) {
+                console.error('❌ Error creating expense via ceoStatus flow:', expenseError);
             }
         }
 
@@ -1314,10 +1393,7 @@ exports.adminApproval = async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
         
-        // Check if request is in correct status
-        if (request.status !== 'pending') {
-            return res.status(400).json({ message: 'Request is not pending approval' });
-        }
+        // Allow CEO approval regardless of current status
         
         request.approval.admin = {
             approved,
@@ -1389,10 +1465,7 @@ exports.financeApproval = async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
         
-        // Check if request is in correct status
-        if (request.status !== 'pending') {
-            return res.status(400).json({ message: 'Request is not pending approval' });
-        }
+        // Allow finance action regardless of exact status (support pending-ceo-approval flow)
         
         // SIMPLIFIED APPROVAL LOGIC: Any approval action = approved
         let isApproved = false;
@@ -1490,8 +1563,9 @@ exports.financeApproval = async (req, res) => {
         console.log('✅ Request saved with finance approval');
 
         // Create double-entry transaction and itemized expense if approved
+        // Defer for financial requests until CEO approval
         let financialResult = null;
-        if (isApproved) {
+        if (isApproved && request.type !== 'financial') {
             try {
                 console.log('💰 Creating expenses and double-entry transactions for approved request...');
                 
@@ -1572,9 +1646,11 @@ exports.financeApproval = async (req, res) => {
                 status: 'created',
                 message: 'Double-entry transactions and expense created successfully'
             } : {
-                status: 'partial',
-                message: 'Request approved but expense creation failed. Request status updated.',
-                convertedToExpense: true
+                status: request.type === 'financial' ? 'deferred' : 'partial',
+                message: request.type === 'financial' 
+                    ? 'Finance approved. Conversion deferred until CEO approval for financial requests.'
+                    : 'Request approved but expense creation failed. Request status updated.',
+                convertedToExpense: request.type === 'financial' ? false : true
             }
         };
         
@@ -1729,6 +1805,7 @@ exports.financeOverrideQuotation = async (req, res) => {
 async function createSimpleExpenseForRequest(request, user, approvalDate) {
     try {
         const Expense = require('../models/finance/Expense');
+        const Vendor = require('../models/Vendor');
         
         // Delete any existing expense for this request
         await Expense.deleteMany({ requestId: request._id });
@@ -1866,12 +1943,34 @@ async function createSimpleExpenseForRequest(request, user, approvalDate) {
             }
         }
         
+        // For financial type, override totalAmount to use the request's explicit totals
+        if (request.type === 'financial') {
+            totalAmount = request.amount || request.totalEstimatedCost || totalAmount;
+        }
+
+        // Normalize residence to an ID if populated
+        const normalizedResidence = (request.residence && request.residence._id) ? request.residence._id : request.residence;
+
+        // Map request category to Expense enum values
+        const mapExpenseCategory = (reqCategory, reqType) => {
+            if (reqType === 'financial') {
+                const c = (reqCategory || '').toLowerCase();
+                if (c === 'salaries' || c === 'salary' || c === 'payroll' || c === 'wages' || c === 'stipend') return 'Salaries';
+                if (c === 'utilities' || c === 'utility') return 'Utilities';
+                if (c === 'tax' || c === 'taxes') return 'Taxes';
+                if (c === 'insurance') return 'Insurance';
+                if (c === 'supplies' || c === 'supply') return 'Supplies';
+                return 'Other';
+            }
+            return 'Maintenance';
+        };
+
         // Create expense data
         const expenseData = {
             expenseId,
             requestId: request._id,
-            residence: request.residence,
-            category: 'Maintenance',
+            residence: normalizedResidence,
+            category: mapExpenseCategory(request.category, request.type),
             amount: totalAmount,
             description: request.title || `Request: ${request.issue || 'Maintenance Request'}`,
             expenseDate: approvalDate, // Use dateApproved for expense date
@@ -1890,6 +1989,31 @@ async function createSimpleExpenseForRequest(request, user, approvalDate) {
         const newExpense = new Expense(expenseData);
         await newExpense.save();
         
+        // If financial, also create double-entry transaction for this expense
+        try {
+            if (request.type === 'financial') {
+                const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
+                const tempRequest = {
+                    _id: request._id,
+                    title: request.title,
+                    residence: request.residence,
+                    items: [{ description: request.title || 'Financial Request', totalCost: totalAmount }],
+                    totalEstimatedCost: totalAmount,
+                    isTemplate: false,
+                    skipExpenseCreation: true,
+                    disableDuplicateCheck: true
+                };
+                const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user, approvalDate);
+                if (transactionResult && transactionResult.transaction) {
+                    newExpense.transactionId = transactionResult.transaction._id;
+                    await newExpense.save();
+                    console.log(`✅ Linked financial expense to transaction: ${transactionResult.transaction._id}`);
+                }
+            }
+        } catch (deError) {
+            console.error('❌ Error creating double-entry for financial expense:', deError);
+        }
+
         console.log(`Simple expense created for request ${request._id}: ${expenseId} (Payment: Cash)`);
         return newExpense;
         
@@ -2110,15 +2234,9 @@ exports.ceoApproval = async (req, res) => {
             return res.status(403).json({ message: 'Access denied' });
         }
         
-        // Check if admin and finance have approved first
-        if (!request.approval.admin.approved || !request.approval.finance.approved) {
-            return res.status(400).json({ message: 'Admin and finance approval required before CEO approval' });
-        }
+        // CEO approval should not be blocked by admin/finance approvals
         
-        // Check if request is in correct status
-        if (request.status !== 'pending') {
-            return res.status(400).json({ message: 'Request is not pending approval' });
-        }
+        // Allow CEO approval regardless of current status (supports pending-ceo-approval)
         
         request.approval.ceo = {
             approved,
@@ -2131,109 +2249,26 @@ exports.ceoApproval = async (req, res) => {
         // Update status based on approval
         if (approved) {
             request.status = 'completed';
-            
-            // Convert to expense if amount is specified
-            if (request.amount > 0) {
-                // Find the approved quotation to get vendor information
-                let vendorId = null;
-                let vendorSpecificAccount = null;
-                
-                // Check for regular quotations first
-                if (request.quotations && request.quotations.length > 0) {
-                    const selectedQuotation = request.quotations.find(q => q.isSelected || q.isApproved);
-                    if (selectedQuotation && selectedQuotation.provider) {
-                        // Find or create vendor for the provider
-                        const vendor = await autoCreateVendor(selectedQuotation.provider, user, request.type || 'other');
-                        if (vendor) {
-                            vendorId = vendor._id;
-                            vendorSpecificAccount = vendor.chartOfAccountsCode;
-                            console.log(`Linked vendor ${vendor.businessName} (${vendor.chartOfAccountsCode}) to expense from maintenance request`);
+
+            // For financial requests: convert to expense and create entries ONLY here (CEO approved)
+            if (request.type === 'financial' && !request.convertedToExpense) {
+                try {
+                    const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
+                    // Ensure amount is set from best available total before conversion
+                    if (!request.amount || request.amount <= 0) {
+                        if (request.totalEstimatedCost && request.totalEstimatedCost > 0) {
+                            request.amount = request.totalEstimatedCost;
+                        } else if (Array.isArray(request.items) && request.items.length > 0) {
+                            request.amount = request.items.reduce((sum, it) => sum + (Number(it.totalCost) || 0), 0);
                         }
                     }
+                    // For financial requests, always create a single expense using total amount
+                    await createSimpleExpenseForRequest(request, user, approvalDate);
+                    request.convertedToExpense = true;
+                    await request.save();
+                } catch (err) {
+                    console.error('Error converting financial request at CEO approval:', err);
                 }
-                
-                // If no regular quotations, check itemized quotations
-                if (!vendorId && request.items && request.items.length > 0) {
-                    for (const item of request.items) {
-                        if (item.quotations && item.quotations.length > 0) {
-                            const selectedQuotation = item.quotations.find(q => q.isSelected || q.isApproved);
-                            if (selectedQuotation) {
-                                // Use vendor information from the quotation if available
-                                if (selectedQuotation.vendorId && selectedQuotation.vendorCode) {
-                                    vendorId = selectedQuotation.vendorId;
-                                    vendorSpecificAccount = selectedQuotation.vendorCode;
-                                    
-                                    // Also populate vendor details on the main request
-                                    if (!request.vendorId) {
-                                        request.vendorId = selectedQuotation.vendorId;
-                                        request.vendorCode = selectedQuotation.vendorCode;
-                                        request.vendorName = selectedQuotation.vendorName;
-                                        request.vendorType = selectedQuotation.vendorType;
-                                        request.vendorContact = selectedQuotation.vendorContact;
-                                        request.expenseCategory = selectedQuotation.expenseCategory;
-                                        request.paymentMethod = selectedQuotation.paymentMethod;
-                                        request.hasBankDetails = selectedQuotation.hasBankDetails;
-                                        
-                                        console.log(`✅ Added vendor details to main request from selected quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode})`);
-                                    }
-                                    
-                                    console.log(`Linked vendor from quotation: ${selectedQuotation.vendorName} (${selectedQuotation.vendorCode})`);
-                                    break;
-                                } else if (selectedQuotation.provider) {
-                                    // Fallback: Find or create vendor for the provider
-                                    const vendor = await autoCreateVendor(selectedQuotation.provider, user, request.type || 'other');
-                                    if (vendor) {
-                                        vendorId = vendor._id;
-                                        vendorSpecificAccount = vendor.chartOfAccountsCode;
-                                        
-                                        // Also populate vendor details on the main request
-                                        if (!request.vendorId) {
-                                            request.vendorId = vendor._id;
-                                            request.vendorCode = vendor.chartOfAccountsCode;
-                                            request.vendorName = vendor.businessName;
-                                            request.vendorType = vendor.vendorType;
-                                            request.vendorContact = {
-                                                firstName: vendor.contactPerson?.firstName || '',
-                                                lastName: vendor.contactPerson?.lastName || '',
-                                                email: vendor.contactPerson?.email || '',
-                                                phone: vendor.contactPerson?.phone || ''
-                                            };
-                                            request.expenseCategory = vendor.expenseCategory;
-                                            request.paymentMethod = 'Cash';
-                                            request.hasBankDetails = !!(vendor.bankDetails && vendor.bankDetails.bankName);
-                                            
-                                            console.log(`✅ Added vendor details to main request from auto-created vendor: ${vendor.businessName} (${vendor.chartOfAccountsCode})`);
-                                        }
-                                        
-                                        console.log(`Linked vendor ${vendor.businessName} (${vendor.chartOfAccountsCode}) to expense from itemized maintenance request`);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
-                const expense = new Expense({
-                    expenseId: generateUniqueId('EXP'),
-                    residence: request.residence,
-                    category: 'Other',
-                    amount: request.amount,
-                    description: request.title,
-                    expenseDate: approvalDate,
-                    paymentStatus: 'Pending',
-                    period: 'monthly',
-                    createdBy: user._id,
-                    maintenanceRequestId: request._id,
-                    vendorId: vendorId, // Link the vendor
-                    vendorSpecificAccount: vendorSpecificAccount // Store the vendor account code
-                });
-                
-                await expense.save();
-                
-                request.convertedToExpense = true;
-                request.expenseId = expense._id;
             }
         } else {
             request.status = 'rejected';

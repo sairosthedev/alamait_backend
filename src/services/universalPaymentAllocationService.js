@@ -186,11 +186,13 @@ class UniversalPaymentAllocationService {
       }
 
       // Create payment allocation transaction
+      const studentDisplay = studentName || studentId || 'GENERAL';
+      const monthSuffix = paymentData.paymentMonth ? ` (${paymentData.paymentMonth})` : '';
       const paymentAllocation = new TransactionEntry({
         transactionId: `PAYMENT-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
         date: date,
-        description: `Payment allocation: $${amount} for ${studentName || studentId}`,
-        reference: reference || `PAYMENT-${studentId || 'GENERAL'}`,
+        description: `Payment allocation: $${amount} for ${studentDisplay}${monthSuffix}`,
+        reference: `${reference || `PAYMENT-${studentDisplay}`}${monthSuffix}`,
         entries: [
           {
             accountCode: cashAccountCode,

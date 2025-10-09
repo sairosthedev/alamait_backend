@@ -319,6 +319,19 @@ class ResidencePaymentService {
                 amount: Math.max(0, Number(config.maintenance?.amount) || 0),
                 description: String(config.maintenance?.description || 'Maintenance fee'),
                 application: config.maintenance?.application || 'every_month'
+            },
+            rentProration: {
+                enabled: Boolean(config.rentProration?.enabled),
+                policy: config.rentProration?.policy || 'daily_calculation',
+                dailyRateMethod: config.rentProration?.dailyRateMethod || 'monthly_rent_calendar_days',
+                fixedDailyRate: Math.max(0, Number(config.rentProration?.fixedDailyRate) || 0),
+                minimumDays: Math.max(0, Math.min(31, Number(config.rentProration?.minimumDays) || 0)),
+                customPeriodDays: Math.max(0, Math.min(62, Number(config.rentProration?.customPeriodDays) || 0)),
+                prorateAfterDay: Math.max(0, Math.min(31, Number(config.rentProration?.prorateAfterDay) || 0)),
+                startDate: config.rentProration?.startDate ? new Date(config.rentProration.startDate) : undefined,
+                rules: String(config.rentProration?.rules || ''),
+                prorateFirstMonth: Boolean(config.rentProration?.prorateFirstMonth !== false),
+                prorateLastMonth: Boolean(config.rentProration?.prorateLastMonth !== false)
             }
         };
         
@@ -355,6 +368,19 @@ class ResidencePaymentService {
                 amount: 0,
                 description: 'Maintenance fee',
                 application: 'every_month'
+            },
+            rentProration: {
+                enabled: false,
+                policy: 'daily_calculation',
+                dailyRateMethod: 'monthly_rent_calendar_days',
+                fixedDailyRate: 0,
+                minimumDays: 0,
+                customPeriodDays: 0,
+                prorateAfterDay: 0,
+                startDate: undefined,
+                rules: '',
+                prorateFirstMonth: true,
+                prorateLastMonth: true
             }
         };
     }

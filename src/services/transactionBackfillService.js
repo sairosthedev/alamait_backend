@@ -9,7 +9,7 @@ const DebtorDataSyncService = require('./debtorDataSyncService');
  * @param {number} monthlyRent - Full monthly rent amount
  * @returns {number} Prorated rent amount
  */
-function calculateProratedRent(startDate, monthlyRent) {
+function calculateProratedRent(startDate, monthlyRent, residence) {
     const start = new Date(startDate);
     const year = start.getFullYear();
     const month = start.getMonth();
@@ -22,6 +22,18 @@ function calculateProratedRent(startDate, monthlyRent) {
     // Calculate days from start date to end of month
     const daysFromStart = daysInMonth - dayOfMonth + 1;
     
+    // If residence provided and has rentProration config, delegate to shared helper
+    if (residence && residence.paymentConfiguration) {
+        try {
+            const RentalAccrualService = require('./rentalAccrualService');
+            const room = { price: monthlyRent };
+            const amount = RentalAccrualService.calculateProratedRent(residence, room, start);
+            return Math.round(amount * 100) / 100;
+        } catch (e) {
+            console.warn('⚠️ Proration via shared helper failed, falling back:', e.message);
+        }
+    }
+
     let proratedAmount;
     
     // Business rule: If lease starts from 20th onwards, use $7 per day
@@ -176,7 +188,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 		
 		if (!existingLeaseStart) {
 			// Create lease start transaction
-            const proratedRent = calculateProratedRent(startDate, monthlyRent);
+            const proratedRent = calculateProratedRent(startDate, monthlyRent, residence);
 			const totalLeaseStartAmount = proratedRent + (adminFee || 0) + depositAmount;
 			
             // Create proper double-entry accounting entries

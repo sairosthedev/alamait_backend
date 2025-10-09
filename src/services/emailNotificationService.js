@@ -15,6 +15,57 @@ const transporter = nodemailer.createTransport({
  * Handles all email notifications for the Alamait system
  */
 class EmailNotificationService {
+
+    /**
+     * Send notification to CEO users when a financial request for salaries is created
+     */
+    static async sendFinancialSalariesRequestToCEO(request, submittedBy) {
+        try {
+            const User = require('../models/User');
+            const ceoUsers = await User.find({ role: 'ceo' });
+
+            const emailContent = `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+                        <h2 style="color: #333;">Financial Request: Salaries</h2>
+                        <p>Dear CEO,</p>
+                        <p>A financial request categorized as <strong>Salaries</strong> has been submitted:</p>
+                        <ul>
+                            <li><strong>Title:</strong> ${request.title || 'N/A'}</li>
+                            <li><strong>Description:</strong> ${request.description || 'N/A'}</li>
+                            <li><strong>Residence:</strong> ${request.residence?.name || 'N/A'}</li>
+                            <li><strong>Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</li>
+                            <li><strong>Submitted By:</strong> ${submittedBy?.firstName || ''} ${submittedBy?.lastName || ''}</li>
+                            <li><strong>Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
+                        </ul>
+                        <p>Please review and take the necessary action.</p>
+                        <hr style="margin: 20px 0;">
+                        <p style="font-size: 12px; color: #666;">
+                            This is an automated message from Alamait Student Accommodation.<br>
+                            Please do not reply to this email.
+                        </p>
+                    </div>
+                </div>
+            `;
+
+            for (const ceo of ceoUsers) {
+                if (!ceo.email || !ceo.email.includes('@gmail.com')) {
+                    continue;
+                }
+                await sendEmail({
+                    to: ceo.email,
+                    subject: 'Financial Request - Salaries',
+                    html: emailContent
+                });
+            }
+
+            console.log(`✅ Salaries financial request notification sent to ${ceoUsers.length} CEO users`);
+            return true;
+        } catch (error) {
+            console.error('❌ Error sending salaries financial request notification:', error);
+            throw error;
+        }
+    }
 	
 	/**
 	 * 1. MONTHLY REQUEST APPROVAL WORKFLOW
@@ -719,7 +770,24 @@ class EmailNotificationService {
 		try {
 			// Get CEO users
 			const User = require('../models/User');
+			const Residence = require('../models/Residence');
 			const ceoUsers = await User.find({ role: 'ceo' });
+
+			// Resolve residence name robustly
+			let residenceName = 'N/A';
+			try {
+				if (request.residence?.name) {
+					residenceName = request.residence.name;
+				} else if (request.residence) {
+					const residenceId = typeof request.residence === 'string' ? request.residence : request.residence._id;
+					if (residenceId) {
+						const resDoc = await Residence.findById(residenceId).select('name');
+						if (resDoc && resDoc.name) {
+							residenceName = resDoc.name;
+						}
+					}
+				}
+			} catch (_) {}
 
 			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -730,7 +798,7 @@ class EmailNotificationService {
 						<ul>
 							<li><strong>Request Type:</strong> ${request.type || 'Maintenance'}</li>
 							<li><strong>Title:</strong> ${request.title || request.issue}</li>
-							<li><strong>Location:</strong> ${request.residence?.name || 'N/A'}</li>
+							<li><strong>Location:</strong> ${residenceName}</li>
 							<li><strong>Amount:</strong> $${request.amount?.toFixed(2) || '0.00'}</li>
 							<li><strong>Submitted By:</strong> ${submittedBy.firstName} ${submittedBy.lastName}</li>
 							<li><strong>Submitted Date:</strong> ${new Date().toLocaleDateString()}</li>
@@ -746,6 +814,10 @@ class EmailNotificationService {
 			`;
 
 			for (const ceo of ceoUsers) {
+				// Skip invalid emails as elsewhere
+				if (!ceo.email || !ceo.email.includes('@gmail.com')) {
+					continue;
+				}
 				await sendEmail({
 					to: ceo.email,
 					subject: 'Request Pending CEO Approval',

@@ -377,7 +377,9 @@ const requestSchema = new mongoose.Schema({
             'plumbing', 'electrical', 'hvac', 'appliance', 'structural', 
             'cleaning', 'pest_control', 'security', 'furniture', 'fire_safety',
             'emergency', 'landscaping', 'internet_it', 'accessibility', 'parking',
-            'exterior', 'communication', 'general_maintenance', 'other'
+            'exterior', 'communication', 'general_maintenance', 'other',
+            // Financial-specific categories
+            'salaries'
         ],
         required: false // Will be validated in custom validation
     },
@@ -721,9 +723,9 @@ requestSchema.pre('validate', function(next) {
         if (this.issue) {
             errors.push('issue: Issue should not be provided for admin requests');
         }
-        // Allow category for student_maintenance type
-        if (this.category && this.type !== 'student_maintenance') {
-            errors.push('category: Category should not be provided for admin requests');
+        // Allow category for student_maintenance and financial types
+        if (this.category && !['student_maintenance', 'financial'].includes(this.type)) {
+            errors.push('category: Category should not be provided for this admin request type');
         }
     } else {
         // Neither student nor admin request - invalid
@@ -736,6 +738,19 @@ requestSchema.pre('validate', function(next) {
         return next(error);
     }
     
+    // Auto-categorize salaries for financial type based on title/description keywords
+    try {
+        if (this.type === 'financial') {
+            const text = `${this.title || ''} ${this.description || ''}`.toLowerCase();
+            const hasSalaryKeyword = /(salary|salaries|payroll|wages|stipend)/i.test(text);
+            if (hasSalaryKeyword && !this.category) {
+                this.category = 'salaries';
+            }
+        }
+    } catch (e) {
+        // swallow auto-categorization errors; validation continues
+    }
+
     next();
 });
 

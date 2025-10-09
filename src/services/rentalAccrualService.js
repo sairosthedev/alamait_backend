@@ -17,6 +17,92 @@ const { logTransactionOperation, logSystemOperation } = require('../utils/auditL
  */
 class RentalAccrualService {
     /**
+     * Calculate prorated rent based on residence paymentConfiguration.rentProration
+     * Falls back to existing logic if config missing/disabled
+     */
+    static calculateProratedRent(residence, room, leaseStartDate) {
+        const cfg = residence?.paymentConfiguration?.rentProration || {};
+        const enabled = cfg.enabled === true;
+        const startDate = new Date(leaseStartDate);
+        const year = startDate.getFullYear();
+        const month = startDate.getMonth();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const startDay = startDate.getDate();
+        const daysRemaining = daysInMonth - startDay + 1;
+
+        if (!enabled) {
+            // Fallback to legacy rule: $7/day if start >=20th, else calendar prorate
+            if (startDay >= 20) return daysRemaining * 7;
+            return (room.price / daysInMonth) * daysRemaining;
+        }
+
+        const policy = cfg.policy || 'daily_calculation';
+        const dailyMethod = cfg.dailyRateMethod || 'monthly_rent_calendar_days';
+        const minimumDays = Number.isFinite(cfg.minimumDays) ? Math.max(0, Math.min(31, cfg.minimumDays)) : 0;
+        const prorateAfterDay = Number.isFinite(cfg.prorateAfterDay) ? Math.max(0, Math.min(31, cfg.prorateAfterDay)) : 0;
+
+        // Determine daily rate
+        let dailyRate;
+        switch (dailyMethod) {
+            case 'monthly_rent_30_days':
+                dailyRate = room.price / 30;
+                break;
+            case 'fixed_daily_rate':
+                dailyRate = Number(cfg.fixedDailyRate) || (room.price / daysInMonth);
+                break;
+            case 'business_days_only':
+                // Approximate by excluding weekends from remaining days
+                {
+                    let businessDays = 0;
+                    for (let d = startDay; d <= daysInMonth; d++) {
+                        const wd = new Date(year, month, d).getDay();
+                        if (wd !== 0 && wd !== 6) businessDays++;
+                    }
+                    // Derive rate so that businessDays * rate ~= monthly price
+                    dailyRate = room.price / businessDays;
+                }
+                break;
+            case 'auto_calendar_days':
+                // Alias to calendar days
+                dailyRate = room.price / daysInMonth;
+                break;
+            case 'monthly_rent_calendar_days':
+            default:
+                dailyRate = room.price / daysInMonth;
+        }
+
+        // Compute charged days per policy
+        let chargedDays = daysRemaining;
+        switch (policy) {
+            case 'full_month':
+            case 'full_month_only':
+                // If a cutoff is provided, charge full month only when starting on/before cutoff, else prorate
+                if (prorateAfterDay > 0 && startDay > prorateAfterDay) {
+                    chargedDays = daysRemaining;
+                    break;
+                }
+                return room.price;
+            case 'weekly_basis':
+                // Charge by full weeks remaining (ceil to next full week)
+                chargedDays = Math.ceil(daysRemaining / 7) * 7;
+                break;
+            case 'custom_period':
+                // Respect customPeriodDays if provided; otherwise default to remaining days
+                chargedDays = Number(cfg.customPeriodDays) || daysRemaining;
+                break;
+            case 'daily_calculation':
+            default:
+                // Already using chargedDays = daysRemaining
+                break;
+        }
+
+        if (minimumDays > 0) {
+            chargedDays = Math.max(chargedDays, minimumDays);
+        }
+
+        return dailyRate * chargedDays;
+    }
+    /**
      * Calculate fees based on residence payment configuration
      * @param {Object} residence - Residence object with paymentConfiguration
      * @param {Object} room - Room object with price
@@ -191,12 +277,8 @@ class RentalAccrualService {
                         const startDay = startDate.getDate();
                         const proratedDays = daysInMonth - startDay + 1;
                         
-                        let proratedRent;
-                        if (startDay >= 20) {
-                            proratedRent = proratedDays * 7; // $7 per day
-                        } else {
-                            proratedRent = (room.price / daysInMonth) * proratedDays;
-                        }
+                        // Calculate prorated rent using residence proration config
+                        let proratedRent = this.constructor.calculateProratedRent(residence, room, application.startDate);
                         
                         // Calculate fees based on residence payment configuration
                         const fees = this.constructor.calculateFeesFromPaymentConfig(residence, room);
@@ -253,20 +335,9 @@ class RentalAccrualService {
             const startDay = startDate.getDate();
             const proratedDays = daysInMonth - startDay + 1;
             
-            let proratedRent;
-            
-            // Business rule: If lease starts from 20th onwards, use $7 per day
-            if (startDay >= 20) {
-                proratedRent = proratedDays * 7; // $7 per day
-                console.log(`📅 Lease starts on ${startDay}th (≥20th): Using $7/day rate`);
-                console.log(`   Days from start: ${proratedDays}, Amount: $${proratedRent}`);
-            } else {
-                // Use normal prorated calculation
-                proratedRent = (room.price / daysInMonth) * proratedDays;
-                console.log(`📅 Lease starts on ${startDay}th (<20th): Using prorated calculation`);
-                console.log(`   Monthly rent: $${room.price}, Days in month: ${daysInMonth}, Days from start: ${proratedDays}`);
-                console.log(`   Prorated rent: $${proratedRent} (${room.price} × ${proratedDays}/${daysInMonth})`);
-            }
+            // Calculate prorated rent using residence proration config
+            let proratedRent = this.constructor.calculateProratedRent(residence, room, application.startDate);
+            console.log(`📅 Prorated rent computed via config: $${proratedRent.toFixed(2)}`);
             
             // Calculate fees based on residence payment configuration
             const fees = this.constructor.calculateFeesFromPaymentConfig(residence, room);
