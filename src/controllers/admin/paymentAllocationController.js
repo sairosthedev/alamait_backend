@@ -5,7 +5,7 @@ const Payment = require('../../models/Payment');
 const Debtor = require('../../models/Debtor');
 const TransactionEntry = require('../../models/TransactionEntry');
 const User = require('../../models/User');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const Lease = require('../../models/Lease');
 const mongoose = require('mongoose');
 

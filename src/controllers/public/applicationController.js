@@ -3,7 +3,7 @@ const { sendEmail } = require('../../utils/email');
 const whatsappService = require('../../services/whatsappService');
 const User = require('../../models/User');
 const ExpiredStudent = require('../../models/ExpiredStudent');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const Debtor = require('../../models/Debtor');
 const { validationResult } = require('express-validator');
 

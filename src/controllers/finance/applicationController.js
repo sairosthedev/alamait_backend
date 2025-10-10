@@ -1,6 +1,6 @@
 const Application = require('../../models/Application');
 const User = require('../../models/User');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const { validationResult } = require('express-validator');
 
 // Get all applications (for finance)

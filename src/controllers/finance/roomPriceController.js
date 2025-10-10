@@ -1,4 +1,4 @@
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 
 // Get all room prices (for finance) - fetching from rooms in residences collection
 exports.getAllRoomPrices = async (req, res) => {

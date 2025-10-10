@@ -1127,7 +1127,8 @@ class FinancialReportsController {
                 });
             }
             
-            const cashFlowStatement = await FinancialReportingService.generateResidenceFilteredCashFlowStatement(period, residence, basis);
+            // Use EnhancedCashFlowService for better residence filtering
+            const cashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             
             res.json({
                 success: true,

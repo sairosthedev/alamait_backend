@@ -3025,13 +3025,43 @@ class FinancialReportingService {
                 console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
             }
             
-            // Get transaction entries for the specific residence
+            // Get all transaction entries for the period (don't filter by residence initially)
             const entries = await TransactionEntry.find({
-                date: { $gte: startDate, $lte: endDate },
-                residence: actualResidenceId
-            }).populate('residence');
+                date: { $gte: startDate, $lte: endDate }
+            })
+            .populate('residence')
+            .populate({
+                path: 'sourceId',
+                select: 'residence student amount date',
+                populate: {
+                    path: 'residence',
+                    select: 'name address'
+                }
+            });
             
-            console.log(`Found ${entries.length} transaction entries for residence ${residenceId}`);
+            console.log(`Found ${entries.length} total transaction entries for period ${period}`);
+            
+            // Filter entries by residence using the same logic as cash flow service
+            const filteredEntries = entries.filter(entry => {
+                // Check if transaction has direct residence match
+                if (entry.residence && entry.residence._id && 
+                    entry.residence._id.toString() === actualResidenceId.toString()) {
+                    return true;
+                }
+                
+                // For transactions without residence field, check if they're linked to payments/expenses for this residence
+                if (!entry.residence || entry.residence === "Unknown") {
+                    // Check if sourceId has residence match
+                    if (entry.sourceId && entry.sourceId.residence && 
+                        entry.sourceId.residence._id.toString() === actualResidenceId.toString()) {
+                        return true;
+                    }
+                }
+                
+                return false;
+            });
+            
+            console.log(`Filtered to ${filteredEntries.length} transaction entries for residence ${residenceId}`);
             
             // Initialize monthly breakdown structure
             const monthNames = [
@@ -3055,7 +3085,7 @@ class FinancialReportingService {
             });
             
             // Process entries by month
-            entries.forEach(entry => {
+            filteredEntries.forEach(entry => {
                 const entryDate = new Date(entry.date);
                 const monthIndex = entryDate.getMonth();
                 
@@ -3089,6 +3119,17 @@ class FinancialReportingService {
                 }
                 
                 monthlyBreakdown[monthIndex].transaction_count++;
+            });
+            
+            // Add Alamait Management Fee (25% of monthly revenue) as an expense
+            monthNames.forEach((month, index) => {
+                const managementFee = (monthlyBreakdown[index].total_revenue || 0) * 0.25;
+                if (managementFee > 0) {
+                    const feeKey = '5001 - Alamait Management Fees';
+                    monthlyBreakdown[index].expenses[feeKey] = (monthlyBreakdown[index].expenses[feeKey] || 0) + managementFee;
+                    monthlyBreakdown[index].total_expenses += managementFee;
+                    console.log(`💰 Added management fee for ${month}: $${managementFee.toFixed(2)} (25% of revenue: $${monthlyBreakdown[index].total_revenue})`);
+                }
             });
             
             // Calculate net income for each month

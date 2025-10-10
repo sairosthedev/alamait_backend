@@ -898,6 +898,7 @@ exports.markExpenseAsPaid = async (req, res) => {
             source: 'expense_payment',
             sourceId: updatedExpense._id,
             sourceModel: 'Expense',
+            residence: updatedExpense.residence, // ✅ Add residence field
             createdBy: req.user.email || req.user.email || 'finance@alamait.com',
             status: 'posted',
             metadata: {
@@ -905,7 +906,9 @@ exports.markExpenseAsPaid = async (req, res) => {
                 expenseId: updatedExpense._id,
                 originalAmount: updatedExpense.amount,
                 wasAccrued: wasAccrued,
-                datePaid: updatedExpense.paidDate // Store the actual payment date for cash flow
+                datePaid: updatedExpense.paidDate, // Store the actual payment date for cash flow
+                residenceId: updatedExpense.residence?._id || updatedExpense.residence,
+                residenceName: updatedExpense.residence?.name || 'Unknown'
             }
         });
         
@@ -1179,6 +1182,7 @@ exports.recordExpensePayment = async (req, res) => {
             source: 'expense_payment',
             sourceId: expense._id,
             sourceModel: 'Expense',
+            residence: expense.residence, // ✅ Add residence field
             createdBy: user.email,
             createdAt: new Date(),
             metadata: {
@@ -1187,7 +1191,9 @@ exports.recordExpensePayment = async (req, res) => {
                 paymentMethod,
                 reference,
                 datePaid: paymentDate, // Store the actual payment date for cash flow
-                monthSettled
+                monthSettled,
+                residenceId: expense.residence?._id || expense.residence,
+                residenceName: expense.residence?.name || 'Unknown'
             }
         });
 

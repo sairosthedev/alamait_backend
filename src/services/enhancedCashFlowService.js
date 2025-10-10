@@ -38,9 +38,7 @@ class EnhancedCashFlowService {
                 'metadata.isForfeiture': { $ne: true }
             };
             
-            if (residenceId) {
-                transactionQuery.residence = residenceId;
-            }
+            // Don't filter transactions by residence - we'll filter by expense residence instead
             
             if (basis === 'cash') {
                 transactionQuery.source = {
@@ -83,10 +81,13 @@ class EnhancedCashFlowService {
                 .sort({ expenseDate: 1 });
             
             // Process detailed income breakdown
-            const incomeBreakdown = await this.processDetailedIncome(transactionEntries, payments, period);
+            const incomeBreakdown = await this.processDetailedIncome(transactionEntries, payments, period, residenceId);
             
-            // Process detailed expense breakdown
-            const expenseBreakdown = await this.processDetailedExpenses(transactionEntries, expenses, period);
+            // Create comprehensive transaction-expense mapping
+            const transactionExpenseMapping = await this.createTransactionExpenseMapping(transactionEntries, expenses, residenceId);
+            
+            // Process detailed expense breakdown with proper mapping
+            const expenseBreakdown = await this.processDetailedExpenses(transactionEntries, expenses, period, residenceId, transactionExpenseMapping);
             
             // Calculate cash flow by activity
             const operatingActivities = this.calculateOperatingActivities(incomeBreakdown, expenseBreakdown);
@@ -112,20 +113,24 @@ class EnhancedCashFlowService {
             // Generate monthly breakdown
             const monthlyBreakdown = this.generateMonthlyBreakdown(transactionEntries, payments, expenses, period);
             
+            // Calculate yearly totals from monthly breakdown
+            const yearlyTotals = this.calculateYearlyTotals(monthlyBreakdown);
+            
             const cashFlowData = {
                 period,
                 basis,
+                residence: residenceId ? { id: residenceId, name: 'Filtered Residence' } : null,
+                monthly_breakdown: monthlyBreakdown,
+                yearly_totals: yearlyTotals,
+                net_cash_flow: netChangeInCash,
+                opening_balance: 0,
+                closing_balance: netChangeInCash,
                 summary: {
-                    net_change_in_cash: netChangeInCash,
-                    net_operating_cash_flow: netOperatingCashFlow,
-                    net_investing_cash_flow: netInvestingCashFlow,
-                    net_financing_cash_flow: netFinancingCashFlow,
-                    total_income: incomeBreakdown.total,
-                    total_expenses: expenseBreakdown.total,
-                    transaction_count: transactionEntries.length,
-                    payment_count: payments.length,
-                    expense_count: expenses.length
+                    best_cash_flow_month: this.getBestCashFlowMonth(monthlyBreakdown),
+                    worst_cash_flow_month: this.getWorstCashFlowMonth(monthlyBreakdown),
+                    total_transactions: transactionEntries.length
                 },
+                // Enhanced detailed breakdown
                 cash_breakdown: cashBreakdown,
                 operating_activities: operatingActivities,
                 investing_activities: investingActivities,
@@ -160,7 +165,7 @@ class EnhancedCashFlowService {
     /**
      * Process detailed income breakdown
      */
-    static async processDetailedIncome(transactionEntries, payments, period) {
+    static async processDetailedIncome(transactionEntries, payments, period, residenceId = null) {
         const incomeBreakdown = {
             total: 0,
             by_source: {
@@ -190,6 +195,61 @@ class EnhancedCashFlowService {
         console.log(`🔍 Total transactions loaded: ${transactionEntries.length}`);
         const transactionIds = transactionEntries.map(t => t.transactionId);
         console.log(`🔍 Transaction IDs:`, transactionIds);
+        
+        // Filter transactions by residence if specified
+        if (residenceId) {
+            console.log(`🏠 Filtering transactions for residence: ${residenceId}`);
+            const originalCount = transactionEntries.length;
+            
+            // Filter transactions that belong to the specified residence
+            const filteredTransactions = transactionEntries.filter(entry => {
+                // Check if transaction has direct residence match
+                if (entry.residence && entry.residence._id && 
+                    entry.residence._id.toString() === residenceId.toString()) {
+                    console.log(`✅ Transaction ${entry.transactionId} has direct residence match`);
+                    return true;
+                }
+                
+                // For transactions without residence field, check if they're linked to payments for this residence
+                if (!entry.residence || entry.residence === "Unknown") {
+                    const correspondingPayment = payments.find(p => 
+                        p._id.toString() === entry.reference || 
+                        p.paymentId === entry.reference
+                    );
+                    
+                    if (correspondingPayment && correspondingPayment.residence && 
+                        correspondingPayment.residence._id.toString() === residenceId.toString()) {
+                        console.log(`✅ Transaction ${entry.transactionId} linked to payment for residence ${correspondingPayment.residence.name}`);
+                        return true;
+                    }
+                }
+                
+                console.log(`❌ Transaction ${entry.transactionId} does not belong to residence ${residenceId}`);
+                return false;
+            });
+            
+            // Replace the transaction entries with filtered ones
+            transactionEntries.length = 0;
+            transactionEntries.push(...filteredTransactions);
+            
+            console.log(`🏠 Filtered transactions: ${originalCount} → ${transactionEntries.length} (residence: ${residenceId})`);
+            
+            // Also filter payments by residence
+            const originalPaymentCount = payments.length;
+            const filteredPayments = payments.filter(payment => {
+                if (payment.residence && payment.residence._id && 
+                    payment.residence._id.toString() === residenceId.toString()) {
+                    return true;
+                }
+                return false;
+            });
+            
+            // Replace the payments array with filtered ones
+            payments.length = 0;
+            payments.push(...filteredPayments);
+            
+            console.log(`🏠 Filtered payments: ${originalPaymentCount} → ${payments.length} (residence: ${residenceId})`);
+        }
         
         // Check if R180 transaction is in the loaded transactions
         const r180Transaction = transactionEntries.find(t => t.transactionId === 'TXN17570154497464WBST');
@@ -995,9 +1055,89 @@ class EnhancedCashFlowService {
     }
     
     /**
+     * Create comprehensive mapping between transactions and expenses
+     */
+    static async createTransactionExpenseMapping(transactionEntries, expenses, residenceId = null) {
+        const mapping = {
+            transactionToExpense: new Map(),
+            expenseToTransactions: new Map(),
+            residenceFilteredTransactions: new Set()
+        };
+        
+        console.log(`🔗 Creating transaction-expense mapping for ${transactionEntries.length} transactions and ${expenses.length} expenses`);
+        
+        // Map each transaction to its related expense
+        transactionEntries.forEach(transaction => {
+            let linkedExpense = null;
+            
+            // Method 1: Check by sourceId (most reliable for expense payments)
+            if (transaction.sourceId) {
+                linkedExpense = expenses.find(expense => 
+                    expense._id.toString() === transaction.sourceId.toString()
+                );
+            }
+            
+            // Method 2: Check by reference
+            if (!linkedExpense && transaction.reference) {
+                linkedExpense = expenses.find(expense => 
+                    expense._id.toString() === transaction.reference || 
+                    expense.expenseId === transaction.reference ||
+                    transaction.reference.includes(expense._id.toString())
+                );
+            }
+            
+            // Method 3: Check by description for expense payments
+            if (!linkedExpense && transaction.description && transaction.description.includes('Payment for Expense')) {
+                const expenseIdMatch = transaction.description.match(/EXP-[\w-]+/);
+                if (expenseIdMatch) {
+                    linkedExpense = expenses.find(expense => 
+                        expense.expenseId === expenseIdMatch[0]
+                    );
+                }
+            }
+            
+            if (linkedExpense) {
+                // Store the mapping
+                mapping.transactionToExpense.set(transaction._id.toString(), linkedExpense);
+                
+                if (!mapping.expenseToTransactions.has(linkedExpense._id.toString())) {
+                    mapping.expenseToTransactions.set(linkedExpense._id.toString(), []);
+                }
+                mapping.expenseToTransactions.get(linkedExpense._id.toString()).push(transaction);
+                
+                // Check if this transaction should be included based on residence filtering
+                if (residenceId) {
+                    if (linkedExpense.residence && 
+                        linkedExpense.residence._id.toString() === residenceId.toString()) {
+                        mapping.residenceFilteredTransactions.add(transaction._id.toString());
+                        console.log(`✅ Transaction ${transaction.transactionId} linked to expense ${linkedExpense.expenseId} for residence ${linkedExpense.residence.name}`);
+                    }
+                } else {
+                    // If no residence filter, include all transactions
+                    mapping.residenceFilteredTransactions.add(transaction._id.toString());
+                }
+            } else {
+                // For non-expense transactions, check if they have direct residence field
+                if (residenceId) {
+                    if (transaction.residence && transaction.residence._id && 
+                        transaction.residence._id.toString() === residenceId.toString()) {
+                        mapping.residenceFilteredTransactions.add(transaction._id.toString());
+                        console.log(`✅ Transaction ${transaction.transactionId} has direct residence match`);
+                    }
+                } else {
+                    mapping.residenceFilteredTransactions.add(transaction._id.toString());
+                }
+            }
+        });
+        
+        console.log(`📊 Mapping complete: ${mapping.residenceFilteredTransactions.size} transactions will be included`);
+        return mapping;
+    }
+    
+    /**
      * Process detailed expense breakdown
      */
-    static async processDetailedExpenses(transactionEntries, expenses, period) {
+    static async processDetailedExpenses(transactionEntries, expenses, period, residenceId = null, transactionExpenseMapping = null) {
         const expenseBreakdown = {
             total: 0,
             by_category: {
@@ -1020,7 +1160,17 @@ class EnhancedCashFlowService {
         const getResidenceName = (entry, expenses) => {
             let residenceName = entry.residence?.name || 'Unknown';
             
-            // If residence is unknown, try to get it from the expense record
+            // Use the mapping if available
+            if (transactionExpenseMapping) {
+                const linkedExpense = transactionExpenseMapping.transactionToExpense.get(entry._id.toString());
+                if (linkedExpense && linkedExpense.residence) {
+                    residenceName = linkedExpense.residence.name || 'Unknown';
+                    console.log(`🏠 Found residence for transaction ${entry.transactionId}: ${residenceName} from mapped expense ${linkedExpense.expenseId}`);
+                    return residenceName;
+                }
+            }
+            
+            // Fallback to original logic if mapping not available
             if (residenceName === 'Unknown' && entry.reference) {
                 // Look for expense by reference
                 const relatedExpense = expenses.find(expense => 
@@ -1041,6 +1191,14 @@ class EnhancedCashFlowService {
         };
         
         transactionEntries.forEach(entry => {
+            // Use the comprehensive mapping to filter transactions by residence
+            if (transactionExpenseMapping && residenceId) {
+                // Check if this transaction should be included based on the mapping
+                if (!transactionExpenseMapping.residenceFilteredTransactions.has(entry._id.toString())) {
+                    return; // Skip this transaction
+                }
+            }
+            
             if (entry.entries && entry.entries.length > 0) {
                 // Look for Cash/Bank credits (expenses paid)
                 const cashEntry = entry.entries.find(line => {
@@ -2568,6 +2726,56 @@ class EnhancedCashFlowService {
         cashBreakdown.cash_reconciliation.difference = cashBreakdown.cash_reconciliation.actual_ending_cash - cashBreakdown.cash_reconciliation.calculated_ending_cash;
         
         return cashBreakdown;
+    }
+    
+    /**
+     * Calculate yearly totals from monthly breakdown
+     */
+    static calculateYearlyTotals(monthlyBreakdown) {
+        const yearlyTotals = {
+            operating_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
+            investing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
+            financing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
+            net_cash_flow: 0
+        };
+        
+        Object.values(monthlyBreakdown).forEach(monthData => {
+            yearlyTotals.operating_activities.inflows += monthData.operating_activities?.inflows || 0;
+            yearlyTotals.operating_activities.outflows += monthData.operating_activities?.outflows || 0;
+            yearlyTotals.operating_activities.net += monthData.operating_activities?.net || 0;
+            
+            yearlyTotals.investing_activities.inflows += monthData.investing_activities?.inflows || 0;
+            yearlyTotals.investing_activities.outflows += monthData.investing_activities?.outflows || 0;
+            yearlyTotals.investing_activities.net += monthData.investing_activities?.net || 0;
+            
+            yearlyTotals.financing_activities.inflows += monthData.financing_activities?.inflows || 0;
+            yearlyTotals.financing_activities.outflows += monthData.financing_activities?.outflows || 0;
+            yearlyTotals.financing_activities.net += monthData.financing_activities?.net || 0;
+            
+            yearlyTotals.net_cash_flow += monthData.net_cash_flow || 0;
+        });
+        
+        return yearlyTotals;
+    }
+    
+    /**
+     * Get best cash flow month
+     */
+    static getBestCashFlowMonth(monthlyBreakdown) {
+        const months = Object.keys(monthlyBreakdown);
+        return months.reduce((best, month) => 
+            (monthlyBreakdown[month].net_cash_flow || 0) > (monthlyBreakdown[best].net_cash_flow || 0) ? month : best
+        );
+    }
+    
+    /**
+     * Get worst cash flow month
+     */
+    static getWorstCashFlowMonth(monthlyBreakdown) {
+        const months = Object.keys(monthlyBreakdown);
+        return months.reduce((worst, month) => 
+            (monthlyBreakdown[month].net_cash_flow || 0) < (monthlyBreakdown[worst].net_cash_flow || 0) ? month : worst
+        );
     }
     
     /**

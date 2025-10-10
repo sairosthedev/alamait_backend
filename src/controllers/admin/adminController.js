@@ -1,5 +1,5 @@
 const Lease = require('../../models/Lease');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 
 // GET /api/admin/leases - fetch all leases from all students
 exports.getAllLeases = async (req, res) => {

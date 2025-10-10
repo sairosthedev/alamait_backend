@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 
 // Get all residences (public route for frontend)
 router.get('/', async (req, res) => {
