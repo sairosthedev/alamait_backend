@@ -1377,6 +1377,8 @@ class TransactionController {
                 status: 'posted',
                 createdBy: req.user?._id,
                 transactionId: `NEG-${paymentType.toUpperCase()}-${Date.now()}`,
+                // Ensure residence is saved at top-level for reliable filtering
+                residence: residenceId ? new mongoose.Types.ObjectId(residenceId) : (originalAccrual?.residence || undefined),
                 totalDebit: discountAmount, // Only the discount amount
                 totalCredit: discountAmount, // Balanced transaction
                 entries: [
@@ -1391,6 +1393,7 @@ class TransactionController {
                         metadata: {
                             studentName,
                             studentId,
+                            residenceId: residenceId || originalAccrual?.metadata?.residenceId || originalAccrual?.residence,
                             transactionType: 'negotiated_payment_adjustment',
                             paymentType: paymentType,
                             originalAmount: original,
@@ -1415,6 +1418,7 @@ class TransactionController {
                         metadata: {
                             studentName,
                             studentId,
+                            residenceId: residenceId || originalAccrual?.metadata?.residenceId || originalAccrual?.residence,
                             transactionType: 'negotiated_payment_adjustment',
                             paymentType: paymentType,
                             originalAmount: original,
@@ -1438,7 +1442,9 @@ class TransactionController {
                     negotiatedAmount: negotiated,
                     discountAmount: discountAmount,
                     negotiationReason: negotiationReason || 'Student negotiation',
-                    residence: residenceId,
+                    // Duplicate residence in metadata for compatibility with existing filters
+                    residence: residenceId || originalAccrual?.residence,
+                    residenceId: residenceId || originalAccrual?.metadata?.residenceId || originalAccrual?.residence,
                     originalAccrualId: originalAccrual?._id,
                     accrualMonth: accrualMonth,
                     accrualYear: accrualYear,

@@ -182,6 +182,11 @@ class BalanceSheetService {
             const debit = lineItem.debit || 0;
             const credit = lineItem.credit || 0;
             
+            // Debug: Log AR transactions to see credits being processed
+            if (accountCode && accountCode.startsWith('1100')) {
+              console.log(`🔍 Processing AR transaction: ${entry.transactionId} - ${accountCode} - Debit: $${debit}, Credit: $${credit}`);
+            }
+            
             if (accountBalances[accountCode]) {
               accountBalances[accountCode].debitTotal += debit;
               accountBalances[accountCode].creditTotal += credit;
@@ -265,6 +270,7 @@ class BalanceSheetService {
               arDebits += Number(line.debit || 0);
               arCredits += Number(line.credit || 0);
               console.log(`  📝 A/R Entry: ${line.accountCode} - Debit: $${line.debit}, Credit: $${line.credit}`);
+              console.log(`  📊 Running AR totals: Debits=$${arDebits}, Credits=$${arCredits}, Net=$${arDebits - arCredits}`);
             }
           });
         });
@@ -281,6 +287,11 @@ class BalanceSheetService {
         });
         
         const arByMonthOutstanding = arDebits - arCredits;
+        
+        console.log(`📊 Final AR Calculation Summary:`);
+        console.log(`   Total AR Debits: $${arDebits}`);
+        console.log(`   Total AR Credits: $${arCredits}`);
+        console.log(`   Net AR Outstanding: $${arByMonthOutstanding}`);
         
         // Override account balances with monthSettled values
         Object.values(accountBalances).forEach(account => {
@@ -331,6 +342,10 @@ class BalanceSheetService {
         switch (account.type) {
           case 'Asset':
             account.balance = account.debitTotal - account.creditTotal;
+            // Debug: Log AR account balances to see credits being applied
+            if (account.code && account.code.startsWith('1100')) {
+              console.log(`🔍 AR Account ${account.code} (${account.name}): Debits=$${account.debitTotal}, Credits=$${account.creditTotal}, Balance=$${account.balance}`);
+            }
             break;
           case 'Liability':
             account.balance = account.creditTotal - account.debitTotal;
@@ -542,7 +557,11 @@ class BalanceSheetService {
         totalAnnualCurrentAssets: 0,
         totalAnnualNonCurrentAssets: 0,
         totalAnnualCurrentLiabilities: 0,
-        totalAnnualNonCurrentLiabilities: 0
+        totalAnnualNonCurrentLiabilities: 0,
+        // Enhanced: Add negotiation tracking
+        totalNegotiations: 0,
+        totalDiscountsGiven: 0,
+        studentsAffected: new Set()
       };
       
       // 🚀 OPTIMIZATION: Cache accounts once to avoid repeated database queries
@@ -576,6 +595,9 @@ class BalanceSheetService {
           // This ensures negotiated payments and other adjustments are properly included
           monthBalanceSheet = await this.generateBalanceSheet(monthEndDate, residence);
           
+          // Enhanced: Get negotiation details for this month
+          const negotiationDetails = await this.getNegotiationDetailsForMonth(monthEndDate, residence);
+          
           // Structure the data as expected by the React component with enhanced structure
           monthlyData[monthKey] = {
             month: monthKey,
@@ -583,7 +605,7 @@ class BalanceSheetService {
             assets: {
               current: {
                 cashAndBank: this.formatCashAndBankAccounts(monthBalanceSheet.assets.current),
-                accountsReceivable: this.formatAccountsReceivable(monthBalanceSheet.assets.current),
+                accountsReceivable: this.formatAccountsReceivableWithNegotiations(monthBalanceSheet.assets.current, negotiationDetails),
                 inventory: this.formatInventoryAccounts(monthBalanceSheet.assets.current),
                 prepaidExpenses: this.formatPrepaidAccounts(monthBalanceSheet.assets.current),
                 total: monthBalanceSheet.assets.totalCurrent
@@ -633,7 +655,9 @@ class BalanceSheetService {
               workingCapital: monthBalanceSheet.workingCapital,
               currentRatio: monthBalanceSheet.currentRatio,
               debtToEquity: monthBalanceSheet.debtToEquity
-            }
+            },
+            // Enhanced: Add negotiation details
+            negotiations: negotiationDetails
           };
           
           // Return structured data for parallel processing
@@ -696,6 +720,17 @@ class BalanceSheetService {
           annualSummary.totalAnnualNonCurrentAssets += monthlyData[monthKey].assets?.nonCurrent?.total || 0;
           annualSummary.totalAnnualCurrentLiabilities += monthlyData[monthKey].liabilities?.current?.total || 0;
           annualSummary.totalAnnualNonCurrentLiabilities += monthlyData[monthKey].liabilities?.nonCurrent?.total || 0;
+          
+          // Enhanced: Add negotiation totals
+          if (monthlyData[monthKey].negotiations) {
+            annualSummary.totalNegotiations += monthlyData[monthKey].negotiations.totalNegotiations || 0;
+            annualSummary.totalDiscountsGiven += monthlyData[monthKey].negotiations.totalDiscountsGiven || 0;
+            if (monthlyData[monthKey].negotiations.studentsAffected) {
+              monthlyData[monthKey].negotiations.studentsAffected.forEach(studentId => {
+                annualSummary.studentsAffected.add(studentId);
+              });
+            }
+          }
         }
       }
       
@@ -709,6 +744,9 @@ class BalanceSheetService {
       annualSummary.totalAnnualNonCurrentAssets = Math.round(annualSummary.totalAnnualNonCurrentAssets / 12);
       annualSummary.totalAnnualCurrentLiabilities = Math.round(annualSummary.totalAnnualCurrentLiabilities / 12);
       annualSummary.totalAnnualNonCurrentLiabilities = Math.round(annualSummary.totalAnnualNonCurrentLiabilities / 12);
+      
+      // Convert Set to Array for JSON serialization
+      annualSummary.studentsAffected = Array.from(annualSummary.studentsAffected);
       
       const result = {
         success: true,
@@ -1486,6 +1524,121 @@ class BalanceSheetService {
       console.error('❌ Error aggregating parent-child accounts:', error);
       // Don't throw error as this is not critical for balance sheet generation
     }
+  }
+
+  /**
+   * Get negotiation details for a specific month
+   */
+  static async getNegotiationDetailsForMonth(asOfDate, residenceId = null) {
+    try {
+      const TransactionEntry = require('../models/TransactionEntry');
+      
+      const query = {
+        date: { $lte: asOfDate },
+        status: 'posted',
+        source: 'manual',
+        $or: [
+          { 'metadata.type': 'negotiated_payment_adjustment' },
+          { description: { $regex: /negotiated|discount/i } }
+        ]
+      };
+      
+      if (residenceId) {
+        query.residence = residenceId;
+      }
+      
+      const negotiationTransactions = await TransactionEntry.find(query);
+      
+      let totalNegotiations = 0;
+      let totalDiscountsGiven = 0;
+      const studentsAffected = new Set();
+      const studentDetails = {};
+      
+      for (const transaction of negotiationTransactions) {
+        for (const entry of transaction.entries) {
+          if (entry.accountCode.startsWith('1100')) {
+            totalNegotiations++;
+            const discountAmount = entry.credit || 0;
+            totalDiscountsGiven += discountAmount;
+            
+            // Extract student information
+            const studentId = this.extractStudentIdFromAccountCode(entry.accountCode);
+            const studentName = this.extractStudentNameFromDescription(entry.description) || 
+                               this.extractStudentNameFromAccountName(entry.accountName);
+            
+            studentsAffected.add(studentId);
+            
+            if (!studentDetails[studentId]) {
+              studentDetails[studentId] = {
+                studentId,
+                studentName,
+                totalDiscounts: 0,
+                negotiationCount: 0
+              };
+            }
+            
+            studentDetails[studentId].totalDiscounts += discountAmount;
+            studentDetails[studentId].negotiationCount++;
+          }
+        }
+      }
+      
+      return {
+        totalNegotiations,
+        totalDiscountsGiven,
+        studentsAffected: Array.from(studentsAffected),
+        studentDetails,
+        averageDiscountPerNegotiation: totalNegotiations > 0 ? totalDiscountsGiven / totalNegotiations : 0
+      };
+      
+    } catch (error) {
+      console.error('❌ Error getting negotiation details:', error);
+      return {
+        totalNegotiations: 0,
+        totalDiscountsGiven: 0,
+        studentsAffected: [],
+        studentDetails: {},
+        averageDiscountPerNegotiation: 0
+      };
+    }
+  }
+
+  /**
+   * Format Accounts Receivable with negotiation details
+   */
+  static formatAccountsReceivableWithNegotiations(currentAssets, negotiationDetails) {
+    const accountsReceivable = this.formatAccountsReceivable(currentAssets);
+    
+    // Add negotiation breakdown to the main AR account
+    if (accountsReceivable['1100']) {
+      accountsReceivable['1100'].negotiations = {
+        totalNegotiations: negotiationDetails.totalNegotiations,
+        totalDiscountsGiven: negotiationDetails.totalDiscountsGiven,
+        studentsAffected: negotiationDetails.studentsAffected.length,
+        averageDiscountPerNegotiation: negotiationDetails.averageDiscountPerNegotiation,
+        studentDetails: negotiationDetails.studentDetails
+      };
+    }
+    
+    return accountsReceivable;
+  }
+
+  /**
+   * Helper methods for extracting student information
+   */
+  static extractStudentIdFromAccountCode(accountCode) {
+    const parts = accountCode.split('-');
+    return parts.length > 1 ? parts[1] : accountCode;
+  }
+
+  static extractStudentNameFromDescription(description) {
+    const match = description.match(/- ([^-]+)$/);
+    return match ? match[1].trim() : null;
+  }
+
+  static extractStudentNameFromAccountName(accountName) {
+    const match = accountName.match(/Accounts Receivable - (.+)$/);
+    return match ? match[1].trim() : null;
   }
 }
 

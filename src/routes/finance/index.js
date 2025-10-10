@@ -13,6 +13,7 @@ const transactionRoutes = require('./transactionRoutes');
 const accountRoutes = require('./accountRoutes');
 const studentARBalancesRoutes = require('./studentARBalancesRoutes');
 const transactionAccountsRoutes = require('./transactionAccountsRoutes');
+const enhancedBalanceSheetRoutes = require('./enhancedBalanceSheetRoutes');
 const { getAllStudentAccounts } = require('../../controllers/finance/studentAccountController');
 const SecurityDepositController = require('../../controllers/finance/securityDepositController');
 const CashFlowController = require('../../controllers/finance/cashFlowController');
@@ -31,6 +32,7 @@ router.use('/transactions', transactionRoutes);
 router.use('/accounts', accountRoutes);
 router.use('/students', studentARBalancesRoutes);
 router.use('/transaction-accounts', transactionAccountsRoutes);
+router.use('/', enhancedBalanceSheetRoutes);
 
 // Security Deposit Management Routes
 router.get('/security-deposits/status/:studentId', SecurityDepositController.getDepositStatus);

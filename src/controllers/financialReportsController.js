@@ -103,7 +103,7 @@ class FinancialReportsController {
                 incomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
             } else {
                 // Use FinancialReportingService with basis parameter and monthly breakdown
-                incomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
+                incomeStatement = await FinancialReportingService.generateIncomeStatement(period, basis);
             }
             
             // Add cache-busting headers to prevent 304 responses

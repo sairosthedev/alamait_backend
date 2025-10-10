@@ -26,30 +26,50 @@ class FinancialReportingService {
      * ACCRUAL BASIS: Shows income/expenses when earned/incurred
      * CASH BASIS: Shows income/expenses when cash is received/paid
      */
-    static async generateIncomeStatement(period, basis = 'accrual') {
+    static async generateIncomeStatement(period, basis = 'accrual', residenceId = null) {
         try {
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
             
-            console.log(`Generating income statement for ${period} using ${basis.toUpperCase()} basis`);
+            console.log(`Generating income statement for ${period} using ${basis.toUpperCase()} basis${residenceId ? ` for residence: ${residenceId}` : ''}`);
             
             if (basis === 'accrual') {
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred');
                 
                 // For accrual basis, look at transaction entries with rental_accrual source for income
                 // Also include forfeiture transactions and reversals (which are debits to income accounts)
-                const accrualEntries = await TransactionEntry.find({
+                const accrualQuery = {
                     date: { $gte: startDate, $lte: endDate },
                     source: { $in: ['rental_accrual', 'manual', 'payment', 'rental_accrual_reversal'] },
                     status: 'posted'
-                });
+                };
+                
+                // Add residence filtering if specified
+                if (residenceId) {
+                    accrualQuery.$or = [
+                        { residence: residenceId },
+                        { 'metadata.residenceId': residenceId }
+                    ];
+                }
+                
+                const accrualEntries = await TransactionEntry.find(accrualQuery);
                 
                 // For accrual basis, include only expense accruals (and optionally manual adjustments)
-                const expenseEntries = await TransactionEntry.find({
+                const expenseQuery = {
                     date: { $gte: startDate, $lte: endDate },
                     source: { $in: ['expense_accrual', 'manual'] },
                     status: 'posted'
-                });
+                };
+                
+                // Add residence filtering if specified
+                if (residenceId) {
+                    expenseQuery.$or = [
+                        { residence: residenceId },
+                        { 'metadata.residenceId': residenceId }
+                    ];
+                }
+                
+                const expenseEntries = await TransactionEntry.find(expenseQuery);
                 
                 console.log(`Found ${accrualEntries.length} rental accrual entries and ${expenseEntries.length} expense entries for accrual basis`);
                 
@@ -107,9 +127,9 @@ class FinancialReportingService {
                     }
             });
             
-            // 🆕 Calculate Alamait Management Fee (25% of rental income)
+            // 🆕 Calculate Alamait Management Fee (25% of rental income) - PER RESIDENCE
             const managementFee = totalRevenue * 0.25;
-            console.log(`💰 Alamait Management Fee (25% of rental income): $${managementFee.toFixed(2)}`);
+            console.log(`💰 Alamait Management Fee (25% of rental income): $${managementFee.toFixed(2)}${residenceId ? ` for residence: ${residenceId}` : ''}`);
             
             // Add management fee to expenses
             expensesByAccount['5001 - Alamait Management Fees'] = managementFee;
@@ -194,17 +214,37 @@ class FinancialReportingService {
                 console.log('🟢 CASH BASIS: Including only actual cash receipts and payments');
                 
                 // For cash basis, use the transaction entries with payment source
-                const paymentEntries = await TransactionEntry.find({
+                const paymentQuery = {
                     date: { $gte: startDate, $lte: endDate },
                     source: 'payment',
                     status: 'posted'
-                });
+                };
                 
-                const expenseEntries = await TransactionEntry.find({
+                // Add residence filtering if specified
+                if (residenceId) {
+                    paymentQuery.$or = [
+                        { residence: residenceId },
+                        { 'metadata.residenceId': residenceId }
+                    ];
+                }
+                
+                const paymentEntries = await TransactionEntry.find(paymentQuery);
+                
+                const expenseQuery = {
                     date: { $gte: startDate, $lte: endDate },
                     source: { $in: ['expense_payment', 'vendor_payment', 'expense_accrual'] },
                     status: 'posted'
-                });
+                };
+                
+                // Add residence filtering if specified
+                if (residenceId) {
+                    expenseQuery.$or = [
+                        { residence: residenceId },
+                        { 'metadata.residenceId': residenceId }
+                    ];
+                }
+                
+                const expenseEntries = await TransactionEntry.find(expenseQuery);
                 
                 console.log(`Found ${paymentEntries.length} payment entries and ${expenseEntries.length} expense entries for cash basis`);
                 
@@ -2995,177 +3035,12 @@ class FinancialReportingService {
      */
     static async generateResidenceFilteredIncomeStatement(period, residenceId, basis = 'cash') {
         try {
-            const startDate = new Date(`${period}-01-01`);
-            const endDate = new Date(`${period}-12-31`);
+            console.log(`Generating residence-filtered income statement for ${period}, residence: ${residenceId}, basis: ${basis}`);
             
-            console.log(`Generating residence-filtered income statement for ${period}, residence: ${residenceId}`);
+            // Use the main generateIncomeStatement method with residence filtering
+            const incomeStatement = await this.generateIncomeStatement(period, basis, residenceId);
             
-            // Handle residence parameter - could be ObjectId or residence name
-            let actualResidenceId = residenceId;
-            let residenceInfo = null;
-            
-            // Check if residenceId is a valid ObjectId
-            if (!mongoose.Types.ObjectId.isValid(residenceId)) {
-                // If not a valid ObjectId, treat it as a residence name and look it up
-                console.log(`Residence parameter "${residenceId}" is not a valid ObjectId, searching by name...`);
-                residenceInfo = await Residence.findOne({ name: { $regex: new RegExp(residenceId, 'i') } });
-                
-                if (!residenceInfo) {
-                    throw new Error(`Residence not found: ${residenceId}`);
-                }
-                
-                actualResidenceId = residenceInfo._id;
-                console.log(`Found residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
-            } else {
-                // If it's a valid ObjectId, get residence info for logging
-                residenceInfo = await Residence.findById(residenceId).select('name');
-                if (!residenceInfo) {
-                    throw new Error(`Residence not found with ID: ${residenceId}`);
-                }
-                console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
-            }
-            
-            // Get all transaction entries for the period (don't filter by residence initially)
-            const entries = await TransactionEntry.find({
-                date: { $gte: startDate, $lte: endDate }
-            })
-            .populate('residence')
-            .populate({
-                path: 'sourceId',
-                select: 'residence student amount date',
-                populate: {
-                    path: 'residence',
-                    select: 'name address'
-                }
-            });
-            
-            console.log(`Found ${entries.length} total transaction entries for period ${period}`);
-            
-            // Filter entries by residence using the same logic as cash flow service
-            const filteredEntries = entries.filter(entry => {
-                // Check if transaction has direct residence match
-                if (entry.residence && entry.residence._id && 
-                    entry.residence._id.toString() === actualResidenceId.toString()) {
-                    return true;
-                }
-                
-                // For transactions without residence field, check if they're linked to payments/expenses for this residence
-                if (!entry.residence || entry.residence === "Unknown") {
-                    // Check if sourceId has residence match
-                    if (entry.sourceId && entry.sourceId.residence && 
-                        entry.sourceId.residence._id.toString() === actualResidenceId.toString()) {
-                        return true;
-                    }
-                }
-                
-                return false;
-            });
-            
-            console.log(`Filtered to ${filteredEntries.length} transaction entries for residence ${residenceId}`);
-            
-            // Initialize monthly breakdown structure
-            const monthNames = [
-                'January', 'February', 'March', 'April', 'May', 'June',
-                'July', 'August', 'September', 'October', 'November', 'December'
-            ];
-            
-            const monthlyBreakdown = {};
-            monthNames.forEach((month, index) => {
-                monthlyBreakdown[index] = {
-                    month,
-                    monthNumber: index + 1,
-                    revenue: {},
-                    expenses: {},
-                    total_revenue: 0,
-                    total_expenses: 0,
-                    net_income: 0,
-                    residences: [residenceId], // Only this residence
-                    transaction_count: 0
-                };
-            });
-            
-            // Process entries by month
-            filteredEntries.forEach(entry => {
-                const entryDate = new Date(entry.date);
-                const monthIndex = entryDate.getMonth();
-                
-                if (entry.entries && entry.entries.length > 0) {
-                    entry.entries.forEach(line => {
-                        const accountCode = line.accountCode;
-                        const accountName = line.accountName;
-                        const accountType = line.accountType;
-                        const debit = line.debit || 0;
-                        const credit = line.credit || 0;
-                        
-                        if (accountType === 'Income' || accountType === 'income') {
-                            // For income accounts: credits increase revenue, debits decrease revenue
-                            const amount = (line.credit || 0) - (line.debit || 0);
-                            monthlyBreakdown[monthIndex].total_revenue += amount;
-                            
-                            // Group by account code only to net all transactions for the same account
-                            const key = accountCode;
-                            monthlyBreakdown[monthIndex].revenue[key] = 
-                                (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
-                        } else if (accountType === 'Expense' || accountType === 'expense') {
-                            const amount = line.debit || 0; // Expenses increase with debit
-                            monthlyBreakdown[monthIndex].total_expenses += amount;
-                            
-                            // Group by account code only to net all transactions for the same account
-                            const key = accountCode;
-                            monthlyBreakdown[monthIndex].expenses[key] = 
-                                (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
-                        }
-                    });
-                }
-                
-                monthlyBreakdown[monthIndex].transaction_count++;
-            });
-            
-            // Add Alamait Management Fee (25% of monthly revenue) as an expense
-            monthNames.forEach((month, index) => {
-                const managementFee = (monthlyBreakdown[index].total_revenue || 0) * 0.25;
-                if (managementFee > 0) {
-                    const feeKey = '5001 - Alamait Management Fees';
-                    monthlyBreakdown[index].expenses[feeKey] = (monthlyBreakdown[index].expenses[feeKey] || 0) + managementFee;
-                    monthlyBreakdown[index].total_expenses += managementFee;
-                    console.log(`💰 Added management fee for ${month}: $${managementFee.toFixed(2)} (25% of revenue: $${monthlyBreakdown[index].total_revenue})`);
-                }
-            });
-            
-            // Calculate net income for each month
-            monthNames.forEach((month, index) => {
-                monthlyBreakdown[index].net_income = monthlyBreakdown[index].total_revenue - monthlyBreakdown[index].total_expenses;
-            });
-            
-            // Calculate year totals
-            const yearTotals = {
-                total_revenue: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0),
-                total_expenses: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_expenses, 0),
-                net_income: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].net_income, 0),
-                total_transactions: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].transaction_count, 0)
-            };
-            
-            return {
-                period,
-                basis,
-                residence: {
-                    id: actualResidenceId,
-                    name: residenceInfo?.name || 'Unknown',
-                    originalParameter: residenceId
-                },
-                monthly_breakdown: monthlyBreakdown,
-                year_totals: yearTotals,
-                month_names: monthNames,
-                residences_included: true,
-                data_sources: ['TransactionEntry'],
-                accounting_notes: {
-                    basis_type: basis === 'cash' ? 'cash_basis' : 'accrual_basis',
-                    includes_rental_accruals: basis === 'accrual',
-                    includes_cash_payments: basis === 'cash',
-                    source_filter: `Filtered by residence: ${residenceInfo?.name || residenceId}`,
-                    note: `Based on ${basis} basis entries from transactionentries collection for specific residence`
-                }
-            };
+            return incomeStatement;
             
         } catch (error) {
             console.error('Error generating residence-filtered income statement:', error);

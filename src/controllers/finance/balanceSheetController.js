@@ -1063,6 +1063,7 @@ exports.getAccountTransactionDetails = async (req, res) => {
         const mainAccount = await Account.findOne({ code: accountCode });
         let childAccounts = [];
         let allAccountCodes = [accountCode];
+        let useRegexForAR = false; // when true, include all 1100 and 1100-* even if child accounts are missing
         
         if (mainAccount && accountCode === '1100') {
             console.log(`🔗 Found parent account ${accountCode}, looking for child accounts...`);
@@ -1077,6 +1078,8 @@ exports.getAccountTransactionDetails = async (req, res) => {
             
             // Add child account codes to the search
             allAccountCodes = [accountCode, ...childAccounts.map(child => child.code)];
+            // Also enable regex fallback to capture child AR entries even if account records are missing
+            useRegexForAR = true;
             
             console.log(`📊 Found ${childAccounts.length} student-specific AR accounts for ${accountCode}:`, 
                 childAccounts.map(c => `${c.code} - ${c.name}`));
@@ -1100,12 +1103,23 @@ exports.getAccountTransactionDetails = async (req, res) => {
         // Build query for cumulative transactions up to the selected month
         const query = {
             date: { $lte: asOfDate },
-            'entries.accountCode': { $in: allAccountCodes },
             status: 'posted'
         };
+        // If this is AR parent 1100, include all child entries using regex to avoid missing credits
+        if (useRegexForAR && accountCode === '1100') {
+            query['entries.accountCode'] = { $regex: '^1100(-|$)' };
+        } else {
+            query['entries.accountCode'] = { $in: allAccountCodes };
+        }
         
         if (residenceId) {
-            query.residence = residenceId;
+            // Include transactions tied to the residence either via top-level residence
+            // or via metadata (some manual/adjustment entries may only record residence in metadata)
+            query.$or = [
+                { residence: residenceId },
+                { 'metadata.residenceId': residenceId },
+                { 'metadata.residence': residenceId }
+            ];
         }
         
         console.log(`📊 Balance Sheet Query:`, JSON.stringify(query, null, 2));
@@ -1126,9 +1140,12 @@ exports.getAccountTransactionDetails = async (req, res) => {
         
         transactions.forEach(transaction => {
             // Filter entries for all relevant account codes (parent + children)
-            const relevantEntries = transaction.entries.filter(entry => 
-                allAccountCodes.includes(entry.accountCode)
-            );
+            const relevantEntries = transaction.entries.filter(entry => {
+                if (useRegexForAR && accountCode === '1100') {
+                    return typeof entry.accountCode === 'string' && entry.accountCode.startsWith('1100');
+                }
+                return allAccountCodes.includes(entry.accountCode);
+            });
             
             relevantEntries.forEach(entry => {
                 const debitAmount = entry.debit || 0;
@@ -1290,10 +1307,18 @@ exports.getAccountTransactionDetails = async (req, res) => {
                     transactions.forEach(transaction => {
                         transaction.entries.forEach(entry => {
                             if (entry.accountCode === child.code) {
-                                if (entry.accountType === 'Liability') {
-                                    childBalance += (entry.credit || 0) - (entry.debit || 0);
-                                    childDebits += entry.debit || 0;
-                                    childCredits += entry.credit || 0;
+                                // Compute debits/credits regardless of type
+                                const debit = entry.debit || 0;
+                                const credit = entry.credit || 0;
+                                childDebits += debit;
+                                childCredits += credit;
+                                
+                                // Balance based on account type: Asset/Expense (debit - credit), others (credit - debit)
+                                const isAssetOrExpense = (entry.accountType === 'Asset') || (entry.accountType === 'Expense') || child.code.startsWith('1100');
+                                if (isAssetOrExpense) {
+                                    childBalance += debit - credit;
+                                } else {
+                                    childBalance += credit - debit;
                                 }
                             }
                         });
