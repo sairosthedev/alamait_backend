@@ -6,6 +6,8 @@ const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
 const { initCronJobs } = require('./utils/cronJobs');
+const { auditMiddleware } = require('./middleware/auditMiddleware');
+const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 // Load Swagger document
 const swaggerDocument = YAML.load(path.join(__dirname, '../swagger.yaml'));
@@ -142,6 +144,9 @@ app.use((req, res, next) => {
 // Parse JSON bodies with increased limits
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Add audit middleware to log all API requests
+app.use(auditMiddleware);
 
 // Add timeout middleware for file upload routes
 app.use('/api/student/payments', (req, res, next) => {
@@ -362,6 +367,11 @@ app.use('/api/finance/debtors', debtorRoutes);
 const studentAccountRoutes = require('./routes/finance/studentAccountRoutes');
 app.use('/api/finance/student-accounts', studentAccountRoutes);
 
+// Finance account management routes
+const financeAccountRoutes = require('./routes/finance/accountRoutes');
+const { auth } = require('./middleware/auth');
+app.use('/api/finance/accounts', auth, financeAccountRoutes);
+
 // Petty Cash routes
 const pettyCashRoutes = require('./routes/finance/pettyCashRoutes');
 app.use('/api/finance/petty-cash', pettyCashRoutes);
@@ -395,21 +405,10 @@ const vendorRoutes = require('./routes/vendorRoutes');
 app.use('/api/vendors', vendorRoutes);
 
 // 404 handler
-app.use((req, res) => {
-    res.status(404).json({ 
-        error: 'Not Found',
-        path: req.path
-    });
-});
+app.use(notFoundHandler);
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ 
-        error: 'Something went wrong!',
-        message: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
-});
+app.use(errorHandler);
 
 // Start monthly accrual cron service
 try {

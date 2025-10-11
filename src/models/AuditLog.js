@@ -8,7 +8,15 @@ const AuditLogSchema = new mongoose.Schema({
   },
   action: { 
     type: String, 
-    required: true 
+    required: true,
+    enum: [
+      'create', 'read', 'update', 'delete',
+      'approve', 'reject', 'submit', 'convert',
+      'mark_paid', 'login', 'logout', 'register',
+      'upload', 'download', 'export', 'import',
+      'bulk_create', 'bulk_update', 'bulk_delete',
+      'system_operation', 'api_call', 'unknown'
+    ]
   },
   collection: { 
     type: String, 
@@ -16,7 +24,8 @@ const AuditLogSchema = new mongoose.Schema({
   },
   recordId: { 
     type: mongoose.Schema.Types.ObjectId, 
-    required: true 
+    required: false, // Allow null for API calls without specific records
+    default: null
   },
   before: { 
     type: Object, 
@@ -33,6 +42,34 @@ const AuditLogSchema = new mongoose.Schema({
   timestamp: { 
     type: Date, 
     default: Date.now 
+  },
+  ipAddress: {
+    type: String,
+    default: null
+  },
+  userAgent: {
+    type: String,
+    default: null
+  },
+  sessionId: {
+    type: String,
+    default: null
+  },
+  requestId: {
+    type: String,
+    default: null
+  },
+  duration: {
+    type: Number, // Duration in milliseconds
+    default: null
+  },
+  statusCode: {
+    type: Number,
+    default: null
+  },
+  errorMessage: {
+    type: String,
+    default: null
   }
 }, {
   timestamps: true,

@@ -82,49 +82,88 @@ AccountSchema.virtual('fullPath').get(function() {
 
 // Method to get next available code for a type
 AccountSchema.statics.getNextCode = async function(type, category = null) {
-  const typePrefixes = {
-    'Asset': '1',
-    'Liability': '2', 
-    'Equity': '3',
-    'Income': '4',
-    'Expense': '5'
-  };
+  try {
+    const typePrefixes = {
+      'Asset': '1',
+      'Liability': '2', 
+      'Equity': '3',
+      'Income': '4',
+      'Expense': '5'
+    };
 
-  const categorySubPrefixes = {
-    'Current Assets': '0',
-    'Fixed Assets': '2',
-    'Other Assets': '3',
-    'Current Liabilities': '0',
-    'Long-term Liabilities': '1',
-    'Owner Equity': '0',
-    'Retained Earnings': '1',
-    'Operating Revenue': '0',
-    'Other Income': '2',
-    'Operating Expenses': '0',
-    'Administrative Expenses': '1',
-    'Financial Expenses': '2'
-  };
+    const categorySubPrefixes = {
+      'Current Assets': '0',
+      'Fixed Assets': '2',
+      'Other Assets': '3',
+      'Current Liabilities': '0',
+      'Long-term Liabilities': '1',
+      'Owner Equity': '0',
+      'Retained Earnings': '1',
+      'Operating Revenue': '0',
+      'Other Income': '2',
+      'Operating Expenses': '0',
+      'Administrative Expenses': '1',
+      'Financial Expenses': '2'
+    };
 
-  const basePrefix = typePrefixes[type];
-  const subPrefix = category && categorySubPrefixes[category] ? categorySubPrefixes[category] : '0';
-  const searchPrefix = `${basePrefix}${subPrefix}`;
+    const basePrefix = typePrefixes[type];
+    if (!basePrefix) {
+      throw new Error(`Invalid account type: ${type}`);
+    }
+    
+    const subPrefix = category && categorySubPrefixes[category] ? categorySubPrefixes[category] : '0';
+    const searchPrefix = `${basePrefix}${subPrefix}`;
 
-  // Find the highest existing code with this prefix
-  const highestAccount = await this.findOne({
-    code: { $regex: `^${searchPrefix}` }
-  }).sort({ code: -1 });
+    // Find all existing codes with this prefix
+    const existingAccounts = await this.find({
+      code: { $regex: `^${searchPrefix}` }
+    }).sort({ code: -1 });
 
-  if (!highestAccount) {
-    // No existing accounts with this prefix, start with 001
-    return `${searchPrefix}001`;
+    if (existingAccounts.length === 0) {
+      // No existing accounts with this prefix, start with 001
+      return `${searchPrefix}001`;
+    }
+
+    // Get all existing numeric parts
+    const existingNumbers = existingAccounts
+      .map(acc => parseInt(acc.code.slice(-3)))
+      .filter(num => !isNaN(num))
+      .sort((a, b) => b - a);
+
+    // Find the next available number
+    let nextNumber = 1;
+    for (let i = 0; i < existingNumbers.length; i++) {
+      if (existingNumbers[i] === nextNumber) {
+        nextNumber++;
+      } else {
+        break;
+      }
+    }
+    
+    // Format with leading zeros
+    const nextCode = `${searchPrefix}${nextNumber.toString().padStart(3, '0')}`;
+    
+    // Final check that this code doesn't already exist
+    const existingAccount = await this.findOne({ code: nextCode });
+    if (existingAccount) {
+      // If it still exists, find the next available number
+      let alternativeNumber = nextNumber + 1;
+      while (alternativeNumber <= 999) {
+        const alternativeCode = `${searchPrefix}${alternativeNumber.toString().padStart(3, '0')}`;
+        const checkAccount = await this.findOne({ code: alternativeCode });
+        if (!checkAccount) {
+          return alternativeCode;
+        }
+        alternativeNumber++;
+      }
+      throw new Error('No available codes found for this type and category');
+    }
+    
+    return nextCode;
+  } catch (error) {
+    console.error('Error in getNextCode:', error);
+    throw error;
   }
-
-  // Extract the numeric part and increment
-  const currentNumber = parseInt(highestAccount.code.slice(-3));
-  const nextNumber = currentNumber + 1;
-  
-  // Format with leading zeros
-  return `${searchPrefix}${nextNumber.toString().padStart(3, '0')}`;
 };
 
 // Method to validate code format

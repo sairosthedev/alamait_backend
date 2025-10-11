@@ -4,6 +4,7 @@ const MonthlyRequest = require('../../models/MonthlyRequest');
 const Request = require('../../models/Request');
 const { Residence } = require('../../models/Residence');
 const { validateMongoId } = require('../../utils/validators');
+const { logSalaryRequestOperation } = require('../../utils/auditHelpers');
 
 // List employees with basic filtering and pagination
 exports.list = async (req, res) => {
@@ -265,11 +266,20 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                 await reqDoc.save();
                 console.log(`Request saved successfully with ID: ${reqDoc._id}`);
                 
-                createdRequests.push({
-                    request: reqDoc,
-                    residence: residenceName,
-                    total: totalForResidence,
-                    employeeCount: residenceEmployees.length,
+                        // Log the salary request creation
+                        await logSalaryRequestOperation(
+                            'create',
+                            reqDoc,
+                            req.user._id,
+                            `Created salary request for ${residenceName} with ${residenceEmployees.length} employees`,
+                            req
+                        );
+
+                        createdRequests.push({
+                            request: reqDoc,
+                            residence: residenceName,
+                            total: totalForResidence,
+                            employeeCount: residenceEmployees.length,
                             employees: residenceEmployees.map(e => ({
                                 id: e._id,
                                 name: e.fullName || `${e.firstName} ${e.lastName}`,
@@ -277,7 +287,7 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                                 salary: e.allocatedSalary,
                                 allocationPercentage: e.allocationPercentage
                             }))
-                });
+                        });
             } catch (residenceError) {
                 console.error(`Error creating request for residence ${residenceId}:`, residenceError);
                 throw residenceError;

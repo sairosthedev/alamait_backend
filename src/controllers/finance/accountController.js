@@ -1,6 +1,7 @@
 const Account = require('../../models/Account');
 const AccountCodeService = require('../../services/accountCodeService');
-const mongoose = require('mongoose'); // Added for database connection check
+const mongoose = require('mongoose');
+const { logAccountOperation } = require('../../utils/auditHelpers'); // Added for database connection check
 
 /**
  * Get all accounts with optional filtering
@@ -88,16 +89,39 @@ exports.getAccountById = async (req, res) => {
   try {
     const { id } = req.params;
     
+    console.log('Getting account by ID:', id);
+    
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      console.log('Invalid ObjectId format:', id);
+      return res.status(400).json({ 
+        error: 'Invalid account ID format',
+        providedId: id,
+        expectedFormat: '24-character hexadecimal string'
+      });
+    }
+    
     const account = await Account.findById(id)
       .populate('parentAccount', 'code name');
     
     if (!account) {
+      console.log('Account not found for ID:', id);
       return res.status(404).json({ error: 'Account not found' });
     }
 
+    console.log('Account found:', account.code, account.name);
     res.status(200).json(account);
   } catch (error) {
     console.error('Error fetching account:', error);
+    
+    // Provide more specific error messages
+    if (error.name === 'CastError') {
+      return res.status(400).json({ 
+        error: 'Invalid account ID format',
+        details: error.message
+      });
+    }
+    
     res.status(500).json({ error: 'Failed to fetch account' });
   }
 };
@@ -119,6 +143,8 @@ exports.createAccount = async (req, res) => {
       metadata
     } = req.body;
 
+    console.log('Creating account with data:', { name, type, category });
+
     // Validate account data
     const validation = await AccountCodeService.validateAccountData({
       name,
@@ -127,6 +153,7 @@ exports.createAccount = async (req, res) => {
     });
 
     if (!validation.isValid) {
+      console.log('Validation failed:', validation.errors);
       return res.status(400).json({ 
         error: 'Validation failed', 
         details: validation.errors 
@@ -134,7 +161,9 @@ exports.createAccount = async (req, res) => {
     }
 
     // Generate account code automatically
+    console.log('Generating account code for:', type, category);
     const code = await AccountCodeService.generateAccountCode(type, category);
+    console.log('Generated code:', code);
 
     // Create account object
     const accountData = {
@@ -155,6 +184,15 @@ exports.createAccount = async (req, res) => {
 
     // Populate parent account info
     await account.populate('parentAccount', 'code name');
+
+    // Log the account creation
+    await logAccountOperation(
+      'create',
+      account,
+      req.user._id,
+      `Created account ${account.code} - ${account.name}`,
+      req
+    );
 
     res.status(201).json({
       message: 'Account created successfully',
