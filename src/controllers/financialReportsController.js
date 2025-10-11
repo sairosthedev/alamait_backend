@@ -160,8 +160,8 @@ class FinancialReportsController {
                 // Use residence-filtered method with basis
                 monthlyIncomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
             } else {
-                // Use the simpler method that works consistently like balance sheet and cash flow
-                monthlyIncomeStatement = await FinancialReportingService.generateMonthlyIncomeStatement(period, basis);
+                // Use the comprehensive method but with fixed data structure parsing
+                monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
             }
             
             // Add cache-busting headers to prevent 304 responses
@@ -210,13 +210,29 @@ class FinancialReportsController {
             
             // Use FinancialReportingService for monthly breakdown with residence filtering
             try {
-                // Use the simpler method that works consistently like balance sheet and cash flow
-                const monthlyBreakdown = await FinancialReportingService.generateMonthlyIncomeStatement(period, basis);
+                // Use the comprehensive method but with fixed data structure parsing
+                const monthlyBreakdown = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis, residence);
                 
                 if (monthlyBreakdown && monthlyBreakdown.monthly_breakdown) {
+                    // Debug: Log the data structure we're getting
+                    console.log('🔍 Monthly breakdown data structure:', Object.keys(monthlyBreakdown.monthly_breakdown));
+                    
                     // Process the monthly breakdown data
-                    Object.entries(monthlyBreakdown.monthly_breakdown).forEach(([monthIndex, monthData]) => {
-                        const month = parseInt(monthIndex) + 1; // Convert 0-based index to 1-based month
+                    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+                    
+                    Object.entries(monthlyBreakdown.monthly_breakdown).forEach(([monthKey, monthData]) => {
+                        // Handle both numeric indices and month names
+                        let month, monthName;
+                        if (isNaN(parseInt(monthKey))) {
+                            // Month name (january, february, etc.)
+                            const monthIndex = monthNames.indexOf(monthKey);
+                            month = monthIndex + 1;
+                            monthName = monthData.month || new Date(parseInt(period), monthIndex, 1).toLocaleDateString('en-US', { month: 'long' });
+                        } else {
+                            // Numeric index (0, 1, 2, etc.)
+                            month = parseInt(monthKey) + 1;
+                            monthName = monthData.month || new Date(parseInt(period), parseInt(monthKey), 1).toLocaleDateString('en-US', { month: 'long' });
+                        }
                         
                         // Calculate monthly totals
                         const monthRevenue = monthData.total_revenue || 0;
@@ -228,10 +244,22 @@ class FinancialReportsController {
                         let adminIncome = 0;
                         
                         if (monthData.revenue) {
-                            // Account 4001 = Rental Income
-                            rentalIncome = monthData.revenue['4001'] || 0;
-                            // Account 4002 = Administrative Income
-                            adminIncome = monthData.revenue['4002'] || 0;
+                            // Look for account codes in the revenue object keys
+                            Object.keys(monthData.revenue).forEach(key => {
+                                if (key.includes('4001') || key.includes('Rental')) {
+                                    rentalIncome += monthData.revenue[key] || 0;
+                                } else if (key.includes('4002') || key.includes('Administrative') || key.includes('Admin')) {
+                                    adminIncome += monthData.revenue[key] || 0;
+                                }
+                            });
+                            
+                            // If no specific account codes found, try to parse from the revenue object structure
+                            if (rentalIncome === 0 && adminIncome === 0 && monthRevenue > 0) {
+                                // Fallback: check if there are any revenue entries
+                                console.log(`🔍 Month ${month} revenue structure:`, monthData.revenue);
+                                // For now, assume all revenue is rental income if we can't determine the type
+                                rentalIncome = monthRevenue;
+                            }
                             
                             // Debug: Log account breakdown for months with revenue
                             if (monthRevenue > 0) {
