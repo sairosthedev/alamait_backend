@@ -222,12 +222,32 @@ class FinancialReportsController {
                         const monthExpenses = monthData.total_expenses || 0;
                         const monthNetIncome = monthRevenue - monthExpenses;
                         
+                        // Separate rental income from admin income based on account codes
+                        let rentalIncome = 0;
+                        let adminIncome = 0;
+                        
+                        if (monthData.revenue) {
+                            // Account 4001 = Rental Income
+                            rentalIncome = monthData.revenue['4001'] || 0;
+                            // Account 4002 = Administrative Income
+                            adminIncome = monthData.revenue['4002'] || 0;
+                            
+                            // Debug: Log account breakdown for months with revenue
+                            if (monthRevenue > 0) {
+                                console.log(`📊 Month ${month} (${monthData.month}) Revenue Breakdown:`);
+                                console.log(`  Total Revenue: $${monthRevenue.toFixed(2)}`);
+                                console.log(`  Rental Income (4001): $${rentalIncome.toFixed(2)}`);
+                                console.log(`  Admin Income (4002): $${adminIncome.toFixed(2)}`);
+                                console.log(`  All Revenue Accounts:`, Object.keys(monthData.revenue).map(code => `${code}: $${monthData.revenue[code].toFixed(2)}`));
+                            }
+                        }
+                        
                         monthlyData[month] = {
                             month: month,
                             monthName: monthData.month || new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
                             revenue: {
-                                rentalIncome: monthRevenue, // You can break this down further if needed
-                                adminIncome: 0, // You can calculate this from the monthly breakdown
+                                rentalIncome: rentalIncome,
+                                adminIncome: adminIncome,
                                 total: monthRevenue
                             },
                             expenses: {

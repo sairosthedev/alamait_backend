@@ -405,9 +405,10 @@ class FinancialReportingService {
             if (basis === 'accrual') {
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred by month');
                 
-                // For accrual basis, group rental accruals, manual adjustments, and reversals by month
+                // For accrual basis, get ALL transactions up to end of year (like balance sheet)
+                // This ensures consistency between environments
                 const accrualQuery = {
-                    date: { $gte: startDate, $lte: endDate },
+                    date: { $lte: endDate }, // Use cumulative filtering like balance sheet
                     source: { $in: ['rental_accrual', 'manual', 'rental_accrual_reversal'] },
                     status: 'posted'
                 };
@@ -422,7 +423,7 @@ class FinancialReportingService {
                 
                 // For accrual basis, also get expense entries (all expense-related sources)
                 const expenseQuery = {
-                    date: { $gte: startDate, $lte: endDate },
+                    date: { $lte: endDate }, // Use cumulative filtering like balance sheet
                     source: { $in: ['expense_accrual', 'expense_payment', 'vendor_payment', 'manual'] },
                     status: 'posted'
                 };
@@ -520,79 +521,86 @@ class FinancialReportingService {
                     return null;
                 };
                 
-                // Process accrual entries by month
+                // Process accrual entries by month with CONSISTENT logic
                 accrualEntries.forEach((entry, entryIndex) => {
                     console.log(`\n🔍 Processing Accrual Entry ${entryIndex + 1}:`);
                     console.log(`  Description: "${entry.description}"`);
                     console.log(`  Transaction Date: ${entry.date}`);
                     console.log(`  Metadata:`, entry.metadata);
                     
-                    // For accrual entries, use the incurred date (when income was earned) not transaction date
+                    // CONSISTENT MONTH ASSIGNMENT LOGIC (same as balance sheet approach)
                     let incurredDate = null;
+                    let monthIndex = null;
                     
-                    // Try metadata first
+                    // Step 1: Try metadata first (most reliable)
                     if (entry.metadata && (entry.metadata.accrualDate || entry.metadata.incomeDate)) {
                         incurredDate = new Date(entry.metadata.accrualDate || entry.metadata.incomeDate);
-                        console.log(`  Using metadata date: ${incurredDate.toISOString()}`);
+                        monthIndex = incurredDate.getMonth();
+                        console.log(`  ✅ Using metadata date: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
                     }
                     
-                    // If metadata fails, try parsing description
-                    if (!incurredDate || isNaN(incurredDate)) {
+                    // Step 2: Try parsing description with consistent patterns
+                    if (monthIndex === null) {
                         const parsed = parseMonthYearFromDescription(entry.description);
                         if (parsed) {
                             incurredDate = parsed;
-                            console.log(`  Using parsed description date: ${incurredDate.toISOString()}`);
-                        } else {
-                            // CRITICAL FIX: If all accrual entries have the same date, 
-                            // we need to distribute them across months based on some logic
-                            // For now, let's use a round-robin approach or parse from description more aggressively
-                            
-                            // Try to extract month from description more aggressively
-                            const desc = entry.description.toLowerCase();
-                            let extractedMonth = null;
-                            
-                            // Look for month patterns in description
-                            if (desc.includes('september') || desc.includes('sep')) {
-                                extractedMonth = 8; // September is month 8 (0-based)
-                            } else if (desc.includes('october') || desc.includes('oct')) {
-                                extractedMonth = 9; // October is month 9 (0-based)
-                            } else if (desc.includes('november') || desc.includes('nov')) {
-                                extractedMonth = 10;
-                            } else if (desc.includes('december') || desc.includes('dec')) {
-                                extractedMonth = 11;
-                            } else if (desc.includes('january') || desc.includes('jan')) {
-                                extractedMonth = 0;
-                            } else if (desc.includes('february') || desc.includes('feb')) {
-                                extractedMonth = 1;
-                            } else if (desc.includes('march') || desc.includes('mar')) {
-                                extractedMonth = 2;
-                            } else if (desc.includes('april') || desc.includes('apr')) {
-                                extractedMonth = 3;
-                            } else if (desc.includes('may')) {
-                                extractedMonth = 4;
-                            } else if (desc.includes('june') || desc.includes('jun')) {
-                                extractedMonth = 5;
-                            } else if (desc.includes('july') || desc.includes('jul')) {
-                                extractedMonth = 6;
-                            } else if (desc.includes('august') || desc.includes('aug')) {
-                                extractedMonth = 7;
-                            }
-                            
-                            if (extractedMonth !== null) {
-                                incurredDate = new Date(parseInt(period), extractedMonth, 1);
-                                console.log(`  Using extracted month from description: ${incurredDate.toISOString()}`);
-                            } else {
-                                // Last resort: use transaction date but log warning
-                                incurredDate = new Date(entry.date);
-                                console.log(`  ⚠️ Using transaction date as fallback: ${incurredDate.toISOString()}`);
+                            monthIndex = incurredDate.getMonth();
+                            console.log(`  ✅ Using parsed description: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
+                        }
+                    }
+                    
+                    // Step 3: Aggressive month extraction from description (consistent patterns)
+                    if (monthIndex === null) {
+                        const desc = entry.description.toLowerCase();
+                        const monthPatterns = [
+                            { pattern: ['september', 'sep'], month: 8 },
+                            { pattern: ['october', 'oct'], month: 9 },
+                            { pattern: ['november', 'nov'], month: 10 },
+                            { pattern: ['december', 'dec'], month: 11 },
+                            { pattern: ['january', 'jan'], month: 0 },
+                            { pattern: ['february', 'feb'], month: 1 },
+                            { pattern: ['march', 'mar'], month: 2 },
+                            { pattern: ['april', 'apr'], month: 3 },
+                            { pattern: ['may'], month: 4 },
+                            { pattern: ['june', 'jun'], month: 5 },
+                            { pattern: ['july', 'jul'], month: 6 },
+                            { pattern: ['august', 'aug'], month: 7 }
+                        ];
+                        
+                        for (const { pattern, month } of monthPatterns) {
+                            if (pattern.some(p => desc.includes(p))) {
+                                monthIndex = month;
+                                incurredDate = new Date(parseInt(period), month, 1);
+                                console.log(`  ✅ Using extracted month from description: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
+                                break;
                             }
                         }
                     }
                     
-                    const monthIndex = incurredDate.getMonth();
-                    const monthName = monthNames[monthIndex];
-                    console.log(`  Assigned to month: ${monthIndex + 1} (${monthName})`);
+                    // Step 4: Last resort - use transaction date (but ensure it's within the year)
+                    if (monthIndex === null) {
+                        const transactionDate = new Date(entry.date);
+                        if (transactionDate.getFullYear() == parseInt(period)) {
+                            monthIndex = transactionDate.getMonth();
+                            incurredDate = transactionDate;
+                            console.log(`  ⚠️ Using transaction date as fallback: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
+                        } else {
+                            // Skip entries from different years
+                            console.log(`  ❌ Skipping entry from different year: ${transactionDate.getFullYear()} != ${period}`);
+                            return;
+                        }
+                    }
                     
+                    // Ensure month index is valid
+                    if (monthIndex < 0 || monthIndex > 11) {
+                        console.log(`  ❌ Invalid month index: ${monthIndex}, skipping entry`);
+                        return;
+                    }
+                    
+                    const monthName = monthNames[monthIndex];
+                    console.log(`  📅 Final assignment: Month ${monthIndex + 1} (${monthName})`);
+                    
+                    // Process the entry
                     if (entry.entries && Array.isArray(entry.entries)) {
                         entry.entries.forEach((lineItem, lineIndex) => {
                             if (lineItem.accountType === 'Income') {
@@ -702,6 +710,32 @@ class FinancialReportingService {
                     console.log(`  ${month}: $${revenue.toFixed(2)}`);
                 }
             });
+            
+            // CONSISTENCY CHECK: Ensure total revenue matches expected amount
+            const totalCalculatedRevenue = monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0);
+            console.log(`\n🔍 CONSISTENCY CHECK:`);
+            console.log(`  Total calculated revenue: $${totalCalculatedRevenue.toFixed(2)}`);
+            console.log(`  Expected total revenue: $${accrualEntries.reduce((sum, entry) => {
+                return sum + (entry.entries?.reduce((entrySum, line) => {
+                    if (line.accountType === 'Income') {
+                        return entrySum + ((line.credit || 0) - (line.debit || 0));
+                    }
+                    return entrySum;
+                }, 0) || 0);
+            }, 0).toFixed(2)}`);
+            
+            if (Math.abs(totalCalculatedRevenue - accrualEntries.reduce((sum, entry) => {
+                return sum + (entry.entries?.reduce((entrySum, line) => {
+                    if (line.accountType === 'Income') {
+                        return entrySum + ((line.credit || 0) - (line.debit || 0));
+                    }
+                    return entrySum;
+                }, 0) || 0);
+            }, 0)) > 0.01) {
+                console.log(`  ⚠️ WARNING: Revenue totals don't match - there may be data inconsistencies`);
+            } else {
+                console.log(`  ✅ Revenue totals match - data is consistent`);
+            }
             
             // Calculate year totals
             const yearTotals = {
