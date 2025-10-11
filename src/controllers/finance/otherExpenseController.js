@@ -342,22 +342,71 @@ exports.deleteOtherExpense = async (req, res) => {
         }
 
         const before = otherExpense.toObject();
+        const deletedItems = {
+            expense: 0,
+            transactionEntries: 0,
+            transactions: 0
+        };
 
-        // Delete other expense entry
+        console.log(`🗑️ Starting cascade deletion for other expense: ${id}`);
+
+        // 1. Find and delete related transaction entries
+        const TransactionEntry = require('../../models/TransactionEntry');
+        const Transaction = require('../../models/Transaction');
+        
+        // Find transaction entries related to this other expense
+        const relatedEntries = await TransactionEntry.find({
+            $or: [
+                { sourceId: id, sourceModel: 'OtherExpense' },
+                { sourceId: id, source: 'other_expense' }
+            ]
+        });
+
+        console.log(`   📊 Found ${relatedEntries.length} related transaction entries`);
+
+        if (relatedEntries.length > 0) {
+            // Get unique transaction IDs that will be affected
+            const transactionIds = [...new Set(relatedEntries.map(entry => entry.transactionId))];
+            
+            // Delete transaction entries first
+            const deleteResult = await TransactionEntry.deleteMany({
+                _id: { $in: relatedEntries.map(entry => entry._id) }
+            });
+            deletedItems.transactionEntries = deleteResult.deletedCount;
+            console.log(`   ✅ Deleted ${deleteResult.deletedCount} transaction entries`);
+
+            // Check if any transactions are now empty and delete them
+            for (const transactionId of transactionIds) {
+                const remainingEntries = await TransactionEntry.countDocuments({ transactionId });
+                if (remainingEntries === 0) {
+                    await Transaction.findByIdAndDelete(transactionId);
+                    deletedItems.transactions++;
+                    console.log(`   ✅ Deleted empty transaction: ${transactionId}`);
+                }
+            }
+        }
+
+        // 2. Delete the other expense record
         await OtherExpense.findByIdAndDelete(id);
+        deletedItems.expense = 1;
+        console.log(`   ✅ Deleted other expense: ${id}`);
 
-        // Audit log
+        // 3. Audit log
         await AuditLog.create({
             user: req.user._id,
             action: 'delete',
             collection: 'OtherExpense',
             recordId: id,
             before,
-            after: null
+            after: null,
+            details: `Cascade deletion: ${deletedItems.expense} expense, ${deletedItems.transactionEntries} transaction entries, ${deletedItems.transactions} transactions`
         });
 
+        console.log(`✅ Cascade deletion completed for other expense: ${id}`);
+
         res.status(200).json({
-            message: 'Other expense entry deleted successfully'
+            message: 'Other expense entry and related records deleted successfully',
+            deletedItems
         });
     } catch (error) {
         console.error('Error deleting other expense entry:', error);

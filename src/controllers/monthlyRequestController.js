@@ -1414,7 +1414,7 @@ exports.submitMonthlyRequest = async (req, res) => {
 exports.approveMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
-        const { approved, notes, month, year, status, datePaid } = req.body;
+        const { approved, notes, month, year, status, datePaid, dateApproved } = req.body;
 
         // Check permissions - allow admin and finance users to approve
         if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
@@ -1452,9 +1452,12 @@ exports.approveMonthlyRequest = async (req, res) => {
             // Update monthly approval status
             monthlyApproval.status = approved ? 'approved' : 'rejected';
             monthlyApproval.approvedBy = user._id;
-            monthlyApproval.approvedAt = new Date();
+            monthlyApproval.approvedAt = dateApproved ? new Date(dateApproved) : new Date();
             monthlyApproval.approvedByEmail = user.email;
             monthlyApproval.notes = notes || monthlyApproval.notes;
+            
+            // Save the dateApproved field to the main monthly request document
+            monthlyRequest.dateApproved = dateApproved ? new Date(dateApproved) : null;
             
             // Set datePaid when monthly approval is approved (marked as paid)
             if (approved) {
@@ -2522,7 +2525,7 @@ async function convertRequestToExpenses(request, user) {
                     disableDuplicateCheck: true
                 };
 
-                const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user);
+                const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user, request.approvedAt);
 
                 // Resolve transaction id
                 let linkedTransactionId = null;
@@ -2544,7 +2547,7 @@ async function convertRequestToExpenses(request, user) {
                     description: item.description,
                     amount: item.estimatedCost,
                     category: expenseCategory,
-                    expenseDate: request.dateRequested ? new Date(request.dateRequested) : new Date(request.year, request.month - 1, 1), // Use actual request date or fallback to month start
+                    expenseDate: request.approvedAt ? new Date(request.approvedAt) : (request.dateRequested ? new Date(request.dateRequested) : new Date(request.year, request.month - 1, 1)), // Use approval date, then request date, then fallback to month start
                     period: 'monthly',
                     paymentStatus: 'Pending',
                     paymentMethod: 'Bank Transfer',
@@ -2580,9 +2583,9 @@ async function convertRequestToExpenses(request, user) {
         if (request._id && typeof request.save === 'function') {
             // This is a Mongoose document, update it directly
             request.status = 'completed';
-            request.datePaid = new Date(); // Set datePaid when marking as completed/paid
+            request.datePaid = request.approvedAt ? new Date(request.approvedAt) : new Date(); // Set datePaid when marking as completed/paid
             request.requestHistory.push({
-                date: new Date(),
+                date: request.approvedAt ? new Date(request.approvedAt) : new Date(),
                 action: 'Converted to expenses with double-entry transactions',
                 user: user._id,
                 changes: [`${createdExpenses.length} items converted to expenses with proper double-entry accounting`]
@@ -2593,9 +2596,9 @@ async function convertRequestToExpenses(request, user) {
             const actualRequest = await MonthlyRequest.findById(request._id);
             if (actualRequest) {
                 actualRequest.status = 'completed';
-                actualRequest.datePaid = new Date(); // Set datePaid when marking as completed/paid
+                actualRequest.datePaid = request.approvedAt ? new Date(request.approvedAt) : new Date(); // Set datePaid when marking as completed/paid
                 actualRequest.requestHistory.push({
-                    date: new Date(),
+                    date: request.approvedAt ? new Date(request.approvedAt) : new Date(),
                     action: 'Converted to expenses with double-entry transactions',
                     user: user._id,
                     changes: [`${createdExpenses.length} items converted to expenses with proper double-entry accounting`]
@@ -4384,7 +4387,7 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
         const { id } = req.params;
-        const { approved, notes, createExpenses = true, datePaid } = req.body;
+        const { approved, notes, createExpenses = true, datePaid, dateApproved } = req.body;
 
         // Check permissions - allow admin and finance users to approve
         if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
@@ -4415,18 +4418,19 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
         // Update request status
         monthlyRequest.status = approved ? 'approved' : 'rejected';
         monthlyRequest.approvedBy = user._id;
-        monthlyRequest.approvedAt = new Date();
+        monthlyRequest.approvedAt = dateApproved ? new Date(dateApproved) : new Date();
+        monthlyRequest.dateApproved = dateApproved ? new Date(dateApproved) : null;
         monthlyRequest.approvedByEmail = user.email;
         monthlyRequest.notes = notes || monthlyRequest.notes;
         
         // Set datePaid when request is approved (marked as paid)
         if (approved) {
-            monthlyRequest.datePaid = datePaid ? new Date(datePaid) : new Date();
+            monthlyRequest.datePaid = datePaid ? new Date(datePaid) : (dateApproved ? new Date(dateApproved) : new Date());
         }
 
         // Add to request history
         monthlyRequest.requestHistory.push({
-            date: new Date(),
+            date: dateApproved ? new Date(dateApproved) : new Date(),
             action: `Monthly request ${approved ? 'approved' : 'rejected'} by finance`,
             user: user._id,
             changes: [`Status changed to ${approved ? 'approved' : 'rejected'}`]
@@ -4457,7 +4461,7 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
                 if (monthlyApproval) {
                     monthlyApproval.status = approved ? 'approved' : 'rejected';
                     monthlyApproval.approvedBy = user._id;
-                    monthlyApproval.approvedAt = new Date();
+                    monthlyApproval.approvedAt = dateApproved ? new Date(dateApproved) : new Date();
                     monthlyApproval.approvedByEmail = user.email;
                     monthlyApproval.notes = notes;
                     
@@ -4474,9 +4478,9 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
                 
                 // Update request status to completed after expense creation
                 monthlyRequest.status = 'completed';
-                monthlyRequest.datePaid = new Date(); // Set datePaid when marking as completed/paid
+                monthlyRequest.datePaid = datePaid ? new Date(datePaid) : (dateApproved ? new Date(dateApproved) : new Date()); // Set datePaid when marking as completed/paid
                 monthlyRequest.requestHistory.push({
-                    date: new Date(),
+                    date: dateApproved ? new Date(dateApproved) : new Date(),
                     action: 'Converted to expenses with double-entry transactions',
                     user: user._id,
                     changes: [`${expenseConversionResult.expenses.length} expenses created`]

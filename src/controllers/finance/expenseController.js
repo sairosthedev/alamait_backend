@@ -408,22 +408,85 @@ exports.deleteExpense = async (req, res) => {
         }
 
         const before = expense.toObject();
+        const deletedItems = {
+            expense: 0,
+            transactionEntries: 0,
+            transactions: 0
+        };
 
-        // Delete expense
+        console.log(`🗑️ Starting cascade deletion for expense: ${id}`);
+
+        // 1. Find and delete related transaction entries
+        const TransactionEntry = require('../../models/TransactionEntry');
+        const Transaction = require('../../models/Transaction');
+        
+        // Find transaction entries related to this expense
+        // First, find transactions linked to this expense
+        const relatedTransactions = await Transaction.find({ expenseId: id });
+        const transactionIds = relatedTransactions.map(t => t.transactionId);
+        
+        const relatedEntries = await TransactionEntry.find({
+            $or: [
+                { sourceId: id, sourceModel: 'Expense' },
+                { sourceId: id, source: 'expense_accrual' },
+                { sourceId: id, source: 'expense_payment' },
+                { transactionId: { $in: transactionIds } }, // Transaction entries linked via transaction
+                { reference: id } // Reference field link
+            ]
+        });
+
+        console.log(`   📊 Found ${relatedEntries.length} related transaction entries`);
+
+        if (relatedEntries.length > 0) {
+            // Get unique transaction IDs that will be affected
+            const transactionIds = [...new Set(relatedEntries.map(entry => entry.transactionId))];
+            
+            // Delete transaction entries first
+            const deleteResult = await TransactionEntry.deleteMany({
+                _id: { $in: relatedEntries.map(entry => entry._id) }
+            });
+            deletedItems.transactionEntries = deleteResult.deletedCount;
+            console.log(`   ✅ Deleted ${deleteResult.deletedCount} transaction entries`);
+
+            // Check if any transactions are now empty and delete them
+            for (const transactionId of transactionIds) {
+                const remainingEntries = await TransactionEntry.countDocuments({ transactionId });
+                if (remainingEntries === 0) {
+                    await Transaction.findOneAndDelete({ transactionId });
+                    deletedItems.transactions++;
+                    console.log(`   ✅ Deleted empty transaction: ${transactionId}`);
+                }
+            }
+        }
+
+        // Also delete any transactions directly linked to this expense
+        if (relatedTransactions.length > 0) {
+            await Transaction.deleteMany({ expenseId: id });
+            deletedItems.transactions += relatedTransactions.length;
+            console.log(`   ✅ Deleted ${relatedTransactions.length} transactions directly linked to expense`);
+        }
+
+        // 2. Delete the expense record
         await Expense.findByIdAndDelete(id);
+        deletedItems.expense = 1;
+        console.log(`   ✅ Deleted expense: ${id}`);
 
-        // Audit log
+        // 3. Audit log
         await AuditLog.create({
             user: req.user._id,
             action: 'delete',
             collection: 'Expense',
             recordId: id,
             before,
-            after: null
+            after: null,
+            details: `Cascade deletion: ${deletedItems.expense} expense, ${deletedItems.transactionEntries} transaction entries, ${deletedItems.transactions} transactions`
         });
 
+        console.log(`✅ Cascade deletion completed for expense: ${id}`);
+
         res.status(200).json({
-            message: 'Expense deleted successfully'
+            message: 'Expense and related records deleted successfully',
+            deletedItems
         });
     } catch (error) {
         console.error('Error deleting expense:', error);

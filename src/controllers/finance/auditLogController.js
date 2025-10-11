@@ -13,7 +13,10 @@ exports.getAuditLogs = async (req, res) => {
       if (endDate) filter.timestamp.$lte = new Date(endDate);
     }
 
-    const logs = await AuditLog.find(filter).sort({ timestamp: -1 }).limit(500);
+    const logs = await AuditLog.find(filter)
+      .populate('user', 'firstName lastName email role')
+      .sort({ timestamp: -1 })
+      .limit(500);
     res.json(logs);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching audit log', error: error.message });

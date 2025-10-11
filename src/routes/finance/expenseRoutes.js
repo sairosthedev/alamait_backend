@@ -26,9 +26,9 @@ router.put('/:id',
     expenseController.updateExpense
 );
 
-// Delete expense (admin only)
+// Delete expense (admin and finance roles)
 router.delete('/:id', 
-    checkRole('admin'),
+    checkRole('admin', 'finance_admin', 'finance_user'),
     expenseController.deleteExpense
 );
 

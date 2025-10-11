@@ -246,6 +246,10 @@ const monthlyRequestSchema = new mongoose.Schema({
     approvedAt: {
         type: Date
     },
+    dateApproved: {
+        type: Date,
+        description: 'The specific date provided by finance when approving the request'
+    },
     approvedByEmail: {
         type: String,
         trim: true
