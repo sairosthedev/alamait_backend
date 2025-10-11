@@ -595,11 +595,11 @@ class DoubleEntryAccountingService {
             const transactionId = await this.generateTransactionId();
             
             // Always use the incurred/expense date for accruals
-            // Priority: explicit expenseDate -> request.year/month -> dateRequested -> approvalDate -> createdAt
+            // Priority: explicit expenseDate -> dateRequested -> approvalDate -> year/month (1st of month) -> createdAt
             const accrualDate = request.expenseDate ? new Date(request.expenseDate)
-                               : (request.year && request.month ? new Date(request.year, request.month - 1, 1)
                                : (request.dateRequested ? new Date(request.dateRequested)
                                : (approvalDate ? new Date(approvalDate)
+                               : (request.year && request.month ? new Date(request.year, request.month - 1, 1)
                                : (request.createdAt ? new Date(request.createdAt) : new Date()))));
             
             const transaction = new Transaction({
