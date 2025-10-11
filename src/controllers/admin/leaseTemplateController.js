@@ -1,7 +1,7 @@
 const multer = require('multer');
 const multerS3 = require('multer-s3');
 const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const mongoose = require('mongoose');
 
 // Export the multer middleware for S3 uploads

@@ -1,7 +1,7 @@
 const path = require('path');
 const User = require('../../models/User');
 const Application = require('../../models/Application');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const Lease = require('../../models/Lease');
 const { s3, s3Configs, generateSignedUrl, getKeyFromUrl } = require('../../config/s3');
 

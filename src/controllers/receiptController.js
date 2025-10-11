@@ -1,7 +1,7 @@
 const Receipt = require('../models/Receipt');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const Room = require('../models/Room');
 const PDFDocument = require('pdfkit');
 const AWS = require('aws-sdk');

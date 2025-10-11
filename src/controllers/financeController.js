@@ -609,7 +609,7 @@ class FinanceController {
             }
 
             // Validate residence exists
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const residenceDoc = await Residence.findById(residence);
             if (!residenceDoc) {
                 return res.status(400).json({ error: 'Invalid residence ID provided' });
@@ -684,7 +684,7 @@ class FinanceController {
             }
 
             // Validate residence exists
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const residenceDoc = await Residence.findById(residence);
             if (!residenceDoc) {
                 return res.status(400).json({ error: 'Invalid residence ID provided' });
@@ -804,7 +804,7 @@ class FinanceController {
             }
 
             // Validate residence exists
-            const Residence = require('../models/Residence');
+            const { Residence } = require('../models/Residence');
             const residenceDoc = await Residence.findById(residence);
             if (!residenceDoc) {
                 return res.status(400).json({ error: 'Invalid residence ID provided' });

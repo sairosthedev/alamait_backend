@@ -8,7 +8,7 @@ const {
     getApprovedApplication,
     requestRoomChange
 } = require('../../controllers/student/bookingDetailsController');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 
 // Log all requests for debugging
 const loggerMiddleware = (req, res, next) => {

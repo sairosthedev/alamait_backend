@@ -770,7 +770,7 @@ class EmailNotificationService {
 		try {
 			// Get CEO users
 			const User = require('../models/User');
-			const Residence = require('../models/Residence');
+			const { Residence } = require('../models/Residence');
 			const ceoUsers = await User.find({ role: 'ceo' });
 
 			// Resolve residence name robustly

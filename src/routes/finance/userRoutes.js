@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const User = require('../../models/User');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 
 // Get list of admin users
 router.get('/admins', auth, async (req, res) => {

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const { uploadMiddleware, uploadLeaseTemplate } = require('../../controllers/admin/leaseTemplateController');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const mongoose = require('mongoose');
 
 // This validation now runs AFTER multer has parsed the body

@@ -1,6 +1,6 @@
 const ProperAccountingService = require('../../services/properAccountingService');
 const { validateMongoId } = require('../../utils/validators');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 
 /**
  * PROPER ACCOUNTING CONTROLLER

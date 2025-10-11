@@ -1,5 +1,5 @@
 const Event = require('../../models/Event');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const { validationResult } = require('express-validator');
 
 // Get events for managed residences

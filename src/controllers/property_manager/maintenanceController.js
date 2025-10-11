@@ -4,7 +4,7 @@ const Transaction = require('../../models/Transaction');
 const TransactionEntry = require('../../models/TransactionEntry');
 const Account = require('../../models/Account');
 const AuditLog = require('../../models/AuditLog');
-const Residence = require('../../models/Residence');
+const { Residence } = require('../../models/Residence');
 const EmailNotificationService = require('../../services/emailNotificationService');
 
 // Helper function to generate unique transaction ID

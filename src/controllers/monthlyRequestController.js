@@ -1,5 +1,5 @@
 const MonthlyRequest = require('../models/MonthlyRequest');
-const Residence = require('../models/Residence');
+const { Residence } = require('../models/Residence');
 const { uploadToS3 } = require('../utils/fileStorage');
 const Expense = require('../models/finance/Expense'); // Added for expense conversion
 const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
