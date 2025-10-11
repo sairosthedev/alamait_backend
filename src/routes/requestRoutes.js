@@ -58,6 +58,9 @@ router.use((error, req, res, next) => {
 // Get all requests (filtered by user role) - CEO can view all requests
 router.get('/', requestController.getAllRequests);
 
+// Get pending count (for dashboard widgets)
+router.get('/pending-count', requestController.getPendingCount);
+
 // Get request by ID - CEO can view any request
 router.get('/:id', requestController.getRequestById);
 

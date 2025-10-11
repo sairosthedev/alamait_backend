@@ -4605,4 +4605,65 @@ exports.getPendingFinanceApproval = async (req, res) => {
     }
 };
 
+// Get finance pending count (for dashboard widgets)
+exports.getFinancePendingCount = async (req, res) => {
+    try {
+        const user = req.user;
+        
+        // Allow admin and finance users to access this endpoint
+        if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only admin and finance users can access this endpoint' 
+            });
+        }
+        
+        const currentDate = new Date();
+        const currentMonth = currentDate.getMonth() + 1;
+        const currentYear = currentDate.getFullYear();
+        
+        // Count pending monthly requests
+        const pendingMonthlyRequests = await MonthlyRequest.countDocuments({
+            status: 'pending',
+            isTemplate: false
+        });
+        
+        // Count pending template approvals
+        const pendingTemplateApprovals = await MonthlyRequest.countDocuments({
+            status: 'pending',
+            isTemplate: true,
+            month: currentMonth,
+            year: currentYear
+        });
+        
+        // Count requests with changes needing approval
+        const requestsWithChanges = await MonthlyRequest.countDocuments({
+            status: 'pending',
+            isTemplate: false,
+            'requestHistory': {
+                $elemMatch: {
+                    date: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+                }
+            }
+        });
+        
+        res.status(200).json({
+            success: true,
+            data: {
+                pendingMonthlyRequests,
+                pendingTemplateApprovals,
+                requestsWithChanges,
+                total: pendingMonthlyRequests + pendingTemplateApprovals
+            }
+        });
+    } catch (error) {
+        console.error('Error getting finance pending count:', error);
+        res.status(500).json({ 
+            success: false,
+            message: 'Error getting finance pending count',
+            error: error.message 
+        });
+    }
+};
+
 // ✅ NEW: Dedicated method for monthly templates with proper accrual accounting

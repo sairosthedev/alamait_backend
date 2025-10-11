@@ -54,6 +54,12 @@ router.get('/finance/pending-approvals',
     monthlyRequestController.getFinancePendingApprovals
 );
 
+// Get finance pending count (for dashboard widgets)
+router.get('/finance/pending-count', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    monthlyRequestController.getFinancePendingCount
+);
+
 // Get CEO monthly request dashboard
 router.get('/ceo/dashboard', 
     checkRole(['ceo']), 

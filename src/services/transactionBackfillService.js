@@ -339,12 +339,9 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 				break;
 			}
 
-			// Skip monthly accrual for lease start month (already covered by lease start transaction)
-			if (monthKey === leaseStartMonthKey) {
-				console.log(`⏭️ Skipping monthly accrual for lease start month: ${monthKey}`);
-				currentMonthIter.setMonth(currentMonthIter.getMonth() + 1);
-				continue;
-			}
+			// Create monthly accrual for lease start month too
+			// Lease start transaction covers prorated rent, monthly accrual covers full month
+			// This ensures proper accrual accounting for the entire month
 
 			// Skip if any existing accrual exists for this student+period from either model
 			// Check for both backfill-created and rental accrual service-created monthly accruals
@@ -377,7 +374,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 			if (!existingMonthlyAccrual) {
             const monthlyAccrualTransaction = new TransactionEntry({
                 transactionId: `MONTHLY_ACCRUAL_${monthKey}_${applicationCode}_${Date.now()}`,
-					date: new Date(year, month - 1, 1),
+					date: new Date(year, month - 1, 1), // This is correct - month is 1-based, Date constructor expects 0-based
 					description: `Monthly rent accrual for ${debtor.user.firstName} ${debtor.user.lastName} - ${monthKey}`,
                 reference: `MONTHLY_ACCRUAL_${monthKey}_${applicationCode}`,
                 entries: [

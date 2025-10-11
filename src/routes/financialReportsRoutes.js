@@ -151,4 +151,15 @@ router.get('/balance-sheet/account-details', balanceSheetController.getAccountTr
  */
 router.get('/balance-sheet/with-drilldown', balanceSheetController.getBalanceSheetWithDrillDown);
 
+/**
+ * Income Statement Drill-down Routes
+ */
+const incomeStatementController = require('../controllers/finance/incomeStatementController');
+
+/**
+ * Income Statement Account Details (Drill-down)
+ * GET /api/financial-reports/income-statement/account-details?period=2025&month=july&accountCode=4001
+ */
+router.get('/income-statement/account-details', incomeStatementController.getAccountTransactionDetails);
+
 module.exports = router; 

@@ -4268,3 +4268,70 @@ exports.markExpenseAsPaid = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// Get pending count (for dashboard widgets)
+exports.getPendingCount = async (req, res) => {
+    try {
+        const user = req.user;
+        
+        // Count pending maintenance requests
+        const pendingMaintenanceRequests = await Request.countDocuments({
+            status: 'pending',
+            type: 'maintenance'
+        });
+        
+        // Count pending operational requests
+        const pendingOperationalRequests = await Request.countDocuments({
+            status: 'pending',
+            type: 'operational'
+        });
+        
+        // Count pending financial requests
+        const pendingFinancialRequests = await Request.countDocuments({
+            status: 'pending',
+            type: 'financial'
+        });
+        
+        // Count requests pending admin approval
+        const pendingAdminApproval = await Request.countDocuments({
+            'approval.admin.approved': { $ne: true },
+            status: 'pending'
+        });
+        
+        // Count requests pending finance approval
+        const pendingFinanceApproval = await Request.countDocuments({
+            'approval.admin.approved': true,
+            'approval.finance.approved': { $ne: true },
+            status: 'pending'
+        });
+        
+        // Count requests pending CEO approval
+        const pendingCEOApproval = await Request.countDocuments({
+            'approval.admin.approved': true,
+            'approval.finance.approved': true,
+            'approval.ceo.approved': { $ne: true },
+            status: 'pending',
+            type: { $in: ['financial', 'operational'] }
+        });
+        
+        res.status(200).json({
+            success: true,
+            data: {
+                pendingMaintenanceRequests,
+                pendingOperationalRequests,
+                pendingFinancialRequests,
+                pendingAdminApproval,
+                pendingFinanceApproval,
+                pendingCEOApproval,
+                total: pendingMaintenanceRequests + pendingOperationalRequests + pendingFinancialRequests
+            }
+        });
+    } catch (error) {
+        console.error('Error getting pending count:', error);
+        res.status(500).json({ 
+            success: false,
+            message: 'Error getting pending count',
+            error: error.message 
+        });
+    }
+};
