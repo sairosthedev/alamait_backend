@@ -479,42 +479,127 @@ class FinancialReportingService {
                 const parseMonthYearFromDescription = (desc) => {
                     if (!desc || typeof desc !== 'string') return null;
                     const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];
-                    const regex = /(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/i;
-                    const match = desc.match(regex);
-                    if (!match) return null;
-                    const monthIndex = monthNames.indexOf(match[1].toLowerCase());
-                    const year = parseInt(match[2], 10);
-                    if (monthIndex < 0 || isNaN(year)) return null;
-                    return new Date(year, monthIndex, 1);
+                    
+                    // Try multiple patterns
+                    const patterns = [
+                        /(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/i,
+                        /for\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/i,
+                        /(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/i,
+                        /(\d{1,2})\/(\d{4})/i, // MM/YYYY format
+                        /(\d{4})-(\d{1,2})/i  // YYYY-MM format
+                    ];
+                    
+                    for (const pattern of patterns) {
+                        const match = desc.match(pattern);
+                        if (match) {
+                            if (pattern === patterns[0] || pattern === patterns[1] || pattern === patterns[2]) {
+                                // Month name format
+                                const monthIndex = monthNames.indexOf(match[1].toLowerCase());
+                                const year = parseInt(match[2], 10);
+                                if (monthIndex >= 0 && !isNaN(year)) {
+                                    return new Date(year, monthIndex, 1);
+                                }
+                            } else if (pattern === patterns[3]) {
+                                // MM/YYYY format
+                                const month = parseInt(match[1], 10) - 1; // Convert to 0-based
+                                const year = parseInt(match[2], 10);
+                                if (month >= 0 && month <= 11 && !isNaN(year)) {
+                                    return new Date(year, month, 1);
+                                }
+                            } else if (pattern === patterns[4]) {
+                                // YYYY-MM format
+                                const year = parseInt(match[1], 10);
+                                const month = parseInt(match[2], 10) - 1; // Convert to 0-based
+                                if (!isNaN(year) && month >= 0 && month <= 11) {
+                                    return new Date(year, month, 1);
+                                }
+                            }
+                        }
+                    }
+                    
+                    return null;
                 };
                 
                 // Process accrual entries by month
-                accrualEntries.forEach(entry => {
-                    // For accrual entries, use the incurred date (when income was earned) not transaction date
-                    let incurredDate = (entry.metadata && (entry.metadata.accrualDate || entry.metadata.incomeDate))
-                        ? new Date(entry.metadata.accrualDate || entry.metadata.incomeDate)
-                        : null;
+                accrualEntries.forEach((entry, entryIndex) => {
+                    console.log(`\n🔍 Processing Accrual Entry ${entryIndex + 1}:`);
+                    console.log(`  Description: "${entry.description}"`);
+                    console.log(`  Transaction Date: ${entry.date}`);
+                    console.log(`  Metadata:`, entry.metadata);
                     
+                    // For accrual entries, use the incurred date (when income was earned) not transaction date
+                    let incurredDate = null;
+                    
+                    // Try metadata first
+                    if (entry.metadata && (entry.metadata.accrualDate || entry.metadata.incomeDate)) {
+                        incurredDate = new Date(entry.metadata.accrualDate || entry.metadata.incomeDate);
+                        console.log(`  Using metadata date: ${incurredDate.toISOString()}`);
+                    }
+                    
+                    // If metadata fails, try parsing description
                     if (!incurredDate || isNaN(incurredDate)) {
-                        // Fallback: parse month/year from description (e.g., "for July 2025")
                         const parsed = parseMonthYearFromDescription(entry.description);
                         if (parsed) {
                             incurredDate = parsed;
+                            console.log(`  Using parsed description date: ${incurredDate.toISOString()}`);
                         } else {
-                            // If description parsing fails, try to extract month from transaction date
-                            // This is a temporary fix - ideally all accrual entries should have proper metadata
-                            incurredDate = new Date(entry.date);
-                            console.log(`⚠️ Could not parse incurred date from description "${entry.description}", using transaction date: ${incurredDate.toISOString()}`);
+                            // CRITICAL FIX: If all accrual entries have the same date, 
+                            // we need to distribute them across months based on some logic
+                            // For now, let's use a round-robin approach or parse from description more aggressively
+                            
+                            // Try to extract month from description more aggressively
+                            const desc = entry.description.toLowerCase();
+                            let extractedMonth = null;
+                            
+                            // Look for month patterns in description
+                            if (desc.includes('september') || desc.includes('sep')) {
+                                extractedMonth = 8; // September is month 8 (0-based)
+                            } else if (desc.includes('october') || desc.includes('oct')) {
+                                extractedMonth = 9; // October is month 9 (0-based)
+                            } else if (desc.includes('november') || desc.includes('nov')) {
+                                extractedMonth = 10;
+                            } else if (desc.includes('december') || desc.includes('dec')) {
+                                extractedMonth = 11;
+                            } else if (desc.includes('january') || desc.includes('jan')) {
+                                extractedMonth = 0;
+                            } else if (desc.includes('february') || desc.includes('feb')) {
+                                extractedMonth = 1;
+                            } else if (desc.includes('march') || desc.includes('mar')) {
+                                extractedMonth = 2;
+                            } else if (desc.includes('april') || desc.includes('apr')) {
+                                extractedMonth = 3;
+                            } else if (desc.includes('may')) {
+                                extractedMonth = 4;
+                            } else if (desc.includes('june') || desc.includes('jun')) {
+                                extractedMonth = 5;
+                            } else if (desc.includes('july') || desc.includes('jul')) {
+                                extractedMonth = 6;
+                            } else if (desc.includes('august') || desc.includes('aug')) {
+                                extractedMonth = 7;
+                            }
+                            
+                            if (extractedMonth !== null) {
+                                incurredDate = new Date(parseInt(period), extractedMonth, 1);
+                                console.log(`  Using extracted month from description: ${incurredDate.toISOString()}`);
+                            } else {
+                                // Last resort: use transaction date but log warning
+                                incurredDate = new Date(entry.date);
+                                console.log(`  ⚠️ Using transaction date as fallback: ${incurredDate.toISOString()}`);
+                            }
                         }
                     }
                     
                     const monthIndex = incurredDate.getMonth();
+                    const monthName = monthNames[monthIndex];
+                    console.log(`  Assigned to month: ${monthIndex + 1} (${monthName})`);
                     
                     if (entry.entries && Array.isArray(entry.entries)) {
-                        entry.entries.forEach(lineItem => {
+                        entry.entries.forEach((lineItem, lineIndex) => {
                             if (lineItem.accountType === 'Income') {
                                 // For income accounts: credits increase revenue, debits decrease revenue
                                 const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
+                                console.log(`    Line ${lineIndex + 1}: $${amount} income (credit: ${lineItem.credit}, debit: ${lineItem.debit})`);
+                                
                                 monthlyBreakdown[monthIndex].total_revenue += amount;
                                 
                                 // Group by account code only to net all transactions for the same account
@@ -522,7 +607,7 @@ class FinancialReportingService {
                                 monthlyBreakdown[monthIndex].revenue[key] = 
                                     (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
                                 
-                                console.log(`💰 Accrual: $${amount} income assigned to month ${monthIndex + 1} (${monthNames[monthIndex]}) for ${entry.description}`);
+                                console.log(`    💰 Total revenue for ${monthName}: $${monthlyBreakdown[monthIndex].total_revenue}`);
                             }
                         });
                     }
