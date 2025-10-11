@@ -353,7 +353,7 @@ const requestSchema = new mongoose.Schema({
     residence: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Residence',
-        required: true
+        required: false // Will be validated conditionally based on request type
     },
     
     // Student-specific fields (for maintenance requests)
@@ -692,6 +692,9 @@ requestSchema.pre('validate', function(next) {
         if (this.deliveryLocation) {
             errors.push('deliveryLocation: DeliveryLocation should not be provided for student requests');
         }
+        if (!this.residence) {
+            errors.push('residence: Residence is required for student requests');
+        }
     } else if (isAdminRequest) {
         // Admin request validation
         if (!this.title) {
@@ -726,6 +729,23 @@ requestSchema.pre('validate', function(next) {
         // Allow category for student_maintenance and financial types
         if (this.category && !['student_maintenance', 'financial'].includes(this.type)) {
             errors.push('category: Category should not be provided for this admin request type');
+        }
+        
+        // Residence validation based on request type
+        if (this.type === 'student_maintenance') {
+            // Student maintenance requests don't require a residence
+            if (this.residence) {
+                errors.push('residence: Residence should not be provided for student maintenance requests');
+            }
+        } else if (this.type === 'financial' && (this.category === 'salary' || this.category === 'salaries')) {
+            // Salary requests can have residence (for residence-specific requests) or no residence (for multi-residence requests)
+            console.log('🔍 Salary request detected - type:', this.type, 'category:', this.category, 'residence:', this.residence);
+            // Allow both cases: with residence (residence-specific) or without residence (multi-residence)
+        } else {
+            // All other admin requests require a residence
+            if (!this.residence) {
+                errors.push('residence: Residence is required for this admin request type');
+            }
         }
     } else {
         // Neither student nor admin request - invalid
