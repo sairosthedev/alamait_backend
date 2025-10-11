@@ -193,19 +193,20 @@ class ProperAccountingService {
     }
     
     /**
-     * GENERATE CASH BASIS CASH FLOW STATEMENT
+     * GENERATE CASH BASIS CASH FLOW STATEMENT WITH CASH & CASH EQUIVALENTS
      * 
      * Cash Basis Principles:
      * - Only actual cash receipts and payments
      * - No accruals or deferrals
      * - Must reconcile with cash balance changes
+     * - Includes cash and cash equivalents as per IFRS 7
      */
     static async generateCashBasisCashFlowStatement(period, residence = null) {
         try {
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
             
-            console.log(`💵 Generating CASH BASIS cash flow statement for ${period}${residence ? ` (residence: ${residence})` : ''}`);
+            console.log(`💵 Generating CASH BASIS cash flow statement with cash & cash equivalents for ${period}${residence ? ` (residence: ${residence})` : ''}`);
             
             // Build query with residence filter
             let query = {
@@ -225,24 +226,28 @@ class ProperAccountingService {
             
             // CASH FLOW CATEGORIES (Cash Basis Only)
             const operatingActivities = {
-                cash_received_from_customers: 0,    // Only actual cash received
-                cash_paid_to_suppliers: 0,         // Only actual cash paid
-                cash_paid_for_expenses: 0,         // Only actual cash paid
-                cash_paid_for_utilities: 0,        // Only actual cash paid
-                cash_paid_for_maintenance: 0,      // Only actual cash paid
-                cash_paid_for_staff: 0             // Only actual cash paid
+                cash_received_from_tenants: 0,     // Rent collections
+                cash_received_from_admin_fees: 0,  // Admin fees
+                cash_paid_for_maintenance: 0,      // Maintenance and repairs
+                cash_paid_for_utilities: 0,        // Utilities (electricity, water)
+                cash_paid_for_staff: 0,            // Staff and caretakers
+                cash_paid_for_office_expenses: 0,  // Office expenses
+                cash_paid_to_suppliers: 0          // Other supplier payments
             };
             
             const investingActivities = {
-                purchase_of_equipment: 0,          // Only actual cash paid
-                purchase_of_buildings: 0,          // Only actual cash paid
-                loans_made: 0                      // Only actual cash paid
+                purchase_of_property_improvements: 0, // Property improvements (paint, plumbing)
+                purchase_of_equipment: 0,             // Equipment (computers, tools)
+                sale_of_equipment: 0,                 // Sale of old equipment
+                purchase_of_buildings: 0,             // Building purchases
+                loans_made: 0                         // Loans made to others
             };
             
             const financingActivities = {
-                owners_contribution: 0,            // Only actual cash received
-                loan_proceeds: 0,                  // Only actual cash received
-                loan_repayments: 0                 // Only actual cash paid
+                loan_proceeds: 0,                     // Bank loans received
+                loan_repayments: 0,                   // Loan repayments
+                owners_contribution: 0,               // Owner contributions
+                owner_drawings: 0                     // Owner drawings
             };
             
             // Process each transaction entry for CASH FLOWS ONLY
@@ -258,7 +263,14 @@ class ProperAccountingService {
                         // OPERATING ACTIVITIES - Only actual cash movements
                         if (accountCode.startsWith('100') || accountCode.startsWith('101')) { // Cash accounts
                             if (entry.source === 'payment') {
-                                operatingActivities.cash_received_from_customers += credit;
+                                // Categorize cash receipts
+                                if (accountName.toLowerCase().includes('rent') || entry.description?.toLowerCase().includes('rent')) {
+                                    operatingActivities.cash_received_from_tenants += credit;
+                                } else if (accountName.toLowerCase().includes('admin') || entry.description?.toLowerCase().includes('admin')) {
+                                    operatingActivities.cash_received_from_admin_fees += credit;
+                                } else {
+                                    operatingActivities.cash_received_from_tenants += credit; // Default to rent
+                                }
                             } else if (entry.source === 'expense_payment') {
                                 // Categorize cash payments by expense type
                                 if (accountName.toLowerCase().includes('utility') || accountName.toLowerCase().includes('electricity') || accountName.toLowerCase().includes('water')) {
@@ -267,17 +279,25 @@ class ProperAccountingService {
                                     operatingActivities.cash_paid_for_maintenance += debit;
                                 } else if (accountName.toLowerCase().includes('staff') || accountName.toLowerCase().includes('salary')) {
                                     operatingActivities.cash_paid_for_staff += debit;
+                                } else if (accountName.toLowerCase().includes('office') || accountName.toLowerCase().includes('admin')) {
+                                    operatingActivities.cash_paid_for_office_expenses += debit;
                                 } else {
-                                    operatingActivities.cash_paid_for_expenses += debit;
+                                    operatingActivities.cash_paid_to_suppliers += debit;
                                 }
                             }
                         }
                         
                         // INVESTING ACTIVITIES - Only actual cash payments
-                        if (accountName.toLowerCase().includes('equipment') || accountName.toLowerCase().includes('furniture')) {
-                            investingActivities.purchase_of_equipment += debit;
-                        } else if (accountName.toLowerCase().includes('building') || accountName.toLowerCase().includes('construction')) {
+                        if (accountName.toLowerCase().includes('equipment') || accountName.toLowerCase().includes('furniture') || accountName.toLowerCase().includes('computer')) {
+                            if (debit > 0) {
+                                investingActivities.purchase_of_equipment += debit;
+                            } else if (credit > 0) {
+                                investingActivities.sale_of_equipment += credit;
+                            }
+                        } else if (accountName.toLowerCase().includes('building') || accountName.toLowerCase().includes('construction') || accountName.toLowerCase().includes('property')) {
                             investingActivities.purchase_of_buildings += debit;
+                        } else if (accountName.toLowerCase().includes('improvement') || accountName.toLowerCase().includes('renovation')) {
+                            investingActivities.purchase_of_property_improvements += debit;
                         }
                         
                         // FINANCING ACTIVITIES - Only actual cash movements
@@ -287,33 +307,51 @@ class ProperAccountingService {
                             } else if (debit > 0) {
                                 financingActivities.loan_repayments += debit; // Cash paid
                             }
+                        } else if (accountName.toLowerCase().includes('contribution') || accountName.toLowerCase().includes('capital')) {
+                            financingActivities.owners_contribution += credit;
+                        } else if (accountName.toLowerCase().includes('drawing') || accountName.toLowerCase().includes('withdrawal')) {
+                            financingActivities.owner_drawings += debit;
                         }
                     });
                 }
             });
             
             // Calculate net cash flows (Cash Basis)
-            const netOperatingCashFlow = operatingActivities.cash_received_from_customers - 
-                                       operatingActivities.cash_paid_for_expenses - 
-                                       operatingActivities.cash_paid_for_utilities - 
+            const netOperatingCashFlow = operatingActivities.cash_received_from_tenants + 
+                                       operatingActivities.cash_received_from_admin_fees - 
                                        operatingActivities.cash_paid_for_maintenance - 
-                                       operatingActivities.cash_paid_for_staff;
+                                       operatingActivities.cash_paid_for_utilities - 
+                                       operatingActivities.cash_paid_for_staff - 
+                                       operatingActivities.cash_paid_for_office_expenses - 
+                                       operatingActivities.cash_paid_to_suppliers;
             
-            const netInvestingCashFlow = -(investingActivities.purchase_of_equipment + 
-                                       investingActivities.purchase_of_buildings + 
-                                       investingActivities.loans_made);
+            const netInvestingCashFlow = investingActivities.sale_of_equipment - 
+                                       investingActivities.purchase_of_property_improvements - 
+                                       investingActivities.purchase_of_equipment - 
+                                       investingActivities.purchase_of_buildings - 
+                                       investingActivities.loans_made;
             
-            const netFinancingCashFlow = financingActivities.owners_contribution + 
-                                       financingActivities.loan_proceeds - 
-                                       financingActivities.loan_repayments;
+            const netFinancingCashFlow = financingActivities.loan_proceeds + 
+                                       financingActivities.owners_contribution - 
+                                       financingActivities.loan_repayments - 
+                                       financingActivities.owner_drawings;
             
-            const netChangeInCash = netOperatingCashFlow + netInvestingCashFlow + netFinancingCashFlow;
+            const netChangeInCashAndCashEquivalents = netOperatingCashFlow + netInvestingCashFlow + netFinancingCashFlow;
             
-            console.log(`✅ Cash Basis Cash Flow Statement Generated:`);
+            // Calculate opening and closing cash and cash equivalents
+            const openingCashAndCashEquivalents = await this.getOpeningCashAndCashEquivalents(startDate, residence);
+            const closingCashAndCashEquivalents = openingCashAndCashEquivalents + netChangeInCashAndCashEquivalents;
+            
+            // Get detailed breakdown of cash and cash equivalents
+            const cashAndCashEquivalentsBreakdown = await this.getCashAndCashEquivalentsBreakdown(endDate, residence);
+            
+            console.log(`✅ Cash Basis Cash Flow Statement with Cash & Cash Equivalents Generated:`);
             console.log(`   Operating Cash Flow: $${netOperatingCashFlow.toLocaleString()}`);
             console.log(`   Investing Cash Flow: $${netInvestingCashFlow.toLocaleString()}`);
             console.log(`   Financing Cash Flow: $${netFinancingCashFlow.toLocaleString()}`);
-            console.log(`   Net Change in Cash: $${netChangeInCash.toLocaleString()}`);
+            console.log(`   Net Change in Cash & Cash Equivalents: $${netChangeInCashAndCashEquivalents.toLocaleString()}`);
+            console.log(`   Opening Cash & Cash Equivalents: $${openingCashAndCashEquivalents.toLocaleString()}`);
+            console.log(`   Closing Cash & Cash Equivalents: $${closingCashAndCashEquivalents.toLocaleString()}`);
             
             return {
                 period,
@@ -331,18 +369,141 @@ class ProperAccountingService {
                     ...financingActivities,
                     net_financing_cash_flow: netFinancingCashFlow
                 },
-                net_change_in_cash: netChangeInCash,
+                net_change_in_cash_and_cash_equivalents: netChangeInCashAndCashEquivalents,
+                cash_and_cash_equivalents: {
+                    opening_balance: openingCashAndCashEquivalents,
+                    closing_balance: closingCashAndCashEquivalents,
+                    breakdown: cashAndCashEquivalentsBreakdown
+                },
                 accounting_principles: {
                     cash_basis: 'Only actual cash receipts and payments recorded',
                     no_accruals: 'No recognition of earned but unpaid revenue',
                     no_deferrals: 'No recognition of incurred but unpaid expenses',
-                    cash_reconciliation: 'Must reconcile with actual cash balance changes'
+                    cash_reconciliation: 'Must reconcile with actual cash balance changes',
+                    ifrs_compliance: 'Cash and cash equivalents defined per IFRS 7 standards'
                 }
             };
             
         } catch (error) {
             console.error('❌ Error generating cash basis cash flow statement:', error);
             throw error;
+        }
+    }
+    
+    /**
+     * Get opening cash and cash equivalents balance
+     */
+    static async getOpeningCashAndCashEquivalents(asOfDate, residence = null) {
+        try {
+            // Build query with residence filter
+            let query = {
+                date: { $lt: asOfDate }
+            };
+            
+            if (residence) {
+                query.residence = new mongoose.Types.ObjectId(residence);
+            }
+            
+            // Get all transaction entries up to the specified date
+            const entries = await TransactionEntry.find(query)
+                .populate('residence')
+                .populate('entries.account');
+            
+            let openingBalance = 0;
+            
+            // Process each transaction entry to calculate opening balance
+            entries.forEach(entry => {
+                if (entry.entries && entry.entries.length > 0) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        // Only include cash and cash equivalents accounts
+                        if (accountCode.startsWith('100') || accountCode.startsWith('101')) {
+                            openingBalance += (debit - credit);
+                        }
+                    });
+                }
+            });
+            
+            return openingBalance;
+            
+        } catch (error) {
+            console.error('❌ Error calculating opening cash and cash equivalents:', error);
+            return 0;
+        }
+    }
+    
+    /**
+     * Get detailed breakdown of cash and cash equivalents
+     */
+    static async getCashAndCashEquivalentsBreakdown(asOfDate, residence = null) {
+        try {
+            // Build query with residence filter
+            let query = {
+                date: { $lte: asOfDate }
+            };
+            
+            if (residence) {
+                query.residence = new mongoose.Types.ObjectId(residence);
+            }
+            
+            // Get all transaction entries up to the specified date
+            const entries = await TransactionEntry.find(query)
+                .populate('residence')
+                .populate('entries.account');
+            
+            const breakdown = {
+                cash_on_hand: 0,
+                cash_at_bank: 0,
+                short_term_deposits: 0,
+                mobile_wallets: 0,
+                petty_cash: 0
+            };
+            
+            // Process each transaction entry to calculate breakdown
+            entries.forEach(entry => {
+                if (entry.entries && entry.entries.length > 0) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        const netAmount = debit - credit;
+                        
+                        // Categorize cash and cash equivalents
+                        if (accountCode.startsWith('100') || accountCode.startsWith('101')) {
+                            if (accountName.toLowerCase().includes('petty')) {
+                                breakdown.petty_cash += netAmount;
+                            } else if (accountName.toLowerCase().includes('bank')) {
+                                breakdown.cash_at_bank += netAmount;
+                            } else if (accountName.toLowerCase().includes('ecocash') || 
+                                      accountName.toLowerCase().includes('innbucks') || 
+                                      accountName.toLowerCase().includes('mobile')) {
+                                breakdown.mobile_wallets += netAmount;
+                            } else if (accountName.toLowerCase().includes('deposit') || 
+                                      accountName.toLowerCase().includes('investment')) {
+                                breakdown.short_term_deposits += netAmount;
+                            } else {
+                                breakdown.cash_on_hand += netAmount;
+                            }
+                        }
+                    });
+                }
+            });
+            
+            return breakdown;
+            
+        } catch (error) {
+            console.error('❌ Error calculating cash and cash equivalents breakdown:', error);
+            return {
+                cash_on_hand: 0,
+                cash_at_bank: 0,
+                short_term_deposits: 0,
+                mobile_wallets: 0,
+                petty_cash: 0
+            };
         }
     }
     
@@ -377,11 +538,14 @@ class ProperAccountingService {
             
             console.log(`📊 Found ${entries.length} transaction entries up to ${asOfDate}`);
             
-            // CASH BASIS BALANCE SHEET - Only actual cash and cash equivalents
+            // CASH BASIS BALANCE SHEET - Only actual cash and cash equivalents (IFRS 7 compliant)
             const cashBasisAssets = {
-                cash_and_cash_equivalents: 0,     // Only actual cash
-                petty_cash: 0,                     // Only actual petty cash
-                bank_accounts: 0                   // Only actual bank balances
+                cash_and_cash_equivalents: 0,     // Total cash and cash equivalents
+                cash_on_hand: 0,                  // Physical cash
+                cash_at_bank: 0,                  // Bank account balances
+                short_term_deposits: 0,           // Deposits maturing ≤ 3 months
+                mobile_wallets: 0,                // EcoCash, InnBucks, etc.
+                petty_cash: 0                     // Petty cash funds
             };
             
             const cashBasisLiabilities = {
@@ -405,14 +569,23 @@ class ProperAccountingService {
                         const debit = line.debit || 0;
                         const credit = line.credit || 0;
                         
-                        // CASH BASIS ASSETS - Only actual cash and cash equivalents
+                        // CASH BASIS ASSETS - Only actual cash and cash equivalents (IFRS 7 compliant)
                         if (accountCode.startsWith('100') || accountCode.startsWith('101')) { // Cash accounts
+                            const netAmount = debit - credit;
+                            
                             if (accountName.toLowerCase().includes('petty')) {
-                                cashBasisAssets.petty_cash += debit - credit;
+                                cashBasisAssets.petty_cash += netAmount;
                             } else if (accountName.toLowerCase().includes('bank')) {
-                                cashBasisAssets.bank_accounts += debit - credit;
+                                cashBasisAssets.cash_at_bank += netAmount;
+                            } else if (accountName.toLowerCase().includes('ecocash') || 
+                                      accountName.toLowerCase().includes('innbucks') || 
+                                      accountName.toLowerCase().includes('mobile')) {
+                                cashBasisAssets.mobile_wallets += netAmount;
+                            } else if (accountName.toLowerCase().includes('deposit') || 
+                                      accountName.toLowerCase().includes('investment')) {
+                                cashBasisAssets.short_term_deposits += netAmount;
                             } else {
-                                cashBasisAssets.cash_and_cash_equivalents += debit - credit;
+                                cashBasisAssets.cash_on_hand += netAmount;
                             }
                         }
                         
@@ -439,10 +612,15 @@ class ProperAccountingService {
                 }
             });
             
+            // Calculate total cash and cash equivalents
+            cashBasisAssets.cash_and_cash_equivalents = cashBasisAssets.cash_on_hand + 
+                                                       cashBasisAssets.cash_at_bank + 
+                                                       cashBasisAssets.short_term_deposits + 
+                                                       cashBasisAssets.mobile_wallets + 
+                                                       cashBasisAssets.petty_cash;
+            
             // Calculate totals
-            const totalAssets = cashBasisAssets.cash_and_cash_equivalents + 
-                               cashBasisAssets.petty_cash + 
-                               cashBasisAssets.bank_accounts;
+            const totalAssets = cashBasisAssets.cash_and_cash_equivalents;
             
             const totalLiabilities = cashBasisLiabilities.loans_payable + 
                                    cashBasisLiabilities.accounts_payable + 
@@ -454,8 +632,13 @@ class ProperAccountingService {
             const accountingEquation = Math.abs(totalAssets - (totalLiabilities + totalEquity));
             const isBalanced = accountingEquation < 0.01; // Allow for small rounding differences
             
-            console.log(`✅ Cash Basis Balance Sheet Generated:`);
-            console.log(`   Total Assets: $${totalAssets.toLocaleString()}`);
+            console.log(`✅ Cash Basis Balance Sheet with Cash & Cash Equivalents Generated:`);
+            console.log(`   Cash on Hand: $${cashBasisAssets.cash_on_hand.toLocaleString()}`);
+            console.log(`   Cash at Bank: $${cashBasisAssets.cash_at_bank.toLocaleString()}`);
+            console.log(`   Short-term Deposits: $${cashBasisAssets.short_term_deposits.toLocaleString()}`);
+            console.log(`   Mobile Wallets: $${cashBasisAssets.mobile_wallets.toLocaleString()}`);
+            console.log(`   Petty Cash: $${cashBasisAssets.petty_cash.toLocaleString()}`);
+            console.log(`   Total Cash & Cash Equivalents: $${cashBasisAssets.cash_and_cash_equivalents.toLocaleString()}`);
             console.log(`   Total Liabilities: $${totalLiabilities.toLocaleString()}`);
             console.log(`   Total Equity: $${totalEquity.toLocaleString()}`);
             console.log(`   Accounting Equation: Assets (${totalAssets}) = Liabilities (${totalLiabilities}) + Equity (${totalEquity})`);
@@ -477,6 +660,14 @@ class ProperAccountingService {
                     ...cashBasisEquity,
                     total_equity: totalEquity
                 },
+                cash_and_cash_equivalents_breakdown: {
+                    cash_on_hand: cashBasisAssets.cash_on_hand,
+                    cash_at_bank: cashBasisAssets.cash_at_bank,
+                    short_term_deposits: cashBasisAssets.short_term_deposits,
+                    mobile_wallets: cashBasisAssets.mobile_wallets,
+                    petty_cash: cashBasisAssets.petty_cash,
+                    total: cashBasisAssets.cash_and_cash_equivalents
+                },
                 accounting_equation: {
                     assets: totalAssets,
                     liabilities: totalLiabilities,
@@ -489,12 +680,70 @@ class ProperAccountingService {
                     no_receivables: 'No accounts receivable (cash basis)',
                     no_prepaid: 'No prepaid expenses (cash basis)',
                     real_time_balances: 'Balances calculated from actual transaction entries',
-                    gaap_compliant: 'Follows cash basis accounting principles'
+                    gaap_compliant: 'Follows cash basis accounting principles',
+                    ifrs_compliance: 'Cash and cash equivalents defined per IFRS 7 standards',
+                    cash_equivalents_definition: 'Short-term, highly liquid investments readily convertible to known amounts of cash'
                 }
             };
             
         } catch (error) {
             console.error('❌ Error generating cash basis balance sheet:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Validate cash flow statement reconciliation with cash and cash equivalents
+     */
+    static async validateCashFlowReconciliation(period, residence = null) {
+        try {
+            console.log(`🔍 Validating cash flow reconciliation for ${period}${residence ? ` (residence: ${residence})` : ''}`);
+            
+            // Generate cash flow statement
+            const cashFlowStatement = await this.generateCashBasisCashFlowStatement(period, residence);
+            
+            // Get actual cash and cash equivalents balances
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            const openingBalance = await this.getOpeningCashAndCashEquivalents(startDate, residence);
+            const closingBalance = await this.getCashAndCashEquivalentsBreakdown(endDate, residence);
+            
+            // Calculate expected closing balance from cash flow
+            const expectedClosingBalance = openingBalance + cashFlowStatement.net_change_in_cash_and_cash_equivalents;
+            const actualClosingBalance = closingBalance.cash_on_hand + 
+                                       closingBalance.cash_at_bank + 
+                                       closingBalance.short_term_deposits + 
+                                       closingBalance.mobile_wallets + 
+                                       closingBalance.petty_cash;
+            
+            // Calculate difference
+            const difference = Math.abs(expectedClosingBalance - actualClosingBalance);
+            const isReconciled = difference < 0.01; // Allow for small rounding differences
+            
+            console.log(`📊 Cash Flow Reconciliation Validation:`);
+            console.log(`   Opening Balance: $${openingBalance.toLocaleString()}`);
+            console.log(`   Net Change: $${cashFlowStatement.net_change_in_cash_and_cash_equivalents.toLocaleString()}`);
+            console.log(`   Expected Closing: $${expectedClosingBalance.toLocaleString()}`);
+            console.log(`   Actual Closing: $${actualClosingBalance.toLocaleString()}`);
+            console.log(`   Difference: $${difference.toLocaleString()}`);
+            console.log(`   Reconciled: ${isReconciled ? '✅ YES' : '❌ NO'}`);
+            
+            return {
+                period,
+                residence,
+                opening_balance: openingBalance,
+                net_change: cashFlowStatement.net_change_in_cash_and_cash_equivalents,
+                expected_closing_balance: expectedClosingBalance,
+                actual_closing_balance: actualClosingBalance,
+                difference: difference,
+                is_reconciled: isReconciled,
+                cash_flow_statement: cashFlowStatement,
+                validation_timestamp: new Date()
+            };
+            
+        } catch (error) {
+            console.error('❌ Error validating cash flow reconciliation:', error);
             throw error;
         }
     }
