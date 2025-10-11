@@ -413,13 +413,16 @@ class FinancialReportingService {
                     status: 'posted'
                 };
                 
+                // FORCE CONSISTENCY: Sort by transactionId to ensure same processing order
+                console.log('🔧 FORCING CONSISTENT DATA PROCESSING ORDER');
+                
                 // Add residence filter if specified
                 if (residence) {
                     accrualQuery.residence = residence;
                     console.log(`🔍 Filtering accrual entries by residence: ${residence}`);
                 }
                 
-                const accrualEntries = await TransactionEntry.find(accrualQuery);
+                const accrualEntries = await TransactionEntry.find(accrualQuery).sort({ transactionId: 1 });
                 
                 // For accrual basis, also get expense entries (all expense-related sources)
                 const expenseQuery = {
@@ -433,7 +436,7 @@ class FinancialReportingService {
                     expenseQuery.residence = residence;
                 }
                 
-                const expenseEntries = await TransactionEntry.find(expenseQuery);
+                const expenseEntries = await TransactionEntry.find(expenseQuery).sort({ transactionId: 1 });
                 
                 console.log(`Found ${accrualEntries.length} accrual entries and ${expenseEntries.length} expense entries for accrual basis`);
                 
@@ -442,17 +445,25 @@ class FinancialReportingService {
                     console.log('🔍 Sample accrual entries:');
                     accrualEntries.slice(0, 3).forEach((entry, index) => {
                         console.log(`  Entry ${index + 1}:`, {
+                            transactionId: entry.transactionId,
                             date: entry.date,
                             description: entry.description,
                             metadata: entry.metadata,
                             entries: entry.entries?.map(e => ({
                                 accountType: e.accountType,
+                                accountCode: e.accountCode,
                                 credit: e.credit,
                                 debit: e.debit
                             }))
                         });
                     });
                 }
+                
+                // CONSISTENCY CHECK: Log all transaction IDs to identify differences
+                console.log('🔍 ALL ACCRUAL TRANSACTION IDs (for consistency check):');
+                accrualEntries.forEach((entry, index) => {
+                    console.log(`  ${index + 1}. ${entry.transactionId} - ${entry.description} - $${entry.entries?.reduce((sum, e) => sum + (e.credit || 0) - (e.debit || 0), 0) || 0}`);
+                });
                 
                 // Initialize monthly breakdown
                 const monthlyBreakdown = {};
