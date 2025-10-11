@@ -436,6 +436,23 @@ class FinancialReportingService {
                 
                 console.log(`Found ${accrualEntries.length} accrual entries and ${expenseEntries.length} expense entries for accrual basis`);
                 
+                // Debug: Log sample accrual entries to understand the data structure
+                if (accrualEntries.length > 0) {
+                    console.log('🔍 Sample accrual entries:');
+                    accrualEntries.slice(0, 3).forEach((entry, index) => {
+                        console.log(`  Entry ${index + 1}:`, {
+                            date: entry.date,
+                            description: entry.description,
+                            metadata: entry.metadata,
+                            entries: entry.entries?.map(e => ({
+                                accountType: e.accountType,
+                                credit: e.credit,
+                                debit: e.debit
+                            }))
+                        });
+                    });
+                }
+                
                 // Initialize monthly breakdown
                 const monthlyBreakdown = {};
                 const monthNames = [
@@ -458,33 +475,6 @@ class FinancialReportingService {
                     };
                 });
                 
-                // Process accrual entries by month
-                accrualEntries.forEach(entry => {
-                    const entryDate = new Date(entry.date);
-                    const monthIndex = entryDate.getMonth();
-                    
-                    if (entry.entries && Array.isArray(entry.entries)) {
-                        entry.entries.forEach(lineItem => {
-                            if (lineItem.accountType === 'Income') {
-                                // For income accounts: credits increase revenue, debits decrease revenue
-                                const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
-                                monthlyBreakdown[monthIndex].total_revenue += amount;
-                                
-                                // Group by account code only to net all transactions for the same account
-                                const key = lineItem.accountCode;
-                                monthlyBreakdown[monthIndex].revenue[key] = 
-                                    (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
-                            }
-                        });
-                    }
-                    
-                    if (entry.residence) {
-                        monthlyBreakdown[monthIndex].residences.push(entry.residence.toString());
-                    }
-                    
-                    monthlyBreakdown[monthIndex].transaction_count++;
-                });
-                
                 // Helper: parse month/year from description like "for July 2025"
                 const parseMonthYearFromDescription = (desc) => {
                     if (!desc || typeof desc !== 'string') return null;
@@ -497,6 +487,52 @@ class FinancialReportingService {
                     if (monthIndex < 0 || isNaN(year)) return null;
                     return new Date(year, monthIndex, 1);
                 };
+                
+                // Process accrual entries by month
+                accrualEntries.forEach(entry => {
+                    // For accrual entries, use the incurred date (when income was earned) not transaction date
+                    let incurredDate = (entry.metadata && (entry.metadata.accrualDate || entry.metadata.incomeDate))
+                        ? new Date(entry.metadata.accrualDate || entry.metadata.incomeDate)
+                        : null;
+                    
+                    if (!incurredDate || isNaN(incurredDate)) {
+                        // Fallback: parse month/year from description (e.g., "for July 2025")
+                        const parsed = parseMonthYearFromDescription(entry.description);
+                        if (parsed) {
+                            incurredDate = parsed;
+                        } else {
+                            // If description parsing fails, try to extract month from transaction date
+                            // This is a temporary fix - ideally all accrual entries should have proper metadata
+                            incurredDate = new Date(entry.date);
+                            console.log(`⚠️ Could not parse incurred date from description "${entry.description}", using transaction date: ${incurredDate.toISOString()}`);
+                        }
+                    }
+                    
+                    const monthIndex = incurredDate.getMonth();
+                    
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        entry.entries.forEach(lineItem => {
+                            if (lineItem.accountType === 'Income') {
+                                // For income accounts: credits increase revenue, debits decrease revenue
+                                const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
+                                monthlyBreakdown[monthIndex].total_revenue += amount;
+                                
+                                // Group by account code only to net all transactions for the same account
+                                const key = lineItem.accountCode;
+                                monthlyBreakdown[monthIndex].revenue[key] = 
+                                    (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
+                                
+                                console.log(`💰 Accrual: $${amount} income assigned to month ${monthIndex + 1} (${monthNames[monthIndex]}) for ${entry.description}`);
+                            }
+                        });
+                    }
+                    
+                    if (entry.residence) {
+                        monthlyBreakdown[monthIndex].residences.push(entry.residence.toString());
+                    }
+                    
+                    monthlyBreakdown[monthIndex].transaction_count++;
+                });
 
                 // Process expense entries by month (use incurred/expense date when available)
                 expenseEntries.forEach(entry => {
@@ -571,6 +607,15 @@ class FinancialReportingService {
             // Calculate net income for each month
                 monthNames.forEach((month, index) => {
                     monthlyBreakdown[index].net_income = monthlyBreakdown[index].total_revenue - monthlyBreakdown[index].total_expenses;
+            });
+            
+            // Debug: Log monthly revenue distribution
+            console.log('📊 Monthly Revenue Distribution (Accrual Basis):');
+            monthNames.forEach((month, index) => {
+                const revenue = monthlyBreakdown[index].total_revenue;
+                if (revenue > 0) {
+                    console.log(`  ${month}: $${revenue.toFixed(2)}`);
+                }
             });
             
             // Calculate year totals
