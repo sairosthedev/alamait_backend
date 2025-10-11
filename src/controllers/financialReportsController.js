@@ -160,8 +160,8 @@ class FinancialReportsController {
                 // Use residence-filtered method with basis
                 monthlyIncomeStatement = await FinancialReportingService.generateResidenceFilteredIncomeStatement(period, residence, basis);
             } else {
-                // Use FinancialReportingService with basis parameter
-                monthlyIncomeStatement = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis);
+                // Use the simpler method that works consistently like balance sheet and cash flow
+                monthlyIncomeStatement = await FinancialReportingService.generateMonthlyIncomeStatement(period, basis);
             }
             
             // Add cache-busting headers to prevent 304 responses
@@ -210,7 +210,8 @@ class FinancialReportsController {
             
             // Use FinancialReportingService for monthly breakdown with residence filtering
             try {
-                const monthlyBreakdown = await FinancialReportingService.generateComprehensiveMonthlyIncomeStatement(period, basis, residence);
+                // Use the simpler method that works consistently like balance sheet and cash flow
+                const monthlyBreakdown = await FinancialReportingService.generateMonthlyIncomeStatement(period, basis);
                 
                 if (monthlyBreakdown && monthlyBreakdown.monthly_breakdown) {
                     // Process the monthly breakdown data
