@@ -379,7 +379,7 @@ const requestSchema = new mongoose.Schema({
             'emergency', 'landscaping', 'internet_it', 'accessibility', 'parking',
             'exterior', 'communication', 'general_maintenance', 'other',
             // Financial-specific categories
-            'salaries'
+            'salary', 'salaries'
         ],
         required: false // Will be validated in custom validation
     },

@@ -419,6 +419,13 @@ exports.createIndividualSalaryRequests = async (req, res) => {
 
         console.log('📊 Processing individual salary requests:');
         console.log(`   Employee allocations: ${employeeAllocations.length}`);
+        console.log('📋 Sample allocation data:', employeeAllocations[0] ? {
+            employeeId: employeeAllocations[0].employeeId,
+            residenceId: employeeAllocations[0].residenceId,
+            allocationPercentage: employeeAllocations[0].allocationPercentage,
+            baseSalary: employeeAllocations[0].baseSalary,
+            allocatedSalary: employeeAllocations[0].allocatedSalary
+        } : 'No allocations');
 
         // Extract unique employee IDs and residence IDs
         const employeeIds = [...new Set(employeeAllocations.map(a => a.employeeId))];
@@ -466,20 +473,23 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                 allocations.forEach(allocation => {
                     const employee = employeeMap[allocation.employeeId];
                     if (employee) {
+                        // Use pre-calculated values from frontend if available, otherwise calculate
                         const allocationPercentage = allocation.allocationPercentage || 100;
-                        const allocatedSalary = (employee.salary || 0) * (allocationPercentage / 100);
+                        const baseSalary = allocation.baseSalary || employee.salary || 0;
+                        const allocatedSalary = allocation.allocatedSalary || (baseSalary * (allocationPercentage / 100));
+                        
                         totalForResidence += allocatedSalary;
 
                         allocatedEmployees.push({
                             employeeId: employee._id,
                             employeeName: employee.fullName || `${employee.firstName} ${employee.lastName}`,
                             jobTitle: employee.jobTitle || 'Employee',
-                            baseSalary: employee.salary || 0,
+                            baseSalary: baseSalary,
                             allocationPercentage: allocationPercentage,
                             allocatedSalary: allocatedSalary
                         });
 
-                        console.log(`   👤 ${employee.firstName} ${employee.lastName}: ${allocationPercentage}% of $${employee.salary} = $${allocatedSalary}`);
+                        console.log(`   👤 ${employee.firstName} ${employee.lastName}: ${allocationPercentage}% of $${baseSalary} = $${allocatedSalary}`);
                     }
                 });
 
@@ -538,7 +548,22 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                     employeeCount: allocatedEmployees.length,
                     allocatedEmployees: allocatedEmployees,
                     month: parseInt(month),
-                    year: parseInt(year)
+                    year: parseInt(year),
+                    // Add detailed breakdown for frontend
+                    allocationBreakdown: {
+                        residenceName: residenceName,
+                        residenceId: residenceId,
+                        totalAmount: totalForResidence,
+                        employeeAllocations: allocatedEmployees.map(emp => ({
+                            employeeId: emp.employeeId,
+                            employeeName: emp.employeeName,
+                            jobTitle: emp.jobTitle,
+                            baseSalary: emp.baseSalary,
+                            allocationPercentage: emp.allocationPercentage,
+                            allocatedAmount: emp.allocatedSalary,
+                            percentageText: `${emp.allocationPercentage}% of $${emp.baseSalary} = $${emp.allocatedSalary}`
+                        }))
+                    }
                 };
 
             } catch (residenceError) {
@@ -559,7 +584,35 @@ exports.createIndividualSalaryRequests = async (req, res) => {
 
         console.log(`📊 Results: ${successfulRequests.length} successful, ${failedRequests.length} failed`);
 
-        return res.status(201).json({
+        // Calculate employee allocation validation
+        const employeeAllocationSummary = {};
+        employeeAllocations.forEach(allocation => {
+            const empId = allocation.employeeId;
+            if (!employeeAllocationSummary[empId]) {
+                employeeAllocationSummary[empId] = {
+                    employeeId: empId,
+                    employeeName: employeeMap[empId]?.fullName || `${employeeMap[empId]?.firstName} ${employeeMap[empId]?.lastName}`,
+                    baseSalary: employeeMap[empId]?.salary || 0,
+                    totalAllocatedPercentage: 0,
+                    totalAllocatedAmount: 0,
+                    allocations: []
+                };
+            }
+            const allocationPercentage = allocation.allocationPercentage || 100;
+            const baseSalary = allocation.baseSalary || employeeMap[empId]?.salary || 0;
+            const allocatedAmount = allocation.allocatedSalary || (baseSalary * (allocationPercentage / 100));
+            
+            employeeAllocationSummary[empId].totalAllocatedPercentage += allocationPercentage;
+            employeeAllocationSummary[empId].totalAllocatedAmount += allocatedAmount;
+            employeeAllocationSummary[empId].allocations.push({
+                residenceId: allocation.residenceId,
+                residenceName: residenceMap[allocation.residenceId]?.name || 'Unknown',
+                percentage: allocationPercentage,
+                amount: allocatedAmount
+            });
+        });
+
+        res.status(201).json({
             message: `Created ${successfulRequests.length} salary requests by residence`,
             requests: successfulRequests,
             failedRequests: failedRequests,
@@ -572,7 +625,16 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                 totalAmount: successfulRequests.reduce((sum, req) => sum + req.total, 0),
                 month: parseInt(month),
                 year: parseInt(year)
-            }
+            },
+            employeeAllocationValidation: Object.values(employeeAllocationSummary).map(emp => ({
+                employeeId: emp.employeeId,
+                employeeName: emp.employeeName,
+                baseSalary: emp.baseSalary,
+                totalAllocatedPercentage: emp.totalAllocatedPercentage,
+                totalAllocatedAmount: emp.totalAllocatedAmount,
+                isValid: emp.totalAllocatedPercentage === 100,
+                allocations: emp.allocations
+            }))
         });
 
     } catch (error) {
