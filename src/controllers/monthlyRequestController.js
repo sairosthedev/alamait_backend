@@ -4385,6 +4385,10 @@ exports.sendToFinance = async (req, res) => {
 // Finance approve monthly request with expense creation
 exports.financeApproveMonthlyRequest = async (req, res) => {
     try {
+        // Set longer timeout for this operation
+        req.setTimeout(60000); // 60 seconds
+        res.setTimeout(60000); // 60 seconds
+        
         const user = req.user;
         const { id } = req.params;
         const { approved, notes, createExpenses = true, datePaid, dateApproved } = req.body;
@@ -4415,7 +4419,7 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
             });
         }
 
-        // Update request status
+        // Update request status immediately
         monthlyRequest.status = approved ? 'approved' : 'rejected';
         monthlyRequest.approvedBy = user._id;
         monthlyRequest.approvedAt = dateApproved ? new Date(dateApproved) : new Date();
@@ -4436,66 +4440,99 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
             changes: [`Status changed to ${approved ? 'approved' : 'rejected'}`]
         });
 
-        // Send email to submitter about approval state
-        try {
-            await EmailNotificationService.sendMonthlyRequestApprovalNotification(
-                monthlyRequest,
-                approved,
-                notes,
-                monthlyRequest.month,
-                monthlyRequest.year,
-                user
-            );
-        } catch (emailError) {
-            console.error('Failed to send monthly request approval email:', emailError);
-        }
-
-        // Update template monthly approval if this is from a template
-        if (monthlyRequest.templateId) {
-            const template = await MonthlyRequest.findById(monthlyRequest.templateId);
-            if (template && template.monthlyApprovals) {
-                const monthlyApproval = template.monthlyApprovals.find(
-                    approval => approval.month === monthlyRequest.month && approval.year === monthlyRequest.year
-                );
-                
-                if (monthlyApproval) {
-                    monthlyApproval.status = approved ? 'approved' : 'rejected';
-                    monthlyApproval.approvedBy = user._id;
-                    monthlyApproval.approvedAt = dateApproved ? new Date(dateApproved) : new Date();
-                    monthlyApproval.approvedByEmail = user.email;
-                    monthlyApproval.notes = notes;
-                    
-                    await template.save();
-                }
-            }
-        }
-
-        // Auto-create expenses if approved and requested
-        let expenseConversionResult = null;
-        if (approved && createExpenses) {
-            try {
-                expenseConversionResult = await convertRequestToExpenses(monthlyRequest, user);
-                
-                // Update request status to completed after expense creation
-                monthlyRequest.status = 'completed';
-                monthlyRequest.datePaid = datePaid ? new Date(datePaid) : (dateApproved ? new Date(dateApproved) : new Date()); // Set datePaid when marking as completed/paid
-                monthlyRequest.requestHistory.push({
-                    date: dateApproved ? new Date(dateApproved) : new Date(),
-                    action: 'Converted to expenses with double-entry transactions',
-                    user: user._id,
-                    changes: [`${expenseConversionResult.expenses.length} expenses created`]
-                });
-                
-                console.log(`Auto-converted ${expenseConversionResult.expenses.length} expenses for approved monthly request: ${monthlyRequest._id}`);
-            } catch (conversionError) {
-                console.error('Error auto-converting to expenses:', conversionError);
-                // Don't fail the approval if expense conversion fails
-                expenseConversionResult = { expenses: [], errors: [conversionError.message] };
-            }
-        }
-
+        // Save the request immediately
         await monthlyRequest.save();
 
+        // 🆕 SCHEDULE BACKGROUND PROCESSES - Run after response is sent
+        if (approved) {
+            console.log(`🔄 Scheduling background processes for monthly request ${monthlyRequest._id}...`);
+            
+            // Schedule background processes
+            setTimeout(async () => {
+                try {
+                    console.log(`📧 Starting background email notification for request ${monthlyRequest._id}...`);
+                    
+                    // Send email to submitter about approval state
+                    try {
+                        await EmailNotificationService.sendMonthlyRequestApprovalNotification(
+                            monthlyRequest,
+                            approved,
+                            notes,
+                            monthlyRequest.month,
+                            monthlyRequest.year,
+                            user
+                        );
+                        console.log(`✅ Background email sent for request ${monthlyRequest._id}`);
+                    } catch (emailError) {
+                        console.error(`❌ Failed to send background email for request ${monthlyRequest._id}:`, emailError);
+                    }
+
+                    // Update template monthly approval if this is from a template
+                    if (monthlyRequest.templateId) {
+                        try {
+                            console.log(`📝 Updating template approval for request ${monthlyRequest._id}...`);
+                            const template = await MonthlyRequest.findById(monthlyRequest.templateId);
+                            if (template && template.monthlyApprovals) {
+                                const monthlyApproval = template.monthlyApprovals.find(
+                                    approval => approval.month === monthlyRequest.month && approval.year === monthlyRequest.year
+                                );
+                                
+                                if (monthlyApproval) {
+                                    monthlyApproval.status = approved ? 'approved' : 'rejected';
+                                    monthlyApproval.approvedBy = user._id;
+                                    monthlyApproval.approvedAt = dateApproved ? new Date(dateApproved) : new Date();
+                                    monthlyApproval.approvedByEmail = user.email;
+                                    monthlyApproval.notes = notes;
+                                    
+                                    await template.save();
+                                    console.log(`✅ Template approval updated for request ${monthlyRequest._id}`);
+                                }
+                            }
+                        } catch (templateError) {
+                            console.error(`❌ Failed to update template for request ${monthlyRequest._id}:`, templateError);
+                        }
+                    }
+
+                    // Auto-create expenses if approved and requested
+                    if (createExpenses) {
+                        try {
+                            console.log(`💰 Starting background expense conversion for request ${monthlyRequest._id}...`);
+                            const expenseConversionResult = await convertRequestToExpenses(monthlyRequest, user);
+                            
+                            // Update request status to completed after expense creation
+                            monthlyRequest.status = 'completed';
+                            monthlyRequest.datePaid = datePaid ? new Date(datePaid) : (dateApproved ? new Date(dateApproved) : new Date());
+                            monthlyRequest.requestHistory.push({
+                                date: dateApproved ? new Date(dateApproved) : new Date(),
+                                action: 'Converted to expenses with double-entry transactions',
+                                user: user._id,
+                                changes: [`${expenseConversionResult.expenses.length} expenses created`]
+                            });
+                            
+                            await monthlyRequest.save();
+                            console.log(`✅ Background expense conversion completed for request ${monthlyRequest._id}: ${expenseConversionResult.expenses.length} expenses created`);
+                        } catch (conversionError) {
+                            console.error(`❌ Error in background expense conversion for request ${monthlyRequest._id}:`, conversionError);
+                            // Update request with error status
+                            monthlyRequest.requestHistory.push({
+                                date: new Date(),
+                                action: 'Expense conversion failed',
+                                user: user._id,
+                                changes: [`Error: ${conversionError.message}`]
+                            });
+                            await monthlyRequest.save();
+                        }
+                    }
+                    
+                } catch (backgroundError) {
+                    console.error(`❌ Error in background processes for request ${monthlyRequest._id}:`, backgroundError);
+                }
+            }, 2000); // Wait 2 seconds after response is sent
+            
+            console.log(`✅ Background processes scheduled for request ${monthlyRequest._id}`);
+        }
+
+        // Get updated request for response
         const updatedRequest = await MonthlyRequest.findById(monthlyRequest._id)
             .populate('residence', 'name')
             .populate('submittedBy', 'firstName lastName email')
@@ -4503,11 +4540,12 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: `Monthly request ${approved ? 'approved' : 'rejected'} successfully`,
+            message: `Monthly request ${approved ? 'approved' : 'rejected'} successfully. ${approved && createExpenses ? 'Background processes (email notification, expense conversion) are running and will complete within 2-5 minutes.' : ''}`,
             monthlyRequest: updatedRequest,
-            expenseConversion: approved && expenseConversionResult ? {
-                converted: expenseConversionResult.expenses.length,
-                errors: expenseConversionResult.errors.length > 0 ? expenseConversionResult.errors : undefined
+            backgroundProcessing: approved && createExpenses ? {
+                status: 'scheduled',
+                message: 'Email notification and expense conversion will be processed in the background',
+                estimatedCompletion: new Date(Date.now() + 5 * 60 * 1000).toISOString() // 5 minutes from now
             } : undefined
         });
 

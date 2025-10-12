@@ -1564,6 +1564,11 @@ exports.manualAddStudent = async (req, res) => {
         setTimeout(async () => {
             try {
                 console.log(`📧 Sending welcome email to ${email}...`);
+                console.log(`   Student: ${firstName} ${lastName}`);
+                console.log(`   Application Code: ${application.applicationCode}`);
+                console.log(`   Room: ${roomNumber}`);
+                console.log(`   Residence: ${residence.name}`);
+                
                 await sendEmail({
                     to: email,
                     subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
@@ -1609,11 +1614,26 @@ exports.manualAddStudent = async (req, res) => {
                     `,
                     attachments: attachments.length > 0 ? attachments : undefined
                 });
-                console.log(`✅ Welcome email sent to ${email}`);
+                console.log(`✅ Welcome email sent successfully to ${email}`);
             } catch (emailError) {
                 console.error(`❌ Error sending welcome email to ${email}:`, emailError);
+                console.error(`   Error details:`, emailError.message);
+                console.error(`   Stack trace:`, emailError.stack);
+                
+                // Try to send a simple email as fallback
+                try {
+                    console.log(`🔄 Attempting fallback email to ${email}...`);
+                    await sendEmail({
+                        to: email,
+                        subject: 'Welcome to Alamait Student Accommodation',
+                        text: `Dear ${firstName} ${lastName}, Welcome to Alamait Student Accommodation! Your account has been created. Please log in to your student portal for more details.`
+                    });
+                    console.log(`✅ Fallback email sent successfully to ${email}`);
+                } catch (fallbackError) {
+                    console.error(`❌ Fallback email also failed for ${email}:`, fallbackError.message);
+                }
             }
-        }, 1000); // Wait 1 second after response is sent
+        }, 2000); // Wait 2 seconds after response is sent
 
         // Return success response with login details (following existing application response format)
         res.status(201).json({

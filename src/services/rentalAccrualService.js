@@ -1147,7 +1147,33 @@ class RentalAccrualService {
             await invoice.save();
             
             // Send email
-            await this.sendInvoiceEmail(invoice, student, residence);
+            try {
+                console.log(`📧 Sending lease start invoice email to ${student.email}...`);
+                console.log(`   Invoice: ${invoiceNumber}`);
+                console.log(`   Student: ${student.firstName} ${student.lastName}`);
+                console.log(`   Amount: $${totalAmount}`);
+                
+                await this.sendInvoiceEmail(invoice, student, residence);
+                console.log(`✅ Lease start invoice email sent successfully to ${student.email}`);
+            } catch (emailError) {
+                console.error(`❌ Error sending lease start invoice email to ${student.email}:`, emailError);
+                console.error(`   Error details:`, emailError.message);
+                console.error(`   Stack trace:`, emailError.stack);
+                
+                // Try to send a simple email as fallback
+                try {
+                    console.log(`🔄 Attempting fallback invoice email to ${student.email}...`);
+                    const { sendEmail } = require('../utils/email');
+                    await sendEmail({
+                        to: student.email,
+                        subject: `Invoice ${invoiceNumber} - Alamait Student Accommodation`,
+                        text: `Dear ${student.firstName} ${student.lastName}, Your invoice ${invoiceNumber} for $${totalAmount} has been created. Please check your student portal for details.`
+                    });
+                    console.log(`✅ Fallback invoice email sent successfully to ${student.email}`);
+                } catch (fallbackError) {
+                    console.error(`❌ Fallback invoice email also failed for ${student.email}:`, fallbackError.message);
+                }
+            }
             
             console.log(`📄 Lease start invoice created and sent: ${invoiceNumber}`);
             return invoice;
@@ -1238,7 +1264,33 @@ class RentalAccrualService {
             await invoice.save();
             
             // Send email
-            await this.sendInvoiceEmail(invoice, student, residence);
+            try {
+                console.log(`📧 Sending monthly invoice email to ${student.email}...`);
+                console.log(`   Invoice: ${invoiceNumber}`);
+                console.log(`   Student: ${student.firstName} ${student.lastName}`);
+                console.log(`   Amount: $${rentAmount}`);
+                
+                await this.sendInvoiceEmail(invoice, student, residence);
+                console.log(`✅ Monthly invoice email sent successfully to ${student.email}`);
+            } catch (emailError) {
+                console.error(`❌ Error sending monthly invoice email to ${student.email}:`, emailError);
+                console.error(`   Error details:`, emailError.message);
+                console.error(`   Stack trace:`, emailError.stack);
+                
+                // Try to send a simple email as fallback
+                try {
+                    console.log(`🔄 Attempting fallback monthly invoice email to ${student.email}...`);
+                    const { sendEmail } = require('../utils/email');
+                    await sendEmail({
+                        to: student.email,
+                        subject: `Monthly Invoice ${invoiceNumber} - Alamait Student Accommodation`,
+                        text: `Dear ${student.firstName} ${student.lastName}, Your monthly invoice ${invoiceNumber} for $${rentAmount} has been created. Please check your student portal for details.`
+                    });
+                    console.log(`✅ Fallback monthly invoice email sent successfully to ${student.email}`);
+                } catch (fallbackError) {
+                    console.error(`❌ Fallback monthly invoice email also failed for ${student.email}:`, fallbackError.message);
+                }
+            }
             
             console.log(`📄 Monthly invoice created and sent: ${invoiceNumber}`);
             return invoice;

@@ -632,185 +632,110 @@ const getARInvoices = async (req, res) => {
     }
 };
 
-// Get all students with outstanding balances for admin dashboard
+// Get all students with outstanding balances for admin dashboard (OPTIMIZED VERSION)
 const getStudentsWithOutstandingBalances = async (req, res) => {
     try {
-        // Set longer timeout for this complex operation
-        req.setTimeout(300000); // 5 minutes
-        res.setTimeout(300000); // 5 minutes
+        const { residence, limit = 20, sortBy = 'totalBalance', sortOrder = 'desc' } = req.query;
+
+        console.log(`👥 Getting students with outstanding balances (OPTIMIZED method)`);
+
+        // Use aggregation pipeline for much faster processing
+        const pipeline = [
+            // Match AR transactions
+            {
+                $match: {
+                    'entries.accountCode': { $regex: '^1100-' },
+                    'entries.accountType': 'Asset',
+                    'entries.debit': { $gt: 0 },
+                    ...(residence && { residence: new mongoose.Types.ObjectId(residence) })
+                }
+            },
+            // Unwind entries to process each AR entry
+            { $unwind: '$entries' },
+            // Match only AR entries
+            {
+                $match: {
+                    'entries.accountCode': { $regex: '^1100-' },
+                    'entries.accountType': 'Asset',
+                    'entries.debit': { $gt: 0 }
+                }
+            },
+            // Extract student ID from account code
+            {
+                $addFields: {
+                    studentId: { $arrayElemAt: [{ $split: ['$entries.accountCode', '-'] }, 1] }
+                }
+            },
+            // Group by student ID to get totals
+            {
+                $group: {
+                    _id: '$studentId',
+                    totalBalance: { $sum: '$entries.debit' },
+                    transactionCount: { $sum: 1 },
+                    latestTransaction: { $max: '$date' },
+                    residence: { $first: '$residence' }
+                }
+            },
+            // Sort by total balance
+            { $sort: { totalBalance: -1 } },
+            // Limit results
+            { $limit: parseInt(limit) }
+        ];
+
+        console.log(`🔍 Running optimized aggregation pipeline...`);
+        const studentBalances = await TransactionEntry.aggregate(pipeline);
+
+        console.log(`🔍 Found ${studentBalances.length} students with outstanding balances`);
+
+        // Get debtor information in batch for better performance
+        const studentIds = studentBalances.map(s => s._id);
+        const Debtor = require('../../models/Debtor');
         
-        const { residence, limit = 100, sortBy = 'totalBalance', sortOrder = 'desc' } = req.query;
+        const debtors = await Debtor.find({
+            $or: [
+                { user: { $in: studentIds } },
+                { user: { $in: studentIds.map(id => new mongoose.Types.ObjectId(id)) } },
+                { accountCode: { $in: studentIds.map(id => `1100-${id}`) } }
+            ]
+        });
 
-        console.log(`👥 Getting students with outstanding balances (enhanced method)`);
-
-        // First, get all students who have AR transactions
-        const query = {
-            'entries.accountCode': { $regex: '^1100-' },
-            'entries.accountType': 'Asset',
-            'entries.debit': { $gt: 0 }
-        };
-
-        if (residence) {
-            query.residence = new mongoose.Types.ObjectId(residence);
-        }
-
-        // Get all AR transactions to find unique student IDs
-        const arTransactions = await TransactionEntry.find(query)
-            .populate('residence', 'name')
-            .sort({ date: 1 });
-
-        // Extract unique student IDs
-        const studentIds = new Set();
-        arTransactions.forEach(transaction => {
-            const arEntry = transaction.entries.find(e => 
-                e.accountCode.startsWith('1100-') && e.debit > 0
-            );
-            if (arEntry) {
-                // Account code format is: 1100-{studentId}
-                const studentId = arEntry.accountCode.split('-')[1];
-                studentIds.add(studentId);
+        // Create a map for quick lookup
+        const debtorMap = new Map();
+        debtors.forEach(debtor => {
+            const userId = debtor.user?.toString();
+            const accountCode = debtor.accountCode;
+            if (userId) debtorMap.set(userId, debtor);
+            if (accountCode && accountCode.startsWith('1100-')) {
+                const studentId = accountCode.split('-')[1];
+                debtorMap.set(studentId, debtor);
             }
         });
 
-        console.log(`🔍 Found ${studentIds.size} unique students with AR transactions`);
-        console.log(`🔍 Student IDs:`, Array.from(studentIds).slice(0, 10)); // Show first 10 IDs
+        // Build response with optimized data
+        const studentsWithOutstanding = studentBalances.map(student => {
+            const debtor = debtorMap.get(student._id);
+            return {
+                studentId: student._id,
+                residence: student.residence,
+                totalBalance: debtor?.currentBalance || student.totalBalance,
+                transactionCount: student.transactionCount,
+                latestTransaction: student.latestTransaction,
+                hasDebtorAccount: !!debtor,
+                debtorCode: debtor?.debtorCode || null
+            };
+        });
 
-        // Get detailed outstanding balances for each student (limit to prevent timeout)
-        const studentsWithOutstanding = [];
-        const maxStudents = Math.min(parseInt(limit), 50); // Limit to 50 students max to prevent timeout
-        const studentIdsArray = Array.from(studentIds).slice(0, maxStudents);
-        
-        console.log(`🔍 Processing ${studentIdsArray.length} students (limited to prevent timeout)`);
-        
-        for (let i = 0; i < studentIdsArray.length; i++) {
-            const studentId = studentIdsArray[i];
-            
-            // Progress indicator
-            if (i % 10 === 0) {
-                console.log(`📊 Processing student ${i + 1}/${studentIdsArray.length}: ${studentId}`);
-            }
-            
-            try {
-                // Get debtor information to get the actual current balance (includes negotiated payments and reversals)
-                const Debtor = require('../../models/Debtor');
-                let debtor = null;
-                
-                // Optimized debtor lookup - try the most likely first
-                debtor = await Debtor.findOne({ 
-                    $or: [
-                        { user: studentId },
-                        { user: new mongoose.Types.ObjectId(studentId) },
-                        { accountCode: `1100-${studentId}` }
-                    ]
-                });
-                
-                if (debtor) {
-                    // Get residence information from first transaction
-                    const studentTransaction = arTransactions.find(t => 
-                        t.entries.some(e => e.accountCode.includes(studentId))
-                    );
-                    
-                    // Get the original accrual transaction for this student
-                    const originalAccrual = arTransactions.find(t => 
-                        t.entries.some(e => e.accountCode === `1100-${studentId}` && e.debit > 0)
-                    );
-                    
-                    // Create a simplified monthly balance structure
-                    const monthlyBalances = [];
-                    if (originalAccrual) {
-                        // Extract month from original accrual
-                        const accrualDate = new Date(originalAccrual.date);
-                        const monthKey = `${accrualDate.getFullYear()}-${String(accrualDate.getMonth() + 1).padStart(2, '0')}`;
-                        
-                        // Get original debt amount from the accrual
-                        const originalDebtEntry = originalAccrual.entries.find(e => 
-                            e.accountCode === `1100-${studentId}` && e.debit > 0
-                        );
-                        const originalDebt = originalDebtEntry ? originalDebtEntry.debit : 0;
-                        
-                        monthlyBalances.push({
-                            month: monthKey,
-                            balance: debtor.currentBalance, // Current balance after negotiations/reversals
-                            originalDebt: originalDebt,
-                            transactionId: originalAccrual._id
-                        });
-                    }
-
-                    studentsWithOutstanding.push({
-                        studentId,
-                        residence: studentTransaction?.residence,
-                        totalBalance: debtor.currentBalance,
-                        monthlyBalances,
-                        oldestBalance: monthlyBalances.length > 0 ? monthlyBalances[0].month : null,
-                        newestBalance: monthlyBalances.length > 0 ? monthlyBalances[monthlyBalances.length - 1].month : null,
-                        monthsWithBalance: monthlyBalances.length
-                    });
-                }
-            } catch (error) {
-                console.error(`❌ Error getting outstanding balances for student ${studentId}:`, error);
-                // Continue with other students
-            }
-        }
-
-        console.log(`📊 Found ${studentsWithOutstanding.length} students (including those with $0 balance)`);
-        
-        // Also check for expired students who might have outstanding balances but no AR transactions
-        console.log('🔍 Checking for expired students with outstanding balances...');
-        const ExpiredStudent = require('../../models/ExpiredStudent');
-        const expiredStudents = await ExpiredStudent.find({});
-        
-        for (const expiredStudent of expiredStudents) {
-            try {
-                // Handle cases where student data might be missing
-                const studentData = expiredStudent.student || expiredStudent;
-                const studentId = studentData._id || studentData;
-                
-                if (!studentId) {
-                    console.log('⚠️ Skipping expired student with missing ID');
-                    continue;
-                }
-                
-                const debtor = await Debtor.findOne({ user: studentId });
-                
-                if (debtor && debtor.currentBalance > 0) {
-                    // Check if this student is already in our list
-                    const alreadyIncluded = studentsWithOutstanding.find(s => s.studentId === studentId.toString());
-                    if (!alreadyIncluded) {
-                        const firstName = studentData.firstName || 'Unknown';
-                        const lastName = studentData.lastName || 'Student';
-                        console.log(`🔴 Found expired student with outstanding balance: ${firstName} ${lastName} - $${debtor.currentBalance}`);
-                        
-                        // Get residence information (try to find from any transaction or use default)
-                        const studentTransaction = arTransactions.find(t => 
-                            t.entries.some(e => e.accountCode.includes(studentId))
-                        );
-                        
-                        studentsWithOutstanding.push({
-                            studentId: studentId.toString(),
-                            totalBalance: debtor.currentBalance,
-                            monthlyBalances: debtor.monthlyBalances || [],
-                            residence: studentTransaction?.residence || null,
-                            isExpiredStudent: true // Flag to identify this came from expired students
-                        });
-                    }
-                }
-            } catch (error) {
-                const studentEmail = expiredStudent?.student?.email || expiredStudent?.email || 'Unknown';
-                console.error(`❌ Error processing expired student ${studentEmail}:`, error.message);
-            }
-        }
-        
-        console.log(`📊 Total students with outstanding balances (including expired): ${studentsWithOutstanding.length}`);
+        console.log(`📊 Found ${studentsWithOutstanding.length} students with outstanding balances`);
 
         // Sort by specified criteria
         const sortMultiplier = sortOrder === 'desc' ? -1 : 1;
         studentsWithOutstanding.sort((a, b) => {
             if (sortBy === 'totalBalance') {
                 return (a.totalBalance - b.totalBalance) * sortMultiplier;
-            } else if (sortBy === 'oldestBalance') {
-                return (a.oldestBalance.localeCompare(b.oldestBalance)) * sortMultiplier;
-            } else if (sortBy === 'monthsWithBalance') {
-                return (a.monthsWithBalance - b.monthsWithBalance) * sortMultiplier;
+            } else if (sortBy === 'transactionCount') {
+                return (a.transactionCount - b.transactionCount) * sortMultiplier;
+            } else if (sortBy === 'latestTransaction') {
+                return (new Date(a.latestTransaction) - new Date(b.latestTransaction)) * sortMultiplier;
             }
             return 0;
         });
