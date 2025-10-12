@@ -645,9 +645,38 @@ class RentalAccrualService {
      * Backfill missing monthly rent accruals from lease start up to current month
      * - Excludes the lease start month (handled by lease_start)
      * - Skips months that already have a monthly_rent_accrual entry
+     * - Uses time-based throttling to prevent excessive execution
      */
     static async backfillMissingAccruals() {
+        const throttleKey = 'backfill_missing_accruals_throttle';
+        const throttleMinutes = process.env.NODE_ENV === 'production' ? 30 : 1; // 30 minutes in production, 1 minute in dev
+        
         try {
+            // Check if backfill was run recently (time-based throttle)
+            const lastRun = await mongoose.connection.db.collection('locks').findOne({
+                _id: throttleKey
+            });
+            
+            if (lastRun) {
+                const minutesSinceLastRun = (new Date() - lastRun.lastRun) / (1000 * 60);
+                if (minutesSinceLastRun < throttleMinutes) {
+                    console.log(`⏭️ Backfill throttled - last run was ${Math.round(minutesSinceLastRun)} minutes ago (min interval: ${throttleMinutes}m)`);
+                    return { success: true, skipped: true, reason: 'Throttled' };
+                }
+            }
+            
+            // Update throttle timestamp
+            await mongoose.connection.db.collection('locks').replaceOne(
+                { _id: throttleKey },
+                { 
+                    _id: throttleKey, 
+                    lastRun: new Date(),
+                    processId: process.pid,
+                    hostname: require('os').hostname()
+                },
+                { upsert: true }
+            );
+            
             const now = new Date();
             const currentMonth = now.getMonth() + 1;
             const currentYear = now.getFullYear();

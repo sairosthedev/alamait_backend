@@ -16,6 +16,7 @@ class MonthlyAccrualCronService {
         this.lastRun = null;
         this.nextRun = null;
         this.job = null;
+        this.lastBackfillRun = null;
     }
     
     /**
@@ -44,10 +45,12 @@ class MonthlyAccrualCronService {
             console.log(`   Next run: ${this.nextRun}`);
             console.log(`   Schedule: 1st of each month at 1:00 AM (Zimbabwe time)`);
             
-            // Also run immediately if it's the first time (for testing)
-            if (!this.lastRun) {
-                console.log('🔄 Running initial monthly accrual check...');
+            // Only run immediately if it's the first time and we're in development
+            if (!this.lastRun && process.env.NODE_ENV !== 'production') {
+                console.log('🔄 Running initial monthly accrual check (development mode)...');
                 setTimeout(() => this.processMonthlyAccruals(), 5000); // Wait 5 seconds
+            } else if (process.env.NODE_ENV === 'production') {
+                console.log('🏭 Production mode: Cron service started, waiting for scheduled execution');
             }
             
         } catch (error) {
@@ -135,9 +138,25 @@ class MonthlyAccrualCronService {
             }
             
             // After attempting current month, backfill any missing prior months
-            console.log('🧩 Running backfill for missing monthly accruals...');
-            const backfill = await RentalAccrualService.backfillMissingAccruals();
-            console.log(`   Backfill -> created: ${backfill.created}, skipped: ${backfill.skipped}, errors: ${backfill.errors?.length || 0}`);
+            // Only run backfill if we haven't run it recently (within last 6 hours in production)
+            const now = new Date();
+            const lastBackfillRun = this.lastBackfillRun || new Date(0);
+            const hoursSinceLastBackfill = (now - lastBackfillRun) / (1000 * 60 * 60);
+            const minHoursBetweenBackfills = process.env.NODE_ENV === 'production' ? 6 : 1;
+            
+            if (hoursSinceLastBackfill >= minHoursBetweenBackfills) {
+                console.log('🧩 Running backfill for missing monthly accruals...');
+                const backfill = await RentalAccrualService.backfillMissingAccruals();
+                
+                if (backfill.skipped && backfill.reason === 'Already running') {
+                    console.log('⏭️ Backfill skipped - already running in another instance');
+                } else {
+                    console.log(`   Backfill -> created: ${backfill.created}, skipped: ${backfill.skipped}, errors: ${backfill.errors?.length || 0}`);
+                    this.lastBackfillRun = now;
+                }
+            } else {
+                console.log(`⏭️ Skipping backfill - last run was ${Math.round(hoursSinceLastBackfill * 60)} minutes ago (min interval: ${minHoursBetweenBackfills}h)`);
+            }
 
             this.lastRun = now;
             this.calculateNextRun();
