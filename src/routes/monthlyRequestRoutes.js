@@ -81,39 +81,6 @@ router.get('/rejected-count',
     }
 );
 
-// Force backfill monthly accruals (admin only) - URGENT VERSION
-router.post('/force-backfill', 
-    checkRole(['admin']), 
-    async (req, res) => {
-        try {
-            const RentalAccrualService = require('../services/rentalAccrualService');
-            console.log('🚨 URGENT: Admin requested forced backfill - Job is at stake!');
-            
-            // Force run backfill immediately without any throttling
-            const result = await RentalAccrualService.backfillMissingAccruals();
-            
-            console.log(`✅ URGENT BACKFILL COMPLETED:`, result);
-            
-            res.json({
-                success: true,
-                message: 'URGENT Backfill completed successfully - Job saved!',
-                result: result,
-                urgent: true,
-                timestamp: new Date().toISOString()
-            });
-        } catch (error) {
-            console.error('❌ URGENT BACKFILL FAILED:', error);
-            res.status(500).json({ 
-                success: false,
-                error: 'URGENT Backfill failed - Job still at risk!',
-                details: error.message,
-                urgent: true,
-                timestamp: new Date().toISOString()
-            });
-        }
-    }
-);
-
 // Convert approved monthly requests to expenses
 router.post('/convert-to-expenses', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 

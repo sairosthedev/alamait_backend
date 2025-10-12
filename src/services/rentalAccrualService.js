@@ -648,43 +648,7 @@ class RentalAccrualService {
      * - Uses time-based throttling to prevent excessive execution
      */
     static async backfillMissingAccruals() {
-        const throttleKey = 'backfill_missing_accruals_throttle';
-        const throttleMinutes = process.env.NODE_ENV === 'production' ? 0 : 1; // NO THROTTLING in production - job is at stake!
-        
         try {
-            console.log(`🚨 URGENT BACKFILL STARTING - Job is at stake! Environment: ${process.env.NODE_ENV}`);
-            
-            // Check if backfill was run recently (time-based throttle) - DISABLED in production
-            if (process.env.NODE_ENV !== 'production') {
-                const lastRun = await mongoose.connection.db.collection('locks').findOne({
-                    _id: throttleKey
-                });
-                
-                if (lastRun) {
-                    const minutesSinceLastRun = (new Date() - lastRun.lastRun) / (1000 * 60);
-                    if (minutesSinceLastRun < throttleMinutes) {
-                        console.log(`⏭️ Backfill throttled - last run was ${Math.round(minutesSinceLastRun)} minutes ago (min interval: ${throttleMinutes}m)`);
-                        return { success: true, skipped: true, reason: 'Throttled' };
-                    }
-                }
-            } else {
-                console.log(`🔥 PRODUCTION MODE: Skipping throttling - backfill will run immediately!`);
-            }
-            
-            // Update throttle timestamp
-            await mongoose.connection.db.collection('locks').replaceOne(
-                { _id: throttleKey },
-                { 
-                    _id: throttleKey, 
-                    lastRun: new Date(),
-                    processId: process.pid,
-                    hostname: require('os').hostname(),
-                    environment: process.env.NODE_ENV,
-                    urgent: true
-                },
-                { upsert: true }
-            );
-            
             const now = new Date();
             const currentMonth = now.getMonth() + 1;
             const currentYear = now.getFullYear();
@@ -697,43 +661,25 @@ class RentalAccrualService {
                 .find({ status: 'approved', paymentStatus: { $ne: 'cancelled' } })
                 .toArray();
 
-            console.log(`🔍 DEBUG: Found ${approvedApplications.length} approved applications`);
-            
-            // Debug: Show details of each application
-            approvedApplications.forEach((app, index) => {
-                console.log(`   App ${index + 1}: ${app.firstName} ${app.lastName}`);
-                console.log(`     Start: ${app.startDate} (${new Date(app.startDate).toLocaleDateString()})`);
-                console.log(`     End: ${app.endDate} (${new Date(app.endDate).toLocaleDateString()})`);
-                console.log(`     Status: ${app.status}, Payment: ${app.paymentStatus}`);
-                console.log(`     Room: ${app.allocatedRoom}, Residence: ${app.residence}`);
-            });
-
             let totalCreated = 0;
             let totalSkipped = 0;
             let totalErrors = 0;
             const errors = [];
 
             for (const app of approvedApplications) {
-                console.log(`\n🔍 Processing ${app.firstName} ${app.lastName}...`);
-                
                 const leaseStart = new Date(app.startDate);
                 const leaseEnd = new Date(app.endDate);
                 if (isNaN(leaseStart) || isNaN(leaseEnd)) {
-                    console.log(`   ❌ Invalid dates - skipping`);
                     continue;
                 }
-
-                console.log(`   📅 Lease: ${leaseStart.toLocaleDateString()} to ${leaseEnd.toLocaleDateString()}`);
-                console.log(`   📅 Current: ${now.toLocaleDateString()}`);
 
                 // Determine backfill window: from month AFTER lease start up to current month
                 // Future months will be created by the monthly cron job on the 1st of each month
                 const windowEnd = new Date(Math.min(leaseEnd.getTime(), now.getTime()));
-                console.log(`   📅 Window end: ${windowEnd.toLocaleDateString()}`);
 
                 // Start from the first day of the month AFTER lease start month
                 // The lease start month is handled by lease_start (prorated), not monthly accrual
-                let startMonth = leaseStart.getMonth() + 2; // Convert to 1-based month + 1 for next month
+                let startMonth = leaseStart.getMonth() + 1; // Convert to 1-based month
                 let startYear = leaseStart.getFullYear();
                 
                 // Move to next month
@@ -742,18 +688,11 @@ class RentalAccrualService {
                     startYear++;
                 }
                 
-                console.log(`   📅 Backfill start: ${startMonth}/${startYear}`);
-                
                 const cursor = new Date(startYear, startMonth - 1, 1); // Convert back to 0-based for Date constructor
-                console.log(`   📅 Cursor start: ${cursor.toLocaleDateString()}`);
 
-                let monthsProcessed = 0;
                 while (cursor <= windowEnd) {
                     const month = cursor.getMonth() + 1; // Convert 0-based to 1-based month
                     const year = cursor.getFullYear();
-                    
-                    console.log(`   🔄 Processing ${month}/${year} (month ${monthsProcessed + 1})`);
-                    monthsProcessed++;
 
                     try {
                         // Skip if accrual already exists for this application/month/year

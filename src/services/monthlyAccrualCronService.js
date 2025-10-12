@@ -138,27 +138,9 @@ class MonthlyAccrualCronService {
             }
             
             // After attempting current month, backfill any missing prior months
-            // Only run backfill if we haven't run it recently (within last 6 hours in production)
-            const lastBackfillRun = this.lastBackfillRun || new Date(0);
-            const hoursSinceLastBackfill = (now - lastBackfillRun) / (1000 * 60 * 60);
-            const minHoursBetweenBackfills = process.env.NODE_ENV === 'production' ? 0 : 0.5; // NO THROTTLING in production - job is at stake!
-            
-            if (hoursSinceLastBackfill >= minHoursBetweenBackfills) {
-                console.log('🚨 URGENT BACKFILL RUNNING - Job is at stake!');
-                const backfill = await RentalAccrualService.backfillMissingAccruals();
-                
-                if (backfill.skipped && backfill.reason === 'Already running') {
-                    console.log('⏭️ Backfill skipped - already running in another instance');
-                } else {
-                    console.log(`✅ URGENT BACKFILL COMPLETED -> created: ${backfill.created}, skipped: ${backfill.skipped}, errors: ${backfill.errors?.length || 0}`);
-                    this.lastBackfillRun = now;
-                }
-            } else {
-                console.log(`🔥 PRODUCTION MODE: Running backfill immediately - no throttling!`);
-                const backfill = await RentalAccrualService.backfillMissingAccruals();
-                console.log(`✅ IMMEDIATE BACKFILL COMPLETED -> created: ${backfill.created}, skipped: ${backfill.skipped}, errors: ${backfill.errors?.length || 0}`);
-                this.lastBackfillRun = now;
-            }
+            console.log('🧩 Running backfill for missing monthly accruals...');
+            const backfill = await RentalAccrualService.backfillMissingAccruals();
+            console.log(`   Backfill -> created: ${backfill.created}, skipped: ${backfill.skipped}, errors: ${backfill.errors?.length || 0}`);
 
             this.lastRun = now;
             this.calculateNextRun();
