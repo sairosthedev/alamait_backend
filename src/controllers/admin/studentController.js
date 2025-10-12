@@ -1598,12 +1598,12 @@ exports.manualAddStudent = async (req, res) => {
             },
             startDate,
             endDate,
-            totalAmount: monthlyRent,
+            totalAmount: finalMonthlyRent,
             paymentStatus: 'paid',
             status: 'confirmed',
-            paidAmount: monthlyRent + (adminFee || 0) + (securityDeposit || 0),
+            paidAmount: finalMonthlyRent + finalAdminFee + finalSecurityDeposit,
             payments: [{
-                amount: monthlyRent + (adminFee || 0) + (securityDeposit || 0),
+                amount: finalMonthlyRent + finalAdminFee + finalSecurityDeposit,
                 date: new Date(),
                 method: 'admin_manual',
                 status: 'completed',
@@ -1660,10 +1660,10 @@ exports.manualAddStudent = async (req, res) => {
                 End Date: ${new Date(endDate).toLocaleDateString()}
 
                 PAYMENT DETAILS:
-                Monthly Rent: $${monthlyRent}
-                Admin Fee: $${adminFee || 0}
-                Security Deposit: $${securityDeposit || 0}
-                Total Initial Payment: $${monthlyRent + (adminFee || 0) + (securityDeposit || 0)}
+                Monthly Rent: $${finalMonthlyRent}
+                Admin Fee: $${finalAdminFee}
+                Security Deposit: $${finalSecurityDeposit}
+                Total Initial Payment: $${finalMonthlyRent + finalAdminFee + finalSecurityDeposit}
 
                 IMPORTANT:
                 1. Please log in to your account using the temporary password above
@@ -1737,6 +1737,12 @@ exports.manualAddStudent = async (req, res) => {
                 currentOccupancy: room.currentOccupancy,
                 capacity: room.capacity,
                 occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+            },
+            financialSummary: {
+                monthlyRent: finalMonthlyRent,
+                securityDeposit: finalSecurityDeposit,
+                adminFee: finalAdminFee,
+                totalInitialPayment: finalMonthlyRent + finalAdminFee + finalSecurityDeposit
             },
             backgroundProcessing: {
                 status: 'scheduled',
