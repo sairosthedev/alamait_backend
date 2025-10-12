@@ -613,33 +613,22 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         // 🆕 INTEGRATED: Auto-backfill transactions for the new debtor
         // NOTE: Only run backfill if rental accrual service is NOT handling transactions
         // (Rental accrual service creates transactions when lease starts via application approval)
-        if (!options.skipBackfill) {
-            try {
-                const { backfillTransactionsForDebtor } = require('./transactionBackfillService');
-                console.log(`🔄 Auto-backfilling transactions for new debtor: ${debtorCode}`);
-                
-                // Use optimized backfill options if provided
-                const backfillOptions = {
-                    auto: true,
-                    ...options.backfillOptions // Merge any specific backfill options
-                };
-                
-                const backfillResult = await backfillTransactionsForDebtor(debtor, backfillOptions);
-                
-                if (backfillResult.success) {
-                    console.log(`✅ Auto-backfill completed for ${debtorCode}:`);
-                    console.log(`   - Lease start created: ${backfillResult.leaseStartCreated}`);
-                    console.log(`   - Monthly transactions created: ${backfillResult.monthlyTransactionsCreated}`);
-                } else if (backfillResult.skipped) {
-                    console.log(`⏭️  Backfill skipped for ${debtorCode}: ${backfillResult.reason || 'not in bulk mode'}`);
-                } else {
-                    console.error(`❌ Auto-backfill failed for ${debtorCode}: ${backfillResult.error}`);
-                }
-            } catch (backfillError) {
-                console.error(`❌ Failed to auto-backfill transactions for debtor ${debtorCode}:`, backfillError);
+        try {
+            const { backfillTransactionsForDebtor } = require('./transactionBackfillService');
+            console.log(`🔄 Auto-backfilling transactions for new debtor: ${debtorCode}`);
+            const backfillResult = await backfillTransactionsForDebtor(debtor, { auto: true });
+            
+            if (backfillResult.success) {
+                console.log(`✅ Auto-backfill completed for ${debtorCode}:`);
+                console.log(`   - Lease start created: ${backfillResult.leaseStartCreated}`);
+                console.log(`   - Monthly transactions created: ${backfillResult.monthlyTransactionsCreated}`);
+            } else if (backfillResult.skipped) {
+                console.log(`⏭️  Backfill skipped for ${debtorCode}: ${backfillResult.reason || 'not in bulk mode'}`);
+            } else {
+                console.error(`❌ Auto-backfill failed for ${debtorCode}: ${backfillResult.error}`);
             }
-        } else {
-            console.log(`⏭️  Backfill skipped for ${debtorCode}: skipBackfill option set`);
+        } catch (backfillError) {
+            console.error(`❌ Failed to auto-backfill transactions for debtor ${debtorCode}:`, backfillError);
         }
 
         return debtor;

@@ -377,12 +377,6 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
                 continue;
             }
             
-            // Skip monthly accruals if optimization option is set
-            if (options.skipMonthlyAccruals) {
-                console.log(`⏭️ Skipping monthly accrual for ${monthKey} - skipMonthlyAccruals option set`);
-                continue;
-            }
-            
 			if (!existingMonthlyAccrual) {
             const monthlyAccrualTransaction = new TransactionEntry({
                 transactionId: `MONTHLY_ACCRUAL_${monthKey}_${applicationCode}_${Date.now()}`,
@@ -461,9 +455,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
         await DebtorDataSyncService.syncDebtorDataArrays(debtor._id);
         
         // 🆕 FIFO INVOICE PROCESSING: Create invoices in chronological order
-        if (options.skipInvoiceCreation) {
-            console.log(`⏭️ Skipping invoice creation - skipInvoiceCreation option set`);
-        } else if (invoiceQueue.length > 0) {
+        if (invoiceQueue.length > 0) {
             console.log(`\n📄 Processing ${invoiceQueue.length} invoices in FIFO order...`);
             
             // Sort invoice queue by transaction date (FIFO)

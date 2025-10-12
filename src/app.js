@@ -101,10 +101,6 @@ initCronJobs();
 const StudentStatusJob = require('./jobs/studentStatusJob');
 StudentStatusJob.initialize();
 
-// Initialize invoice cron service
-const { instance: InvoiceCronService } = require('./services/invoiceCronService');
-InvoiceCronService.start();
-
 // Start monthly accrual cron service
 const monthlyAccrualCronService = require('./services/monthlyAccrualCronService');
 
@@ -203,17 +199,6 @@ app.use('/api/finance/employees', (req, res, next) => {
   if (req.method === 'POST' && (req.path.includes('salary-requests') || req.path.includes('salary-request'))) {
     req.setTimeout(300000); // 5 minutes for salary request operations
     res.setTimeout(300000);
-  }
-  next();
-});
-
-// Add timeout middleware for manual student creation
-app.use('/api/admin/students', (req, res, next) => {
-  // Set moderate timeout for manual student creation (should be much faster now)
-  if (req.method === 'POST' && req.path.includes('manual-add')) {
-    req.setTimeout(60000); // 1 minute for manual student creation (streamlined)
-    res.setTimeout(60000);
-    console.log('🕐 Set timeout for manual student creation (streamlined)');
   }
   next();
 });
@@ -430,18 +415,6 @@ app.use('/api/invoices', invoiceRoutes);
 app.use('/api/requests', requestRoutes);
 app.use('/api/maintenance-requests', requestRoutes); // Alias for frontend compatibility
 app.use('/api/monthly-requests', monthlyRequestRoutes);
-
-// Application routes (root level for frontend compatibility)
-const applicationRoutes = require('./routes/applicationRoutes');
-app.use('/api/applications', applicationRoutes);
-
-// Message routes (root level for frontend compatibility)
-const messageRoutes = require('./routes/messageRoutes');
-app.use('/api/messages', messageRoutes);
-
-// Invoice cron service routes
-const invoiceCronRoutes = require('./routes/invoiceCronRoutes');
-app.use('/api/invoice-cron', invoiceCronRoutes);
 
 // Vendor routes
 const vendorRoutes = require('./routes/vendorRoutes');
