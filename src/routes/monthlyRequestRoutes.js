@@ -66,6 +66,47 @@ router.get('/ceo/dashboard',
     monthlyRequestController.getCEOMonthlyRequests
 );
 
+// Get rejected monthly requests count (must be before /:id route)
+router.get('/rejected-count', 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    async (req, res) => {
+        try {
+            const MonthlyRequest = require('../models/MonthlyRequest');
+            const count = await MonthlyRequest.countDocuments({ status: 'rejected' });
+            res.json({ count });
+        } catch (error) {
+            console.error('Error getting rejected monthly requests count:', error);
+            res.status(500).json({ error: 'Failed to get rejected monthly requests count' });
+        }
+    }
+);
+
+// Force backfill monthly accruals (admin only)
+router.post('/force-backfill', 
+    checkRole(['admin']), 
+    async (req, res) => {
+        try {
+            const RentalAccrualService = require('../services/rentalAccrualService');
+            console.log('🔄 Admin requested forced backfill of monthly accruals...');
+            
+            const result = await RentalAccrualService.backfillMissingAccruals();
+            
+            res.json({
+                success: true,
+                message: 'Backfill completed',
+                result: result
+            });
+        } catch (error) {
+            console.error('Error in forced backfill:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Failed to run backfill',
+                details: error.message 
+            });
+        }
+    }
+);
+
 // Convert approved monthly requests to expenses
 router.post('/convert-to-expenses', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 

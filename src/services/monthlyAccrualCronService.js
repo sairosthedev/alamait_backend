@@ -141,7 +141,7 @@ class MonthlyAccrualCronService {
             // Only run backfill if we haven't run it recently (within last 6 hours in production)
             const lastBackfillRun = this.lastBackfillRun || new Date(0);
             const hoursSinceLastBackfill = (now - lastBackfillRun) / (1000 * 60 * 60);
-            const minHoursBetweenBackfills = process.env.NODE_ENV === 'production' ? 6 : 1;
+            const minHoursBetweenBackfills = process.env.NODE_ENV === 'production' ? 1 : 0.5; // Reduced from 6 to 1 hour in production
             
             if (hoursSinceLastBackfill >= minHoursBetweenBackfills) {
                 console.log('🧩 Running backfill for missing monthly accruals...');

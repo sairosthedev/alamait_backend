@@ -46,4 +46,15 @@ router.put('/user/:userId/room-validity', auth, checkAdminOrFinance, updateRoomV
 // Sync room occupancy with allocations
 router.post('/sync-room-occupancy', auth, checkAdminOrFinance, syncRoomOccupancy);
 
+// Get pending applications count
+router.get('/pending-count', auth, checkAdminOrFinance, async (req, res) => {
+    try {
+        const count = await Application.countDocuments({ status: 'pending' });
+        res.json({ count });
+    } catch (error) {
+        console.error('Error getting pending applications count:', error);
+        res.status(500).json({ error: 'Failed to get pending applications count' });
+    }
+});
+
 module.exports = router; 

@@ -105,4 +105,16 @@ router.delete('/:messageId/replies/:replyId',
     messageController.deleteReply
 );
 
+// Get unread messages count
+router.get('/unread-count', auth, checkRole('admin'), async (req, res) => {
+    try {
+        const Message = require('../../models/Message');
+        const count = await Message.countDocuments({ read: false });
+        res.json({ count });
+    } catch (error) {
+        console.error('Error getting unread messages count:', error);
+        res.status(500).json({ error: 'Failed to get unread messages count' });
+    }
+});
+
 module.exports = router; 

@@ -116,24 +116,26 @@ class StudentStatusManager {
             new Date(lease.endDate) > now
         );
         
-        // Check room validity
-        const roomValid = student.roomValidUntil && new Date(student.roomValidUntil) > now;
+        // Check if application has valid lease period (use application endDate, not roomValidUntil)
+        const applicationValid = activeApplication && 
+            activeApplication.endDate && 
+            new Date(activeApplication.endDate) > now;
         
         // Status determination logic
-        if (activeLease && roomValid && activeApplication) {
+        if (activeLease && applicationValid) {
             return {
                 status: 'active',
-                reason: 'Active lease with valid room and approved application'
+                reason: 'Active lease with valid application period'
             };
-        } else if (activeApplication && roomValid) {
+        } else if (applicationValid) {
             return {
                 status: 'active',
-                reason: 'Approved application with valid room'
+                reason: 'Approved application with valid lease period'
             };
-        } else if (activeApplication && !roomValid) {
+        } else if (activeApplication && !applicationValid) {
             return {
                 status: 'expired',
-                reason: 'Approved application but room validity expired'
+                reason: 'Approved application but lease period expired'
             };
         } else if (leases.length > 0 && !activeLease) {
             return {
