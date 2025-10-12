@@ -635,6 +635,10 @@ const getARInvoices = async (req, res) => {
 // Get all students with outstanding balances for admin dashboard
 const getStudentsWithOutstandingBalances = async (req, res) => {
     try {
+        // Set longer timeout for this complex operation
+        req.setTimeout(300000); // 5 minutes
+        res.setTimeout(300000); // 5 minutes
+        
         const { residence, limit = 100, sortBy = 'totalBalance', sortOrder = 'desc' } = req.query;
 
         console.log(`👥 Getting students with outstanding balances (enhanced method)`);
@@ -671,23 +675,34 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
         console.log(`🔍 Found ${studentIds.size} unique students with AR transactions`);
         console.log(`🔍 Student IDs:`, Array.from(studentIds).slice(0, 10)); // Show first 10 IDs
 
-        // Get detailed outstanding balances for each student
+        // Get detailed outstanding balances for each student (limit to prevent timeout)
         const studentsWithOutstanding = [];
+        const maxStudents = Math.min(parseInt(limit), 50); // Limit to 50 students max to prevent timeout
+        const studentIdsArray = Array.from(studentIds).slice(0, maxStudents);
         
-        for (const studentId of studentIds) {
+        console.log(`🔍 Processing ${studentIdsArray.length} students (limited to prevent timeout)`);
+        
+        for (let i = 0; i < studentIdsArray.length; i++) {
+            const studentId = studentIdsArray[i];
+            
+            // Progress indicator
+            if (i % 10 === 0) {
+                console.log(`📊 Processing student ${i + 1}/${studentIdsArray.length}: ${studentId}`);
+            }
+            
             try {
                 // Get debtor information to get the actual current balance (includes negotiated payments and reversals)
                 const Debtor = require('../../models/Debtor');
                 let debtor = null;
                 
-                // Try multiple methods to find the debtor (for both active and expired students)
-                debtor = await Debtor.findOne({ user: studentId });
-                if (!debtor) {
-                    debtor = await Debtor.findOne({ accountCode: `1100-${studentId}` });
-                }
-                if (!debtor) {
-                    debtor = await Debtor.findOne({ user: new mongoose.Types.ObjectId(studentId) });
-                }
+                // Optimized debtor lookup - try the most likely first
+                debtor = await Debtor.findOne({ 
+                    $or: [
+                        { user: studentId },
+                        { user: new mongoose.Types.ObjectId(studentId) },
+                        { accountCode: `1100-${studentId}` }
+                    ]
+                });
                 
                 if (debtor) {
                     // Get residence information from first transaction

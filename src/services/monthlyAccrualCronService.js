@@ -29,10 +29,10 @@ class MonthlyAccrualCronService {
                 return;
             }
             
-            // Schedule: Run every 5 minutes in both production and development
-            // Cron format: '*/5 * * * *' = every 5 minutes
-            const cronSchedule = '*/5 * * * *';
-            const scheduleDescription = 'Every 5 minutes (Zimbabwe time)';
+            // Schedule: Run every 60 seconds in both production and development
+            // Cron format: '* * * * *' = every minute (60 seconds)
+            const cronSchedule = '* * * * *';
+            const scheduleDescription = 'Every 60 seconds (Zimbabwe time)';
             
             this.job = cron.schedule(cronSchedule, async () => {
                 await this.processMonthlyAccrualsInstance();
