@@ -31,9 +31,8 @@ class RentalAccrualService {
         const daysRemaining = daysInMonth - startDay + 1;
 
         if (!enabled) {
-            // Fallback to legacy rule: $7/day if start >=20th, else calendar prorate
-            if (startDay >= 20) return daysRemaining * 7;
-            return (room.price / daysInMonth) * daysRemaining;
+            // When rent proration is disabled, charge full month regardless of start date
+            return room.price;
         }
 
         const policy = cfg.policy || 'daily_calculation';

@@ -1361,9 +1361,10 @@ class EnhancedPaymentAllocationService {
    * @param {number} monthlyRent - Full monthly rent amount
    * @param {number} monthlyAdminFee - Full monthly admin fee
    * @param {number} monthlyDeposit - Full monthly deposit
+   * @param {Object} residence - Residence object with paymentConfiguration (optional)
    * @returns {Object} Prorated amounts for rent, admin fee, and deposit
    */
-  static calculateProratedAmounts(leaseStartDate, monthlyRent = 180, monthlyAdminFee = 20, monthlyDeposit = 180) {
+  static calculateProratedAmounts(leaseStartDate, monthlyRent = 180, monthlyAdminFee = 20, monthlyDeposit = 180, residence = null) {
     try {
       const startDate = new Date(leaseStartDate);
       const year = startDate.getFullYear();
@@ -1382,17 +1383,33 @@ class EnhancedPaymentAllocationService {
       
       let proratedRent;
       
-      // Business rule: If lease starts from 20th onwards, use $7 per day
-      if (dayOfMonth >= 20) {
-        proratedRent = daysFromStart * 7; // $7 per day
-        console.log(`📅 Lease starts on ${dayOfMonth}th (≥20th): Using $7/day rate`);
-        console.log(`   Days from start: ${daysFromStart}, Amount: $${proratedRent}`);
-      } else {
-        // Use normal prorated calculation
-        proratedRent = Math.round((monthlyRent / daysInMonth) * daysFromStart * 100) / 100;
-        console.log(`📅 Lease starts on ${dayOfMonth}th (<20th): Using prorated calculation`);
-        console.log(`   Monthly rent: $${monthlyRent}, Days in month: ${daysInMonth}, Days from start: ${daysFromStart}`);
-        console.log(`   Prorated rent: $${proratedRent} (${monthlyRent} × ${daysFromStart}/${daysInMonth})`);
+      // If residence provided and has rentProration config, use shared logic
+      if (residence && residence.paymentConfiguration) {
+        try {
+          const RentalAccrualService = require('./rentalAccrualService');
+          const room = { price: monthlyRent };
+          proratedRent = RentalAccrualService.calculateProratedRent(residence, room, startDate);
+          console.log(`📅 Using residence-specific proration logic: $${proratedRent}`);
+        } catch (e) {
+          console.warn('⚠️ Proration via shared helper failed, falling back to legacy logic:', e.message);
+          // Fall back to legacy logic below
+        }
+      }
+      
+      // Legacy logic (fallback or when no residence provided)
+      if (proratedRent === undefined) {
+        // Business rule: If lease starts from 20th onwards, use $7 per day
+        if (dayOfMonth >= 20) {
+          proratedRent = daysFromStart * 7; // $7 per day
+          console.log(`📅 Lease starts on ${dayOfMonth}th (≥20th): Using $7/day rate`);
+          console.log(`   Days from start: ${daysFromStart}, Amount: $${proratedRent}`);
+        } else {
+          // Use normal prorated calculation
+          proratedRent = Math.round((monthlyRent / daysInMonth) * daysFromStart * 100) / 100;
+          console.log(`📅 Lease starts on ${dayOfMonth}th (<20th): Using prorated calculation`);
+          console.log(`   Monthly rent: $${monthlyRent}, Days in month: ${daysInMonth}, Days from start: ${daysFromStart}`);
+          console.log(`   Prorated rent: $${proratedRent} (${monthlyRent} × ${daysFromStart}/${daysInMonth})`);
+        }
       }
       
       const proratedAdminFee = monthlyAdminFee; // Admin fee is charged once, not prorated
@@ -1408,7 +1425,7 @@ class EnhancedPaymentAllocationService {
         daysInMonth,
         daysFromStart,
         calculationDate: startDate,
-        calculationMethod: dayOfMonth >= 20 ? 'flat_rate_7_per_day' : 'prorated'
+        calculationMethod: residence && residence.paymentConfiguration ? 'residence_specific' : (dayOfMonth >= 20 ? 'flat_rate_7_per_day' : 'prorated')
       };
       
     } catch (error) {
