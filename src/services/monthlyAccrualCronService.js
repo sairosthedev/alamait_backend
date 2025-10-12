@@ -29,11 +29,11 @@ class MonthlyAccrualCronService {
                 return;
             }
             
-            // Schedule: Run daily at 6:25 AM in production, 1st of month at 1:00 AM in development
-            // Cron format: '25 6 * * *' = minute hour day month day-of-week (daily at 6:25 AM)
-            const cronSchedule = process.env.NODE_ENV === 'production' ? '25 6 * * *' : '0 1 1 * *';
+            // Schedule: Run every 5 minutes in production, 1st of month at 1:00 AM in development
+            // Cron format: '*/5 * * * *' = every 5 minutes
+            const cronSchedule = process.env.NODE_ENV === 'production' ? '*/5 * * * *' : '0 1 1 * *';
             const scheduleDescription = process.env.NODE_ENV === 'production' 
-                ? 'Daily at 6:25 AM (Zimbabwe time)' 
+                ? 'Every 5 minutes (Zimbabwe time)' 
                 : '1st of each month at 1:00 AM (Zimbabwe time)';
             
             this.job = cron.schedule(cronSchedule, async () => {
@@ -214,11 +214,12 @@ class MonthlyAccrualCronService {
             const now = new Date();
             
             if (process.env.NODE_ENV === 'production') {
-                // Production: Next run is tomorrow at 6:25 AM
-                const tomorrow = new Date(now);
-                tomorrow.setDate(tomorrow.getDate() + 1);
-                tomorrow.setHours(6, 25, 0, 0);
-                this.nextRun = tomorrow;
+                // Production: Next run is in 5 minutes
+                const nextRun = new Date(now);
+                nextRun.setMinutes(nextRun.getMinutes() + 5);
+                nextRun.setSeconds(0);
+                nextRun.setMilliseconds(0);
+                this.nextRun = nextRun;
             } else {
                 // Development: Next run is 1st of next month at 1:00 AM
                 let nextMonth = now.getMonth() + 1;
@@ -243,7 +244,7 @@ class MonthlyAccrualCronService {
      */
     getStatus() {
         const schedule = process.env.NODE_ENV === 'production' 
-            ? '25 6 * * * (Daily at 6:25 AM)' 
+            ? '*/5 * * * * (Every 5 minutes)' 
             : '0 1 1 * * (1st of each month at 1:00 AM)';
             
         return {
