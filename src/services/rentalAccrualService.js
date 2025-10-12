@@ -688,7 +688,7 @@ class RentalAccrualService {
 
                     if (!existingLeaseStart) {
                         console.log(`🔄 Creating missing lease start accrual for ${app.firstName} ${app.lastName} (${app.applicationCode})`);
-                        const leaseStartResult = await this.processLeaseStart(app);
+                        const leaseStartResult = await this.createLeaseStartAccrual(app);
                         if (leaseStartResult && leaseStartResult.success) {
                             leaseStartCreated++;
                             totalCreated++;
