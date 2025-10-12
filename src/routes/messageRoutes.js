@@ -124,4 +124,3 @@ router.delete('/:messageId/replies/:replyId',
 );
 
 module.exports = router;
-

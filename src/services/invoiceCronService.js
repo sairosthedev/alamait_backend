@@ -380,4 +380,3 @@ module.exports = {
     InvoiceCronService,
     instance
 };
-

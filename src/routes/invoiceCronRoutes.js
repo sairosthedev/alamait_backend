@@ -92,4 +92,3 @@ router.post('/stop', auth, checkRole(['admin']), (req, res) => {
 });
 
 module.exports = router;
-
