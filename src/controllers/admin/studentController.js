@@ -1396,13 +1396,13 @@ exports.manualAddStudent = async (req, res) => {
             
             // Validate required parameters before calling service
             if (!residenceId) {
-                   return res.status(404).json({ error: 'No residense Id Found' });
+                throw new Error('residenceId is required but was not provided');
             }
             if (!roomNumber) {
-               return res.status(404).json({ error: 'Room Number Not Found' });
+                throw new Error('roomNumber is required but was not provided');
             }
             if (!req.user?._id) {
-                return res.status(404).json({ error: 'User Not Found' });
+                throw new Error('req.user._id is required but was not provided - authentication issue');
             }
             
             debtor = await createDebtorForStudent(student, {
