@@ -2,7 +2,6 @@ const Transaction = require('../models/Transaction');
 const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
 const Invoice = require('../models/Invoice');
-const { Residence } = require('../models/Residence');
 const mongoose = require('mongoose');
 const { logTransactionOperation, logSystemOperation } = require('../utils/auditLogger');
 
@@ -754,6 +753,7 @@ class RentalAccrualService {
                     const leaseStartYear = leaseStartDate.getFullYear();
                     if (leaseStartMonth === month && leaseStartYear === year) {
                         // Get residence to check rent proration configuration
+                        const { Residence } = require('../models/Residence');
                         const residence = await Residence.findById(student.residence);
                         
                         if (residence && residence.paymentConfiguration && residence.paymentConfiguration.rentProration) {
