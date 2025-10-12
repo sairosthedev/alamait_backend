@@ -649,20 +649,26 @@ class RentalAccrualService {
      */
     static async backfillMissingAccruals() {
         const throttleKey = 'backfill_missing_accruals_throttle';
-        const throttleMinutes = process.env.NODE_ENV === 'production' ? 2 : 1; // Reduced from 30 to 2 minutes in production
+        const throttleMinutes = process.env.NODE_ENV === 'production' ? 0 : 1; // NO THROTTLING in production - job is at stake!
         
         try {
-            // Check if backfill was run recently (time-based throttle)
-            const lastRun = await mongoose.connection.db.collection('locks').findOne({
-                _id: throttleKey
-            });
+            console.log(`🚨 URGENT BACKFILL STARTING - Job is at stake! Environment: ${process.env.NODE_ENV}`);
             
-            if (lastRun) {
-                const minutesSinceLastRun = (new Date() - lastRun.lastRun) / (1000 * 60);
-                if (minutesSinceLastRun < throttleMinutes) {
-                    console.log(`⏭️ Backfill throttled - last run was ${Math.round(minutesSinceLastRun)} minutes ago (min interval: ${throttleMinutes}m)`);
-                    return { success: true, skipped: true, reason: 'Throttled' };
+            // Check if backfill was run recently (time-based throttle) - DISABLED in production
+            if (process.env.NODE_ENV !== 'production') {
+                const lastRun = await mongoose.connection.db.collection('locks').findOne({
+                    _id: throttleKey
+                });
+                
+                if (lastRun) {
+                    const minutesSinceLastRun = (new Date() - lastRun.lastRun) / (1000 * 60);
+                    if (minutesSinceLastRun < throttleMinutes) {
+                        console.log(`⏭️ Backfill throttled - last run was ${Math.round(minutesSinceLastRun)} minutes ago (min interval: ${throttleMinutes}m)`);
+                        return { success: true, skipped: true, reason: 'Throttled' };
+                    }
                 }
+            } else {
+                console.log(`🔥 PRODUCTION MODE: Skipping throttling - backfill will run immediately!`);
             }
             
             // Update throttle timestamp
@@ -672,7 +678,9 @@ class RentalAccrualService {
                     _id: throttleKey, 
                     lastRun: new Date(),
                     processId: process.pid,
-                    hostname: require('os').hostname()
+                    hostname: require('os').hostname(),
+                    environment: process.env.NODE_ENV,
+                    urgent: true
                 },
                 { upsert: true }
             );
