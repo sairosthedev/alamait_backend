@@ -37,6 +37,19 @@ class AccountingService {
             let accrualsCreated = 0;
             
             for (const student of activeStudents) {
+                // Skip creating a monthly accrual for the lease start month
+                if (student && (student.startDate || student.leaseStartDate)) {
+                    const leaseStartDate = new Date(student.startDate || student.leaseStartDate);
+                    if (!isNaN(leaseStartDate)) {
+                        const leaseStartMonth = leaseStartDate.getMonth() + 1;
+                        const leaseStartYear = leaseStartDate.getFullYear();
+                        if (leaseStartMonth === month && leaseStartYear === year) {
+                            console.log(`⏭️  Skipping monthly accrual for ${student.firstName} ${student.lastName} - lease start month handled by lease_start process`);
+                            continue;
+                        }
+                    }
+                }
+                
                 // Check if accrual already exists
                 const existingAccrual = await TransactionEntry.findOne({
                     'metadata.type': 'monthly_rent_accrual',

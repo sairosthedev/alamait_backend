@@ -339,9 +339,9 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 				break;
 			}
 
-			// Create monthly accrual for lease start month too
-			// Lease start transaction covers prorated rent, monthly accrual covers full month
-			// This ensures proper accrual accounting for the entire month
+			// Skip creating monthly accrual for lease start month
+			// Lease start transaction handles the entire month (full month when proration disabled, prorated when enabled)
+			// No separate monthly accrual needed for the start month
 
 			// Skip if any existing accrual exists for this student+period from either model
 			// Check for both backfill-created and rental accrual service-created monthly accruals
@@ -370,6 +370,12 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
                     }
                 ]
             });
+            
+            // Skip creating monthly accrual for lease start month
+            if (month === leaseStartMonth && year === leaseStartYear) {
+                console.log(`⏭️ Skipping monthly accrual for lease start month ${monthKey} - handled by lease start process`);
+                continue;
+            }
             
 			if (!existingMonthlyAccrual) {
             const monthlyAccrualTransaction = new TransactionEntry({

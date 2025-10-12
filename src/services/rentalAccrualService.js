@@ -745,14 +745,36 @@ class RentalAccrualService {
             const monthEnd = new Date(year, month, 0);
             
             // Skip creating a monthly accrual for the lease start month
-            // The lease start month is always handled by lease_start (prorated), not monthly accrual
+            // The lease start month is handled by lease_start process, not monthly accrual
             if (student && (student.startDate || student.leaseStartDate)) {
                 const leaseStartDate = new Date(student.startDate || student.leaseStartDate);
                 if (!isNaN(leaseStartDate)) {
                     const leaseStartMonth = leaseStartDate.getMonth() + 1;
                     const leaseStartYear = leaseStartDate.getFullYear();
                     if (leaseStartMonth === month && leaseStartYear === year) {
-                        return { success: false, error: 'Lease start month is always handled by lease_start (prorated). Skipping monthly accrual.' };
+                        // Get residence to check rent proration configuration
+                        const Residence = require('../models/Residence');
+                        const residence = await Residence.findById(student.residence);
+                        
+                        if (residence && residence.paymentConfiguration && residence.paymentConfiguration.rentProration) {
+                            const prorationEnabled = residence.paymentConfiguration.rentProration.enabled;
+                            if (!prorationEnabled) {
+                                return { 
+                                    success: false, 
+                                    error: 'Lease start month handled by lease_start (full month charged). No monthly accrual needed when rent proration is disabled.' 
+                                };
+                            } else {
+                                return { 
+                                    success: false, 
+                                    error: 'Lease start month handled by lease_start (prorated). No monthly accrual needed.' 
+                                };
+                            }
+                        } else {
+                            return { 
+                                success: false, 
+                                error: 'Lease start month is always handled by lease_start. Skipping monthly accrual.' 
+                            };
+                        }
                     }
                 }
             }
