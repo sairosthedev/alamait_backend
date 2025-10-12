@@ -88,7 +88,7 @@ router.use(checkRole('admin', 'ceo'));
 
 // Routes
 router.post(
-  '/residences',
+  '/',
   [
     body('name').notEmpty().trim().withMessage('Name is required'),
     body('description').notEmpty().withMessage('Description is required'),
