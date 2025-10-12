@@ -2,6 +2,7 @@ const Transaction = require('../models/Transaction');
 const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
 const Invoice = require('../models/Invoice');
+const { Residence } = require('../models/Residence');
 const mongoose = require('mongoose');
 const { logTransactionOperation, logSystemOperation } = require('../utils/auditLogger');
 
@@ -678,7 +679,7 @@ class RentalAccrualService {
 
                 // Start from the first day of the month AFTER lease start month
                 // The lease start month is handled by lease_start (prorated), not monthly accrual
-                let startMonth = leaseStart.getMonth() + 1; // Convert to 1-based month
+                let startMonth = leaseStart.getMonth() + 2; // Convert to 1-based month + 1 for next month
                 let startYear = leaseStart.getFullYear();
                 
                 // Move to next month
@@ -753,7 +754,6 @@ class RentalAccrualService {
                     const leaseStartYear = leaseStartDate.getFullYear();
                     if (leaseStartMonth === month && leaseStartYear === year) {
                         // Get residence to check rent proration configuration
-                        const Residence = require('../models/Residence');
                         const residence = await Residence.findById(student.residence);
                         
                         if (residence && residence.paymentConfiguration && residence.paymentConfiguration.rentProration) {
