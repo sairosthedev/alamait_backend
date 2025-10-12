@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const mongoose = require('mongoose');
 const RentalAccrualService = require('./rentalAccrualService');
 const logger = require('../utils/logger'); // We'll create this if it doesn't exist
 
@@ -75,10 +76,29 @@ class MonthlyAccrualCronService {
     }
     
     /**
+     * Ensure database connection is available
+     */
+    async ensureDatabaseConnection() {
+        try {
+            if (mongoose.connection.readyState !== 1) {
+                console.log('🔄 Database not connected, attempting to connect...');
+                await mongoose.connect(process.env.MONGODB_URI);
+                console.log('✅ Database connection established');
+            }
+        } catch (error) {
+            console.error('❌ Failed to establish database connection:', error);
+            throw error;
+        }
+    }
+
+    /**
      * Process monthly accruals for the current month
      */
     async processMonthlyAccruals() {
         try {
+            // Ensure database connection is available
+            await this.ensureDatabaseConnection();
+            
             const now = new Date();
             const month = now.getMonth() + 1;
             const year = now.getFullYear();
@@ -137,6 +157,9 @@ class MonthlyAccrualCronService {
      */
     async checkExistingAccruals(month, year) {
         try {
+            // Ensure database connection is available
+            await this.ensureDatabaseConnection();
+            
             const TransactionEntry = require('../models/TransactionEntry');
             
             const existingAccruals = await TransactionEntry.find({
