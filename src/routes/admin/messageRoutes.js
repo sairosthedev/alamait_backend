@@ -38,6 +38,18 @@ const replyValidation = [
 // Get all messages (with filtering and pagination)
 router.get('/', auth, checkRole('admin'), messageController.getMessages);
 
+// Get unread messages count (must be before /:messageId routes)
+router.get('/unread-count', auth, checkRole('admin'), async (req, res) => {
+    try {
+        const Message = require('../../models/Message');
+        const count = await Message.countDocuments({ read: false });
+        res.json({ count });
+    } catch (error) {
+        console.error('Error getting unread messages count:', error);
+        res.status(500).json({ error: 'Failed to get unread messages count' });
+    }
+});
+
 // Create new message (announcement)
 router.post('/', 
     auth, 
@@ -104,17 +116,5 @@ router.delete('/:messageId/replies/:replyId',
     checkRole('admin'),
     messageController.deleteReply
 );
-
-// Get unread messages count
-router.get('/unread-count', auth, checkRole('admin'), async (req, res) => {
-    try {
-        const Message = require('../../models/Message');
-        const count = await Message.countDocuments({ read: false });
-        res.json({ count });
-    } catch (error) {
-        console.error('Error getting unread messages count:', error);
-        res.status(500).json({ error: 'Failed to get unread messages count' });
-    }
-});
 
 module.exports = router; 

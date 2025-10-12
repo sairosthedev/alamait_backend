@@ -649,7 +649,7 @@ class RentalAccrualService {
      */
     static async backfillMissingAccruals() {
         const throttleKey = 'backfill_missing_accruals_throttle';
-        const throttleMinutes = process.env.NODE_ENV === 'production' ? 5 : 1; // Reduced from 30 to 5 minutes in production
+        const throttleMinutes = process.env.NODE_ENV === 'production' ? 2 : 1; // Reduced from 30 to 2 minutes in production
         
         try {
             // Check if backfill was run recently (time-based throttle)
