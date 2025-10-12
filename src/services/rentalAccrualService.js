@@ -642,10 +642,9 @@ class RentalAccrualService {
     }
 
     /**
-     * Backfill missing accruals (lease start + monthly rent) from lease start up to current month
-     * - Includes lease start accruals for applications that don't have them
-     * - Includes monthly rent accruals (excludes the lease start month which is handled by lease_start)
-     * - Skips months that already have accrual entries
+     * Backfill missing monthly rent accruals from lease start up to current month
+     * - Excludes the lease start month (handled by lease_start)
+     * - Skips months that already have a monthly_rent_accrual entry
      * - Uses time-based throttling to prevent excessive execution
      */
     static async backfillMissingAccruals() {
@@ -654,7 +653,7 @@ class RentalAccrualService {
             const currentMonth = now.getMonth() + 1;
             const currentYear = now.getFullYear();
 
-            console.log(`\n🧩 Backfilling missing accruals (lease start + monthly) up to ${currentMonth}/${currentYear}...`);
+            console.log(`\n🧩 Backfilling missing monthly rent accruals up to ${currentMonth}/${currentYear}...`);
 
             // Load approved applications (active leases at any time)
             const approvedApplications = await mongoose.connection.db
@@ -665,8 +664,6 @@ class RentalAccrualService {
             let totalCreated = 0;
             let totalSkipped = 0;
             let totalErrors = 0;
-            let leaseStartCreated = 0;
-            let monthlyCreated = 0;
             const errors = [];
 
             for (const app of approvedApplications) {
@@ -676,44 +673,6 @@ class RentalAccrualService {
                     continue;
                 }
 
-                // Step 1: Check and create missing lease start accrual
-                try {
-                    const existingLeaseStart = await TransactionEntry.findOne({
-                        $or: [
-                            { 'metadata.applicationId': app._id.toString(), 'metadata.type': 'lease_start' },
-                            { 'reference': `LEASE_START_${app.applicationCode}` },
-                            { 'description': { $regex: `Lease start.*${app.firstName}.*${app.lastName}`, $options: 'i' } }
-                        ]
-                    });
-
-                    if (!existingLeaseStart) {
-                        console.log(`🔄 Creating missing lease start accrual for ${app.firstName} ${app.lastName} (${app.applicationCode})`);
-                        const leaseStartResult = await this.createLeaseStartAccrual(app);
-                        if (leaseStartResult && leaseStartResult.success) {
-                            leaseStartCreated++;
-                            totalCreated++;
-                            console.log(`✅ Lease start accrual created for ${app.firstName} ${app.lastName}`);
-                        } else {
-                            totalErrors++;
-                            errors.push({ 
-                                applicationId: app._id.toString(), 
-                                type: 'lease_start', 
-                                error: leaseStartResult?.error || 'Unknown error' 
-                            });
-                        }
-                    } else {
-                        totalSkipped++;
-                    }
-                } catch (err) {
-                    totalErrors++;
-                    errors.push({ 
-                        applicationId: app._id.toString(), 
-                        type: 'lease_start', 
-                        error: err.message 
-                    });
-                }
-
-                // Step 2: Create missing monthly accruals
                 // Determine backfill window: from month AFTER lease start up to current month
                 // Future months will be created by the monthly cron job on the 1st of each month
                 const windowEnd = new Date(Math.min(leaseEnd.getTime(), now.getTime()));
@@ -749,7 +708,6 @@ class RentalAccrualService {
                         } else {
                             const res = await this.createStudentRentAccrual(app, month, year);
                             if (res && res.success) {
-                                monthlyCreated++;
                                 totalCreated++;
                             } else {
                                 totalErrors++;
@@ -766,21 +724,14 @@ class RentalAccrualService {
                 }
             }
 
-            console.log(`✅ Backfill complete. Lease start created: ${leaseStartCreated}, Monthly created: ${monthlyCreated}, Total created: ${totalCreated}, Skipped existing: ${totalSkipped}, Errors: ${totalErrors}`);
+            console.log(`✅ Backfill complete. Created: ${totalCreated}, Skipped existing: ${totalSkipped}, Errors: ${totalErrors}`);
             if (errors.length > 0) {
                 console.log('⚠️ Backfill errors:', errors.slice(0, 10)); // print first few
             }
 
-            return { 
-                success: true, 
-                created: totalCreated, 
-                leaseStartCreated, 
-                monthlyCreated, 
-                skipped: totalSkipped, 
-                errors 
-            };
+            return { success: true, created: totalCreated, skipped: totalSkipped, errors };
         } catch (error) {
-            console.error('❌ Error backfilling accruals (lease start + monthly):', error);
+            console.error('❌ Error backfilling monthly rent accruals:', error);
             return { success: false, error: error.message };
         }
     }
