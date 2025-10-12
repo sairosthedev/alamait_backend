@@ -139,7 +139,6 @@ class MonthlyAccrualCronService {
             
             // After attempting current month, backfill any missing prior months
             // Only run backfill if we haven't run it recently (within last 6 hours in production)
-            const now = new Date();
             const lastBackfillRun = this.lastBackfillRun || new Date(0);
             const hoursSinceLastBackfill = (now - lastBackfillRun) / (1000 * 60 * 60);
             const minHoursBetweenBackfills = process.env.NODE_ENV === 'production' ? 6 : 1;
