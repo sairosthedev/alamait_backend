@@ -49,3 +49,4 @@ router.put('/user/:userId/room-validity', auth, checkAdminOrFinance, updateRoomV
 router.post('/sync-room-occupancy', auth, checkAdminOrFinance, syncRoomOccupancy);
 
 module.exports = router;
+
