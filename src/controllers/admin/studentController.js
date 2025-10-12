@@ -1386,149 +1386,109 @@ exports.manualAddStudent = async (req, res) => {
         student.applicationCode = application.applicationCode;
         await student.save();
 
-        // Automatically create debtor account for the new student with application link
-        let debtor = null;
-        try {
-            console.log(`🏗️  Creating debtor account for manually added student: ${student.email}`);
-            console.log(`   Debug - residenceId: ${residenceId} (type: ${typeof residenceId})`);
-            console.log(`   Debug - req.user: ${req.user ? 'exists' : 'undefined'}`);
-            console.log(`   Debug - req.user._id: ${req.user?._id || 'undefined'}`);
-            
-            // Validate required parameters before calling service
-            if (!residenceId) {
-                throw new Error('residenceId is required but was not provided');
-            }
-            if (!roomNumber) {
-                throw new Error('roomNumber is required but was not provided');
-            }
-            if (!req.user?._id) {
-                throw new Error('req.user._id is required but was not provided - authentication issue');
-            }
-            
-            debtor = await createDebtorForStudent(student, {
-                residenceId: residenceId,
-                roomNumber: roomNumber,
-                createdBy: req.user._id,
-                application: application._id, // Link to the application
-                applicationCode: application.applicationCode, // Link application code
-                startDate: parsedStartDate,
-                endDate: parsedEndDate,
-                roomPrice: finalMonthlyRent
-            });
-            
-            if (debtor) {
-                console.log(`✅ Debtor account created for manually added student ${student.email}`);
-                console.log(`   Application Code: ${application.applicationCode}`);
-                console.log(`   Debtor Code: ${debtor.debtorCode}`);
+        // 🆕 SCHEDULE ALL BACKGROUND PROCESSES - Run after student creation is complete
+        console.log(`🔄 Scheduling all background processes for application ${application.applicationCode}...`);
+        
+        // Schedule debtor creation, email sending, and rental accrual to run in background
+        setTimeout(async () => {
+            try {
+                console.log(`🏗️  Starting background debtor creation for ${student.email}...`);
                 
-                // Create audit log for debtor creation
-                await createAuditLog({
-                    action: 'create',
-                    collection: 'Debtor',
-                    recordId: debtor._id,
-                    userId: req.user._id,
-                    before: null,
-                    after: {
-                        debtorCode: debtor.debtorCode,
-                        user: debtor.user,
-                        accountCode: debtor.accountCode,
-                        status: debtor.status,
-                        currentBalance: debtor.currentBalance,
-                        totalOwed: debtor.totalOwed,
-                        residence: debtor.residence,
-                        roomNumber: debtor.roomNumber
-                    },
-                    details: `Manual debtor creation - ${debtor.debtorCode} for student ${student.email}`
+                // Validate required parameters before calling service
+                if (!residenceId) {
+                    throw new Error('residenceId is required but was not provided');
+                }
+                if (!roomNumber) {
+                    throw new Error('roomNumber is required but was not provided');
+                }
+                if (!req.user?._id) {
+                    throw new Error('req.user._id is required but was not provided - authentication issue');
+                }
+                
+                const debtor = await createDebtorForStudent(student, {
+                    residenceId: residenceId,
+                    roomNumber: roomNumber,
+                    createdBy: req.user._id,
+                    application: application._id, // Link to the application
+                    applicationCode: application.applicationCode, // Link application code
+                    startDate: parsedStartDate,
+                    endDate: parsedEndDate,
+                    roomPrice: finalMonthlyRent
                 });
                 
-                // Link the debtor back to the application
-                application.debtor = debtor._id;
-                await application.save();
-                console.log(`🔗 Linked debtor ${debtor._id} to application ${application._id}`);
-                
-                // 🆕 TRIGGER RENTAL ACCRUAL SERVICE - Lease starts now!
-                try {
-                    console.log(`🏠 Triggering rental accrual service for lease start...`);
+                if (debtor) {
+                    console.log(`✅ Background debtor account created for ${student.email}`);
+                    console.log(`   Application Code: ${application.applicationCode}`);
+                    console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                    
+                    // Create audit log for debtor creation
+                    await createAuditLog({
+                        action: 'create',
+                        collection: 'Debtor',
+                        recordId: debtor._id,
+                        userId: req.user._id,
+                        before: null,
+                        after: {
+                            debtorCode: debtor.debtorCode,
+                            user: debtor.user,
+                            accountCode: debtor.accountCode,
+                            status: debtor.status,
+                            currentBalance: debtor.currentBalance,
+                            totalOwed: debtor.totalOwed,
+                            residence: debtor.residence,
+                            roomNumber: debtor.roomNumber
+                        },
+                        details: `Manual debtor creation - ${debtor.debtorCode} for student ${student.email}`
+                    });
+                    
+                    // Link the debtor back to the application
+                    application.debtor = debtor._id;
+                    await application.save();
+                    console.log(`🔗 Linked debtor ${debtor._id} to application ${application._id}`);
+                    
+                    // Now trigger rental accrual service
+                    console.log(`🏠 Starting background rental accrual service for ${application.firstName} ${application.lastName}...`);
                     const RentalAccrualService = require('../../services/rentalAccrualService');
                     
                     const accrualResult = await RentalAccrualService.processLeaseStart(application);
                     
                     if (accrualResult && accrualResult.success) {
-                        console.log(`✅ Rental accrual service completed successfully`);
+                        console.log(`✅ Background rental accrual service completed successfully`);
                         console.log(`   - Initial accounting entries created`);
                         console.log(`   - Prorated rent, admin fees, and deposits recorded`);
                         console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
                     } else {
-                        console.log(`⚠️  Rental accrual service completed with warnings:`, accrualResult?.error || 'Unknown issue');
+                        console.log(`⚠️  Background rental accrual service completed with warnings:`, accrualResult?.error || 'Unknown issue');
                     }
-                } catch (accrualError) {
-                    console.error(`❌ Error in rental accrual service:`, accrualError);
-                    // Don't fail the student creation if accrual fails
-                    console.log(`ℹ️  Student created successfully, but rental accrual failed. Manual intervention may be needed.`);
+
+                    // Trigger monthly accrual process after rental accrual is complete
+                    setTimeout(async () => {
+                        try {
+                            console.log(`⏰ Triggering monthly accrual process for application ${application.applicationCode}...`);
+                            const MonthlyAccrualCronService = require('../../services/monthlyAccrualCronService');
+                            
+                            await MonthlyAccrualCronService.triggerMonthlyAccrual();
+                            console.log(`✅ Monthly accrual process completed for manual add ${application.applicationCode}`);
+                        } catch (monthlyAccrualError) {
+                            console.error(`❌ Error in background monthly accrual process:`, monthlyAccrualError);
+                        }
+                    }, 30000); // Wait 30 seconds after rental accrual completes
+                    
+                } else {
+                    console.log(`⚠️  Background debtor creation returned null - this indicates a problem`);
+                    console.log(`   Student: ${student.email}`);
+                    console.log(`   Application: ${application.applicationCode}`);
+                    console.log(`   Residence: ${residenceId}`);
+                    console.log(`   Room: ${roomNumber}`);
                 }
-            } else {
-                console.log(`⚠️  Debtor creation returned null - this indicates a problem`);
-                console.log(`   Student: ${student.email}`);
-                console.log(`   Application: ${application.applicationCode}`);
-                console.log(`   Residence: ${residenceId}`);
-                console.log(`   Room: ${roomNumber}`);
-                console.log(`   Start Date: ${parsedStartDate}`);
-                console.log(`   End Date: ${parsedEndDate}`);
-                console.log(`   Room Price: ${monthlyRent}`);
                 
-                // CRITICAL: Fail the request if debtor creation fails
-                throw new Error('Debtor creation failed - returned null. This is required for student functionality.');
+            } catch (debtorError) {
+                console.error(`❌ Error in background debtor creation:`, debtorError);
+                console.log(`ℹ️  Student created successfully, but background debtor creation failed. Manual intervention may be needed.`);
             }
-        } catch (debtorError) {
-            console.error(`❌ Failed to create debtor account:`, debtorError);
-            console.error(`   Error details:`, debtorError.message);
-            console.error(`   Stack trace:`, debtorError.stack);
-            console.error(`   Input data:`, {
-                student: student.email,
-                application: application.applicationCode,
-                residenceId,
-                roomNumber,
-                startDate: parsedStartDate,
-                endDate: parsedEndDate,
-                monthlyRent: finalMonthlyRent,
-                securityDeposit: finalSecurityDeposit,
-                adminFee: finalAdminFee
-            });
-            
-            // CRITICAL: Clean up created data and fail the request
-            console.log('🧹 Cleaning up created data due to debtor creation failure...');
-            
-            try {
-                // Remove the application
-                await Application.deleteOne({ _id: application._id });
-                console.log('✅ Application cleaned up');
-                
-                // Remove the student
-                await User.deleteOne({ _id: student._id });
-                console.log('✅ Student cleaned up');
-                
-                // Reset room occupancy
-                if (room) {
-                    room.currentOccupancy = Math.max(0, room.currentOccupancy - 1);
-                    if (room.currentOccupancy === 0) {
-                        room.status = 'available';
-                    } else if (room.currentOccupancy < room.capacity) {
-                        room.status = 'reserved';
-                    }
-                    await residence.save();
-                    console.log('✅ Room occupancy reset');
-                }
-            } catch (cleanupError) {
-                console.error('❌ Error during cleanup:', cleanupError.message);
-            }
-            
-            // Return error response
-            return res.status(500).json({ 
-                error: 'Failed to create student - debtor account creation failed',
-                details: debtorError.message,
-                message: 'Student creation failed because debtor account could not be created. This is required for proper functionality.'
-            });
-        }
+        }, 2000); // Wait 2 seconds after student creation response is sent
+        
+        console.log(`✅ All background processes scheduled for application ${application.applicationCode}`);
 
         // Update room occupancy and status (following existing logic)
         room.currentOccupancy = (room.currentOccupancy || 0) + 1;
@@ -1600,57 +1560,65 @@ exports.manualAddStudent = async (req, res) => {
             }
         }
 
-        // Send welcome email with login details (following existing application approval logic)
-        await sendEmail({
-            to: email,
-            subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
-            text: `
-                Dear ${firstName} ${lastName},
+        // 🆕 SCHEDULE WELCOME EMAIL - Send in background to avoid timeout
+        setTimeout(async () => {
+            try {
+                console.log(`📧 Sending welcome email to ${email}...`);
+                await sendEmail({
+                    to: email,
+                    subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
+                    text: `
+                        Dear ${firstName} ${lastName},
 
-                Welcome to Alamait Student Accommodation! Your account has been successfully created and your application has been approved.
+                        Welcome to Alamait Student Accommodation! Your account has been successfully created and your application has been approved.
 
-                ACCOUNT DETAILS:
-                Email: ${email}
-                ${tempPassword ? `Temporary Password: ${tempPassword}` : 'Password: Use your existing password'}
+                        ACCOUNT DETAILS:
+                        Email: ${email}
+                        ${tempPassword ? `Temporary Password: ${tempPassword}` : 'Password: Use your existing password'}
 
-                APPLICATION DETAILS:
-                Application Code: ${application.applicationCode}
-                Allocated Room: ${roomNumber}
-                Approval Date: ${approvalDate.toLocaleDateString()}
-                Valid Until: ${validUntil.toLocaleDateString()}
+                        APPLICATION DETAILS:
+                        Application Code: ${application.applicationCode}
+                        Allocated Room: ${roomNumber}
+                        Approval Date: ${approvalDate.toLocaleDateString()}
+                        Valid Until: ${validUntil.toLocaleDateString()}
 
-                ROOM ASSIGNMENT:
-                Residence: ${residence.name}
-                Room: ${roomNumber}
-                Start Date: ${new Date(startDate).toLocaleDateString()}
-                End Date: ${new Date(endDate).toLocaleDateString()}
+                        ROOM ASSIGNMENT:
+                        Residence: ${residence.name}
+                        Room: ${roomNumber}
+                        Start Date: ${new Date(startDate).toLocaleDateString()}
+                        End Date: ${new Date(endDate).toLocaleDateString()}
 
-                PAYMENT DETAILS:
-                Monthly Rent: $${monthlyRent}
-                Admin Fee: $${adminFee || 0}
-                Security Deposit: $${securityDeposit || 0}
-                Total Initial Payment: $${monthlyRent + (adminFee || 0) + (securityDeposit || 0)}
+                        PAYMENT DETAILS:
+                        Monthly Rent: $${monthlyRent}
+                        Admin Fee: $${adminFee || 0}
+                        Security Deposit: $${securityDeposit || 0}
+                        Total Initial Payment: $${monthlyRent + (adminFee || 0) + (securityDeposit || 0)}
 
-                IMPORTANT:
-                1. Please log in to your account using the temporary password above
-                2. Change your password immediately after first login
-                3. Review and sign your lease agreement (attached)
-                4. Upload your signed lease agreement through your student portal
+                        IMPORTANT:
+                        1. Please log in to your account using the temporary password above
+                        2. Change your password immediately after first login
+                        3. Review and sign your lease agreement (attached)
+                        4. Upload your signed lease agreement through your student portal
 
-                LOGIN URL: ${process.env.FRONTEND_URL || 'http://localhost:5173' ||'https://alamait.vercel.app' || 'https://alamait.com'}/login
+                        LOGIN URL: ${process.env.FRONTEND_URL || 'http://localhost:5173' ||'https://alamait.vercel.app' || 'https://alamait.com'}/login
 
-                If you have any questions, please contact our support team.
+                        If you have any questions, please contact our support team.
 
-                Best regards,
-                Alamait Student Accommodation Team
-            `,
-            attachments: attachments.length > 0 ? attachments : undefined
-        });
+                        Best regards,
+                        Alamait Student Accommodation Team
+                    `,
+                    attachments: attachments.length > 0 ? attachments : undefined
+                });
+                console.log(`✅ Welcome email sent to ${email}`);
+            } catch (emailError) {
+                console.error(`❌ Error sending welcome email to ${email}:`, emailError);
+            }
+        }, 1000); // Wait 1 second after response is sent
 
         // Return success response with login details (following existing application response format)
         res.status(201).json({
             success: true,
-            message: 'Student added successfully with room assignment and lease',
+            message: 'Student added successfully with room assignment and lease. Background processes (debtor account, welcome email, accounting entries, monthly accruals) are running and will complete within 3-5 minutes.',
             application: {
                 id: application._id,
                 applicationCode: application.applicationCode,
@@ -1670,17 +1638,10 @@ exports.manualAddStudent = async (req, res) => {
                 endDate,
                 applicationCode: application.applicationCode
             },
-            debtor: debtor ? {
-                id: debtor._id,
-                debtorCode: debtor.debtorCode,
-                accountCode: debtor.accountCode,
-                status: debtor.status,
-                currentBalance: debtor.currentBalance,
-                totalOwed: debtor.totalOwed,
-                created: true
-            } : {
-                created: false,
-                error: 'Debtor creation failed - check server logs for details'
+            debtor: {
+                status: 'scheduled',
+                message: 'Debtor account will be created in the background within 2-3 minutes',
+                created: false
             },
             loginDetails: {
                 email,
@@ -1703,6 +1664,11 @@ exports.manualAddStudent = async (req, res) => {
                 currentOccupancy: room.currentOccupancy,
                 capacity: room.capacity,
                 occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+            },
+            backgroundProcessing: {
+                status: 'scheduled',
+                message: 'Accounting entries and monthly accruals will be processed within 3-5 minutes',
+                estimatedCompletion: new Date(Date.now() + 5 * 60 * 1000).toISOString() // 5 minutes from now
             }
         });
 

@@ -29,12 +29,10 @@ class MonthlyAccrualCronService {
                 return;
             }
             
-            // Schedule: Run every 5 minutes in production, 1st of month at 1:00 AM in development
+            // Schedule: Run every 5 minutes in both production and development
             // Cron format: '*/5 * * * *' = every 5 minutes
-            const cronSchedule = process.env.NODE_ENV === 'production' ? '*/5 * * * *' : '0 1 1 * *';
-            const scheduleDescription = process.env.NODE_ENV === 'production' 
-                ? 'Every 5 minutes (Zimbabwe time)' 
-                : '1st of each month at 1:00 AM (Zimbabwe time)';
+            const cronSchedule = '*/5 * * * *';
+            const scheduleDescription = 'Every 5 minutes (Zimbabwe time)';
             
             this.job = cron.schedule(cronSchedule, async () => {
                 await this.processMonthlyAccrualsInstance();
@@ -50,13 +48,9 @@ class MonthlyAccrualCronService {
             console.log(`   Next run: ${this.nextRun}`);
             console.log(`   Schedule: ${scheduleDescription}`);
             
-            // Only run immediately if it's the first time and we're in development
-            if (!this.lastRun && process.env.NODE_ENV !== 'production') {
-                console.log('🔄 Running initial monthly accrual check (development mode)...');
-                setTimeout(() => this.processMonthlyAccrualsInstance(), 5000); // Wait 5 seconds
-            } else if (process.env.NODE_ENV === 'production') {
-                console.log('🏭 Production mode: Cron service started, waiting for scheduled execution');
-            }
+            // Run initial check after 5 seconds to ensure system is ready
+            console.log('🔄 Running initial monthly accrual check in 5 seconds...');
+            setTimeout(() => this.processMonthlyAccrualsInstance(), 5000);
             
         } catch (error) {
             console.error('❌ Failed to start monthly accrual cron service:', error);
@@ -121,6 +115,22 @@ class MonthlyAccrualCronService {
     static async processMonthlyAccruals() {
         const instance = new MonthlyAccrualCronService();
         return await instance.processMonthlyAccrualsInstance();
+    }
+
+    /**
+     * Manually trigger monthly accrual process (useful after manual add)
+     */
+    static async triggerMonthlyAccrual() {
+        try {
+            console.log('🔄 Manually triggering monthly accrual process...');
+            const instance = new MonthlyAccrualCronService();
+            const result = await instance.processMonthlyAccrualsInstance();
+            console.log('✅ Manual monthly accrual process completed');
+            return result;
+        } catch (error) {
+            console.error('❌ Error in manual monthly accrual trigger:', error);
+            throw error;
+        }
     }
 
     async processMonthlyAccrualsInstance() {

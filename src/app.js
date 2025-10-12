@@ -245,6 +245,10 @@ app.use('/api/residences', residenceRoutes);
 // Alias routes for frontend compatibility
 app.use('/api/applications/public', publicApplicationRoutes);
 
+// Add alias routes for dashboard endpoints
+app.use('/api/applications', adminApplicationRoutes);
+app.use('/api/messages', adminMessageRoutes);
+
 // Re-application routes for existing students
 app.use('/api/reapplications', reapplicationRoutes);
 
