@@ -746,14 +746,29 @@ requestSchema.pre('validate', function(next) {
         
         // For student_maintenance type, make department and deliveryLocation optional
         if (this.type !== 'student_maintenance') {
-            if (!this.department) {
-                errors.push('department: Department is required for admin requests');
-            }
-            if (!this.requestedBy) {
-                errors.push('requestedBy: RequestedBy is required for admin requests');
-            }
-            if (!this.deliveryLocation) {
-                errors.push('deliveryLocation: DeliveryLocation is required for admin requests');
+            // Finance requests (including salary requests) have different validation rules
+            if (this.type === 'financial') {
+                console.log('🔍 Finance request detected - applying finance-specific validation');
+                // Finance requests don't require deliveryLocation (it's for physical deliveries)
+                // But they still need department and requestedBy for tracking
+                if (!this.department) {
+                    errors.push('department: Department is required for finance requests');
+                }
+                if (!this.requestedBy) {
+                    errors.push('requestedBy: RequestedBy is required for finance requests');
+                }
+                // deliveryLocation is optional for finance requests
+            } else {
+                // All other admin requests require these fields
+                if (!this.department) {
+                    errors.push('department: Department is required for admin requests');
+                }
+                if (!this.requestedBy) {
+                    errors.push('requestedBy: RequestedBy is required for admin requests');
+                }
+                if (!this.deliveryLocation) {
+                    errors.push('deliveryLocation: DeliveryLocation is required for admin requests');
+                }
             }
         }
         

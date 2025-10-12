@@ -318,6 +318,9 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                     })),
                     totalEstimatedCost: totalForResidence,
                     submittedBy: req.user?._id,
+                    // Provide default values for finance requests to satisfy validation
+                    department: 'Finance',
+                    requestedBy: req.user?.email || 'Finance Department',
                     // Set finance approval as already done (since finance created this)
                     approval: {
                         admin: { approved: true, approvedBy: req.user?._id, approvedAt: new Date() },
@@ -496,6 +499,9 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                     allocatedEmployees: allocatedEmployees,
                     totalEstimatedCost: totalForResidence,
                     submittedBy: req.user?._id,
+                    // Provide default values for finance requests to satisfy validation
+                    department: 'Finance',
+                    requestedBy: req.user?.email || 'Finance Department',
                     // Set finance approval as already done (since finance created this)
                     approval: {
                         admin: { approved: true, approvedBy: req.user?._id, approvedAt: new Date() },

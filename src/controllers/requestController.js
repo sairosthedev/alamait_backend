@@ -222,11 +222,11 @@ exports.getRequestById = async (req, res) => {
 // Create new request
 exports.createRequest = async (req, res) => {
     try {
-        // Set longer timeout for salary request creation
-        if (req.body.type === 'financial' && (req.body.category === 'salary' || req.body.title?.toLowerCase().includes('salary'))) {
-            req.setTimeout(300000); // 5 minutes for salary requests
+        // Set longer timeout for finance requests (including salary requests)
+        if (req.body.type === 'financial') {
+            req.setTimeout(300000); // 5 minutes for finance requests
             res.setTimeout(300000);
-            console.log('🕐 Extended timeout for salary request creation');
+            console.log('🕐 Extended timeout for finance request creation');
         }
 
         console.log('🚀 CREATE REQUEST - Starting request creation...');
@@ -1002,8 +1002,8 @@ exports.createRequest = async (req, res) => {
             console.error('Error sending salaries financial request to CEO:', notifyErr.message);
         }
         
-        // Add to request history (skip for salary requests to improve performance)
-        if (!(request.type === 'financial' && (request.category === 'salary' || request.title?.toLowerCase().includes('salary')))) {
+        // Add to request history (skip for finance requests to improve performance)
+        if (request.type !== 'financial') {
             request.requestHistory.push({
                 date: request.dateRequested,
                 action: 'Request created',
@@ -1013,8 +1013,8 @@ exports.createRequest = async (req, res) => {
         }
         
         // Populate vendor details on the main request if any quotations have vendors
-        // Skip for salary requests to improve performance
-        if (!(request.type === 'financial' && (request.category === 'salary' || request.title?.toLowerCase().includes('salary')))) {
+        // Skip for finance requests to improve performance
+        if (request.type !== 'financial') {
             if (request.items && request.items.length > 0) {
                 for (const item of request.items) {
                     if (item.quotations && item.quotations.length > 0) {
@@ -1043,11 +1043,11 @@ exports.createRequest = async (req, res) => {
         await request.save();
         
         
-        // For salary requests, skip population to improve performance
+        // For finance requests, skip population to improve performance
         let populatedRequest;
-        if (request.type === 'financial' && (request.category === 'salary' || request.title?.toLowerCase().includes('salary'))) {
+        if (request.type === 'financial') {
             populatedRequest = request;
-            console.log('⚡ Skipping population for salary request to improve performance');
+            console.log('⚡ Skipping population for finance request to improve performance');
         } else {
             populatedRequest = await Request.findById(request._id)
                 .populate('submittedBy', 'firstName lastName email role')
@@ -1055,8 +1055,8 @@ exports.createRequest = async (req, res) => {
         }
         
         // Send email notifications (non-blocking) - moved after population
-        // Skip email notifications for salary requests to improve performance
-        if (!(request.type === 'financial' && (request.category === 'salary' || request.title?.toLowerCase().includes('salary')))) {
+        // Skip email notifications for finance requests to improve performance
+        if (request.type !== 'financial') {
             try {
                 console.log('🔍 Request creation email debugging:');
                 console.log('req.user:', req.user ? 'Present' : 'Missing');
@@ -1085,7 +1085,7 @@ exports.createRequest = async (req, res) => {
                 // Don't fail the request if email fails
             }
         } else {
-            console.log('📧 Skipping email notifications for salary request to improve performance');
+            console.log('📧 Skipping email notifications for finance request to improve performance');
         }
         
         res.status(201).json(populatedRequest);
