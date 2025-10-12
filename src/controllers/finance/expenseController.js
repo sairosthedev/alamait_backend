@@ -831,6 +831,22 @@ exports.markExpenseAsPaid = async (req, res) => {
             // Get role-specific petty cash account based on user role
             sourceAccount = await getPettyCashAccountByRole(req.user.role);
             console.log(`[Payment] Using role-specific petty cash account for ${finalPaymentMethod} payment by ${req.user.role}`);
+            
+            // If role-specific account not found, try fallback accounts
+            if (!sourceAccount) {
+                console.log(`⚠️ Role-specific petty cash account not found for ${req.user.role}, trying fallback accounts...`);
+                
+                // Try common cash accounts as fallback
+                const fallbackAccounts = ['1015', '1000', '1010', '1011', '1012']; // Cash, Bank, General Petty Cash, Admin Petty Cash, Finance Petty Cash
+                
+                for (const accountCode of fallbackAccounts) {
+                    sourceAccount = await Account.findOne({ code: accountCode, type: 'Asset' });
+                    if (sourceAccount) {
+                        console.log(`✅ Using fallback account: ${sourceAccount.code} - ${sourceAccount.name}`);
+                        break;
+                    }
+                }
+            }
         } else {
             // Use the mapping for other payment methods
             const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[finalPaymentMethod] || '1011'; // Default to Admin Petty Cash
@@ -839,7 +855,25 @@ exports.markExpenseAsPaid = async (req, res) => {
         
         if (!sourceAccount) {
             console.error('[Payment] Source account not found for payment method:', finalPaymentMethod);
-            throw new Error('Source account not found for payment method: ' + finalPaymentMethod);
+            console.error('[Payment] User role:', req.user.role);
+            console.error('[Payment] Available accounts check failed');
+            
+            // Try to find any cash or bank account as last resort
+            const lastResortAccount = await Account.findOne({
+                $or: [
+                    { code: '1015', type: 'Asset' }, // Cash
+                    { code: '1000', type: 'Asset' }, // Bank
+                    { name: /cash/i, type: 'Asset' },
+                    { name: /bank/i, type: 'Asset' }
+                ]
+            });
+            
+            if (lastResortAccount) {
+                console.log(`🔄 Using last resort account: ${lastResortAccount.code} - ${lastResortAccount.name}`);
+                sourceAccount = lastResortAccount;
+            } else {
+                throw new Error('Source account not found for payment method: ' + finalPaymentMethod + '. No cash or bank accounts available.');
+            }
         }
         
         // Get expense account using dynamic resolver
