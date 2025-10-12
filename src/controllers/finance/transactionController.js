@@ -2175,10 +2175,10 @@ class TransactionController {
             }
             console.log('💰 Payment transactions found:', paymentTransactions.length);
 
-            // Step 4: Find lease start transactions to reverse
+            // Step 4: Find ALL accrual transactions to reverse (lease start + monthly)
             // Search by multiple criteria to catch all related transactions
             // BUT exclude already reversed transactions
-            const leaseStartTransactions = await TransactionEntry.find({
+            const allAccrualTransactions = await TransactionEntry.find({
                 $and: [
                     {
                         $or: [
@@ -2194,9 +2194,14 @@ class TransactionController {
                     },
                     {
                         $or: [
+                            // Lease start accruals
                             { 'metadata.type': 'lease_start' },
                             { 'description': { $regex: 'lease start', $options: 'i' } },
-                            { 'transactionId': { $regex: 'LEASE_START', $options: 'i' } }
+                            { 'transactionId': { $regex: 'LEASE_START', $options: 'i' } },
+                            // Monthly rent accruals
+                            { 'metadata.type': 'monthly_rent_accrual' },
+                            { 'description': { $regex: 'monthly rent accrual', $options: 'i' } },
+                            { 'transactionId': { $regex: 'MONTHLY_ACCRUAL', $options: 'i' } }
                         ]
                     },
                     { status: 'posted' },
@@ -2211,15 +2216,16 @@ class TransactionController {
                 ]
             });
 
-            console.log('🔄 Lease start transactions found:', leaseStartTransactions.length);
+            console.log('🔄 All accrual transactions found:', allAccrualTransactions.length);
 
-            // Step 5: Reverse all lease start accruals
+            // Step 5: Reverse all accruals (lease start + monthly)
             const accrualReversals = [];
-            for (const transaction of leaseStartTransactions) {
+            for (const transaction of allAccrualTransactions) {
                 try {
                     // Create reversal transaction directly instead of calling the endpoint
                     const reversalDate = forfeitureDate;
-                    const reversalTransactionId = `REVERSE-LEASE-START-${Date.now()}`;
+                    const transactionType = transaction.metadata?.type || 'unknown';
+                    const reversalTransactionId = `REVERSE-${transactionType.toUpperCase()}-${Date.now()}`;
                     
                     // Build reversal entries - reverse ALL entries from the original transaction
                     const reversalEntries = transaction.entries.map(entry => {
@@ -2237,7 +2243,7 @@ class TransactionController {
                                 originalEntryId: entry._id,
                                 originalTransactionId: transaction.transactionId,
                                 reason: reason,
-                                transactionType: 'lease_start_accrual_reversal',
+                                transactionType: `${transactionType}_accrual_reversal`,
                                 createdBy: 'system',
                                 createdByEmail: 'system@alamait.com',
                                 isReversal: true,
@@ -2250,7 +2256,7 @@ class TransactionController {
                     const reversalTransaction = new TransactionEntry({
                         transactionId: reversalTransactionId,
                         date: reversalDate,
-                        description: `Complete lease start accrual reversal for forfeiture: ${studentName}`,
+                        description: `Complete ${transactionType} accrual reversal for forfeiture: ${studentName}`,
                         reference: `FORFEIT-REVERSE-${studentId}`,
                         entries: reversalEntries,
                         totalDebit: transaction.totalCredit, // Reversed
@@ -2269,7 +2275,8 @@ class TransactionController {
                             originalTransactionId: transaction.transactionId,
                             originalTransaction: transaction._id,
                             reason: reason,
-                            transactionType: 'lease_start_complete_reversal',
+                            transactionType: `${transactionType}_complete_reversal`,
+                            originalAccrualType: transactionType,
                             residence: transaction.residence,
                             createdBy: 'system',
                             createdByEmail: 'system@alamait.com',
@@ -2292,9 +2299,9 @@ class TransactionController {
                         reversalId: reversalTransaction._id
                     });
 
-                    console.log('✅ Lease start accrual reversal created:', reversalTransaction._id);
+                    console.log(`✅ ${transactionType} accrual reversal created:`, reversalTransaction._id);
                 } catch (reversalError) {
-                    console.error('❌ Error reversing lease start transaction:', reversalError);
+                    console.error('❌ Error reversing accrual transaction:', reversalError);
                 }
             }
 
