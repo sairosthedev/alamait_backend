@@ -187,6 +187,16 @@ app.use('/api/requests', (req, res, next) => {
   next();
 });
 
+// Add timeout middleware for salary request routes
+app.use('/api/finance/employees', (req, res, next) => {
+  // Set longer timeout for salary request creation
+  if (req.method === 'POST' && (req.path.includes('salary-requests') || req.path.includes('salary-request'))) {
+    req.setTimeout(300000); // 5 minutes for salary request operations
+    res.setTimeout(300000);
+  }
+  next();
+});
+
 // Basic route for root path
 app.get('/', (req, res) => {
     res.json({ 

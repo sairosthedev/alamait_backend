@@ -125,6 +125,10 @@ exports.createSalaryRequestByResidence = async (req, res) => {
         if (!month || !year) {
             return res.status(400).json({ error: 'month and year are required' });
         }
+
+        // Set longer timeout for this operation
+        req.setTimeout(300000); // 5 minutes
+        res.setTimeout(300000);
         
         // Extract month from description if it contains date info
         let actualMonth = parseInt(month);
@@ -140,11 +144,21 @@ exports.createSalaryRequestByResidence = async (req, res) => {
             }
         }
 
-        // Load employees
-        const employeeDocs = await Employee.find({ _id: { $in: employees } }).lean();
+        // Load employees and residences in parallel for better performance
+        const [employeeDocs, residenceDocs] = await Promise.all([
+            Employee.find({ _id: { $in: employees } }).lean(),
+            Residence.find({}).lean()
+        ]);
+        
         if (employeeDocs.length === 0) {
             return res.status(404).json({ error: 'Employees not found' });
         }
+
+        // Create residence lookup map for faster access
+        const residenceMap = {};
+        residenceDocs.forEach(res => {
+            residenceMap[res._id.toString()] = res;
+        });
 
         // Group employees by residence
         const employeesByResidence = {};
@@ -197,16 +211,14 @@ exports.createSalaryRequestByResidence = async (req, res) => {
             employeeCount: employeesByResidence[resId].length
         })));
 
-                const createdRequests = [];
-
-        // Create separate requests for each residence
-        for (const [residenceId, residenceEmployees] of Object.entries(employeesByResidence)) {
-            if (residenceEmployees.length === 0) continue; // Skip empty residences
+        // Create separate requests for each residence in parallel
+        const requestPromises = Object.entries(employeesByResidence).map(async ([residenceId, residenceEmployees]) => {
+            if (residenceEmployees.length === 0) return null; // Skip empty residences
             
             console.log(`Creating request for residence ${residenceId} with ${residenceEmployees.length} employees`);
             
             try {
-                const residence = await Residence.findById(residenceId);
+                const residence = residenceMap[residenceId];
                 const residenceName = residence ? residence.name : 'Unknown Residence';
                 
                 console.log(`Residence found: ${residenceName}`);
@@ -266,33 +278,38 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                 await reqDoc.save();
                 console.log(`Request saved successfully with ID: ${reqDoc._id}`);
                 
-                        // Log the salary request creation
-                        await logSalaryRequestOperation(
-                            'create',
-                            reqDoc,
-                            req.user._id,
-                            `Created salary request for ${residenceName} with ${residenceEmployees.length} employees`,
-                            req
-                        );
+                // Log the salary request creation (non-blocking)
+                logSalaryRequestOperation(
+                    'create',
+                    reqDoc,
+                    req.user._id,
+                    `Created salary request for ${residenceName} with ${residenceEmployees.length} employees`,
+                    req
+                ).catch(err => console.error('Audit logging failed:', err));
 
-                        createdRequests.push({
-                            request: reqDoc,
-                            residence: residenceName,
-                            total: totalForResidence,
-                            employeeCount: residenceEmployees.length,
-                            employees: residenceEmployees.map(e => ({
-                                id: e._id,
-                                name: e.fullName || `${e.firstName} ${e.lastName}`,
-                                jobTitle: e.jobTitle,
-                                salary: e.allocatedSalary,
-                                allocationPercentage: e.allocationPercentage
-                            }))
-                        });
+                return {
+                    request: reqDoc,
+                    residence: residenceName,
+                    total: totalForResidence,
+                    employeeCount: residenceEmployees.length,
+                    employees: residenceEmployees.map(e => ({
+                        id: e._id,
+                        name: e.fullName || `${e.firstName} ${e.lastName}`,
+                        jobTitle: e.jobTitle,
+                        salary: e.allocatedSalary,
+                        allocationPercentage: e.allocationPercentage
+                    }))
+                };
+
             } catch (residenceError) {
                 console.error(`Error creating request for residence ${residenceId}:`, residenceError);
                 throw residenceError;
             }
-        }
+        });
+
+        // Wait for all requests to be created in parallel
+        const results = await Promise.all(requestPromises);
+        const createdRequests = results.filter(result => result !== null);
 
         return res.status(201).json({
             message: `Created ${createdRequests.length} salary requests by residence`,
@@ -317,6 +334,10 @@ exports.createSalaryRequestByResidence = async (req, res) => {
 // Supports two backends: MonthlyRequest (preferred) or Request fallback (category: Salaries)
 exports.createSalaryRequest = async (req, res) => {
     try {
+        // Set longer timeout for this operation
+        req.setTimeout(300000); // 5 minutes
+        res.setTimeout(300000);
+
         const { employees = [], month, year, description, residence, notes } = req.body || {};
         if (!Array.isArray(employees) || employees.length === 0) {
             return res.status(400).json({ error: 'No employees provided' });
