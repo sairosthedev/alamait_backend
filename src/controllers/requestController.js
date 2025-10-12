@@ -222,6 +222,12 @@ exports.getRequestById = async (req, res) => {
 // Create new request
 exports.createRequest = async (req, res) => {
     try {
+        // Set longer timeout for salary request creation
+        if (req.body.type === 'financial' && req.body.category === 'salary') {
+            req.setTimeout(300000); // 5 minutes for salary requests
+            res.setTimeout(300000);
+        }
+
         console.log('🚀 CREATE REQUEST - Starting request creation...');
         console.log('📋 Request body keys:', Object.keys(req.body));
         console.log('📋 Request body content:');
