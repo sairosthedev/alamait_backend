@@ -550,8 +550,8 @@ async function backfillAllTransactions() {
             if (result.success) {
                 processedCount++;
                 if (result.leaseStartCreated) totalLeaseStartCreated++;
-                totalMonthlyTransactionsCreated += result.monthlyTransactionsCreated;
-                totalDuplicatesRemoved += result.duplicatesRemoved;
+                totalMonthlyTransactionsCreated += (result.monthlyTransactionsCreated || 0);
+                totalDuplicatesRemoved += (result.duplicatesRemoved || 0);
             } else {
                 errorCount++;
             }
