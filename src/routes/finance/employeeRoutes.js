@@ -26,6 +26,9 @@ router.delete('/:id', checkRole('admin'), controller.remove);
 // Salary request creation from selected employees
 router.post('/salary-requests', checkRole('admin', 'finance_admin', 'finance_user'), controller.createSalaryRequest);
 
+// Individual salary requests with detailed allocation handling
+router.post('/individual-salary-requests', checkRole('admin', 'finance_admin', 'finance_user'), controller.createIndividualSalaryRequests);
+
 module.exports = router;
 
 

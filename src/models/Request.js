@@ -401,6 +401,38 @@ const requestSchema = new mongoose.Schema({
         min: 0,
         default: 0
     },
+    // Salary request specific fields
+    allocatedEmployees: [{
+        employeeId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Employee',
+            required: true
+        },
+        employeeName: {
+            type: String,
+            required: true
+        },
+        jobTitle: {
+            type: String,
+            required: false
+        },
+        baseSalary: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        allocationPercentage: {
+            type: Number,
+            required: true,
+            min: 0,
+            max: 100
+        },
+        allocatedSalary: {
+            type: Number,
+            required: true,
+            min: 0
+        }
+    }],
     proposedVendor: {
         type: String,
         trim: true
@@ -611,6 +643,11 @@ const requestSchema = new mongoose.Schema({
             ref: 'User'
         }
     }],
+    // Metadata for additional request information
+    metadata: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+    },
     requestHistory: [{
         date: {
             type: Date,
