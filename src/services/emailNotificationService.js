@@ -22,7 +22,22 @@ class EmailNotificationService {
     static async sendFinancialSalariesRequestToCEO(request, submittedBy) {
         try {
             const User = require('../models/User');
+            const Residence = require('../models/Residence');
             const ceoUsers = await User.find({ role: 'ceo' });
+
+            // Get residence name if not populated
+            let residenceName = 'N/A';
+            if (request.residence?.name) {
+                residenceName = request.residence.name;
+            } else if (request.residence) {
+                try {
+                    const residence = await Residence.findById(request.residence);
+                    residenceName = residence?.name || 'Unknown Residence';
+                } catch (err) {
+                    console.error('Error fetching residence:', err);
+                    residenceName = 'Unknown Residence';
+                }
+            }
 
             const emailContent = `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -33,7 +48,7 @@ class EmailNotificationService {
                         <ul>
                             <li><strong>Title:</strong> ${request.title || 'N/A'}</li>
                             <li><strong>Description:</strong> ${request.description || 'N/A'}</li>
-                            <li><strong>Residence:</strong> ${request.residence?.name || 'N/A'}</li>
+                            <li><strong>Residence:</strong> ${residenceName}</li>
                             <li><strong>Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</li>
                             <li><strong>Submitted By:</strong> ${submittedBy?.firstName || ''} ${submittedBy?.lastName || ''}</li>
                             <li><strong>Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
@@ -48,18 +63,26 @@ class EmailNotificationService {
                 </div>
             `;
 
+            let sentCount = 0;
             for (const ceo of ceoUsers) {
                 if (!ceo.email || !ceo.email.includes('@gmail.com')) {
+                    console.log(`⚠️ Skipping invalid CEO email: ${ceo.email}`);
                     continue;
                 }
-                await sendEmail({
-                    to: ceo.email,
-                    subject: 'Financial Request - Salaries',
-                    html: emailContent
-                });
+                try {
+                    await sendEmail({
+                        to: ceo.email,
+                        subject: 'Financial Request - Salaries',
+                        html: emailContent
+                    });
+                    sentCount++;
+                    console.log(`✅ Salaries notification sent to CEO: ${ceo.email}`);
+                } catch (emailError) {
+                    console.error(`❌ Failed to send email to CEO ${ceo.email}:`, emailError.message);
+                }
             }
 
-            console.log(`✅ Salaries financial request notification sent to ${ceoUsers.length} CEO users`);
+            console.log(`✅ Salaries financial request notification sent to ${sentCount}/${ceoUsers.length} CEO users`);
             return true;
         } catch (error) {
             console.error('❌ Error sending salaries financial request notification:', error);

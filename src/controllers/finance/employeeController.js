@@ -304,8 +304,9 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                     residence: residenceId, // This should be a valid ObjectId
                     type: 'financial',
                     category: 'salary',
-                    status: 'pending',
+                    status: 'pending-ceo-approval', // Set to pending CEO approval since finance already approved
                     priority: 'high',
+                    financeStatus: 'approved', // Set finance status to approved since finance created this
                     items: items.map(item => ({
                         title: item.title,
                         description: item.description,
@@ -332,6 +333,15 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                 console.log(`Saving Request...`);
                 await reqDoc.save();
                 console.log(`Request saved successfully with ID: ${reqDoc._id}`);
+                
+                // Send CEO notification for salary requests (non-blocking)
+                try {
+                    const EmailNotificationService = require('../../services/emailNotificationService');
+                    await EmailNotificationService.sendFinancialSalariesRequestToCEO(reqDoc, req.user);
+                    console.log(`✅ CEO notification sent for salary request: ${reqDoc._id}`);
+                } catch (emailError) {
+                    console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
+                }
                 
                 // Log the salary request creation (non-blocking)
                 logSalaryRequestOperation(
@@ -503,8 +513,9 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                     residence: residenceId,
                     type: 'financial',
                     category: 'salary',
-                    status: 'pending',
+                    status: 'pending-ceo-approval', // Set to pending CEO approval since finance already approved
                     priority: 'high',
+                    financeStatus: 'approved', // Set finance status to approved since finance created this
                     // Store allocated employees in the request
                     allocatedEmployees: allocatedEmployees,
                     totalEstimatedCost: totalForResidence,
@@ -530,6 +541,15 @@ exports.createIndividualSalaryRequests = async (req, res) => {
 
                 await reqDoc.save();
                 console.log(`✅ Salary request saved for ${residenceName}: $${totalForResidence} (${allocatedEmployees.length} employees)`);
+
+                // Send CEO notification for salary requests (non-blocking)
+                try {
+                    const EmailNotificationService = require('../../services/emailNotificationService');
+                    await EmailNotificationService.sendFinancialSalariesRequestToCEO(reqDoc, req.user);
+                    console.log(`✅ CEO notification sent for salary request: ${reqDoc._id}`);
+                } catch (emailError) {
+                    console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
+                }
 
                 // Log the salary request creation (non-blocking)
                 logSalaryRequestOperation(
@@ -710,6 +730,9 @@ exports.createSalaryRequest = async (req, res) => {
             title: 'Salary Payment Request',
             description: description || `Salaries for ${month}/${year}`,
             type: 'financial',
+            category: 'salary',
+            status: 'pending-ceo-approval', // Set to pending CEO approval since finance already approved
+            financeStatus: 'approved', // Set finance status to approved since finance created this
             submittedBy: req.user?._id,
             residence: residence,
             department: 'Finance',
@@ -722,10 +745,26 @@ exports.createSalaryRequest = async (req, res) => {
             })),
             totalEstimatedCost: total,
             expenseCategory: 'Salaries',
-            paymentMethod: 'Bank Transfer'
+            paymentMethod: 'Bank Transfer',
+            // Set finance approval as already done (since finance created this)
+            approval: {
+                admin: { approved: true, approvedBy: req.user?._id, approvedAt: new Date() },
+                finance: { approved: true, approvedBy: req.user?._id, approvedAt: new Date() },
+                ceo: { approved: false } // Needs CEO approval
+            }
         });
 
         await request.save();
+
+        // Send CEO notification for salary requests (non-blocking)
+        try {
+            const EmailNotificationService = require('../../services/emailNotificationService');
+            await EmailNotificationService.sendFinancialSalariesRequestToCEO(request, req.user);
+            console.log(`✅ CEO notification sent for salary request: ${request._id}`);
+        } catch (emailError) {
+            console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
+        }
+
         return res.status(201).json({ message: 'Salary request created', request, total });
     } catch (error) {
         console.error('Error creating salary request:', error);
