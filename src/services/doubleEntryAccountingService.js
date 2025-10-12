@@ -258,8 +258,31 @@ class DoubleEntryAccountingService {
                 // ✅ SETTLE ACCRUED LIABILITY: Dr. Accounts Payable, Cr. Petty Cash
                 console.log(`💰 Settling accrued liability for expense: ${expenseId}`);
                 
-                // Get Accounts Payable account
-                const apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                // Find the original expense to get the vendor-specific account used during accrual
+                let apAccount = null;
+                const Expense = require('../models/finance/Expense');
+                const originalExpense = await Expense.findById(expenseId);
+                
+                if (originalExpense && originalExpense.vendorSpecificAccount) {
+                    // Use the same vendor-specific account that was used during accrual
+                    apAccount = await Account.findOne({ code: originalExpense.vendorSpecificAccount, type: 'Liability' });
+                    console.log(`[Petty Cash] Using vendor-specific account: ${originalExpense.vendorSpecificAccount} for expense: ${originalExpense.description}`);
+                } else if (originalExpense && originalExpense.vendorId) {
+                    // Look up vendor to get their account code
+                    const Vendor = require('../models/Vendor');
+                    const vendor = await Vendor.findById(originalExpense.vendorId);
+                    if (vendor && vendor.chartOfAccountsCode) {
+                        apAccount = await Account.findOne({ code: vendor.chartOfAccountsCode, type: 'Liability' });
+                        console.log(`[Petty Cash] Using vendor account from lookup: ${vendor.chartOfAccountsCode} for vendor: ${vendor.businessName}`);
+                    }
+                }
+                
+                // Fallback to general AP if vendor-specific account not found
+                if (!apAccount) {
+                    apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
+                    console.log(`[Petty Cash] Using general AP account (2000) as fallback`);
+                }
+                
                 if (!apAccount) {
                     throw new Error('Accounts Payable account not found for settling accrued liability');
                 }

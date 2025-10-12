@@ -827,9 +827,10 @@ exports.markExpenseAsPaid = async (req, res) => {
         const finalPaymentMethod = updatedExpense.paymentMethod || 'Bank Transfer';
         let sourceAccount;
         
-        if (finalPaymentMethod === 'Petty Cash') {
+        if (finalPaymentMethod === 'Petty Cash' || finalPaymentMethod === 'Cash') {
             // Get role-specific petty cash account based on user role
             sourceAccount = await getPettyCashAccountByRole(req.user.role);
+            console.log(`[Payment] Using role-specific petty cash account for ${finalPaymentMethod} payment by ${req.user.role}`);
         } else {
             // Use the mapping for other payment methods
             const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[finalPaymentMethod] || '1011'; // Default to Admin Petty Cash

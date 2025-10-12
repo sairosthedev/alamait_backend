@@ -227,9 +227,10 @@ const addExpense = async (req, res) => {
                 const finalPaymentMethod = expense.paymentMethod || 'Bank Transfer';
                 let sourceAccount;
                 
-                if (finalPaymentMethod === 'Petty Cash') {
+                if (finalPaymentMethod === 'Petty Cash' || finalPaymentMethod === 'Cash') {
                     // Get role-specific petty cash account based on user role
                     sourceAccount = await getPettyCashAccountByRole(req.user.role);
+                    console.log(`[Admin Expense] Using role-specific petty cash account for ${finalPaymentMethod} payment by ${req.user.role}`);
                 } else {
                     // Use the mapping for other payment methods
                     const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[finalPaymentMethod] || '1011';
@@ -658,9 +659,10 @@ const approveExpense = async (req, res) => {
             
             // Determine source account based on payment method
             let sourceAccount;
-            if (paymentMethod === 'Petty Cash') {
+            if (paymentMethod === 'Petty Cash' || paymentMethod === 'Cash') {
                 // Get role-specific petty cash account based on user role
                 sourceAccount = await getPettyCashAccountByRole(req.user.role);
+                console.log(`[Admin Approve] Using role-specific petty cash account for ${paymentMethod} payment by ${req.user.role}`);
             } else {
                 // Use the mapping for other payment methods
                 const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[paymentMethod] || '1011';
