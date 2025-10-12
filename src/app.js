@@ -184,6 +184,13 @@ app.use('/api/requests', (req, res, next) => {
     req.setTimeout(60000); // 60 seconds for file uploads
     res.setTimeout(60000);
   }
+  // Set longer timeout for salary requests
+  if (req.method === 'POST' && req.body && req.body.type === 'financial' && 
+      (req.body.category === 'salary' || req.body.title?.toLowerCase().includes('salary'))) {
+    req.setTimeout(300000); // 5 minutes for salary requests
+    res.setTimeout(300000);
+    console.log('🕐 Extended timeout for salary request via /requests endpoint');
+  }
   next();
 });
 

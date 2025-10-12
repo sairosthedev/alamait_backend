@@ -223,9 +223,10 @@ exports.getRequestById = async (req, res) => {
 exports.createRequest = async (req, res) => {
     try {
         // Set longer timeout for salary request creation
-        if (req.body.type === 'financial' && req.body.category === 'salary') {
+        if (req.body.type === 'financial' && (req.body.category === 'salary' || req.body.title?.toLowerCase().includes('salary'))) {
             req.setTimeout(300000); // 5 minutes for salary requests
             res.setTimeout(300000);
+            console.log('🕐 Extended timeout for salary request creation');
         }
 
         console.log('🚀 CREATE REQUEST - Starting request creation...');
@@ -1001,35 +1002,40 @@ exports.createRequest = async (req, res) => {
             console.error('Error sending salaries financial request to CEO:', notifyErr.message);
         }
         
-        // Add to request history
-        request.requestHistory.push({
-            date: request.dateRequested,
-            action: 'Request created',
-            user: user._id,
-            changes: ['Request submitted']
-        });
+        // Add to request history (skip for salary requests to improve performance)
+        if (!(request.type === 'financial' && (request.category === 'salary' || request.title?.toLowerCase().includes('salary')))) {
+            request.requestHistory.push({
+                date: request.dateRequested,
+                action: 'Request created',
+                user: user._id,
+                changes: ['Request submitted']
+            });
+        }
         
         // Populate vendor details on the main request if any quotations have vendors
-        if (request.items && request.items.length > 0) {
-            for (const item of request.items) {
-                if (item.quotations && item.quotations.length > 0) {
-                    for (const quotation of item.quotations) {
-                        if (quotation.vendorId && !request.vendorId) {
-                            // Populate vendor details on the main request
-                            request.vendorId = quotation.vendorId;
-                            request.vendorCode = quotation.vendorCode;
-                            request.vendorName = quotation.vendorName;
-                            request.vendorType = quotation.vendorType;
-                            request.vendorContact = quotation.vendorContact;
-                            request.expenseCategory = quotation.expenseCategory;
-                            request.paymentMethod = quotation.paymentMethod;
-                            request.hasBankDetails = quotation.hasBankDetails;
-                            
-                            console.log(`✅ Added vendor details to main request from quotation: ${quotation.vendorName} (${quotation.vendorCode})`);
-                            break; // Only populate from the first vendor found
+        // Skip for salary requests to improve performance
+        if (!(request.type === 'financial' && (request.category === 'salary' || request.title?.toLowerCase().includes('salary')))) {
+            if (request.items && request.items.length > 0) {
+                for (const item of request.items) {
+                    if (item.quotations && item.quotations.length > 0) {
+                        for (const quotation of item.quotations) {
+                            if (quotation.vendorId && !request.vendorId) {
+                                // Populate vendor details on the main request
+                                request.vendorId = quotation.vendorId;
+                                request.vendorCode = quotation.vendorCode;
+                                request.vendorName = quotation.vendorName;
+                                request.vendorType = quotation.vendorType;
+                                request.vendorContact = quotation.vendorContact;
+                                request.expenseCategory = quotation.expenseCategory;
+                                request.paymentMethod = quotation.paymentMethod;
+                                request.hasBankDetails = quotation.hasBankDetails;
+                                
+                                console.log(`✅ Added vendor details to main request from quotation: ${quotation.vendorName} (${quotation.vendorCode})`);
+                                break; // Only populate from the first vendor found
+                            }
                         }
+                        if (request.vendorId) break; // Stop if we've found a vendor
                     }
-                    if (request.vendorId) break; // Stop if we've found a vendor
                 }
             }
         }
@@ -1037,37 +1043,49 @@ exports.createRequest = async (req, res) => {
         await request.save();
         
         
-        const populatedRequest = await Request.findById(request._id)
-            .populate('submittedBy', 'firstName lastName email role')
-            .populate('residence', 'name');
+        // For salary requests, skip population to improve performance
+        let populatedRequest;
+        if (request.type === 'financial' && (request.category === 'salary' || request.title?.toLowerCase().includes('salary'))) {
+            populatedRequest = request;
+            console.log('⚡ Skipping population for salary request to improve performance');
+        } else {
+            populatedRequest = await Request.findById(request._id)
+                .populate('submittedBy', 'firstName lastName email role')
+                .populate('residence', 'name');
+        }
         
         // Send email notifications (non-blocking) - moved after population
-        try {
-            console.log('🔍 Request creation email debugging:');
-            console.log('req.user:', req.user ? 'Present' : 'Missing');
-            console.log('req.user.role:', req.user?.role);
-            console.log('User ID:', req.user?._id);
-            console.log('Request type:', request.type);
-            console.log('Request title:', request.title);
-            console.log('Populated residence:', populatedRequest.residence?.name);
-            
-            // Check if user is admin and send appropriate emails
-            if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager')) {
-                if (request.type === 'student_maintenance' || request.type === 'operational' || request.type === 'financial') {
-                    console.log('📧 Sending admin request email to CEO and Finance Admin');
-                    await EmailNotificationService.sendAdminRequestToCEOAndFinance(populatedRequest, req.user);
+        // Skip email notifications for salary requests to improve performance
+        if (!(request.type === 'financial' && (request.category === 'salary' || request.title?.toLowerCase().includes('salary')))) {
+            try {
+                console.log('🔍 Request creation email debugging:');
+                console.log('req.user:', req.user ? 'Present' : 'Missing');
+                console.log('req.user.role:', req.user?.role);
+                console.log('User ID:', req.user?._id);
+                console.log('Request type:', request.type);
+                console.log('Request title:', request.title);
+                console.log('Populated residence:', populatedRequest.residence?.name);
+                
+                // Check if user is admin and send appropriate emails
+                if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager')) {
+                    if (request.type === 'student_maintenance' || request.type === 'operational' || request.type === 'financial') {
+                        console.log('📧 Sending admin request email to CEO and Finance Admin');
+                        await EmailNotificationService.sendAdminRequestToCEOAndFinance(populatedRequest, req.user);
+                    }
+                } else {
+                    // For students, send to admins
+                    if (request.type === 'student_maintenance') {
+                        console.log('📧 Sending student maintenance email to admins');
+                        await EmailNotificationService.sendMaintenanceRequestSubmitted(populatedRequest, req.user);
+                    }
                 }
-            } else {
-                // For students, send to admins
-                if (request.type === 'student_maintenance') {
-                    console.log('📧 Sending student maintenance email to admins');
-                    await EmailNotificationService.sendMaintenanceRequestSubmitted(populatedRequest, req.user);
-                }
+                
+            } catch (emailError) {
+                console.error('Failed to send request email notifications:', emailError);
+                // Don't fail the request if email fails
             }
-            
-        } catch (emailError) {
-            console.error('Failed to send request email notifications:', emailError);
-            // Don't fail the request if email fails
+        } else {
+            console.log('📧 Skipping email notifications for salary request to improve performance');
         }
         
         res.status(201).json(populatedRequest);
