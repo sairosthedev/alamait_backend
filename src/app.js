@@ -410,12 +410,6 @@ app.use(notFoundHandler);
 // Error handling middleware
 app.use(errorHandler);
 
-// Start monthly accrual cron service
-try {
-    monthlyAccrualCronService.start();
-    console.log('✅ Monthly accrual cron service started');
-} catch (error) {
-    console.error('❌ Failed to start monthly accrual cron service:', error);
-}
+// Monthly accrual cron service will be started in index.js after database connection
 
 module.exports = app;

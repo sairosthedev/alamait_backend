@@ -29,10 +29,15 @@ class MonthlyAccrualCronService {
                 return;
             }
             
-            // Schedule: Run on the 1st of each month at 1:00 AM
-            // Cron format: '0 1 1 * *' = minute hour day month day-of-week
-            this.job = cron.schedule('0 1 1 * *', async () => {
-                await this.processMonthlyAccruals();
+            // Schedule: Run daily at 6:25 AM in production, 1st of month at 1:00 AM in development
+            // Cron format: '25 6 * * *' = minute hour day month day-of-week (daily at 6:25 AM)
+            const cronSchedule = process.env.NODE_ENV === 'production' ? '25 6 * * *' : '0 1 1 * *';
+            const scheduleDescription = process.env.NODE_ENV === 'production' 
+                ? 'Daily at 6:25 AM (Zimbabwe time)' 
+                : '1st of each month at 1:00 AM (Zimbabwe time)';
+            
+            this.job = cron.schedule(cronSchedule, async () => {
+                await this.processMonthlyAccrualsInstance();
             }, {
                 scheduled: true,
                 timezone: "Africa/Harare" // Zimbabwe timezone
@@ -43,12 +48,12 @@ class MonthlyAccrualCronService {
             
             console.log('✅ Monthly accrual cron service started successfully');
             console.log(`   Next run: ${this.nextRun}`);
-            console.log(`   Schedule: 1st of each month at 1:00 AM (Zimbabwe time)`);
+            console.log(`   Schedule: ${scheduleDescription}`);
             
             // Only run immediately if it's the first time and we're in development
             if (!this.lastRun && process.env.NODE_ENV !== 'production') {
                 console.log('🔄 Running initial monthly accrual check (development mode)...');
-                setTimeout(() => this.processMonthlyAccruals(), 5000); // Wait 5 seconds
+                setTimeout(() => this.processMonthlyAccrualsInstance(), 5000); // Wait 5 seconds
             } else if (process.env.NODE_ENV === 'production') {
                 console.log('🏭 Production mode: Cron service started, waiting for scheduled execution');
             }
@@ -84,12 +89,28 @@ class MonthlyAccrualCronService {
     async ensureDatabaseConnection() {
         try {
             if (mongoose.connection.readyState !== 1) {
-                console.log('🔄 Database not connected, attempting to connect...');
-                await mongoose.connect(process.env.MONGODB_URI);
+                console.log('🔄 Database not connected, waiting for connection...');
+                
+                // Wait for connection to be established (up to 30 seconds)
+                let attempts = 0;
+                const maxAttempts = 30;
+                
+                while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    attempts++;
+                    console.log(`   Waiting for database connection... (${attempts}/${maxAttempts})`);
+                }
+                
+                if (mongoose.connection.readyState !== 1) {
+                    throw new Error('Database connection timeout - connection not established within 30 seconds');
+                }
+                
                 console.log('✅ Database connection established');
+            } else {
+                console.log('✅ Database connection already established');
             }
         } catch (error) {
-            console.error('❌ Failed to establish database connection:', error);
+            console.error('❌ Failed to ensure database connection:', error);
             throw error;
         }
     }
@@ -97,7 +118,12 @@ class MonthlyAccrualCronService {
     /**
      * Process monthly accruals for the current month
      */
-    async processMonthlyAccruals() {
+    static async processMonthlyAccruals() {
+        const instance = new MonthlyAccrualCronService();
+        return await instance.processMonthlyAccrualsInstance();
+    }
+
+    async processMonthlyAccrualsInstance() {
         try {
             // Ensure database connection is available
             await this.ensureDatabaseConnection();
@@ -186,15 +212,25 @@ class MonthlyAccrualCronService {
     calculateNextRun() {
         try {
             const now = new Date();
-            let nextMonth = now.getMonth() + 1;
-            let nextYear = now.getFullYear();
             
-            if (nextMonth > 12) {
-                nextMonth = 1;
-                nextYear++;
+            if (process.env.NODE_ENV === 'production') {
+                // Production: Next run is tomorrow at 6:25 AM
+                const tomorrow = new Date(now);
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                tomorrow.setHours(6, 25, 0, 0);
+                this.nextRun = tomorrow;
+            } else {
+                // Development: Next run is 1st of next month at 1:00 AM
+                let nextMonth = now.getMonth() + 1;
+                let nextYear = now.getFullYear();
+                
+                if (nextMonth > 12) {
+                    nextMonth = 1;
+                    nextYear++;
+                }
+                
+                this.nextRun = new Date(nextYear, nextMonth - 1, 1, 1, 0, 0);
             }
-            
-            this.nextRun = new Date(nextYear, nextMonth - 1, 1, 1, 0, 0);
             
         } catch (error) {
             console.error('❌ Error calculating next run:', error);
@@ -206,12 +242,17 @@ class MonthlyAccrualCronService {
      * Get service status
      */
     getStatus() {
+        const schedule = process.env.NODE_ENV === 'production' 
+            ? '25 6 * * * (Daily at 6:25 AM)' 
+            : '0 1 1 * * (1st of each month at 1:00 AM)';
+            
         return {
             isRunning: this.isRunning,
             lastRun: this.lastRun,
             nextRun: this.nextRun,
-            schedule: '0 1 1 * * (1st of each month at 1:00 AM)',
-            timezone: 'Africa/Harare'
+            schedule: schedule,
+            timezone: 'Africa/Harare',
+            environment: process.env.NODE_ENV || 'development'
         };
     }
     
@@ -258,3 +299,4 @@ class MonthlyAccrualCronService {
 const monthlyAccrualCronService = new MonthlyAccrualCronService();
 
 module.exports = monthlyAccrualCronService;
+module.exports.MonthlyAccrualCronService = MonthlyAccrualCronService;

@@ -81,6 +81,34 @@ router.get('/rejected-count',
     }
 );
 
+// Manual trigger for monthly accrual and backfill (admin only)
+router.post('/trigger-monthly-accrual', 
+    checkRole(['admin']), 
+    async (req, res) => {
+        try {
+            const { MonthlyAccrualCronService } = require('../services/monthlyAccrualCronService');
+            console.log('🚨 Admin requested manual monthly accrual trigger');
+            
+            // Trigger the monthly accrual process manually
+            await MonthlyAccrualCronService.processMonthlyAccruals();
+            
+            res.json({
+                success: true,
+                message: 'Monthly accrual process completed successfully',
+                timestamp: new Date().toISOString()
+            });
+        } catch (error) {
+            console.error('❌ Manual monthly accrual trigger failed:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Manual monthly accrual trigger failed',
+                details: error.message,
+                timestamp: new Date().toISOString()
+            });
+        }
+    }
+);
+
 // Convert approved monthly requests to expenses
 router.post('/convert-to-expenses', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 

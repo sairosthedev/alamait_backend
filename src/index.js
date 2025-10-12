@@ -10,6 +10,15 @@ const startServer = async () => {
         // Ensure upload directories exist
         ensureUploadDirectoriesExist();
 
+        // Start monthly accrual cron service after database connection
+        const monthlyAccrualCronService = require('./services/monthlyAccrualCronService');
+        try {
+            monthlyAccrualCronService.start();
+            console.log('✅ Monthly accrual cron service started');
+        } catch (error) {
+            console.error('❌ Failed to start monthly accrual cron service:', error);
+        }
+
         // Start server
         const PORT = process.env.PORT || 5000;
         app.listen(PORT, () => {
