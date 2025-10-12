@@ -1413,7 +1413,8 @@ exports.manualAddStudent = async (req, res) => {
                 applicationCode: application.applicationCode, // Link application code
                 startDate: parsedStartDate,
                 endDate: parsedEndDate,
-                roomPrice: finalMonthlyRent
+                roomPrice: finalMonthlyRent,
+                skipBackfill: true // Skip backfill completely - will be handled by async processing
             });
             
             if (debtor) {
@@ -1446,25 +1447,58 @@ exports.manualAddStudent = async (req, res) => {
                 await application.save();
                 console.log(`🔗 Linked debtor ${debtor._id} to application ${application._id}`);
                 
-                // 🆕 TRIGGER RENTAL ACCRUAL SERVICE - Lease starts now!
+                // 🆕 SCHEDULE ASYNC PROCESSING for lease start accruals and invoices
+                // This prevents timeout issues by processing heavy operations in the background
                 try {
-                    console.log(`🏠 Triggering rental accrual service for lease start...`);
-                    const RentalAccrualService = require('../../services/rentalAccrualService');
+                    console.log(`🔄 Scheduling async processing for lease start accruals and invoices...`);
                     
-                    const accrualResult = await RentalAccrualService.processLeaseStart(application);
+                    // Schedule the accrual and backfill processing to run in the background
+                    setImmediate(async () => {
+                        try {
+                            console.log(`🏠 Starting async processing for ${student.email}...`);
+                            
+                            // 1. Create lease start accruals
+                            const RentalAccrualService = require('../../services/rentalAccrualService');
+                            const accrualResult = await RentalAccrualService.createLeaseStartAccrualsOnly(application);
+                            
+                            if (accrualResult && accrualResult.success) {
+                                console.log(`✅ Async lease start accruals completed for ${student.email}`);
+                                console.log(`   - Transaction ID: ${accrualResult.transactionId || 'N/A'}`);
+                            } else {
+                                console.log(`⚠️  Async lease start accruals completed with warnings for ${student.email}:`, accrualResult?.error || 'Unknown issue');
+                            }
+                            
+                            // 2. Run backfill for the debtor (with optimized settings)
+                            try {
+                                console.log(`🔄 Starting async backfill for ${student.email}...`);
+                                const { backfillTransactionsForDebtor } = require('../../services/transactionBackfillService');
+                                
+                                const backfillResult = await backfillTransactionsForDebtor(debtor, {
+                                    auto: true,
+                                    skipInvoiceCreation: true, // Skip invoice creation - handled by cron service
+                                    skipMonthlyAccruals: true  // Skip monthly accruals (handled by lease start accruals)
+                                });
+                                
+                                if (backfillResult.success) {
+                                    console.log(`✅ Async backfill completed for ${student.email}`);
+                                    console.log(`   - Lease start created: ${backfillResult.leaseStartCreated}`);
+                                    console.log(`   - Monthly transactions created: ${backfillResult.monthlyTransactionsCreated}`);
+                                } else {
+                                    console.log(`⚠️  Async backfill completed with warnings for ${student.email}:`, backfillResult?.error || 'Unknown issue');
+                                }
+                            } catch (backfillError) {
+                                console.error(`❌ Error in async backfill for ${student.email}:`, backfillError);
+                            }
+                            
+                        } catch (asyncError) {
+                            console.error(`❌ Error in async processing for ${student.email}:`, asyncError);
+                        }
+                    });
                     
-                    if (accrualResult && accrualResult.success) {
-                        console.log(`✅ Rental accrual service completed successfully`);
-                        console.log(`   - Initial accounting entries created`);
-                        console.log(`   - Prorated rent, admin fees, and deposits recorded`);
-                        console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
-                    } else {
-                        console.log(`⚠️  Rental accrual service completed with warnings:`, accrualResult?.error || 'Unknown issue');
-                    }
-                } catch (accrualError) {
-                    console.error(`❌ Error in rental accrual service:`, accrualError);
-                    // Don't fail the student creation if accrual fails
-                    console.log(`ℹ️  Student created successfully, but rental accrual failed. Manual intervention may be needed.`);
+                    console.log(`✅ Async processing scheduled for ${student.email}`);
+                } catch (scheduleError) {
+                    console.error(`❌ Error scheduling async processing:`, scheduleError);
+                    console.log(`ℹ️  Student created successfully, but async processing scheduling failed.`);
                 }
             } else {
                 console.log(`⚠️  Debtor creation returned null - this indicates a problem`);
@@ -1650,7 +1684,7 @@ exports.manualAddStudent = async (req, res) => {
         // Return success response with login details (following existing application response format)
         res.status(201).json({
             success: true,
-            message: 'Student added successfully with room assignment and lease',
+            message: 'Student added successfully with room assignment and lease. Accruals and invoices are being processed in the background.',
             application: {
                 id: application._id,
                 applicationCode: application.applicationCode,
@@ -1703,6 +1737,11 @@ exports.manualAddStudent = async (req, res) => {
                 currentOccupancy: room.currentOccupancy,
                 capacity: room.capacity,
                 occupancyDisplay: `${room.currentOccupancy}/${room.capacity}`
+            },
+            backgroundProcessing: {
+                status: 'scheduled',
+                message: 'Lease start accruals and backfill transactions are being processed in the background',
+                estimatedCompletion: '2-5 minutes'
             }
         });
 
