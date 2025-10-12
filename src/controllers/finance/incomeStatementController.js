@@ -111,7 +111,7 @@ class IncomeStatementController {
                     },
                     // All transactions with accrual metadata for this month
                     {
-                        'metadata.accrualMonth': monthNumber,
+                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
                         'metadata.accrualYear': parseInt(period),
                         status: 'posted',
                         'entries.accountCode': { $in: allAccountCodes }
@@ -125,7 +125,7 @@ class IncomeStatementController {
                     // Rental accrual transactions for this month
                     {
                         source: 'rental_accrual',
-                        'metadata.accrualMonth': monthNumber,
+                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
                         'metadata.accrualYear': parseInt(period),
                         status: 'posted',
                         'entries.accountCode': { $in: allAccountCodes }
@@ -134,7 +134,7 @@ class IncomeStatementController {
                     {
                         source: 'rental_accrual',
                         'metadata.type': 'lease_start',
-                        'metadata.accrualMonth': monthNumber,
+                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
                         'metadata.accrualYear': parseInt(period),
                         status: 'posted',
                         'entries.accountCode': { $in: allAccountCodes }
@@ -157,7 +157,7 @@ class IncomeStatementController {
                     // Find original accruals that are referenced by adjustments (but only if they affect this month)
                     {
                         'metadata.originalAccrualId': { $exists: true },
-                        'metadata.accrualMonth': monthNumber,
+                        'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
                         'metadata.accrualYear': parseInt(period),
                         status: 'posted',
                         'entries.accountCode': { $in: allAccountCodes }
@@ -192,16 +192,15 @@ class IncomeStatementController {
             
             // Find all relevant transactions
             const transactions = await TransactionEntry.find(query)
-                .populate('residence')
                 .sort({ date: 1 });
             
             // Filter out transactions with wrong month metadata
             const filteredTransactions = transactions.filter(transaction => {
-                // For monthly accruals, check if the month metadata matches the requested month
+                // For monthly accruals, check if the accrual month matches the requested month
                 if (transaction.metadata?.type === 'monthly_rent_accrual') {
-                    const transactionMonth = transaction.metadata?.month;
-                    const expectedMonth = `${period}-${String(monthNumber + 1).padStart(2, '0')}`;
-                    return transactionMonth === expectedMonth;
+                    const accrualMonth = transaction.metadata?.accrualMonth;
+                    const accrualYear = transaction.metadata?.accrualYear;
+                    return accrualMonth === (monthNumber + 1) && accrualYear === parseInt(period);
                 }
                 
                 // For lease start transactions, check if they're in the requested month
