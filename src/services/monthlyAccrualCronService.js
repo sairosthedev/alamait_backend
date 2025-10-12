@@ -167,11 +167,7 @@ class MonthlyAccrualCronService {
             console.log('🧩 Running comprehensive backfill for missing accruals (lease start + monthly)...');
             const TransactionBackfillService = require('./transactionBackfillService');
             const backfill = await TransactionBackfillService.backfillAllTransactions();
-            if (backfill.success) {
-                console.log(`   Backfill -> lease start created: ${backfill.summary.leaseStartCreated}, monthly created: ${backfill.summary.monthlyTransactionsCreated}, duplicates removed: ${backfill.summary.duplicatesRemoved}`);
-            } else {
-                console.log(`   Backfill -> failed: ${backfill.error}`);
-            }
+            console.log(`   Backfill -> lease start created: ${backfill.leaseStartCreated}, monthly created: ${backfill.monthlyTransactionsCreated}, duplicates removed: ${backfill.duplicatesRemoved}`);
 
             this.lastRun = now;
             this.calculateNextRun();
