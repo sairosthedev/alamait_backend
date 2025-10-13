@@ -69,17 +69,20 @@ class EmailNotificationService {
                     console.log(`⚠️ Skipping invalid CEO email: ${ceo.email}`);
                     continue;
                 }
-                try {
-                    await sendEmail({
-                        to: ceo.email,
-                        subject: 'Financial Request - Salaries',
-                        html: emailContent
-                    });
-                    sentCount++;
-                    console.log(`✅ Salaries notification sent to CEO: ${ceo.email}`);
-                } catch (emailError) {
-                    console.error(`❌ Failed to send email to CEO ${ceo.email}:`, emailError.message);
-                }
+                // Send email in background to avoid blocking request processing
+                setTimeout(async () => {
+                    try {
+                        await sendEmail({
+                            to: ceo.email,
+                            subject: 'Financial Request - Salaries',
+                            html: emailContent
+                        });
+                        console.log(`✅ Salaries notification sent to CEO: ${ceo.email}`);
+                    } catch (emailError) {
+                        console.error(`❌ Failed to send email to CEO ${ceo.email}:`, emailError.message);
+                    }
+                }, 100);
+                sentCount++;
             }
 
             console.log(`✅ Salaries financial request notification sent to ${sentCount}/${ceoUsers.length} CEO users`);
@@ -240,7 +243,7 @@ class EmailNotificationService {
 				</div>
 			`;
 
-			// Send to all admins with valid email addresses
+			// Send to all admins with valid email addresses (non-blocking)
 			let sentCount = 0;
 			for (const admin of admins) {
 				// Skip invalid email addresses (like alamait.com domain) - same logic as monthly requests
@@ -249,17 +252,20 @@ class EmailNotificationService {
 					continue;
 				}
 				
-				try {
-					await sendEmail({
-						to: admin.email,
-						subject: 'New Maintenance Request - Action Required',
-						html: emailContent
-					});
-					sentCount++;
-					console.log(`✅ Email sent to: ${admin.email}`);
-				} catch (emailError) {
-					console.error(`❌ Failed to send email to ${admin.email}:`, emailError.message);
-				}
+				// Send email in background to avoid blocking request processing
+				setTimeout(async () => {
+					try {
+						await sendEmail({
+							to: admin.email,
+							subject: 'New Maintenance Request - Action Required',
+							html: emailContent
+						});
+						console.log(`✅ Email sent to: ${admin.email}`);
+					} catch (emailError) {
+						console.error(`❌ Failed to send email to ${admin.email}:`, emailError.message);
+					}
+				}, 100);
+				sentCount++;
 			}
 
 			console.log(`✅ Maintenance request notification sent to ${sentCount} admins`);
@@ -893,11 +899,19 @@ class EmailNotificationService {
 				</div>
 			`;
 
-			await sendEmail({
-				to: recipientEmail,
-				subject: `Request ${approved ? 'Approved' : 'Rejected'} by CEO`,
-				html: emailContent
-			});
+			// Send email in background to avoid blocking request processing
+			setTimeout(async () => {
+				try {
+					await sendEmail({
+						to: recipientEmail,
+						subject: `Request ${approved ? 'Approved' : 'Rejected'} by CEO`,
+						html: emailContent
+					});
+					console.log(`✅ CEO approval email sent to: ${recipientEmail}`);
+				} catch (emailError) {
+					console.error(`❌ Failed to send CEO approval email to ${recipientEmail}:`, emailError.message);
+				}
+			}, 100);
 
 			console.log(`✅ CEO approval notification sent to ${recipientEmail}`);
 			return true;

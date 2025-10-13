@@ -62,6 +62,19 @@ const AccountSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Opening balance captured at account creation (optional)
+  openingBalance: {
+    type: Number,
+    default: 0
+  },
+  openingBalanceDate: {
+    type: Date,
+    default: null
+  },
+  currency: {
+    type: String,
+    default: 'USD'
+  },
   metadata: {
     type: Map,
     of: String,

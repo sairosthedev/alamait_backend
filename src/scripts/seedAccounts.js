@@ -6,6 +6,7 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/alamai
 const accounts = [
   // Assets
   { code: '1000', name: 'Bank - Main Account', type: 'Asset' },
+  { code: '1001', name: 'Cash/Bank', type: 'Asset' },
   { code: '1005', name: 'Bank - Rent Deposits Account', type: 'Asset' },
   { code: '1010', name: 'General Petty Cash', type: 'Asset' },
   { code: '1011', name: 'Admin Petty Cash', type: 'Asset' },
@@ -34,6 +35,12 @@ const accounts = [
   { code: '1235', name: 'Solar', type: 'Asset' },
   { code: '1236', name: 'Motor Vehicles', type: 'Asset' },
   { code: '1237', name: 'Land - Arlington Estate', type: 'Asset' },
+  
+  // Accumulated Depreciation Accounts (Contra-Assets)
+  { code: '1400', name: 'Accumulated Depreciation - Furniture & Fittings', type: 'Asset' },
+  { code: '1401', name: 'Accumulated Depreciation - Motor Vehicles', type: 'Asset' },
+  { code: '1402', name: 'Accumulated Depreciation - Solar Equipment', type: 'Asset' },
+  { code: '1403', name: 'Accumulated Depreciation - Buildings', type: 'Asset' },
   // Liabilities
   { code: '2000', name: 'Accounts Payable', type: 'Liability' },
   { code: '2010', name: 'Staff Advances Payable', type: 'Liability' },
@@ -41,6 +48,7 @@ const accounts = [
   { code: '2030', name: 'Deferred Income - Tenant Advances', type: 'Liability' },
   // Equity
   { code: '3000', name: "Owner's Capital", type: 'Equity' },
+  { code: '3001', name: 'Owner Equity - Opening Balance', type: 'Equity' },
   { code: '3100', name: 'Retained Earnings', type: 'Equity' },
   // Revenue (Income)
   { code: '4000', name: 'Rental Income - Residential', type: 'Income' },
@@ -65,6 +73,7 @@ const accounts = [
   { code: '5012', name: 'Property Management Salaries', type: 'Expense' },
   { code: '5013', name: 'Administrative Expenses', type: 'Expense' },
   { code: '5014', name: 'Marketing Expenses', type: 'Expense' },
+  { code: '5015', name: 'Depreciation Expense', type: 'Expense' },
   { code: '5015', name: 'Staff Salaries & Wages', type: 'Expense' },
   { code: '5016', name: 'Staff Welfare', type: 'Expense' },
   { code: '5017', name: 'Depreciation - Buildings', type: 'Expense' },

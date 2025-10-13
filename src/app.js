@@ -83,6 +83,8 @@ const financeOtherExpenseRoutes = require('./routes/finance/otherExpenseRoutes')
 const financeIndexRoutes = require('./routes/finance/index');
 const financeUsersRoutes = require('./routes/finance/users');
 const debtorRoutes = require('./routes/finance/debtorRoutes');
+const refundRoutes = require('./routes/finance/refundRoutes');
+const depreciationRoutes = require('./routes/finance/depreciationRoutes');
 
 const monitoringRoutes = require('./routes/monitoring');
 const accountRoutes = require('./routes/accountRoutes');
@@ -346,6 +348,12 @@ app.use('/api/finance/room-prices', financeRoomPriceRoutes);
 app.use('/api/finance/other-income', financeOtherIncomeRoutes);
 app.use('/api/finance/other-expenses', financeOtherExpenseRoutes);
 app.use('/api/finance/users', financeUsersRoutes);
+
+// Refunds endpoints
+app.use('/api/finance/refunds', refundRoutes);
+
+// Depreciation endpoints
+app.use('/api/finance/depreciation', depreciationRoutes);
 
 // NEW: Proper Accounting Routes (GAAP-compliant financial statements)
 const properAccountingRoutes = require('./routes/finance/properAccountingRoutes');

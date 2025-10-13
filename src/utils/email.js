@@ -26,6 +26,30 @@ const transporter = nodemailer.createTransport({
  */
 exports.sendEmail = async (options) => {
     try {
+        // Check if email configuration is available
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
+            console.warn('⚠️ Email configuration missing - EMAIL_USER or EMAIL_APP_PASSWORD not set');
+            console.warn('📧 Email will be queued but not sent until configuration is complete');
+            
+            // Try to create outbox entry, but don't fail if MongoDB is not connected
+            try {
+                const outbox = await EmailOutbox.create({
+                    to: options.to,
+                    subject: options.subject,
+                    text: options.text,
+                    html: options.html,
+                    attachments: options.attachments,
+                    status: 'queued',
+                    scheduledAt: new Date()
+                });
+                console.log(`📬 Email queued (no config): ${options.to} → ${options.subject}`);
+            } catch (dbError) {
+                console.warn('⚠️ Could not save email to outbox (MongoDB not connected):', dbError.message);
+                console.log(`📧 Email would be sent to: ${options.to} → ${options.subject}`);
+            }
+            return; // Exit early - don't attempt to send
+        }
+
         // Create outbox entry first
         const outbox = await EmailOutbox.create({
             to: options.to,

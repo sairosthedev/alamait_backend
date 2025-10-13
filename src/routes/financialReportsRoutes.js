@@ -63,6 +63,18 @@ router.get('/monthly-income-expenses', FinancialReportsController.generateMonthl
 router.get('/monthly-balance-sheet', FinancialReportsController.generateMonthlyBalanceSheet);
 
 /**
+ * Simple Monthly Balance Sheet (Clean, simple balance sheet following accounting principles)
+ * GET /api/financial-reports/simple-monthly-balance-sheet?period=2025&residence=67d723cf20f89c4ae69804f3&type=cumulative
+ * 
+ * Features:
+ * - Assets = Liabilities + Equity
+ * - Proper parent-child account aggregation
+ * - Monthly balance tracking
+ * - Works seamlessly with frontend
+ */
+router.get('/simple-monthly-balance-sheet', FinancialReportsController.generateSimpleMonthlyBalanceSheet);
+
+/**
  * Monthly Cash Flow (January to December breakdown)
  * GET /api/financial-reports/monthly-cash-flow?period=2025&basis=cash
  */

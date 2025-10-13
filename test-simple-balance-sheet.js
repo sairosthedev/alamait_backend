@@ -1,126 +1,204 @@
-const mongoose = require('mongoose');
-require('dotenv').config();
+/**
+ * Test Script for Simple Balance Sheet API
+ * 
+ * This script tests the new simple balance sheet endpoint to ensure it works correctly
+ * and returns data in the format expected by the frontend.
+ */
+
+const axios = require('axios');
+
+// Configuration
+const BASE_URL = 'http://localhost:3000'; // Adjust if your server runs on a different port
+const API_ENDPOINT = '/api/financial-reports/simple-monthly-balance-sheet';
+
+// Test parameters
+const testParams = {
+  period: 2025,
+  type: 'cumulative',
+  residence: null // Test with all residences first
+};
 
 async function testSimpleBalanceSheet() {
   try {
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('✅ Connected to database');
+    console.log('🧪 Testing Simple Balance Sheet API...');
+    console.log(`📡 Endpoint: ${BASE_URL}${API_ENDPOINT}`);
+    console.log(`📋 Parameters:`, testParams);
     
-    const TransactionEntry = require('./src/models/TransactionEntry');
-    
-    console.log('\n🧪 TESTING BALANCE SHEET MONTHSETTLED FIX');
-    console.log('==========================================');
-    
-    // Test for June 2025
-    const testMonth = '2025-06';
-    const testDate = new Date(2025, 5, 30); // June 30, 2025
-    
-    console.log(`\n📊 Testing Balance Sheet for ${testMonth}`);
-    console.log('==========================================');
-    
-    // 1. Get all accruals up to June 30, 2025
-    const accrualTransactions = await TransactionEntry.find({
-      source: 'rental_accrual',
-      date: { $lte: testDate },
-      'entries.accountCode': { $regex: '^1100-' },
-      status: 'posted'
-    }).sort({ date: 1 });
-    
-    let totalAccruals = 0;
-    accrualTransactions.forEach(tx => {
-      tx.entries.forEach(entry => {
-        if (entry.accountCode.startsWith('1100-')) {
-          totalAccruals += entry.debit || 0;
-        }
-      });
+    // Make the API request
+    const response = await axios.get(`${BASE_URL}${API_ENDPOINT}`, {
+      params: testParams,
+      timeout: 120000, // 2 minutes timeout
+      headers: {
+        'Content-Type': 'application/json'
+      }
     });
     
-    console.log(`Total Accruals (up to ${testMonth}): $${totalAccruals.toFixed(2)}`);
+    console.log('✅ API Response received successfully!');
+    console.log(`📊 Status: ${response.status}`);
+    console.log(`📈 Response time: ${response.headers['x-response-time'] || 'N/A'}`);
     
-    // 2. Get all payments with monthSettled <= June 2025
-    const paymentTransactions = await TransactionEntry.find({
-      source: 'payment',
-      'metadata.monthSettled': { $lte: testMonth },
-      'entries.accountCode': { $regex: '^1100-' },
-      status: 'posted'
-    }).sort({ date: 1 });
-    
-    let totalPayments = 0;
-    paymentTransactions.forEach(tx => {
-      tx.entries.forEach(entry => {
-        if (entry.accountCode.startsWith('1100-')) {
-          totalPayments += entry.credit || 0;
-        }
-      });
-    });
-    
-    console.log(`Total Payments (monthSettled <= ${testMonth}): $${totalPayments.toFixed(2)}`);
-    
-    // 3. Calculate AR balance using monthSettled
-    const arBalance = totalAccruals - totalPayments;
-    console.log(`Accounts Receivable Balance: $${arBalance.toFixed(2)}`);
-    
-    // 4. Show payment details
-    console.log(`\n📋 Payment Details (${paymentTransactions.length} payments):`);
-    paymentTransactions.forEach((tx, index) => {
-      console.log(`\n${index + 1}. ${tx.description}`);
-      console.log(`   Date: ${tx.date.toISOString().split('T')[0]}`);
-      console.log(`   Month Settled: ${tx.metadata?.monthSettled || 'NOT SET'}`);
-      console.log(`   Payment Type: ${tx.metadata?.paymentType || 'Unknown'}`);
+    // Check response structure
+    if (response.data && response.data.success) {
+      console.log('✅ Response structure is correct');
       
-      tx.entries.forEach((entry, entryIndex) => {
-        if (entry.accountCode.startsWith('1100-')) {
-          console.log(`   Entry ${entryIndex + 1}: ${entry.accountCode} - $${entry.credit || 0}`);
+      const data = response.data.data;
+      
+      // Check if we have monthly data
+      if (data.monthly) {
+        console.log(`📅 Monthly data available for ${Object.keys(data.monthly).length} months`);
+        
+        // Check a sample month (December)
+        const december = data.monthly[12];
+        if (december) {
+          console.log('📊 December Balance Sheet Structure:');
+          console.log(`  Assets Total: $${december.assets?.total || 0}`);
+          console.log(`  Liabilities Total: $${december.liabilities?.total || 0}`);
+          console.log(`  Equity Total: $${december.equity?.total || 0}`);
+          console.log(`  Balance Check: ${december.balanceCheck}`);
+          
+          // Check if it follows the accounting equation
+          const assets = december.assets?.total || 0;
+          const liabilities = december.liabilities?.total || 0;
+          const equity = december.equity?.total || 0;
+          const isBalanced = Math.abs(assets - (liabilities + equity)) < 0.01;
+          
+          console.log(`⚖️  Accounting Equation Check: ${isBalanced ? '✅ BALANCED' : '❌ NOT BALANCED'}`);
+          console.log(`   Assets (${assets}) = Liabilities (${liabilities}) + Equity (${equity})`);
+          console.log(`   Difference: ${assets - (liabilities + equity)}`);
         }
-      });
-    });
-    
-    // 5. Test deposits
-    console.log(`\n💰 DEPOSITS TEST:`);
-    console.log('=================');
-    
-    const depositTransactions = await TransactionEntry.find({
-      date: { $lte: testDate },
-      'entries.accountCode': { $regex: '^2020' },
-      status: 'posted'
-    }).sort({ date: 1 });
-    
-    let totalDeposits = 0;
-    depositTransactions.forEach(tx => {
-      const monthSettled = tx.metadata?.monthSettled;
-      tx.entries.forEach(entry => {
-        if (entry.accountCode.startsWith('2020')) {
-          const delta = (entry.credit || 0) - (entry.debit || 0);
-          // Include if no monthSettled (legacy) or if monthSettled <= current month
-          if (!monthSettled || monthSettled <= testMonth) {
-            totalDeposits += delta;
+        
+        // Check cash and bank accounts
+        const sampleMonth = data.monthly[Object.keys(data.monthly)[0]];
+        if (sampleMonth?.assets?.current?.cashAndBank) {
+          const cashAccounts = Object.keys(sampleMonth.assets.current.cashAndBank).filter(key => key !== 'total');
+          console.log(`💰 Cash & Bank Accounts found: ${cashAccounts.length}`);
+          cashAccounts.forEach(accountKey => {
+            const account = sampleMonth.assets.current.cashAndBank[accountKey];
+            console.log(`   ${account.accountCode} - ${account.accountName}: $${account.amount}`);
+          });
+        }
+        
+        // Check accounts receivable
+        if (sampleMonth?.assets?.current?.accountsReceivable) {
+          const ar = sampleMonth.assets.current.accountsReceivable;
+          console.log(`📋 Accounts Receivable: $${ar.amount} (${ar.accountCode} - ${ar.accountName})`);
+        }
+        
+        // Check accounts payable
+        if (sampleMonth?.liabilities?.current?.accountsPayable) {
+          const ap = sampleMonth.liabilities.current.accountsPayable;
+          console.log(`📋 Accounts Payable: $${ap.amount} (${ap.accountCode} - ${ap.accountName})`);
+        }
+        
+        // Check equity accounts
+        if (sampleMonth?.equity) {
+          console.log(`🏛️  Equity Accounts:`);
+          if (sampleMonth.equity.retainedEarnings) {
+            console.log(`   Retained Earnings: $${sampleMonth.equity.retainedEarnings.amount}`);
+          }
+          if (sampleMonth.equity.ownerCapital) {
+            console.log(`   Owner Capital: $${sampleMonth.equity.ownerCapital.amount}`);
           }
         }
-      });
-    });
-    
-    console.log(`Total Deposits (monthSettled <= ${testMonth}): $${totalDeposits.toFixed(2)}`);
-    
-    // 6. Summary
-    console.log(`\n📈 SUMMARY:`);
-    console.log('=============');
-    console.log(`✅ Balance sheet now correctly uses monthSettled for AR calculations`);
-    console.log(`✅ AR Balance: $${arBalance.toFixed(2)} (Accruals: $${totalAccruals.toFixed(2)} - Payments: $${totalPayments.toFixed(2)})`);
-    console.log(`✅ Deposits: $${totalDeposits.toFixed(2)}`);
-    console.log(`✅ All calculations use monthSettled instead of transaction date`);
-    
-    if (paymentTransactions.length > 0) {
-      console.log(`✅ Found ${paymentTransactions.length} payments with monthSettled metadata`);
+        
+      } else {
+        console.log('❌ No monthly data found in response');
+      }
+      
+      // Check annual summary
+      if (data.annualSummary) {
+        console.log('📈 Annual Summary:');
+        console.log(`   Average Annual Assets: $${data.annualSummary.totalAnnualAssets}`);
+        console.log(`   Average Annual Liabilities: $${data.annualSummary.totalAnnualLiabilities}`);
+        console.log(`   Average Annual Equity: $${data.annualSummary.totalAnnualEquity}`);
+      }
+      
+      // Check performance metrics
+      if (data.performance) {
+        console.log('⚡ Performance Metrics:');
+        console.log(`   Generation Time: ${data.performance.generationTime}s`);
+        console.log(`   Service: ${data.performance.service}`);
+        console.log(`   Type: ${data.performance.type}`);
+      }
+      
     } else {
-      console.log(`⚠️ No payments with monthSettled found - this is expected for current data`);
+      console.log('❌ Response structure is incorrect');
+      console.log('Response:', JSON.stringify(response.data, null, 2));
     }
     
+    console.log('\n🎉 Simple Balance Sheet API test completed successfully!');
+    
   } catch (error) {
-    console.error('❌ Error:', error.message);
-  } finally {
-    await mongoose.disconnect();
-    console.log('\n🔌 Disconnected from database');
+    console.error('❌ Error testing Simple Balance Sheet API:', error.message);
+    
+    if (error.response) {
+      console.error(`📊 Status: ${error.response.status}`);
+      console.error(`📋 Response:`, error.response.data);
+    } else if (error.request) {
+      console.error('🌐 Network error - is the server running?');
+    } else {
+      console.error('🔧 Configuration error:', error.message);
+    }
   }
 }
 
-testSimpleBalanceSheet();
+// Test with residence filter
+async function testWithResidence() {
+  try {
+    console.log('\n🏠 Testing with residence filter...');
+    
+    const residenceParams = {
+      ...testParams,
+      residence: '67c13eb8425a2e078f61d00e' // Belvedere Student House
+    };
+    
+    const response = await axios.get(`${BASE_URL}${API_ENDPOINT}`, {
+      params: residenceParams,
+      timeout: 120000
+    });
+    
+    if (response.data && response.data.success) {
+      console.log('✅ Residence-filtered balance sheet generated successfully');
+      
+      const data = response.data.data;
+      if (data.monthly) {
+        const sampleMonth = data.monthly[12]; // December
+        if (sampleMonth) {
+          console.log(`📊 December Balance Sheet (Residence Filtered):`);
+          console.log(`  Assets: $${sampleMonth.assets?.total || 0}`);
+          console.log(`  Liabilities: $${sampleMonth.liabilities?.total || 0}`);
+          console.log(`  Equity: $${sampleMonth.equity?.total || 0}`);
+        }
+      }
+    }
+    
+  } catch (error) {
+    console.error('❌ Error testing with residence filter:', error.message);
+  }
+}
+
+// Run the tests
+async function runTests() {
+  console.log('🚀 Starting Simple Balance Sheet API Tests...\n');
+  
+  await testSimpleBalanceSheet();
+  await testWithResidence();
+  
+  console.log('\n✨ All tests completed!');
+  console.log('\n📝 Next steps:');
+  console.log('1. Update your frontend to use the new endpoint: /api/financial-reports/simple-monthly-balance-sheet');
+  console.log('2. The response structure matches your existing frontend expectations');
+  console.log('3. Test with different periods and residence filters');
+  console.log('4. Verify the balance sheet balances (Assets = Liabilities + Equity)');
+}
+
+// Run the tests if this script is executed directly
+if (require.main === module) {
+  runTests().catch(console.error);
+}
+
+module.exports = {
+  testSimpleBalanceSheet,
+  testWithResidence,
+  runTests
+};

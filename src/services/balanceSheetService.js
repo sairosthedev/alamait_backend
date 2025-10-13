@@ -1325,8 +1325,17 @@ class BalanceSheetService {
   
   // Enhanced helper methods for proper classification
   static isCurrentAsset(accountCode, accountName) {
+    // Current assets: typically convertible to cash within 12 months
     const currentAssetCodes = ['1000', '1010', '1011', '1012', '1013', '1014', '1100', '1200', '1300', '1400', '1500'];
-    const currentAssetNames = ['cash', 'bank', 'petty', 'receivable', 'inventory', 'prepaid'];
+    const currentAssetNames = ['cash', 'bank', 'petty', 'receivable', 'inventory', 'prepaid', 'short-term', 'current'];
+    
+    // Non-current assets: long-term assets not easily convertible to cash
+    const nonCurrentAssetNames = ['property', 'building', 'equipment', 'furniture', 'vehicle', 'land', 'fixed', 'long-term', 'depreciation', 'accumulated'];
+    
+    // Check if explicitly non-current first
+    if (nonCurrentAssetNames.some(name => accountName.toLowerCase().includes(name))) {
+      return false;
+    }
     
     return currentAssetCodes.includes(accountCode) || 
            currentAssetNames.some(name => accountName.toLowerCase().includes(name));

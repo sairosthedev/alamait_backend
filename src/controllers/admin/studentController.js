@@ -345,26 +345,34 @@ exports.createStudent = async (req, res) => {
             }
         }
 
-        // Send onboarding email with temporary password and lease agreement if available
-        await sendEmail({
-            to: email,
-            subject: 'Welcome to Alamait Student Accommodation',
-            text: `
-                Dear ${firstName} ${lastName},
+        // Send onboarding email with temporary password and lease agreement if available (non-blocking)
+        setTimeout(async () => {
+            try {
+                console.log(`📧 Sending welcome email to ${email}...`);
+                await sendEmail({
+                    to: email,
+                    subject: 'Welcome to Alamait Student Accommodation',
+                    text: `
+                        Dear ${firstName} ${lastName},
 
-                Welcome to Alamait Student Accommodation! Your account has been created.
+                        Welcome to Alamait Student Accommodation! Your account has been created.
 
-                Temporary Password: (provided upon registration)
+                        Temporary Password: ${tempPassword}
 
-                Please log in and change your password as soon as possible.
+                        Please log in and change your password as soon as possible.
 
-                Your lease agreement is attached to this email. Please review and sign it as required.
+                        Your lease agreement is attached to this email. Please review and sign it as required.
 
-                Best regards,
-                Alamait Student Accommodation Team
-            `,
-            attachments: attachments.length > 0 ? attachments : undefined
-        });
+                        Best regards,
+                        Alamait Student Accommodation Team
+                    `,
+                    attachments: attachments.length > 0 ? attachments : undefined
+                });
+                console.log(`✅ Welcome email sent successfully to ${email}`);
+            } catch (error) {
+                console.error(`❌ Failed to send welcome email to ${email}:`, error.message);
+            }
+        }, 100); // Small delay to ensure response is sent first
 
         res.status(201).json({
             ...student.toObject(),

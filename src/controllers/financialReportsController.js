@@ -3,6 +3,7 @@ const FinancialReportingService = require('../services/financialReportingService
 const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
 const AccountingService = require('../services/accountingService');
 const BalanceSheetService = require('../services/balanceSheetService');
+const SimpleBalanceSheetService = require('../services/simpleBalanceSheetService');
 const Account = require('../models/Account');
 const { validateToken } = require('../middleware/auth');
 
@@ -17,6 +18,326 @@ const { validateToken } = require('../middleware/auth');
  * - General Ledger
  * - Account Balances
  */
+
+/**
+ * Transform fixed balance sheet data to monthly structure expected by frontend
+ */
+function transformFixedBalanceSheetToMonthly(balanceSheetData, month, year) {
+    const monthName = new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' });
+    
+    // Extract key accounts from the fixed balance sheet
+    const assets = balanceSheetData.assets || {};
+    const liabilities = balanceSheetData.liabilities || {};
+    const equity = balanceSheetData.equity || {};
+    
+    // Helper function to check if account is a child of a parent
+    const isChildAccount = (accountCode, parentCode) => {
+        if (!accountCode || !parentCode) return false;
+        
+        // For accounts payable: 200001, 200002, etc. are children of 2000
+        if (parentCode === '2000' && accountCode.startsWith('2000') && accountCode !== '2000') {
+            return true;
+        }
+        // For accounts receivable: 1100-xxxxx are children of 1100
+        if (parentCode === '1100' && accountCode.startsWith('1100-')) {
+            return true;
+        }
+        return false;
+    };
+    
+    // Helper function to find account by code in the new structure
+    const findAccountByCode = (code) => {
+        // First check current assets
+        if (assets.current_assets) {
+            const account = Object.values(assets.current_assets).find(acc => acc.code === code);
+            if (account) return account;
+        }
+        
+        // Then check non-current assets
+        if (assets.non_current_assets) {
+            const account = Object.values(assets.non_current_assets).find(acc => acc.code === code);
+            if (account) return account;
+        }
+        
+        return null;
+    };
+    
+    // Build cash and bank section
+    const cashAccount = findAccountByCode('1000');
+    const bankAccount = findAccountByCode('1001');
+    const ecocashAccount = findAccountByCode('1002');
+    const innbucksAccount = findAccountByCode('1003');
+    const pettyCashAccount = findAccountByCode('1004');
+    const cashOnHandAccount = findAccountByCode('1005');
+    const generalPettyCashAccount = findAccountByCode('1010');
+    const adminPettyCashAccount = findAccountByCode('1011');
+    const financePettyCashAccount = findAccountByCode('1012');
+    const propertyManagerPettyCashAccount = findAccountByCode('1013');
+    const maintenancePettyCashAccount = findAccountByCode('1014');
+    
+    // Add CBZ Vault and other custom accounts
+    const cbzVaultAccount = findAccountByCode('10003');
+    
+    // Build accounts receivable with child aggregation
+    const accountsReceivableAccount = findAccountByCode('1100');
+    let totalAccountsReceivable = accountsReceivableAccount?.balance || 0;
+    
+    // Aggregate child accounts receivable into parent
+    Object.entries(assets.current_assets || {}).forEach(([key, account]) => {
+        if (isChildAccount(account.code, '1100')) {
+            totalAccountsReceivable += account.balance || 0;
+        }
+    });
+    
+    // Build liabilities with child aggregation
+    const accountsPayableAccount = Object.values(liabilities).find(acc => acc.code === '2000');
+    let totalAccountsPayable = accountsPayableAccount?.balance || 0;
+    
+    // Aggregate child accounts payable into parent
+    Object.entries(liabilities || {}).forEach(([key, account]) => {
+        if (isChildAccount(account.code, '2000')) {
+            totalAccountsPayable += account.balance || 0;
+        }
+    });
+    
+    const tenantDepositsAccount = Object.values(liabilities).find(acc => acc.code === '2020');
+    const deferredIncomeAccount = Object.values(liabilities).find(acc => acc.code === '2200');
+    
+    // Build equity
+    const retainedEarningsAccount = Object.values(equity).find(acc => acc.code === '3101');
+    const ownerCapitalAccount = Object.values(equity).find(acc => acc.code === '3001');
+    
+    // Calculate totals
+    const totalCashAndBank = (cashAccount?.balance || 0) + 
+                           (bankAccount?.balance || 0) + 
+                           (ecocashAccount?.balance || 0) + 
+                           (innbucksAccount?.balance || 0) + 
+                           (pettyCashAccount?.balance || 0) + 
+                           (cashOnHandAccount?.balance || 0) + 
+                           (generalPettyCashAccount?.balance || 0) + 
+                           (adminPettyCashAccount?.balance || 0) + 
+                           (financePettyCashAccount?.balance || 0) + 
+                           (propertyManagerPettyCashAccount?.balance || 0) + 
+                           (maintenancePettyCashAccount?.balance || 0) +
+                           (cbzVaultAccount?.balance || 0);
+    
+    const totalAssets = balanceSheetData.assets?.total_assets || 0;
+    const totalLiabilities = balanceSheetData.liabilities?.total_liabilities || 0;
+    const totalEquity = balanceSheetData.equity?.total_equity || 0;
+    
+    // Check if balanced
+    const balanceCheck = Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01 ? 'Balanced' : `Off by $${(totalAssets - (totalLiabilities + totalEquity)).toFixed(2)}`;
+    
+    // Build comprehensive structure with ALL accounts
+    const allCurrentAssets = {};
+    const allNonCurrentAssets = {};
+    const allLiabilities = {};
+    const allEquity = {};
+
+    // Process ALL current assets with parent-child aggregation
+    // Define accounts that are already included in specific sections to avoid duplication
+    const cashAndBankAccountCodes = ['1000', '1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014', '10003'];
+    
+    Object.entries(assets.current_assets || {}).forEach(([key, account]) => {
+        if (key !== 'total_current_assets') {
+            // Skip child accounts - they will be aggregated into parents
+            if (isChildAccount(account.code, '1100')) {
+                return;
+            }
+            
+            // Skip accounts that are already included in specific sections
+            if (cashAndBankAccountCodes.includes(account.code)) {
+                return;
+            }
+            
+            allCurrentAssets[key] = {
+                amount: account.balance || 0,
+                accountCode: account.code,
+                accountName: account.name,
+                type: 'current_asset'
+            };
+        }
+    });
+
+    // Process ALL non-current assets
+    Object.entries(assets.non_current_assets || {}).forEach(([key, account]) => {
+        if (key !== 'total_non_current_assets') {
+            allNonCurrentAssets[key] = {
+                amount: account.balance || 0,
+                accountCode: account.code,
+                accountName: account.name,
+                type: 'non_current_asset'
+            };
+        }
+    });
+
+    // Process ALL liabilities with parent-child aggregation
+    // Define accounts that are already included in specific sections to avoid duplication
+    const specificLiabilityAccountCodes = ['2000', '2020', '2200'];
+    
+    Object.entries(liabilities || {}).forEach(([key, account]) => {
+        if (key !== 'total_liabilities') {
+            // Skip child accounts - they will be aggregated into parents
+            if (isChildAccount(account.code, '2000')) {
+                return;
+            }
+            
+            // Skip accounts that are already included in specific sections
+            if (specificLiabilityAccountCodes.includes(account.code)) {
+                return;
+            }
+            
+            allLiabilities[key] = {
+                amount: account.balance || 0,
+                accountCode: account.code,
+                accountName: account.name,
+                type: 'liability'
+            };
+        }
+    });
+
+    // Process ALL equity accounts
+    // Define accounts that are already included in specific sections to avoid duplication
+    const specificEquityAccountCodes = ['3001', '3101'];
+    
+    Object.entries(equity || {}).forEach(([key, account]) => {
+        if (key !== 'total_equity' && key !== 'retained_earnings') {
+            // Skip accounts that are already included in specific sections
+            if (specificEquityAccountCodes.includes(account.code)) {
+                return;
+            }
+            
+            allEquity[key] = {
+                amount: account.balance || 0,
+                accountCode: account.code,
+                accountName: account.name,
+                type: 'equity'
+            };
+        }
+    });
+
+    return {
+        month: month,
+        monthName: monthName,
+        assets: {
+            current: {
+                cashAndBank: {
+                    cash: {
+                        amount: cashAccount?.balance || 0,
+                        accountCode: '1000',
+                        accountName: 'Cash'
+                    },
+                    bank: {
+                        amount: bankAccount?.balance || 0,
+                        accountCode: '1001',
+                        accountName: 'Bank Account'
+                    },
+                    ecocash: {
+                        amount: ecocashAccount?.balance || 0,
+                        accountCode: '1002',
+                        accountName: 'Ecocash'
+                    },
+                    innbucks: {
+                        amount: innbucksAccount?.balance || 0,
+                        accountCode: '1003',
+                        accountName: 'Innbucks'
+                    },
+                    pettyCash: {
+                        amount: pettyCashAccount?.balance || 0,
+                        accountCode: '1004',
+                        accountName: 'Petty Cash'
+                    },
+                    cashOnHand: {
+                        amount: cashOnHandAccount?.balance || 0,
+                        accountCode: '1005',
+                        accountName: 'Cash on Hand'
+                    },
+                    generalPettyCash: {
+                        amount: generalPettyCashAccount?.balance || 0,
+                        accountCode: '1010',
+                        accountName: 'General Petty Cash'
+                    },
+                    adminPettyCash: {
+                        amount: adminPettyCashAccount?.balance || 0,
+                        accountCode: '1011',
+                        accountName: 'Admin Petty Cash'
+                    },
+                    financePettyCash: {
+                        amount: financePettyCashAccount?.balance || 0,
+                        accountCode: '1012',
+                        accountName: 'Finance Petty Cash'
+                    },
+                    propertyManagerPettyCash: {
+                        amount: propertyManagerPettyCashAccount?.balance || 0,
+                        accountCode: '1013',
+                        accountName: 'Property Manager Petty Cash'
+                    },
+                    maintenancePettyCash: {
+                        amount: maintenancePettyCashAccount?.balance || 0,
+                        accountCode: '1014',
+                        accountName: 'Maintenance Petty Cash'
+                    },
+                    cbzVault: {
+                        amount: cbzVaultAccount?.balance || 0,
+                        accountCode: '10003',
+                        accountName: 'Cbz Vault'
+                    },
+                    total: totalCashAndBank
+                },
+                accountsReceivable: {
+                    amount: totalAccountsReceivable,
+                    accountCode: '1100',
+                    accountName: 'Accounts Receivable - Tenants'
+                },
+                // Include ALL other current assets
+                allOtherCurrentAssets: allCurrentAssets
+            },
+            nonCurrent: allNonCurrentAssets, // Include ALL non-current assets
+            total: totalAssets
+        },
+        liabilities: {
+            current: {
+                accountsPayable: {
+                    amount: totalAccountsPayable,
+                    accountCode: '2000',
+                    accountName: 'Accounts Payable'
+                },
+                tenantDeposits: {
+                    amount: tenantDepositsAccount?.balance || 0,
+                    accountCode: '2020',
+                    accountName: 'Tenant Deposits Held'
+                },
+                deferredIncome: {
+                    amount: deferredIncomeAccount?.balance || 0,
+                    accountCode: '2200',
+                    accountName: 'Advance Payment Liability'
+                }
+            },
+            all: allLiabilities, // Include ALL liabilities
+            total: totalLiabilities
+        },
+        equity: {
+            retainedEarnings: {
+                amount: retainedEarningsAccount?.balance || 0,
+                accountCode: '3101',
+                accountName: 'Retained Earnings'
+            },
+            ownerCapital: {
+                amount: ownerCapitalAccount?.balance || 0,
+                accountCode: '3001',
+                accountName: 'Owner Capital'
+            },
+            all: allEquity, // Include ALL equity accounts
+            total: totalEquity
+        },
+        balanceCheck: balanceCheck,
+        summary: {
+            totalAssets: totalAssets,
+            totalLiabilities: totalLiabilities,
+            totalEquity: totalEquity
+        }
+    };
+}
 
 class FinancialReportsController {
     /**
@@ -949,29 +1270,30 @@ class FinancialReportsController {
             let totalAnnualLiabilities = 0;
             let totalAnnualEquity = 0;
             
+            // Use the FIXED balance sheet service that includes ALL accounts
+            const FinancialReportingService = require('../services/financialReportingService');
+            
             // Fetch balance sheet for each month (1-12)
             for (let month = 1; month <= 12; month++) {
                 try {
-                    const monthData = await AccountingService.generateMonthlyBalanceSheet(month, year, residence);
+                    // Calculate end of month date
+                    const endOfMonth = new Date(year, month, 0); // Last day of month
+                    const monthEndDateStr = endOfMonth.toISOString().split('T')[0];
+                    
+                    console.log(`🔧 Generating FIXED balance sheet for ${month}/${year} (${monthEndDateStr})`);
+                    
+                    // Use the fixed balance sheet service
+                    const monthData = await FinancialReportingService.generateBalanceSheet(monthEndDateStr, basis);
                     
                     if (monthData) {
-                        monthlyData[month] = {
-                            month: month,
-                            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
-                            assets: monthData.assets,
-                            liabilities: monthData.liabilities,
-                            equity: monthData.equity,
-                            balanceCheck: monthData.balanceCheck,
-                            summary: {
-                                totalAssets: monthData.assets.total,
-                                totalLiabilities: monthData.liabilities.total,
-                                totalEquity: monthData.equity.total
-                            }
-                        };
+                        // Transform the fixed balance sheet data to match expected structure
+                        const transformedData = transformFixedBalanceSheetToMonthly(monthData, month, year);
                         
-                        totalAnnualAssets += monthData.assets.total;
-                        totalAnnualLiabilities += monthData.liabilities.total;
-                        totalAnnualEquity += monthData.equity.total;
+                        monthlyData[month] = transformedData;
+                        
+                        totalAnnualAssets += monthData.assets?.total_assets || 0;
+                        totalAnnualLiabilities += monthData.liabilities?.total_liabilities || 0;
+                        totalAnnualEquity += monthData.equity?.total_equity || 0;
                     }
                 } catch (monthError) {
                     console.log(`⚠️ Failed to fetch month ${month}:`, monthError.message);
@@ -1614,6 +1936,79 @@ class FinancialReportsController {
             res.status(500).json({
                 success: false,
                 message: 'Error generating comprehensive monthly balance sheet',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Generate Simple Monthly Balance Sheet
+     * GET /api/financial-reports/simple-monthly-balance-sheet
+     * 
+     * A clean, simple balance sheet that follows proper accounting principles:
+     * - Assets = Liabilities + Equity
+     * - Proper parent-child account aggregation
+     * - Monthly balance tracking
+     * - Works seamlessly with the frontend
+     */
+    static async generateSimpleMonthlyBalanceSheet(req, res) {
+        try {
+            const { period, residence, type = 'cumulative' } = req.query;
+            
+            if (!period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period parameter is required (e.g., 2025)'
+                });
+            }
+            
+            if (!['cumulative', 'monthly'].includes(type)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Type must be either "cumulative" (balance as of month end) or "monthly" (monthly changes)'
+                });
+            }
+            
+            console.log(`🚀 Generating Simple Monthly Balance Sheet for ${period}${residence ? ` (residence: ${residence})` : ''} (${type})`);
+            const startTime = Date.now();
+            
+            // Use the simple balance sheet service
+            const monthlyBalanceSheet = await SimpleBalanceSheetService.generateMonthlyBalanceSheet(
+                parseInt(period), 
+                residence, 
+                type
+            );
+            
+            const endTime = Date.now();
+            const duration = (endTime - startTime) / 1000;
+            console.log(`✅ Simple balance sheet generation completed in ${duration.toFixed(2)} seconds`);
+            
+            // Add performance metrics
+            monthlyBalanceSheet.performance = {
+                generationTime: duration,
+                timestamp: new Date().toISOString(),
+                service: 'SimpleBalanceSheetService',
+                type: type
+            };
+            
+            // Add cache-busting headers
+            res.set({
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            });
+            
+            res.json({
+                success: true,
+                data: monthlyBalanceSheet,
+                message: `Simple monthly balance sheet generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${type} type)`
+            });
+            
+        } catch (error) {
+            console.error('Error generating simple monthly balance sheet:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error generating simple monthly balance sheet',
                 error: error.message
             });
         }

@@ -2290,32 +2290,47 @@ class FinancialReportingService {
     }
     
     /**
-     * Generate Balance Sheet
+     * Generate Balance Sheet - FIXED VERSION
+     * Now includes ALL accounts from chart of accounts, even with zero balances
      */
     static async generateBalanceSheet(asOf, basis = 'cash') {
         try {
             const asOfDate = new Date(asOf);
             
-            console.log(`Generating balance sheet as of ${asOfDate}`);
+            console.log(`🔧 Generating FIXED balance sheet as of ${asOfDate}`);
             
-            // Get all transaction entries up to the specified date with residence info
+            // Get ALL accounts from chart of accounts
+            const Account = require('../models/Account');
+            const allAccounts = await Account.find({ isActive: true }).sort({ code: 1 });
+            console.log(`📋 Found ${allAccounts.length} active accounts in chart of accounts`);
+            
+            // Get all transaction entries up to the specified date
             const entries = await TransactionEntry.find({
-                date: { $lte: asOfDate }
-            }).populate('residence');
+                date: { $lte: asOfDate },
+                status: 'posted'
+            });
             
-            console.log(`Found ${entries.length} transaction entries up to ${asOfDate}`);
+            console.log(`📋 Found ${entries.length} transaction entries up to ${asOfDate}`);
             
-            // Calculate account balances
+            // Initialize ALL accounts with zero balances
             const accountBalances = {};
+            allAccounts.forEach(account => {
+                const key = `${account.code} - ${account.name}`;
+                accountBalances[key] = {
+                    code: account.code,
+                    name: account.name,
+                    type: account.type,
+                    category: account.category,
+                    balance: 0,
+                    debit_total: 0,
+                    credit_total: 0
+                };
+            });
+            
             const residences = new Set();
             
+            // Process transactions to calculate actual balances
             entries.forEach(entry => {
-                const residence = entry.residence;
-                const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
-                residences.add(residenceName);
-                
-                console.log(`Processing transaction: ${entry.source} - $${entry.totalDebit} at ${residenceName}`);
-                
                 if (entry.entries && entry.entries.length > 0) {
                     entry.entries.forEach(line => {
                         const accountCode = line.accountCode;
@@ -2324,52 +2339,58 @@ class FinancialReportingService {
                         const debit = line.debit || 0;
                         const credit = line.credit || 0;
                         
-                        console.log(`  Entry: ${accountCode} - ${accountName} (${accountType}): Dr. $${debit} Cr. $${credit}`);
-                        
                         const key = `${accountCode} - ${accountName}`;
-                        if (!accountBalances[key]) {
-                            accountBalances[key] = {
-                                code: accountCode,
-                                name: accountName,
-                                type: accountType,
-                                balance: 0,
-                                debit_total: 0,
-                                credit_total: 0
-                            };
-                        }
                         
-                        // Track totals
-                        accountBalances[key].debit_total += debit;
-                        accountBalances[key].credit_total += credit;
+                        // Find the account by code (not by code + name) to handle name mismatches
+                        const accountKey = Object.keys(accountBalances).find(k => k.startsWith(`${accountCode} -`));
                         
-                        // Calculate balance based on account type
-                        if (accountType === 'Asset' || accountType === 'Expense') {
-                            accountBalances[key].balance += debit - credit;
-                        } else {
-                            accountBalances[key].balance += credit - debit;
+                        // Update balance if account exists in chart of accounts
+                        if (accountKey && accountBalances[accountKey]) {
+                            accountBalances[accountKey].debit_total += debit;
+                            accountBalances[accountKey].credit_total += credit;
+                            
+                            // Calculate balance based on account type
+                            if (accountType === 'Asset' || accountType === 'Expense') {
+                                accountBalances[accountKey].balance += debit - credit;
+                            } else {
+                                accountBalances[accountKey].balance += credit - debit;
+                            }
                         }
                     });
                 }
             });
             
-            // Group by account type
-            const assets = {};
+            // Group by account type with proper current/non-current asset separation
+            const assets = {
+                current_assets: {},
+                non_current_assets: {}
+            };
             const liabilities = {};
             const equity = {};
             const income = {};
             const expenses = {};
             
+            // Import BalanceSheetService to use isCurrentAsset function
+            const BalanceSheetService = require('./balanceSheetService');
+            
             Object.values(accountBalances).forEach(account => {
                 const key = `${account.code} - ${account.name}`;
                 switch (account.type) {
                     case 'Asset':
-                        assets[key] = {
+                        const accountData = {
                             balance: account.balance,
                             debit_total: account.debit_total,
                             credit_total: account.credit_total,
                             code: account.code,
                             name: account.name
                         };
+                        
+                        // Determine if current or non-current asset
+                        if (BalanceSheetService.isCurrentAsset(account.code, account.name)) {
+                            assets.current_assets[key] = accountData;
+                        } else {
+                            assets.non_current_assets[key] = accountData;
+                        }
                         break;
                     case 'Liability':
                         liabilities[key] = {
@@ -2411,7 +2432,9 @@ class FinancialReportingService {
             });
             
             // Calculate totals
-            const totalAssets = Object.values(assets).reduce((sum, account) => sum + account.balance, 0);
+            const totalCurrentAssets = Object.values(assets.current_assets).reduce((sum, account) => sum + account.balance, 0);
+            const totalNonCurrentAssets = Object.values(assets.non_current_assets).reduce((sum, account) => sum + account.balance, 0);
+            const totalAssets = totalCurrentAssets + totalNonCurrentAssets;
             const totalLiabilities = Object.values(liabilities).reduce((sum, account) => sum + account.balance, 0);
             const totalEquity = Object.values(equity).reduce((sum, account) => sum + account.balance, 0);
             const totalIncome = Object.values(income).reduce((sum, account) => sum + account.balance, 0);
@@ -2420,18 +2443,34 @@ class FinancialReportingService {
             // Calculate retained earnings
             const retainedEarnings = totalIncome - totalExpenses;
             
+            // Update the Retained Earnings account (3101) with the calculated value
+            const retainedEarningsKey = Object.keys(equity).find(key => key.includes('3101'));
+            if (retainedEarningsKey) {
+                equity[retainedEarningsKey].balance = retainedEarnings;
+            }
+            
             console.log(`Balance Sheet Summary as of ${asOfDate}:`);
+            console.log(`  Total Current Assets: $${totalCurrentAssets}`);
+            console.log(`  Total Non-Current Assets: $${totalNonCurrentAssets}`);
             console.log(`  Total Assets: $${totalAssets}`);
             console.log(`  Total Liabilities: $${totalLiabilities}`);
             console.log(`  Total Equity: $${totalEquity + retainedEarnings}`);
+            console.log(`  Retained Earnings: $${retainedEarnings}`);
             console.log(`  Residences included: ${Array.from(residences).join(', ')}`);
             
             // Show detailed account breakdown
             console.log('\n📊 Detailed Account Breakdown:');
-            console.log('ASSETS:');
-            Object.entries(assets).forEach(([key, account]) => {
-                console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total})`);
+            console.log('CURRENT ASSETS:');
+            Object.entries(assets.current_assets).forEach(([key, account]) => {
+                console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total}, Net: $${account.debit_total - account.credit_total})`);
             });
+            console.log(`  Total Current Assets: $${totalCurrentAssets}`);
+            
+            console.log('\nNON-CURRENT ASSETS:');
+            Object.entries(assets.non_current_assets).forEach(([key, account]) => {
+                console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total}, Net: $${account.debit_total - account.credit_total})`);
+            });
+            console.log(`  Total Non-Current Assets: $${totalNonCurrentAssets}`);
             
             console.log('LIABILITIES:');
             Object.entries(liabilities).forEach(([key, account]) => {
@@ -2457,7 +2496,14 @@ class FinancialReportingService {
                 asOf,
                 basis,
                 assets: {
-                    ...assets,
+                    current_assets: {
+                        ...assets.current_assets,
+                        total_current_assets: totalCurrentAssets
+                    },
+                    non_current_assets: {
+                        ...assets.non_current_assets,
+                        total_non_current_assets: totalNonCurrentAssets
+                    },
                     total_assets: totalAssets
                 },
                 liabilities: {
