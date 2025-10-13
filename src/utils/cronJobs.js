@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { handleExpiredApplications, sendExpiryWarnings } = require('./applicationUtils');
+const emailOutboxService = require('../services/emailOutboxService');
 
 // Schedule tasks to be run on the server
 const initCronJobs = () => {
@@ -10,6 +11,13 @@ const initCronJobs = () => {
         console.log('Running expiry warning emails...');
         await sendExpiryWarnings();
     });
+
+    // Start email outbox retries every 60s in production
+    try {
+        emailOutboxService.start();
+    } catch (err) {
+        console.error('Failed to start EmailOutboxService:', err);
+    }
 };
 
 module.exports = {
