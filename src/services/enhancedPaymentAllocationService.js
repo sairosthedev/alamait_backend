@@ -477,6 +477,11 @@ class EnhancedPaymentAllocationService {
                 month.rent.outstanding
               );
               
+              // Determine if this is an advance payment (future month) or current settlement
+              const paymentDate = new Date(paymentData.date);
+              const allocationMonth = new Date(month.year, month.month - 1, 1); // month is 1-based
+              const isAdvancePayment = allocationMonth > paymentDate;
+              
               allocationResults.push({
                 month: month.monthKey,
                 monthName: month.monthName,
@@ -485,7 +490,7 @@ class EnhancedPaymentAllocationService {
                 amountAllocated: amountToAllocate,
                 originalOutstanding: month.rent.outstanding,
                 newOutstanding: month.rent.outstanding - amountToAllocate,
-                allocationType: 'rent_settlement',
+                allocationType: isAdvancePayment ? 'advance_payment' : 'rent_settlement',
                 transactionId: month.transactionId
               });
               
