@@ -179,15 +179,13 @@ app.use('/api/student/lease-agreement', (req, res, next) => {
 
 // Add timeout middleware for request routes
 app.use('/api/requests', (req, res, next) => {
-  // Set longer timeout for request file upload routes
-  if (req.method === 'POST' && (req.path.includes('quotations') || req.path.includes('items'))) {
-    req.setTimeout(60000); // 60 seconds for file uploads
-    res.setTimeout(60000);
-  }
-  // Set longer timeout for finance requests
-  if (req.method === 'POST' && req.body && req.body.type === 'financial') {
-    req.setTimeout(300000); // 5 minutes for finance requests
+  // Generic extended timeout for creating requests (covers heavy processing)
+  if (req.method === 'POST') {
+    req.setTimeout(300000); // 5 minutes for all request creations
     res.setTimeout(300000);
+  }
+  // Keep a specific note for finance requests
+  if (req.method === 'POST' && req.body && req.body.type === 'financial') {
     console.log('🕐 Extended timeout for finance request via /requests endpoint');
   }
   next();

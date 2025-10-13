@@ -291,6 +291,14 @@ exports.createRequest = async (req, res) => {
             images,
             dateRequested
         } = req.body;
+
+        // Support async mode to return immediately and process heavy work in background
+        const isAsync = (() => {
+            try {
+                const flag = (req.query?.async ?? req.body?.async ?? '').toString().toLowerCase();
+                return flag === 'true' || flag === '1';
+            } catch (_) { return false; }
+        })();
         
         // Parse items if it's a string (from FormData)
         let parsedItems = items;
@@ -994,6 +1002,82 @@ exports.createRequest = async (req, res) => {
         
         const request = new Request(requestData);
         await request.save();
+
+        // If async requested, return quickly and continue heavy work in background
+        if (isAsync) {
+            try {
+                res.status(202).json({ id: request._id, state: 'queued' });
+            } catch (_) { /* ignore double-send protection */ }
+
+            // Continue non-blocking processing
+            setImmediate(async () => {
+                try {
+                    // Notify CEOs for all requests on creation (skip for financial if already optimized below)
+                    try {
+                        await EmailNotificationService.sendRequestToCEO(request, req.user || { _id: request.submittedBy });
+                    } catch (notifyErr) {
+                        console.error('Error sending request to CEO (async):', notifyErr.message);
+                    }
+
+                    // Skip population for financial to improve performance
+                    if (request.type !== 'financial') {
+                        // Populate vendor details on the main request if any quotations have vendors
+                        if (request.items && request.items.length > 0) {
+                            for (const item of request.items) {
+                                if (item.quotations && item.quotations.length > 0) {
+                                    for (const quotation of item.quotations) {
+                                        if (quotation.vendorId && !request.vendorId) {
+                                            request.vendorId = quotation.vendorId;
+                                            request.vendorCode = quotation.vendorCode;
+                                            request.vendorName = quotation.vendorName;
+                                            request.vendorType = quotation.vendorType;
+                                            request.vendorContact = quotation.vendorContact;
+                                            request.expenseCategory = quotation.expenseCategory;
+                                            request.paymentMethod = quotation.paymentMethod;
+                                            request.hasBankDetails = quotation.hasBankDetails;
+                                            break;
+                                        }
+                                    }
+                                    if (request.vendorId) break;
+                                }
+                            }
+                        }
+
+                        // Add to request history
+                        request.requestHistory = request.requestHistory || [];
+                        request.requestHistory.push({
+                            date: request.dateRequested,
+                            action: 'Request created',
+                            user: (req.user && req.user._id) || request.submittedBy,
+                            changes: ['Request submitted']
+                        });
+
+                        await request.save();
+
+                        // Send additional emails based on role/type
+                        try {
+                            const populatedRequest = await Request.findById(request._id)
+                                .populate('submittedBy', 'firstName lastName email role')
+                                .populate('residence', 'name');
+
+                            if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager')) {
+                                if (request.type === 'student_maintenance' || request.type === 'operational' || request.type === 'financial') {
+                                    await EmailNotificationService.sendAdminRequestToCEOAndFinance(populatedRequest, req.user);
+                                }
+                            } else if (request.type === 'student_maintenance') {
+                                await EmailNotificationService.sendMaintenanceRequestSubmitted(populatedRequest, req.user);
+                            }
+                        } catch (emailError) {
+                            console.error('Failed to send async request email notifications:', emailError);
+                        }
+                    }
+                } catch (bgErr) {
+                    console.error('Async createRequest background error:', bgErr);
+                }
+            });
+
+            return; // prevent further sync processing
+        }
 
         // Notify CEOs for all requests on creation
         try {
