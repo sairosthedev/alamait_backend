@@ -37,6 +37,15 @@ exports.sendEmail = async (options) => {
             scheduledAt: new Date()
         });
 
+        // Queue-first mode in production: skip immediate SMTP send and rely on outbox retry
+        const sendMode = (process.env.EMAIL_SEND_MODE || '').toLowerCase();
+        if (process.env.NODE_ENV === 'production' && sendMode === 'queue') {
+            try {
+                console.log(`📬 Queued email (queue-first mode): ${options.to} → ${options.subject}`);
+            } catch (_) {}
+            return; // do not attempt immediate send; outbox service will deliver
+        }
+
         const mailOptions = {
             from: `Alamait Student Accommodation <${process.env.EMAIL_USER}>`,
             to: options.to,

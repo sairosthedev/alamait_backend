@@ -10,6 +10,15 @@ const startServer = async () => {
         // Ensure upload directories exist
         ensureUploadDirectoriesExist();
 
+        // Initialize cron jobs (includes EmailOutboxService in production)
+        try {
+            const { initCronJobs } = require('./utils/cronJobs');
+            initCronJobs();
+            console.log('✅ Cron jobs initialized');
+        } catch (err) {
+            console.error('❌ Failed to initialize cron jobs:', err);
+        }
+
         // Start monthly accrual cron service after database connection
         const monthlyAccrualCronService = require('./services/monthlyAccrualCronService');
         try {
