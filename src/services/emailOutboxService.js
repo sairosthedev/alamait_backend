@@ -40,12 +40,13 @@ class EmailOutboxService {
                                 user: process.env.EMAIL_USER, 
                                 pass: process.env.EMAIL_APP_PASSWORD 
                             },
-                            connectionTimeout: 10000, // 10 seconds
-                            greetingTimeout: 5000,   // 5 seconds
-                            socketTimeout: 15000,    // 15 seconds
+                            connectionTimeout: 30000, // 30 seconds (increased)
+                            greetingTimeout: 15000,   // 15 seconds (increased)
+                            socketTimeout: 45000,    // 45 seconds (increased)
                             secure: true,
                             tls: {
-                                rejectUnauthorized: false
+                                rejectUnauthorized: false,
+                                ciphers: 'SSLv3'
                             }
                         });
 
@@ -60,7 +61,7 @@ class EmailOutboxService {
                         });
 
                         const timeoutPromise = new Promise((_, reject) => {
-                            setTimeout(() => reject(new Error('Email send timeout')), 15000); // 15s timeout
+                            setTimeout(() => reject(new Error('Email send timeout')), 60000); // 60s timeout (increased)
                         });
 
                         await Promise.race([sendPromise, timeoutPromise]);

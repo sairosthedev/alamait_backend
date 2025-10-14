@@ -1,18 +1,19 @@
 const nodemailer = require('nodemailer');
 const EmailOutbox = require('../models/EmailOutbox');
 
-// Create transporter with pooling and robust timeouts
+// Create transporter with more generous timeouts for production stability
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     pool: true,
-    maxConnections: parseInt(process.env.EMAIL_MAX_CONNECTIONS || '2', 10), // Reduced to 2
-    maxMessages: parseInt(process.env.EMAIL_MAX_MESSAGES || '20', 10), // Reduced to 20
-    connectionTimeout: parseInt(process.env.EMAIL_CONN_TIMEOUT_MS || '10000', 10), // 10s
-    greetingTimeout: parseInt(process.env.EMAIL_GREET_TIMEOUT_MS || '5000', 10),   // 5s
-    socketTimeout: parseInt(process.env.EMAIL_SOCKET_TIMEOUT_MS || '15000', 10),    // 15s
+    maxConnections: parseInt(process.env.EMAIL_MAX_CONNECTIONS || '1', 10), // Reduced to 1 for stability
+    maxMessages: parseInt(process.env.EMAIL_MAX_MESSAGES || '10', 10), // Reduced to 10
+    connectionTimeout: parseInt(process.env.EMAIL_CONN_TIMEOUT_MS || '30000', 10), // 30s (increased)
+    greetingTimeout: parseInt(process.env.EMAIL_GREET_TIMEOUT_MS || '15000', 10),   // 15s (increased)
+    socketTimeout: parseInt(process.env.EMAIL_SOCKET_TIMEOUT_MS || '45000', 10),    // 45s (increased)
     secure: true,
     tls: {
-        rejectUnauthorized: false
+        rejectUnauthorized: false,
+        ciphers: 'SSLv3'
     },
     auth: {
         user: process.env.EMAIL_USER,
@@ -65,58 +66,22 @@ exports.sendEmail = async (options) => {
             scheduledAt: new Date()
         });
 
-        // Queue-first mode in production: skip immediate SMTP send and rely on outbox retry
+        // 🚀 IMMEDIATE SEND MODE: Always try to send immediately, queue as fallback
         const sendMode = (process.env.EMAIL_SEND_MODE || '').toLowerCase();
-        if (process.env.NODE_ENV === 'production' && sendMode === 'queue') {
-            try {
-                console.log(`📬 Queued email (queue-first mode): ${options.to} → ${options.subject}`);
-            } catch (_) {}
-            return; // do not attempt immediate send; outbox service will deliver
-        }
+        console.log(`📧 Email send mode: ${sendMode || 'immediate'} (NODE_ENV: ${process.env.NODE_ENV})`);
+        
+        // Skip queue-only mode - always attempt immediate send first
+        // if (process.env.NODE_ENV === 'production' && sendMode === 'queue') {
+        //     try {
+        //         console.log(`📬 Queued email (queue-first mode): ${options.to} → ${options.subject}`);
+        //     } catch (_) {}
+        //     return; // do not attempt immediate send; outbox service will deliver
+        // }
 
-        // 🆕 PRODUCTION FIX: If in production but not queue mode, try immediate send with shorter timeout
-        if (process.env.NODE_ENV === 'production') {
-            console.log(`📧 Production mode: Attempting immediate email send to ${options.to}`);
-            
-            const mailOptions = {
-                from: `Alamait Student Accommodation <${process.env.EMAIL_USER}>`,
-                to: options.to,
-                subject: options.subject,
-                text: options.text,
-                html: options.html,
-                attachments: options.attachments
-            };
-
-            // Use shorter timeout for production to fail fast and queue
-            const sendPromise = transporter.sendMail(mailOptions);
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Email send timeout')), 10000); // 10s timeout (reduced from 20s)
-            });
-            
-            try {
-                await Promise.race([sendPromise, timeoutPromise]);
-                console.log(`✅ Email sent immediately to ${options.to}`);
-                
-                // Mark outbox as sent
-                outbox.status = 'sent';
-                outbox.sentAt = new Date();
-                outbox.attempts = (outbox.attempts || 0) + 1;
-                await outbox.save();
-                return;
-            } catch (error) {
-                console.error(`❌ Immediate send failed for ${options.to}:`, error.message);
-                console.log(`📬 Email will be retried by EmailOutboxService`);
-                
-                // Mark outbox as failed for retry
-                outbox.status = 'failed';
-                outbox.attempts = (outbox.attempts || 0) + 1;
-                outbox.lastError = error.code ? `${error.code}: ${error.message}` : error.message;
-                outbox.scheduledAt = new Date(Date.now() + 60000); // Retry in 1 minute
-                await outbox.save();
-                return;
-            }
-        }
-
+        // 🚀 IMMEDIATE SEND: Always attempt immediate send first (production and development)
+        console.log(`📧 Attempting immediate email send to ${options.to}`);
+        console.log(`📧 SMTP Config: connectionTimeout=30s, greetingTimeout=15s, socketTimeout=45s`);
+        
         const mailOptions = {
             from: `Alamait Student Accommodation <${process.env.EMAIL_USER}>`,
             to: options.to,
@@ -126,20 +91,34 @@ exports.sendEmail = async (options) => {
             attachments: options.attachments
         };
 
-        // Send email with timeout handling (reduced for production stability)
+        // Use generous timeout for immediate send (production needs more time)
         const sendPromise = transporter.sendMail(mailOptions);
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Email send timeout')), 20000); // 20s timeout
+            setTimeout(() => reject(new Error('Email send timeout')), 60000); // 60s timeout (increased)
         });
         
-        await Promise.race([sendPromise, timeoutPromise]);
-        console.log(`✅ Email sent to ${options.to}`);
-
-        // Mark outbox as sent
-        outbox.status = 'sent';
-        outbox.sentAt = new Date();
-        outbox.attempts = (outbox.attempts || 0) + 1;
-        await outbox.save();
+        try {
+            await Promise.race([sendPromise, timeoutPromise]);
+            console.log(`✅ Email sent immediately to ${options.to}`);
+            
+            // Mark outbox as sent
+            outbox.status = 'sent';
+            outbox.sentAt = new Date();
+            outbox.attempts = (outbox.attempts || 0) + 1;
+            await outbox.save();
+            return;
+        } catch (error) {
+            console.error(`❌ Immediate send failed for ${options.to}:`, error.message);
+            console.log(`📬 Email will be retried by EmailOutboxService`);
+            
+            // Mark outbox as failed for retry
+            outbox.status = 'failed';
+            outbox.attempts = (outbox.attempts || 0) + 1;
+            outbox.lastError = error.code ? `${error.code}: ${error.message}` : error.message;
+            outbox.scheduledAt = new Date(Date.now() + 60000); // Retry in 1 minute
+            await outbox.save();
+            return;
+        }
     } catch (error) {
         console.error('Error sending email:', error);
         try {
