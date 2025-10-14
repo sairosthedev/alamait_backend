@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../../models/User');
-const sendGridService = require('../../services/sendGridService');
+const { sendEmail } = require('../../utils/email');
 const { createDebtorForStudent } = require('../../services/debtorService');
 
 // Register new user
@@ -47,14 +47,39 @@ exports.register = async (req, res) => {
             console.log('📝 Student registered - debtor will be created by middleware if approved application exists');
         }
 
-        // Send verification email
+        // Send verification email (same method as invoice emails)
         try {
-            if (sendGridService.isReady()) {
-                await sendGridService.sendVerificationEmail(user.email, user.emailVerificationToken);
-                console.log('✅ Verification email sent via SendGrid');
-            } else {
-                console.log('⚠️ SendGrid not configured, skipping verification email');
-            }
+            const verificationUrl = `${process.env.FRONTEND_URL || 'https://alamait.vercel.app'}/verify-email?token=${user.emailVerificationToken}`;
+            
+            await sendEmail({
+                to: user.email,
+                subject: 'Verify Your Email Address - Alamait Student Accommodation',
+                text: `Please verify your email address by visiting: ${verificationUrl}`,
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+                            <h2 style="color: #333;">Verify Your Email Address</h2>
+                            <p>Thank you for registering with Alamait Student Accommodation!</p>
+                            <p>Please click the button below to verify your email address:</p>
+                            <div style="text-align: center; margin: 30px 0;">
+                                <a href="${verificationUrl}" 
+                                   style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                                    Verify Email Address
+                                </a>
+                            </div>
+                            <p>If the button doesn't work, copy and paste this link into your browser:</p>
+                            <p style="word-break: break-all; color: #666;">${verificationUrl}</p>
+                            <p>This link will expire in 24 hours.</p>
+                            <hr style="margin: 20px 0;">
+                            <p style="font-size: 12px; color: #666;">
+                                This is an automated message from Alamait Student Accommodation.<br>
+                                Please do not reply to this email.
+                            </p>
+                        </div>
+                    </div>
+                `
+            });
+            console.log('✅ Verification email sent successfully');
         } catch (emailError) {
             console.error('Failed to send verification email:', emailError);
             // Continue with registration even if email fails
@@ -201,16 +226,41 @@ exports.forgotPassword = async (req, res) => {
 
         await user.save();
 
-        // Send password reset email
+        // Send password reset email (same method as invoice emails)
         try {
-            if (sendGridService.isReady()) {
-                await sendGridService.sendPasswordResetEmail(user.email, resetToken);
-                console.log('✅ Password reset email sent via SendGrid');
-                res.json({ message: 'Password reset email sent' });
-            } else {
-                console.log('⚠️ SendGrid not configured, cannot send password reset email');
-                res.status(500).json({ error: 'Email service not configured' });
-            }
+            const resetUrl = `${process.env.FRONTEND_URL || 'https://alamait.vercel.app'}/reset-password?token=${resetToken}`;
+            
+            await sendEmail({
+                to: user.email,
+                subject: 'Password Reset Request - Alamait Student Accommodation',
+                text: `Reset your password by visiting: ${resetUrl}`,
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+                            <h2 style="color: #333;">Password Reset Request</h2>
+                            <p>You requested a password reset for your Alamait Student Accommodation account.</p>
+                            <p>Click the button below to reset your password:</p>
+                            <div style="text-align: center; margin: 30px 0;">
+                                <a href="${resetUrl}" 
+                                   style="background-color: #dc3545; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                                    Reset Password
+                                </a>
+                            </div>
+                            <p>If the button doesn't work, copy and paste this link into your browser:</p>
+                            <p style="word-break: break-all; color: #666;">${resetUrl}</p>
+                            <p><strong>Important:</strong> This link will expire in 1 hour for security reasons.</p>
+                            <p>If you didn't request this password reset, please ignore this email.</p>
+                            <hr style="margin: 20px 0;">
+                            <p style="font-size: 12px; color: #666;">
+                                This is an automated message from Alamait Student Accommodation.<br>
+                                Please do not reply to this email.
+                            </p>
+                        </div>
+                    </div>
+                `
+            });
+            console.log('✅ Password reset email sent successfully');
+            res.json({ message: 'Password reset email sent' });
         } catch (emailError) {
             console.error('Failed to send password reset email:', emailError);
             res.status(500).json({ error: 'Failed to send password reset email' });
