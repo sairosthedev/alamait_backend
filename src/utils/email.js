@@ -5,11 +5,15 @@ const EmailOutbox = require('../models/EmailOutbox');
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     pool: true,
-    maxConnections: parseInt(process.env.EMAIL_MAX_CONNECTIONS || '3', 10),
-    maxMessages: parseInt(process.env.EMAIL_MAX_MESSAGES || '50', 10),
-    connectionTimeout: parseInt(process.env.EMAIL_CONN_TIMEOUT_MS || '15000', 10), // 15s
-    greetingTimeout: parseInt(process.env.EMAIL_GREET_TIMEOUT_MS || '10000', 10),   // 10s
-    socketTimeout: parseInt(process.env.EMAIL_SOCKET_TIMEOUT_MS || '20000', 10),    // 20s
+    maxConnections: parseInt(process.env.EMAIL_MAX_CONNECTIONS || '2', 10), // Reduced to 2
+    maxMessages: parseInt(process.env.EMAIL_MAX_MESSAGES || '20', 10), // Reduced to 20
+    connectionTimeout: parseInt(process.env.EMAIL_CONN_TIMEOUT_MS || '10000', 10), // 10s
+    greetingTimeout: parseInt(process.env.EMAIL_GREET_TIMEOUT_MS || '5000', 10),   // 5s
+    socketTimeout: parseInt(process.env.EMAIL_SOCKET_TIMEOUT_MS || '15000', 10),    // 15s
+    secure: true,
+    tls: {
+        rejectUnauthorized: false
+    },
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_APP_PASSWORD
@@ -79,7 +83,13 @@ exports.sendEmail = async (options) => {
             attachments: options.attachments
         };
 
-        await transporter.sendMail(mailOptions);
+        // Send email with timeout handling
+        const sendPromise = transporter.sendMail(mailOptions);
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Email send timeout')), 30000); // 30s timeout
+        });
+        
+        await Promise.race([sendPromise, timeoutPromise]);
         console.log(`✅ Email sent to ${options.to}`);
 
         // Mark outbox as sent

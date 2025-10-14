@@ -706,3 +706,174 @@ const safeDateFormat = (date) => {
 
 // Export the findStudentById function for use in other modules
 module.exports.findStudentById = findStudentById;
+
+/**
+ * Process payment with double-entry accounting
+ * POST /api/finance/payments/process-payment
+ */
+exports.processPayment = async (req, res) => {
+    try {
+        const {
+            paymentId,
+            student,
+            studentName,
+            studentEmail,
+            residence,
+            room,
+            date,
+            totalAmount,
+            deposit,
+            rentAmount,
+            adminFee,
+            method,
+            paymentMonth,
+            payments,
+            doubleEntry,
+            status,
+            description
+        } = req.body;
+
+        console.log('💰 Processing payment with double-entry:', { paymentId, studentName, totalAmount });
+
+        // Validate required fields
+        if (!paymentId || !student || !totalAmount || !doubleEntry) {
+            return res.status(400).json({
+                success: false,
+                message: 'Payment ID, student, total amount, and double entry data are required'
+            });
+        }
+
+        // Validate double entry structure
+        if (!doubleEntry.receivingAccount || !doubleEntry.payingAccount || !doubleEntry.description) {
+            return res.status(400).json({
+                success: false,
+                message: 'Double entry must include receiving account, paying account, and description'
+            });
+        }
+
+        // Create the payment record
+        const paymentData = {
+            paymentId,
+            student,
+            studentName,
+            studentEmail,
+            residence,
+            room,
+            date: date ? new Date(date) : new Date(),
+            totalAmount: parseFloat(totalAmount),
+            deposit: parseFloat(deposit || 0),
+            rentAmount: parseFloat(rentAmount || 0),
+            adminFee: parseFloat(adminFee || 0),
+            method: method || 'Cash',
+            paymentMonth,
+            payments: payments || [],
+            status: status || 'Confirmed',
+            description: description || '',
+            processedBy: req.user._id,
+            processedAt: new Date()
+        };
+
+        // Save payment record
+        const payment = new Payment(paymentData);
+        await payment.save();
+
+        console.log('✅ Payment record saved:', payment._id);
+
+        // Create double-entry transaction
+        const TransactionController = require('./transactionController');
+        
+        // Prepare double-entry transaction data
+        const transactionData = {
+            description: doubleEntry.description,
+            reference: paymentId,
+            residence: residence,
+            date: date ? new Date(date) : new Date(),
+            entries: [
+                {
+                    account: doubleEntry.receivingAccount, // Bank Account (1001)
+                    debit: parseFloat(totalAmount),
+                    credit: 0,
+                    description: `Payment received from ${studentName} - ${doubleEntry.description}`
+                },
+                {
+                    account: doubleEntry.payingAccount, // Rental Revenue (4000)
+                    debit: 0,
+                    credit: parseFloat(totalAmount),
+                    description: `Revenue from ${studentName} - ${doubleEntry.description}`
+                }
+            ]
+        };
+
+        // Create the double-entry transaction
+        const transactionResult = await TransactionController.createDoubleEntryTransaction(
+            { body: transactionData },
+            { status: () => ({ json: (data) => data }) }
+        );
+
+        if (!transactionResult.success) {
+            // If transaction creation fails, delete the payment record
+            await Payment.findByIdAndDelete(payment._id);
+            return res.status(400).json({
+                success: false,
+                message: 'Failed to create double-entry transaction',
+                error: transactionResult.message
+            });
+        }
+
+        // Update payment record with transaction reference
+        payment.transactionId = transactionResult.data.transactionId;
+        await payment.save();
+
+        console.log('✅ Double-entry transaction created:', transactionResult.data.transactionId);
+
+        // Send confirmation email to student (non-blocking)
+        if (studentEmail) {
+            setTimeout(async () => {
+                try {
+                    const EmailNotificationService = require('../../services/emailNotificationService');
+                    await EmailNotificationService.sendPaymentConfirmation({
+                        studentEmail,
+                        studentName,
+                        amount: totalAmount,
+                        paymentId,
+                        method,
+                        date: paymentData.date
+                    });
+                    console.log(`✅ Payment confirmation email sent to ${studentEmail}`);
+                } catch (emailError) {
+                    console.error('❌ Failed to send payment confirmation email:', emailError.message);
+                }
+            }, 100);
+        }
+
+        return res.status(201).json({
+            success: true,
+            message: 'Payment processed successfully with double-entry accounting',
+            data: {
+                payment: {
+                    id: payment._id,
+                    paymentId: payment.paymentId,
+                    studentName: payment.studentName,
+                    totalAmount: payment.totalAmount,
+                    status: payment.status,
+                    date: payment.date,
+                    method: payment.method
+                },
+                transaction: {
+                    transactionId: transactionResult.data.transactionId,
+                    description: transactionResult.data.description,
+                    totalDebit: transactionResult.data.totalDebit,
+                    totalCredit: transactionResult.data.totalCredit
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error processing payment:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to process payment',
+            error: error.message
+        });
+    }
+};

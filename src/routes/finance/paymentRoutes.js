@@ -6,7 +6,8 @@ const {
     getStudentPayments,
     getPaymentsByStudent,
     updatePaymentStatus,
-    requestClarification
+    requestClarification,
+    processPayment
 } = require('../../controllers/finance/paymentController');
 
 // Validation middleware
@@ -36,5 +37,8 @@ router.put('/students/:paymentId/status', updateStatusValidation, updatePaymentS
 
 // Request clarification for a payment
 router.post('/students/:paymentId/clarification', requestClarificationValidation, requestClarification);
+
+// Process payment with double-entry accounting
+router.post('/process-payment', processPayment);
 
 module.exports = router; 

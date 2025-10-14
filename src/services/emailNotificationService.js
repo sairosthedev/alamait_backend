@@ -31,7 +31,13 @@ class EmailNotificationService {
                 residenceName = request.residence.name;
             } else if (request.residence) {
                 try {
-                    const residence = await Residence.findById(request.residence);
+                    // Use mongoose.Types.ObjectId to ensure proper ObjectId handling
+                    const mongoose = require('mongoose');
+                    const residenceId = typeof request.residence === 'string' 
+                        ? new mongoose.Types.ObjectId(request.residence)
+                        : request.residence;
+                    
+                    const residence = await Residence.findById(residenceId);
                     residenceName = residence?.name || 'Unknown Residence';
                 } catch (err) {
                     console.error('Error fetching residence:', err);
@@ -1640,6 +1646,49 @@ class EmailNotificationService {
 			return true;
 		} catch (error) {
 			console.error('❌ Error sending system maintenance notification:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Send payment confirmation email to student
+	 */
+	static async sendPaymentConfirmation({ studentEmail, studentName, amount, paymentId, method, date }) {
+		try {
+			const emailContent = `
+				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+						<h2 style="color: #28a745;">Payment Confirmation</h2>
+						<p>Dear ${studentName},</p>
+						<p>We have successfully received your payment. Here are the details:</p>
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<ul style="list-style: none; padding: 0;">
+								<li><strong>Payment ID:</strong> ${paymentId}</li>
+								<li><strong>Amount:</strong> $${amount.toFixed(2)}</li>
+								<li><strong>Payment Method:</strong> ${method}</li>
+								<li><strong>Date:</strong> ${new Date(date).toLocaleDateString()}</li>
+								<li><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Confirmed</span></li>
+							</ul>
+						</div>
+						<p>Thank you for your payment. If you have any questions, please contact our finance team.</p>
+						<hr style="margin: 20px 0;">
+						<p style="font-size: 12px; color: #666;">
+							This is an automated message from Alamait Student Accommodation.<br>
+							Please do not reply to this email.
+						</p>
+					</div>
+				</div>
+			`;
+
+			await sendEmail({
+				to: studentEmail,
+				subject: 'Payment Confirmation - Alamait Student Accommodation',
+				html: emailContent
+			});
+
+			console.log(`✅ Payment confirmation email sent to ${studentEmail}`);
+		} catch (error) {
+			console.error('❌ Error sending payment confirmation email:', error);
 			throw error;
 		}
 	}
