@@ -4,7 +4,8 @@ const { Residence } = require('../models/Residence');
 const Payment = require('../models/Payment');
 const Debtor = require('../models/Debtor');
 const { generateInvoicePdf } = require('../utils/invoicePdf');
-const emailService = require('../services/emailService');
+const { sendEmail } = require('../utils/email');
+const EmailNotificationService = require('../services/emailNotificationService');
 const whatsappService = require('../services/whatsappService');
 const mongoose = require('mongoose');
 
@@ -537,11 +538,15 @@ exports.recordPayment = async (req, res) => {
         // Send payment confirmation
         await invoice.populate('student', 'firstName lastName email phone');
         if (invoice.student.email) {
-            await emailService.sendPaymentConfirmation(
-                invoice.student.email,
-                invoice,
-                paymentRecord
-            );
+            await EmailNotificationService.sendPaymentConfirmation({
+                studentEmail: invoice.student.email,
+                studentName: `${invoice.student.firstName} ${invoice.student.lastName}`,
+                amount: paymentRecord.amount,
+                paymentId: paymentRecord.paymentId,
+                method: paymentRecord.method,
+                date: paymentRecord.date,
+                allocation: paymentRecord.allocation
+            });
         }
 
         res.status(200).json({
@@ -584,11 +589,12 @@ exports.sendReminder = async (req, res) => {
         // Send reminder based on method
         let sent = false;
         if (sentVia === 'email' && invoice.student.email) {
-            await emailService.sendInvoiceReminder(
-                invoice.student.email,
-                invoice,
-                message
-            );
+            await sendEmail({
+                to: invoice.student.email,
+                subject: `Invoice Reminder - ${invoice.invoiceNumber}`,
+                text: message,
+                html: `<p>${message}</p>`
+            });
             sent = true;
         } else if (sentVia === 'whatsapp' && invoice.student.phone) {
             await whatsappService.sendInvoiceReminder(
@@ -778,11 +784,12 @@ exports.bulkSendReminders = async (req, res) => {
 
                 let sent = false;
                 if (sentVia === 'email' && invoice.student.email) {
-                    await emailService.sendInvoiceReminder(
-                        invoice.student.email,
-                        invoice,
-                        message
-                    );
+                    await sendEmail({
+                        to: invoice.student.email,
+                        subject: `Invoice Reminder - ${invoice.invoiceNumber}`,
+                        text: message,
+                        html: `<p>${message}</p>`
+                    });
                     sent = true;
                 }
 

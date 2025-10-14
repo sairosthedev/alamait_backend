@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../../models/User');
-const { sendVerificationEmail, sendPasswordResetEmail } = require('../../services/emailService');
+const sendGridService = require('../../services/sendGridService');
 const { createDebtorForStudent } = require('../../services/debtorService');
 
 // Register new user
@@ -48,12 +48,17 @@ exports.register = async (req, res) => {
         }
 
         // Send verification email
-        // try {
-        //     await sendVerificationEmail(user.email, user.emailVerificationToken);
-        // } catch (emailError) {
-        //     console.error('Failed to send verification email:', emailError);
-        //     // Continue with registration even if email fails
-        // }
+        try {
+            if (sendGridService.isReady()) {
+                await sendGridService.sendVerificationEmail(user.email, user.emailVerificationToken);
+                console.log('✅ Verification email sent via SendGrid');
+            } else {
+                console.log('⚠️ SendGrid not configured, skipping verification email');
+            }
+        } catch (emailError) {
+            console.error('Failed to send verification email:', emailError);
+            // Continue with registration even if email fails
+        }
 
         // Generate JWT
         const payload = {
@@ -198,8 +203,14 @@ exports.forgotPassword = async (req, res) => {
 
         // Send password reset email
         try {
-            await sendPasswordResetEmail(user.email, resetToken);
-            res.json({ message: 'Password reset email sent' });
+            if (sendGridService.isReady()) {
+                await sendGridService.sendPasswordResetEmail(user.email, resetToken);
+                console.log('✅ Password reset email sent via SendGrid');
+                res.json({ message: 'Password reset email sent' });
+            } else {
+                console.log('⚠️ SendGrid not configured, cannot send password reset email');
+                res.status(500).json({ error: 'Email service not configured' });
+            }
         } catch (emailError) {
             console.error('Failed to send password reset email:', emailError);
             res.status(500).json({ error: 'Failed to send password reset email' });

@@ -530,7 +530,7 @@ async function generateReceiptPDF(receipt, student, residence, room) {
 async function sendReceiptEmail(receipt, student, pdfUrl) {
     try {
         // Import email service
-        const { sendEmail } = require('../utils/emailService');
+        const { sendEmail } = require('../utils/email');
         
         const emailData = {
             to: student.email,

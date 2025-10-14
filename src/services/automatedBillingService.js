@@ -2,7 +2,7 @@ const cron = require('node-cron');
 const Invoice = require('../models/Invoice');
 const User = require('../models/User');
 const { Residence } = require('../models/Residence');
-const emailService = require('./emailService');
+const { sendEmail } = require('../utils/email');
 const whatsappService = require('./whatsappService');
 
 class AutomatedBillingService {
@@ -271,11 +271,12 @@ class AutomatedBillingService {
                 try {
                     // Send email reminder
                     if (invoice.student.email) {
-                        await emailService.sendDueDateReminder(
-                            invoice.student.email,
-                            invoice,
-                            invoice.student
-                        );
+                        await sendEmail({
+                            to: invoice.student.email,
+                            subject: `Invoice Due Tomorrow - ${invoice.invoiceNumber}`,
+                            text: `Your invoice ${invoice.invoiceNumber} for $${invoice.totalAmount} is due tomorrow. Please make payment to avoid late fees.`,
+                            html: `<p>Your invoice <strong>${invoice.invoiceNumber}</strong> for <strong>$${invoice.totalAmount}</strong> is due tomorrow. Please make payment to avoid late fees.</p>`
+                        });
                     }
 
                     // Send WhatsApp reminder
@@ -323,11 +324,12 @@ class AutomatedBillingService {
                 try {
                     // Send email reminder
                     if (invoice.student.email) {
-                        await emailService.sendOverdueReminder(
-                            invoice.student.email,
-                            invoice,
-                            invoice.student
-                        );
+                        await sendEmail({
+                            to: invoice.student.email,
+                            subject: `Overdue Invoice - ${invoice.invoiceNumber}`,
+                            text: `Your invoice ${invoice.invoiceNumber} for $${invoice.totalAmount} is now overdue. Please make payment immediately to avoid additional fees.`,
+                            html: `<p>Your invoice <strong>${invoice.invoiceNumber}</strong> for <strong>$${invoice.totalAmount}</strong> is now overdue. Please make payment immediately to avoid additional fees.</p>`
+                        });
                     }
 
                     // Send WhatsApp reminder

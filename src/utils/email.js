@@ -1,15 +1,14 @@
 const nodemailer = require('nodemailer');
 const EmailOutbox = require('../models/EmailOutbox');
+const sendGridService = require('../services/sendGridService');
 
-// Create transporter with more generous timeouts for production stability
+// Create transporter with optimized Gmail configuration
 const transporter = nodemailer.createTransport({
     service: 'gmail',
-    pool: true,
-    maxConnections: parseInt(process.env.EMAIL_MAX_CONNECTIONS || '1', 10), // Reduced to 1 for stability
-    maxMessages: parseInt(process.env.EMAIL_MAX_MESSAGES || '10', 10), // Reduced to 10
-    connectionTimeout: parseInt(process.env.EMAIL_CONN_TIMEOUT_MS || '30000', 10), // 30s (increased)
-    greetingTimeout: parseInt(process.env.EMAIL_GREET_TIMEOUT_MS || '15000', 10),   // 15s (increased)
-    socketTimeout: parseInt(process.env.EMAIL_SOCKET_TIMEOUT_MS || '45000', 10),    // 45s (increased)
+    pool: false, // Disable pooling to avoid connection issues
+    connectionTimeout: 60000, // 60 seconds
+    greetingTimeout: 30000,   // 30 seconds
+    socketTimeout: 90000,     // 90 seconds
     secure: true,
     tls: {
         rejectUnauthorized: false,
@@ -78,10 +77,48 @@ exports.sendEmail = async (options) => {
         //     return; // do not attempt immediate send; outbox service will deliver
         // }
 
-        // 🚀 IMMEDIATE SEND: Always attempt immediate send first (production and development)
+        // 🚀 IMMEDIATE SEND: Try SendGrid first, then Gmail fallback
         console.log(`📧 Attempting immediate email send to ${options.to}`);
-        console.log(`📧 SMTP Config: connectionTimeout=30s, greetingTimeout=15s, socketTimeout=45s`);
         
+        // Try SendGrid first (most reliable for production)
+        if (sendGridService.isReady()) {
+            try {
+                console.log(`📧 Trying SendGrid first...`);
+                await sendGridService.sendEmail(options);
+                console.log(`✅ Email sent via SendGrid to ${options.to}`);
+                
+                // Mark outbox as sent
+                outbox.status = 'sent';
+                outbox.sentAt = new Date();
+                outbox.attempts = (outbox.attempts || 0) + 1;
+                await outbox.save();
+                return;
+            } catch (error) {
+                console.error(`❌ SendGrid failed for ${options.to}:`, error.message);
+                console.log(`📧 Falling back to Gmail...`);
+            }
+        } else {
+            console.log(`📧 SendGrid not configured, using Gmail...`);
+        }
+
+        // Fallback to Gmail with retry logic
+        const freshTransporter = nodemailer.createTransport({
+            service: 'gmail',
+            pool: false, // No pooling
+            connectionTimeout: 60000, // 60 seconds
+            greetingTimeout: 30000,   // 30 seconds
+            socketTimeout: 90000,     // 90 seconds
+            secure: true,
+            tls: {
+                rejectUnauthorized: false,
+                ciphers: 'SSLv3'
+            },
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_APP_PASSWORD
+            }
+        });
+
         const mailOptions = {
             from: `Alamait Student Accommodation <${process.env.EMAIL_USER}>`,
             to: options.to,
@@ -91,32 +128,57 @@ exports.sendEmail = async (options) => {
             attachments: options.attachments
         };
 
-        // Use generous timeout for immediate send (production needs more time)
-        const sendPromise = transporter.sendMail(mailOptions);
-        const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Email send timeout')), 60000); // 60s timeout (increased)
-        });
-        
         try {
-            await Promise.race([sendPromise, timeoutPromise]);
-            console.log(`✅ Email sent immediately to ${options.to}`);
+            // Try Gmail with retry logic
+            let lastError;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    console.log(`📧 Gmail send attempt ${attempt}/3 for ${options.to}`);
+                    
+                    const sendPromise = freshTransporter.sendMail(mailOptions);
+                    const timeoutPromise = new Promise((_, reject) => {
+                        setTimeout(() => reject(new Error('Email send timeout')), 120000); // 2 minutes
+                    });
+                    
+                    await Promise.race([sendPromise, timeoutPromise]);
+                    console.log(`✅ Email sent via Gmail to ${options.to} (attempt ${attempt})`);
+                    
+                    // Mark outbox as sent
+                    outbox.status = 'sent';
+                    outbox.sentAt = new Date();
+                    outbox.attempts = (outbox.attempts || 0) + 1;
+                    await outbox.save();
+                    
+                    // Close the fresh transporter
+                    freshTransporter.close();
+                    return;
+                } catch (error) {
+                    lastError = error;
+                    console.error(`❌ Gmail attempt ${attempt} failed for ${options.to}:`, error.message);
+                    
+                    if (attempt < 3) {
+                        // Wait before retry
+                        await new Promise(resolve => setTimeout(resolve, 5000 * attempt)); // 5s, 10s delays
+                    }
+                }
+            }
             
-            // Mark outbox as sent
-            outbox.status = 'sent';
-            outbox.sentAt = new Date();
-            outbox.attempts = (outbox.attempts || 0) + 1;
-            await outbox.save();
-            return;
+            // All attempts failed
+            throw lastError;
+            
         } catch (error) {
-            console.error(`❌ Immediate send failed for ${options.to}:`, error.message);
+            console.error(`❌ All email services failed for ${options.to}:`, error.message);
             console.log(`📬 Email will be retried by EmailOutboxService`);
             
             // Mark outbox as failed for retry
             outbox.status = 'failed';
             outbox.attempts = (outbox.attempts || 0) + 1;
-            outbox.lastError = error.code ? `${error.code}: ${error.message}` : error.message;
-            outbox.scheduledAt = new Date(Date.now() + 60000); // Retry in 1 minute
+            outbox.lastError = error.message;
+            outbox.scheduledAt = new Date(Date.now() + 120000); // Retry in 2 minutes
             await outbox.save();
+            
+            // Close the fresh transporter
+            freshTransporter.close();
             return;
         }
     } catch (error) {
