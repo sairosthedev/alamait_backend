@@ -1259,7 +1259,7 @@ exports.sendToFinance = async (req, res) => {
                 
                 if (monthlyRequest.isTemplate && month && year) {
                     try {
-                        // Primary attempt: Use EmailNotificationService
+                        // Use same method as invoice emails (reliable queue system)
                         await EmailNotificationService.sendMonthlyRequestToFinance(
                             monthlyRequest,
                             user,
@@ -1269,25 +1269,11 @@ exports.sendToFinance = async (req, res) => {
                         console.log('✅ Monthly request email sent successfully to finance team');
                     } catch (emailError) {
                         console.error('❌ Error sending monthly request email:', emailError.message);
-                        
-                        // Fallback attempt: Send simple notification
-                        try {
-                            console.log('🔄 Attempting fallback monthly request email...');
-                            const { sendEmail } = require('../utils/email');
-                            await sendEmail({
-                                to: 'finance@alamait.com', // You may want to make this configurable
-                                subject: `Monthly Request Pending Approval - ${monthlyRequest.title}`,
-                                text: `A monthly request has been submitted by ${user.firstName} ${user.lastName}. Title: ${monthlyRequest.title}. Month/Year: ${month}/${year}. Please review in the finance dashboard.`
-                            });
-                            console.log('✅ Fallback monthly request email sent successfully');
-                        } catch (fallbackError) {
-                            console.error('❌ Fallback monthly request email also failed:', fallbackError.message);
-                        }
                     }
                 } else {
                     // For regular requests without template, still notify finance
                     try {
-                        // Primary attempt: Use EmailNotificationService
+                        // Use same method as invoice emails (reliable queue system)
                         await EmailNotificationService.sendMonthlyRequestToFinance(
                             { ...monthlyRequest.toObject(), month, year },
                             user,
@@ -1297,20 +1283,6 @@ exports.sendToFinance = async (req, res) => {
                         console.log('✅ Monthly request email sent successfully to finance team');
                     } catch (emailError) {
                         console.error('❌ Error sending monthly request email:', emailError.message);
-                        
-                        // Fallback attempt: Send simple notification
-                        try {
-                            console.log('🔄 Attempting fallback monthly request email...');
-                            const { sendEmail } = require('../utils/email');
-                            await sendEmail({
-                                to: 'finance@alamait.com', // You may want to make this configurable
-                                subject: `Monthly Request Pending Approval - ${monthlyRequest.title}`,
-                                text: `A monthly request has been submitted by ${user.firstName} ${user.lastName}. Title: ${monthlyRequest.title}. Month/Year: ${month || monthlyRequest.month}/${year || monthlyRequest.year}. Please review in the finance dashboard.`
-                            });
-                            console.log('✅ Fallback monthly request email sent successfully');
-                        } catch (fallbackError) {
-                            console.error('❌ Fallback monthly request email also failed:', fallbackError.message);
-                        }
                     }
                 }
             } catch (error) {

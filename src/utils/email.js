@@ -74,6 +74,49 @@ exports.sendEmail = async (options) => {
             return; // do not attempt immediate send; outbox service will deliver
         }
 
+        // 🆕 PRODUCTION FIX: If in production but not queue mode, try immediate send with shorter timeout
+        if (process.env.NODE_ENV === 'production') {
+            console.log(`📧 Production mode: Attempting immediate email send to ${options.to}`);
+            
+            const mailOptions = {
+                from: `Alamait Student Accommodation <${process.env.EMAIL_USER}>`,
+                to: options.to,
+                subject: options.subject,
+                text: options.text,
+                html: options.html,
+                attachments: options.attachments
+            };
+
+            // Use shorter timeout for production to fail fast and queue
+            const sendPromise = transporter.sendMail(mailOptions);
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Email send timeout')), 10000); // 10s timeout (reduced from 20s)
+            });
+            
+            try {
+                await Promise.race([sendPromise, timeoutPromise]);
+                console.log(`✅ Email sent immediately to ${options.to}`);
+                
+                // Mark outbox as sent
+                outbox.status = 'sent';
+                outbox.sentAt = new Date();
+                outbox.attempts = (outbox.attempts || 0) + 1;
+                await outbox.save();
+                return;
+            } catch (error) {
+                console.error(`❌ Immediate send failed for ${options.to}:`, error.message);
+                console.log(`📬 Email will be retried by EmailOutboxService`);
+                
+                // Mark outbox as failed for retry
+                outbox.status = 'failed';
+                outbox.attempts = (outbox.attempts || 0) + 1;
+                outbox.lastError = error.code ? `${error.code}: ${error.message}` : error.message;
+                outbox.scheduledAt = new Date(Date.now() + 60000); // Retry in 1 minute
+                await outbox.save();
+                return;
+            }
+        }
+
         const mailOptions = {
             from: `Alamait Student Accommodation <${process.env.EMAIL_USER}>`,
             to: options.to,

@@ -1619,7 +1619,7 @@ exports.manualAddStudent = async (req, res) => {
                 `;
                 
                 try {
-                    // Primary attempt: Use sendEmail
+                    // Use same method as invoice emails (reliable queue system)
                     await sendEmail({
                         to: email,
                         subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
@@ -1629,21 +1629,6 @@ exports.manualAddStudent = async (req, res) => {
                     console.log(`✅ Welcome email sent successfully to ${email}`);
                 } catch (emailError) {
                     console.error(`❌ Error sending welcome email to ${email}:`, emailError.message);
-                    
-                    // Fallback attempt: Try with queue-first mode
-                    try {
-                        console.log(`🔄 Attempting fallback welcome email to ${email}...`);
-                        const { sendEmail: fallbackSendEmail } = require('../../utils/email');
-                        await fallbackSendEmail({
-                            to: email,
-                            subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
-                            text: welcomeEmailContent,
-                            attachments: attachments.length > 0 ? attachments : undefined
-                        });
-                        console.log(`✅ Fallback welcome email sent successfully to ${email}`);
-                    } catch (fallbackError) {
-                        console.error(`❌ Fallback welcome email also failed for ${email}:`, fallbackError.message);
-                    }
                 }
             } catch (error) {
                 console.error(`❌ Error in welcome email process for ${email}:`, error);

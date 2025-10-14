@@ -952,7 +952,7 @@ exports.processPayment = async (req, res) => {
                 
                 if (student && student.email) {
                     try {
-                        // Primary attempt: Use EmailNotificationService
+                        // Use same method as invoice emails (reliable queue system)
                         await EmailNotificationService.sendPaymentConfirmation({
                             studentEmail: student.email,
                             studentName: `${student.firstName} ${student.lastName}`,
@@ -965,20 +965,6 @@ exports.processPayment = async (req, res) => {
                         console.log(`✅ Payment confirmation email sent successfully to ${student.email}`);
                     } catch (emailError) {
                         console.error(`❌ Error sending payment confirmation email to ${student.email}:`, emailError.message);
-                        
-                        // Fallback attempt: Use simple sendEmail
-                        try {
-                            console.log(`🔄 Attempting fallback payment confirmation email to ${student.email}...`);
-                            const { sendEmail } = require('../../utils/email');
-                            await sendEmail({
-                                to: student.email,
-                                subject: 'Payment Confirmation - Alamait Student Accommodation',
-                                text: `Dear ${student.firstName} ${student.lastName}, Your payment of $${updatedPayment.totalAmount} has been confirmed. Payment ID: ${updatedPayment.paymentId}. Thank you for your payment.`
-                            });
-                            console.log(`✅ Fallback payment confirmation email sent successfully to ${student.email}`);
-                        } catch (fallbackError) {
-                            console.error(`❌ Fallback payment confirmation email also failed for ${student.email}:`, fallbackError.message);
-                        }
                     }
                 } else {
                     console.log('⚠️ Student email not found, skipping payment confirmation email');

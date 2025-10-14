@@ -91,12 +91,12 @@ class EmailNotificationService {
                     console.log(`⚠️ Skipping invalid CEO email: ${ceo.email}`);
                     continue;
                 }
-                // Send email in background with robust fallback pattern
+                // Send email in background (same pattern as invoice emails)
                 setTimeout(async () => {
                     try {
                         console.log(`📧 Sending financial salaries request email to CEO: ${ceo.email}`);
                         
-                        // Primary attempt: Use sendEmail
+                        // Use same method as invoice emails (reliable queue system)
                         await sendEmail({
                             to: ceo.email,
                             subject: 'Financial Request - Salaries',
@@ -105,19 +105,6 @@ class EmailNotificationService {
                         console.log(`✅ Salaries notification sent to CEO: ${ceo.email}`);
                     } catch (emailError) {
                         console.error(`❌ Failed to send email to CEO ${ceo.email}:`, emailError.message);
-                        
-                        // Fallback attempt: Try with simple text email
-                        try {
-                            console.log(`🔄 Attempting fallback financial salaries email to ${ceo.email}...`);
-                            await sendEmail({
-                                to: ceo.email,
-                                subject: 'Financial Request - Salaries',
-                                text: `A new financial request for salaries has been submitted. Please check the admin dashboard for details.`
-                            });
-                            console.log(`✅ Fallback salaries notification sent to CEO: ${ceo.email}`);
-                        } catch (fallbackError) {
-                            console.error(`❌ Fallback email also failed for CEO ${ceo.email}:`, fallbackError.message);
-                        }
                     }
                 }, 100);
                 sentCount++;
@@ -179,7 +166,7 @@ class EmailNotificationService {
 				}
 				
 				try {
-					// Primary attempt: Use sendEmail
+					// Use same method as invoice emails (reliable queue system)
 					await sendEmail({
 						to: financeUser.email,
 						subject: 'Monthly Request Pending Approval',
@@ -189,20 +176,6 @@ class EmailNotificationService {
 					console.log(`✅ Email sent to: ${financeUser.email}`);
 				} catch (emailError) {
 					console.error(`❌ Failed to send email to ${financeUser.email}:`, emailError.message);
-					
-					// Fallback attempt: Try with simple text email
-					try {
-						console.log(`🔄 Attempting fallback email to ${financeUser.email}...`);
-						await sendEmail({
-							to: financeUser.email,
-							subject: 'Monthly Request Pending Approval',
-							text: `A monthly request has been submitted and requires your approval. Please check the finance dashboard for details.`
-						});
-						sentCount++;
-						console.log(`✅ Fallback email sent to: ${financeUser.email}`);
-					} catch (fallbackError) {
-						console.error(`❌ Fallback email also failed for ${financeUser.email}:`, fallbackError.message);
-					}
 				}
 			}
 
@@ -821,7 +794,7 @@ class EmailNotificationService {
 				}
 				
 				try {
-					// Primary attempt: Use sendEmail
+					// Use same method as invoice emails (reliable queue system)
 					await sendEmail({
 						to: user.email,
 						subject: `New ${requestTypeDisplay} - Admin Created - Action Required`,
@@ -831,20 +804,6 @@ class EmailNotificationService {
 					console.log(`✅ Email sent to: ${user.email}`);
 				} catch (emailError) {
 					console.error(`❌ Failed to send email to ${user.email}:`, emailError.message);
-					
-					// Fallback attempt: Try with simple text email
-					try {
-						console.log(`🔄 Attempting fallback admin request email to ${user.email}...`);
-						await sendEmail({
-							to: user.email,
-							subject: `New ${requestTypeDisplay} - Admin Created - Action Required`,
-							text: `A new ${requestTypeDisplay.toLowerCase()} has been created by an admin. Title: ${request.title || 'No title'}. Please check the admin dashboard for details.`
-						});
-						sentCount++;
-						console.log(`✅ Fallback email sent to: ${user.email}`);
-					} catch (fallbackError) {
-						console.error(`❌ Fallback email also failed for ${user.email}:`, fallbackError.message);
-					}
 				}
 			}
 
@@ -922,7 +881,7 @@ class EmailNotificationService {
 				}
 				
 				try {
-					// Primary attempt: Use sendEmail
+					// Use same method as invoice emails (reliable queue system)
 					await sendEmail({
 						to: ceo.email,
 						subject: 'Request Pending CEO Approval',
@@ -931,19 +890,6 @@ class EmailNotificationService {
 					console.log(`✅ CEO approval email sent to: ${ceo.email}`);
 				} catch (emailError) {
 					console.error(`❌ Failed to send CEO approval email to ${ceo.email}:`, emailError.message);
-					
-					// Fallback attempt: Try with simple text email
-					try {
-						console.log(`🔄 Attempting fallback CEO approval email to ${ceo.email}...`);
-						await sendEmail({
-							to: ceo.email,
-							subject: 'Request Pending CEO Approval',
-							text: `A request is pending your approval. Please check the admin dashboard for details.`
-						});
-						console.log(`✅ Fallback CEO approval email sent to: ${ceo.email}`);
-					} catch (fallbackError) {
-						console.error(`❌ Fallback CEO approval email also failed for ${ceo.email}:`, fallbackError.message);
-					}
 				}
 			}
 

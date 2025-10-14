@@ -31,7 +31,26 @@ class EmailOutboxService {
 
                 for (const item of pending) {
                     try {
-                        await transporter.sendMail({
+                        console.log(`📧 Attempting to send queued email to ${item.to} (attempt ${(item.attempts || 0) + 1})`);
+                        
+                        // Create a new transporter for each email to avoid connection issues
+                        const freshTransporter = nodemailer.createTransporter({
+                            service: 'gmail',
+                            auth: { 
+                                user: process.env.EMAIL_USER, 
+                                pass: process.env.EMAIL_APP_PASSWORD 
+                            },
+                            connectionTimeout: 10000, // 10 seconds
+                            greetingTimeout: 5000,   // 5 seconds
+                            socketTimeout: 15000,    // 15 seconds
+                            secure: true,
+                            tls: {
+                                rejectUnauthorized: false
+                            }
+                        });
+
+                        // Send with timeout
+                        const sendPromise = freshTransporter.sendMail({
                             from: `Alamait Student Accommodation <${process.env.EMAIL_USER}>`,
                             to: item.to,
                             subject: item.subject,
@@ -40,22 +59,37 @@ class EmailOutboxService {
                             attachments: item.attachments
                         });
 
+                        const timeoutPromise = new Promise((_, reject) => {
+                            setTimeout(() => reject(new Error('Email send timeout')), 15000); // 15s timeout
+                        });
+
+                        await Promise.race([sendPromise, timeoutPromise]);
+
                         item.status = 'sent';
                         item.sentAt = new Date();
                         item.attempts = (item.attempts || 0) + 1;
                         item.lastError = undefined;
                         await item.save();
-                        console.log(`📧 Outbox resend success -> ${item.to} (${item.subject})`);
+                        console.log(`✅ Outbox resend success -> ${item.to} (${item.subject})`);
+                        
+                        // Close the fresh transporter
+                        freshTransporter.close();
                     } catch (err) {
                         item.status = 'failed';
                         item.attempts = (item.attempts || 0) + 1;
                         item.lastError = err.code ? `${err.code}: ${err.message}` : err.message;
+                        
                         // Exponential backoff up to 30 minutes
                         const delayMinutes = Math.min(30, Math.pow(2, Math.min(item.attempts, 6)));
                         const nextTime = new Date(Date.now() + delayMinutes * 60 * 1000);
                         item.scheduledAt = nextTime;
                         await item.save();
-                        console.error(`📧 Outbox resend failed (attempt ${item.attempts}) -> ${item.to}: ${item.lastError}`);
+                        console.error(`❌ Outbox resend failed (attempt ${item.attempts}) -> ${item.to}: ${item.lastError}`);
+                        
+                        // If this is a connection timeout, try a different approach
+                        if (err.code === 'ETIMEDOUT' || err.message.includes('timeout')) {
+                            console.log(`🔄 Connection timeout detected for ${item.to}, will retry with longer delay`);
+                        }
                     }
                 }
             } catch (err) {

@@ -1156,23 +1156,11 @@ exports.createRequest = async (req, res) => {
                         if (request.type === 'student_maintenance' || request.type === 'operational' || request.type === 'financial') {
                             console.log('📧 Sending admin request email to CEO and Finance Admin');
                             try {
+                                // Use same method as invoice emails (reliable queue system)
                                 await EmailNotificationService.sendAdminRequestToCEOAndFinance(populatedRequest, req.user);
                                 console.log('✅ Admin request email sent successfully');
                             } catch (emailError) {
                                 console.error('❌ Error sending admin request email:', emailError.message);
-                                // Fallback: Send simple notification
-                                try {
-                                    console.log('🔄 Attempting fallback admin request email...');
-                                    const { sendEmail } = require('../utils/email');
-                                    await sendEmail({
-                                        to: 'admin@alamait.com', // You may want to make this configurable
-                                        subject: `New ${request.type} Request - ${request.title}`,
-                                        text: `A new ${request.type} request has been submitted by ${req.user?.firstName} ${req.user?.lastName}. Title: ${request.title}`
-                                    });
-                                    console.log('✅ Fallback admin request email sent successfully');
-                                } catch (fallbackError) {
-                                    console.error('❌ Fallback admin request email also failed:', fallbackError.message);
-                                }
                             }
                         }
                     } else {
@@ -1180,23 +1168,11 @@ exports.createRequest = async (req, res) => {
                         if (request.type === 'student_maintenance') {
                             console.log('📧 Sending student maintenance email to admins');
                             try {
+                                // Use same method as invoice emails (reliable queue system)
                                 await EmailNotificationService.sendMaintenanceRequestSubmitted(populatedRequest, req.user);
                                 console.log('✅ Student maintenance request email sent successfully');
                             } catch (emailError) {
                                 console.error('❌ Error sending student maintenance request email:', emailError.message);
-                                // Fallback: Send simple notification
-                                try {
-                                    console.log('🔄 Attempting fallback student maintenance request email...');
-                                    const { sendEmail } = require('../utils/email');
-                                    await sendEmail({
-                                        to: 'admin@alamait.com', // You may want to make this configurable
-                                        subject: `New Student Maintenance Request - ${request.title}`,
-                                        text: `A new student maintenance request has been submitted. Title: ${request.title}, Student: ${req.user?.firstName} ${req.user?.lastName}`
-                                    });
-                                    console.log('✅ Fallback student maintenance request email sent successfully');
-                                } catch (fallbackError) {
-                                    console.error('❌ Fallback student maintenance request email also failed:', fallbackError.message);
-                                }
                             }
                         }
                     }
@@ -1220,23 +1196,11 @@ exports.createRequest = async (req, res) => {
                     if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager' || req.user.role === 'finance_admin')) {
                         console.log('📧 Sending financial request email to CEO and Finance Admin');
                         try {
+                            // Use same method as invoice emails (reliable queue system)
                             await EmailNotificationService.sendFinancialSalariesRequestToCEO(request, req.user);
                             console.log('✅ Financial request email sent successfully');
                         } catch (emailError) {
                             console.error('❌ Error sending financial request email:', emailError.message);
-                            // Fallback: Send simple notification
-                            try {
-                                console.log('🔄 Attempting fallback financial request email...');
-                                const { sendEmail } = require('../utils/email');
-                                await sendEmail({
-                                    to: 'admin@alamait.com', // You may want to make this configurable
-                                    subject: `New Financial Request - ${request.title}`,
-                                    text: `A new financial request has been submitted by ${req.user?.firstName} ${req.user?.lastName}. Title: ${request.title}. Please review in the admin dashboard.`
-                                });
-                                console.log('✅ Fallback financial request email sent successfully');
-                            } catch (fallbackError) {
-                                console.error('❌ Fallback financial request email also failed:', fallbackError.message);
-                            }
                         }
                     }
                     
