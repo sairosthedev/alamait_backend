@@ -98,7 +98,7 @@ exports.sendEmail = async (options) => {
                 console.log(`📧 Falling back to Gmail...`);
             }
         } else {
-            console.log(`📧 SendGrid not configured, using Gmail...`);
+            console.log(`📧 SendGrid not configured, using Gmail directly...`);
         }
 
         // Fallback to Gmail with retry logic

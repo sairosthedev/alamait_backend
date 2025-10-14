@@ -12,7 +12,8 @@ class SendGridService {
             this.isConfigured = true;
             console.log('✅ SendGrid configured successfully');
         } else {
-            console.warn('⚠️ SendGrid API key not found - SENDGRID_API_KEY environment variable required');
+            console.log('📧 SendGrid not configured - using Gmail fallback only');
+            this.isConfigured = false;
         }
     }
 

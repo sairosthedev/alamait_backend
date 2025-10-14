@@ -36,23 +36,25 @@ class EmailOutboxService {
                         
                         let emailSent = false;
                         
-                        // Try SendGrid first
-                        if (sendGridService.isReady()) {
-                            try {
-                                console.log(`📧 Outbox: Trying SendGrid for ${item.to}`);
-                                await sendGridService.sendEmail({
-                                    to: item.to,
-                                    subject: item.subject,
-                                    text: item.text,
-                                    html: item.html,
-                                    attachments: item.attachments
-                                });
-                                emailSent = true;
-                                console.log(`✅ Outbox: SendGrid success -> ${item.to}`);
-                            } catch (error) {
-                                console.error(`❌ Outbox: SendGrid failed for ${item.to}:`, error.message);
+                            // Try SendGrid first
+                            if (sendGridService.isReady()) {
+                                try {
+                                    console.log(`📧 Outbox: Trying SendGrid for ${item.to}`);
+                                    await sendGridService.sendEmail({
+                                        to: item.to,
+                                        subject: item.subject,
+                                        text: item.text,
+                                        html: item.html,
+                                        attachments: item.attachments
+                                    });
+                                    emailSent = true;
+                                    console.log(`✅ Outbox: SendGrid success -> ${item.to}`);
+                                } catch (error) {
+                                    console.error(`❌ Outbox: SendGrid failed for ${item.to}:`, error.message);
+                                }
+                            } else {
+                                console.log(`📧 Outbox: SendGrid not configured, using Gmail for ${item.to}`);
                             }
-                        }
                         
                         // Fallback to Gmail if SendGrid failed or not configured
                         if (!emailSent) {
