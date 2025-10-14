@@ -1138,38 +1138,112 @@ exports.createRequest = async (req, res) => {
                 .populate('residence', 'name');
         }
         
-        // Send email notifications (non-blocking) - moved after population
-        // Skip email notifications for finance requests to improve performance
+        // Send email notifications (non-blocking with fallback) - moved after population
+        // Handle all request types including financial requests
         if (request.type !== 'financial') {
-            try {
-                console.log('🔍 Request creation email debugging:');
-                console.log('req.user:', req.user ? 'Present' : 'Missing');
-                console.log('req.user.role:', req.user?.role);
-                console.log('User ID:', req.user?._id);
-                console.log('Request type:', request.type);
-                console.log('Request title:', request.title);
-                console.log('Populated residence:', populatedRequest.residence?.name);
-                
-                // Check if user is admin and send appropriate emails
-                if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager')) {
-                    if (request.type === 'student_maintenance' || request.type === 'operational' || request.type === 'financial') {
-                        console.log('📧 Sending admin request email to CEO and Finance Admin');
-                        await EmailNotificationService.sendAdminRequestToCEOAndFinance(populatedRequest, req.user);
+            setTimeout(async () => {
+                try {
+                    console.log('🔍 Request creation email debugging:');
+                    console.log('req.user:', req.user ? 'Present' : 'Missing');
+                    console.log('req.user.role:', req.user?.role);
+                    console.log('User ID:', req.user?._id);
+                    console.log('Request type:', request.type);
+                    console.log('Request title:', request.title);
+                    console.log('Populated residence:', populatedRequest.residence?.name);
+                    
+                    // Check if user is admin and send appropriate emails
+                    if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager')) {
+                        if (request.type === 'student_maintenance' || request.type === 'operational' || request.type === 'financial') {
+                            console.log('📧 Sending admin request email to CEO and Finance Admin');
+                            try {
+                                await EmailNotificationService.sendAdminRequestToCEOAndFinance(populatedRequest, req.user);
+                                console.log('✅ Admin request email sent successfully');
+                            } catch (emailError) {
+                                console.error('❌ Error sending admin request email:', emailError.message);
+                                // Fallback: Send simple notification
+                                try {
+                                    console.log('🔄 Attempting fallback admin request email...');
+                                    const { sendEmail } = require('../utils/email');
+                                    await sendEmail({
+                                        to: 'admin@alamait.com', // You may want to make this configurable
+                                        subject: `New ${request.type} Request - ${request.title}`,
+                                        text: `A new ${request.type} request has been submitted by ${req.user?.firstName} ${req.user?.lastName}. Title: ${request.title}`
+                                    });
+                                    console.log('✅ Fallback admin request email sent successfully');
+                                } catch (fallbackError) {
+                                    console.error('❌ Fallback admin request email also failed:', fallbackError.message);
+                                }
+                            }
+                        }
+                    } else {
+                        // For students, send to admins
+                        if (request.type === 'student_maintenance') {
+                            console.log('📧 Sending student maintenance email to admins');
+                            try {
+                                await EmailNotificationService.sendMaintenanceRequestSubmitted(populatedRequest, req.user);
+                                console.log('✅ Student maintenance request email sent successfully');
+                            } catch (emailError) {
+                                console.error('❌ Error sending student maintenance request email:', emailError.message);
+                                // Fallback: Send simple notification
+                                try {
+                                    console.log('🔄 Attempting fallback student maintenance request email...');
+                                    const { sendEmail } = require('../utils/email');
+                                    await sendEmail({
+                                        to: 'admin@alamait.com', // You may want to make this configurable
+                                        subject: `New Student Maintenance Request - ${request.title}`,
+                                        text: `A new student maintenance request has been submitted. Title: ${request.title}, Student: ${req.user?.firstName} ${req.user?.lastName}`
+                                    });
+                                    console.log('✅ Fallback student maintenance request email sent successfully');
+                                } catch (fallbackError) {
+                                    console.error('❌ Fallback student maintenance request email also failed:', fallbackError.message);
+                                }
+                            }
+                        }
                     }
-                } else {
-                    // For students, send to admins
-                    if (request.type === 'student_maintenance') {
-                        console.log('📧 Sending student maintenance email to admins');
-                        await EmailNotificationService.sendMaintenanceRequestSubmitted(populatedRequest, req.user);
-                    }
+                    
+                } catch (error) {
+                    console.error('❌ Error in request email process:', error);
                 }
-                
-            } catch (emailError) {
-                console.error('Failed to send request email notifications:', emailError);
-                // Don't fail the request if email fails
-            }
+            }, 1000); // 1 second delay to avoid blocking
         } else {
-            console.log('📧 Skipping email notifications for finance request to improve performance');
+            // Handle financial request emails with robust pattern
+            setTimeout(async () => {
+                try {
+                    console.log('🔍 Financial request creation email debugging:');
+                    console.log('req.user:', req.user ? 'Present' : 'Missing');
+                    console.log('req.user.role:', req.user?.role);
+                    console.log('User ID:', req.user?._id);
+                    console.log('Request type:', request.type);
+                    console.log('Request title:', request.title);
+                    
+                    // Send financial request notification to CEO and Finance Admin
+                    if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager' || req.user.role === 'finance_admin')) {
+                        console.log('📧 Sending financial request email to CEO and Finance Admin');
+                        try {
+                            await EmailNotificationService.sendFinancialSalariesRequestToCEO(request, req.user);
+                            console.log('✅ Financial request email sent successfully');
+                        } catch (emailError) {
+                            console.error('❌ Error sending financial request email:', emailError.message);
+                            // Fallback: Send simple notification
+                            try {
+                                console.log('🔄 Attempting fallback financial request email...');
+                                const { sendEmail } = require('../utils/email');
+                                await sendEmail({
+                                    to: 'admin@alamait.com', // You may want to make this configurable
+                                    subject: `New Financial Request - ${request.title}`,
+                                    text: `A new financial request has been submitted by ${req.user?.firstName} ${req.user?.lastName}. Title: ${request.title}. Please review in the admin dashboard.`
+                                });
+                                console.log('✅ Fallback financial request email sent successfully');
+                            } catch (fallbackError) {
+                                console.error('❌ Fallback financial request email also failed:', fallbackError.message);
+                            }
+                        }
+                    }
+                    
+                } catch (error) {
+                    console.error('❌ Error in financial request email process:', error);
+                }
+            }, 1000); // 1 second delay to avoid blocking
         }
         
         res.status(201).json(populatedRequest);

@@ -163,6 +163,7 @@ class EmailNotificationService {
 				}
 				
 				try {
+					// Primary attempt: Use sendEmail
 					await sendEmail({
 						to: financeUser.email,
 						subject: 'Monthly Request Pending Approval',
@@ -172,6 +173,20 @@ class EmailNotificationService {
 					console.log(`✅ Email sent to: ${financeUser.email}`);
 				} catch (emailError) {
 					console.error(`❌ Failed to send email to ${financeUser.email}:`, emailError.message);
+					
+					// Fallback attempt: Try with simple text email
+					try {
+						console.log(`🔄 Attempting fallback email to ${financeUser.email}...`);
+						await sendEmail({
+							to: financeUser.email,
+							subject: 'Monthly Request Pending Approval',
+							text: `A monthly request has been submitted and requires your approval. Please check the finance dashboard for details.`
+						});
+						sentCount++;
+						console.log(`✅ Fallback email sent to: ${financeUser.email}`);
+					} catch (fallbackError) {
+						console.error(`❌ Fallback email also failed for ${financeUser.email}:`, fallbackError.message);
+					}
 				}
 			}
 

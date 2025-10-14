@@ -939,7 +939,7 @@ exports.processPayment = async (req, res) => {
         // Refresh payment from database to get latest allocation data
         const updatedPayment = await Payment.findById(payment._id);
         
-        // Send payment confirmation email (non-blocking)
+        // Send payment confirmation email (non-blocking with fallback)
         setTimeout(async () => {
             try {
                 console.log('📧 Sending payment confirmation email...');
@@ -951,16 +951,35 @@ exports.processPayment = async (req, res) => {
                 const student = await User.findById(updatedPayment.student);
                 
                 if (student && student.email) {
-                    // Send payment confirmation email to student
-                    await EmailNotificationService.sendPaymentConfirmation({
-                        studentEmail: student.email,
-                        studentName: `${student.firstName} ${student.lastName}`,
-                        amount: updatedPayment.totalAmount,
-                        paymentId: updatedPayment.paymentId,
-                        method: updatedPayment.method,
-                        date: updatedPayment.date,
-                        allocation: updatedPayment.allocation
-                    });
+                    try {
+                        // Primary attempt: Use EmailNotificationService
+                        await EmailNotificationService.sendPaymentConfirmation({
+                            studentEmail: student.email,
+                            studentName: `${student.firstName} ${student.lastName}`,
+                            amount: updatedPayment.totalAmount,
+                            paymentId: updatedPayment.paymentId,
+                            method: updatedPayment.method,
+                            date: updatedPayment.date,
+                            allocation: updatedPayment.allocation
+                        });
+                        console.log(`✅ Payment confirmation email sent successfully to ${student.email}`);
+                    } catch (emailError) {
+                        console.error(`❌ Error sending payment confirmation email to ${student.email}:`, emailError.message);
+                        
+                        // Fallback attempt: Use simple sendEmail
+                        try {
+                            console.log(`🔄 Attempting fallback payment confirmation email to ${student.email}...`);
+                            const { sendEmail } = require('../../utils/email');
+                            await sendEmail({
+                                to: student.email,
+                                subject: 'Payment Confirmation - Alamait Student Accommodation',
+                                text: `Dear ${student.firstName} ${student.lastName}, Your payment of $${updatedPayment.totalAmount} has been confirmed. Payment ID: ${updatedPayment.paymentId}. Thank you for your payment.`
+                            });
+                            console.log(`✅ Fallback payment confirmation email sent successfully to ${student.email}`);
+                        } catch (fallbackError) {
+                            console.error(`❌ Fallback payment confirmation email also failed for ${student.email}:`, fallbackError.message);
+                        }
+                    }
                 } else {
                     console.log('⚠️ Student email not found, skipping payment confirmation email');
                 }

@@ -1577,56 +1577,76 @@ exports.manualAddStudent = async (req, res) => {
                 console.log(`   Room: ${roomNumber}`);
                 console.log(`   Residence: ${residence.name}`);
                 
-                await sendEmail({
-                    to: email,
-                    subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
-                    text: `
-                        Dear ${firstName} ${lastName},
+                const welcomeEmailContent = `
+                    Dear ${firstName} ${lastName},
 
-                        Welcome to Alamait Student Accommodation! Your account has been successfully created and your application has been approved.
+                    Welcome to Alamait Student Accommodation! Your account has been successfully created and your application has been approved.
 
-                        ACCOUNT DETAILS:
-                        Email: ${email}
-                        ${tempPassword ? `Temporary Password: ${tempPassword}` : 'Password: Use your existing password'}
+                    ACCOUNT DETAILS:
+                    Email: ${email}
+                    ${tempPassword ? `Temporary Password: ${tempPassword}` : 'Password: Use your existing password'}
 
-                        APPLICATION DETAILS:
-                        Application Code: ${application.applicationCode}
-                        Allocated Room: ${roomNumber}
-                        Approval Date: ${approvalDate.toLocaleDateString()}
-                        Valid Until: ${validUntil.toLocaleDateString()}
+                    APPLICATION DETAILS:
+                    Application Code: ${application.applicationCode}
+                    Allocated Room: ${roomNumber}
+                    Approval Date: ${approvalDate.toLocaleDateString()}
+                    Valid Until: ${validUntil.toLocaleDateString()}
 
-                        ROOM ASSIGNMENT:
-                        Residence: ${residence.name}
-                        Room: ${roomNumber}
-                        Start Date: ${new Date(startDate).toLocaleDateString()}
-                        End Date: ${new Date(endDate).toLocaleDateString()}
+                    ROOM ASSIGNMENT:
+                    Residence: ${residence.name}
+                    Room: ${roomNumber}
+                    Start Date: ${new Date(startDate).toLocaleDateString()}
+                    End Date: ${new Date(endDate).toLocaleDateString()}
 
-                        PAYMENT DETAILS:
-                        Monthly Rent: $${monthlyRent}
-                        Admin Fee: $${adminFee || 0}
-                        Security Deposit: $${securityDeposit || 0}
-                        Total Initial Payment: $${monthlyRent + (adminFee || 0) + (securityDeposit || 0)}
+                    PAYMENT DETAILS:
+                    Monthly Rent: $${monthlyRent}
+                    Admin Fee: $${adminFee || 0}
+                    Security Deposit: $${securityDeposit || 0}
+                    Total Initial Payment: $${monthlyRent + (adminFee || 0) + (securityDeposit || 0)}
 
-                        IMPORTANT:
-                        1. Please log in to your account using the temporary password above
-                        2. Change your password immediately after first login
-                        3. Review and sign your lease agreement (attached)
-                        4. Upload your signed lease agreement through your student portal
+                    IMPORTANT:
+                    1. Please log in to your account using the temporary password above
+                    2. Change your password immediately after first login
+                    3. Review and sign your lease agreement (attached)
+                    4. Upload your signed lease agreement through your student portal
 
-                        LOGIN URL: ${process.env.FRONTEND_URL || 'http://localhost:5173' ||'https://alamait.vercel.app' || 'https://alamait.com'}/login
+                    LOGIN URL: ${process.env.FRONTEND_URL || 'http://localhost:5173' ||'https://alamait.vercel.app' || 'https://alamait.com'}/login
 
-                        If you have any questions, please contact our support team.
+                    If you have any questions, please contact our support team.
 
-                        Best regards,
-                        Alamait Student Accommodation Team
-                    `,
-                    attachments: attachments.length > 0 ? attachments : undefined
-                });
-                console.log(`✅ Welcome email sent successfully to ${email}`);
-            } catch (emailError) {
-                console.error(`❌ Error sending welcome email to ${email}:`, emailError);
-                console.error(`   Error details:`, emailError.message);
-                console.error(`   Stack trace:`, emailError.stack);
+                    Best regards,
+                    Alamait Student Accommodation Team
+                `;
+                
+                try {
+                    // Primary attempt: Use sendEmail
+                    await sendEmail({
+                        to: email,
+                        subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
+                        text: welcomeEmailContent,
+                        attachments: attachments.length > 0 ? attachments : undefined
+                    });
+                    console.log(`✅ Welcome email sent successfully to ${email}`);
+                } catch (emailError) {
+                    console.error(`❌ Error sending welcome email to ${email}:`, emailError.message);
+                    
+                    // Fallback attempt: Try with queue-first mode
+                    try {
+                        console.log(`🔄 Attempting fallback welcome email to ${email}...`);
+                        const { sendEmail: fallbackSendEmail } = require('../../utils/email');
+                        await fallbackSendEmail({
+                            to: email,
+                            subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
+                            text: welcomeEmailContent,
+                            attachments: attachments.length > 0 ? attachments : undefined
+                        });
+                        console.log(`✅ Fallback welcome email sent successfully to ${email}`);
+                    } catch (fallbackError) {
+                        console.error(`❌ Fallback welcome email also failed for ${email}:`, fallbackError.message);
+                    }
+                }
+            } catch (error) {
+                console.error(`❌ Error in welcome email process for ${email}:`, error);
                 
                 // Try to send a simple email as fallback
                 try {
