@@ -2,9 +2,19 @@ const nodemailer = require('nodemailer');
 const { sendEmail } = require('../utils/email');
 const Residence = require('../models/Residence');
 
-// Create email transporter
+// Create email transporter with production-optimized settings
 const transporter = nodemailer.createTransport({
 	service: 'gmail',
+	pool: true,
+	maxConnections: 1, // Reduced for production stability
+	maxMessages: 10,   // Reduced for production stability
+	connectionTimeout: 15000, // 15 seconds
+	greetingTimeout: 10000,   // 10 seconds
+	socketTimeout: 20000,     // 20 seconds
+	secure: true,
+	tls: {
+		rejectUnauthorized: false
+	},
 	auth: {
 		user: process.env.EMAIL_USER,
 		pass: process.env.EMAIL_APP_PASSWORD
@@ -37,8 +47,14 @@ class EmailNotificationService {
                         ? new mongoose.Types.ObjectId(request.residence)
                         : request.residence;
                     
-                    const residence = await Residence.findById(residenceId);
-                    residenceName = residence?.name || 'Unknown Residence';
+                    // Ensure Residence model is properly loaded
+                    if (typeof Residence.findById === 'function') {
+                        const residence = await Residence.findById(residenceId);
+                        residenceName = residence?.name || 'Unknown Residence';
+                    } else {
+                        console.error('Residence model not properly loaded - findById is not a function');
+                        residenceName = 'Unknown Residence';
+                    }
                 } catch (err) {
                     console.error('Error fetching residence:', err);
                     residenceName = 'Unknown Residence';
@@ -816,9 +832,14 @@ class EmailNotificationService {
 				} else if (request.residence) {
 					const residenceId = typeof request.residence === 'string' ? request.residence : request.residence._id;
 					if (residenceId) {
-						const resDoc = await Residence.findById(residenceId).select('name');
-						if (resDoc && resDoc.name) {
-							residenceName = resDoc.name;
+						// Ensure Residence model is properly loaded
+						if (typeof Residence.findById === 'function') {
+							const resDoc = await Residence.findById(residenceId).select('name');
+							if (resDoc && resDoc.name) {
+								residenceName = resDoc.name;
+							}
+						} else {
+							console.error('Residence model not properly loaded - findById is not a function');
 						}
 					}
 				}

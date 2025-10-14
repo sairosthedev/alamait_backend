@@ -83,10 +83,10 @@ exports.sendEmail = async (options) => {
             attachments: options.attachments
         };
 
-        // Send email with timeout handling
+        // Send email with timeout handling (reduced for production stability)
         const sendPromise = transporter.sendMail(mailOptions);
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Email send timeout')), 30000); // 30s timeout
+            setTimeout(() => reject(new Error('Email send timeout')), 20000); // 20s timeout
         });
         
         await Promise.race([sendPromise, timeoutPromise]);

@@ -1453,74 +1453,61 @@ class BalanceSheetService {
         return;
       }
 
-      // Get all accounts payable accounts (both children of 2000 and standalone AP accounts)
-      const childAccounts = await Account.find({ 
-        parentAccount: mainAPAccount._id,
+      // --- ACCOUNTS PAYABLE (2000) AGGREGATION ---
+      console.log(`🔍 Found AP parent account 2000 with _id: ${mainAPAccount._id} (type: ${typeof mainAPAccount._id})`);
+      
+      // Get all child accounts of 2000 (handle both string and ObjectId)
+      const apChildAccounts = await Account.find({
+        $or: [
+          { parentAccount: mainAPAccount._id },
+          { parentAccount: mainAPAccount._id.toString() },
+          { mainAPAccountCode: '2000' },
+          { parent: '2000' }
+        ],
         isActive: true
       });
 
-      // Also get standalone accounts payable accounts that aren't children of 2000
-      const standaloneAPAccounts = await Account.find({
+      // Also include accounts that start with 200 but aren't 2000
+      const apSeriesAccounts = await Account.find({
+        code: { $regex: /^200(?!0$)/ }, // starts with 200 but not exactly 2000
         type: 'Liability',
-        isActive: true,
-        $or: [
-          { name: { $regex: /accounts payable/i } },
-          { code: { $regex: '^20' } }, // Include 2000-2099 (all 20xx accounts)
-          { code: { $regex: '^21' } }, // Include 2100-2199 (all 21xx accounts)
-          { code: { $regex: '^22' } }, // Include 2200-2299 (all 22xx accounts)
-          { code: { $regex: '^25' } }  // Include 2500-2599 (all 25xx accounts)
-        ],
-        parentAccount: { $ne: mainAPAccount._id }
+        isActive: true
       });
 
-      // Combine all accounts payable accounts
-      const allAPAccounts = [...childAccounts, ...standaloneAPAccounts];
+      // Merge and remove duplicates by code
+      const allAPChildrenMap = new Map();
+      [...apChildAccounts, ...apSeriesAccounts].forEach(acc => {
+        allAPChildrenMap.set(acc.code, acc);
+      });
+      const allAPChildren = Array.from(allAPChildrenMap.values());
 
-      console.log(`📊 Found ${childAccounts.length} child accounts for account 2000`);
-      console.log(`📊 Found ${standaloneAPAccounts.length} standalone AP accounts`);
-      console.log(`📊 Found ${allAPAccounts.length} total AP accounts`);
+      console.log(`🔗 Found ${allAPChildren.length} Accounts Payable child accounts for parent 2000:`);
       
-      // Calculate total balance for account 2000 including all AP accounts
-      let totalAPBalance = 0;
-      
-      // Add main account 2000 balance
+      // Aggregate child account balances into parent
       if (balanceSheet.liabilities.current['2000']) {
-        totalAPBalance += balanceSheet.liabilities.current['2000'].balance;
-        console.log(`   Main account 2000: $${balanceSheet.liabilities.current['2000'].balance}`);
-      }
-      
-      // Add only child account balances to the main account 2000
-      for (const childAccount of childAccounts) {
-        if (balanceSheet.liabilities.current[childAccount.code]) {
-          const accountBalance = balanceSheet.liabilities.current[childAccount.code].balance;
-          totalAPBalance += accountBalance;
-          console.log(`   CHILD account ${childAccount.code}: $${accountBalance}`);
-        }
-      }
-      
-      console.log(`   Total aggregated balance: $${totalAPBalance}`);
-      
-      // Update the main account 2000 with the aggregated total
-      if (balanceSheet.liabilities.current['2000']) {
-        const originalMainBalance = balanceSheet.liabilities.current['2000'].balance;
-        balanceSheet.liabilities.current['2000'].balance = totalAPBalance;
+        let totalChildBalance = 0;
+        allAPChildren.forEach(childAccount => {
+          if (balanceSheet.liabilities.current[childAccount.code] && childAccount.code !== '2000') {
+            const childBalance = balanceSheet.liabilities.current[childAccount.code].balance;
+            totalChildBalance += childBalance;
+            console.log(
+              `   ↳ Aggregating ${childAccount.code} (${childAccount.name}): $${childBalance.toFixed(2)}`
+            );
+          }
+        });
+
+        // Add the aggregated child balances to parent
+        const originalBalance = balanceSheet.liabilities.current['2000'].balance;
+        balanceSheet.liabilities.current['2000'].balance += totalChildBalance;
         balanceSheet.liabilities.current['2000'].aggregated = true;
-        balanceSheet.liabilities.current['2000'].childAccounts = childAccounts.map(c => c.code);
-        balanceSheet.liabilities.current['2000'].totalWithChildren = totalAPBalance;
-        balanceSheet.liabilities.current['2000'].originalBalance = originalMainBalance;
+        balanceSheet.liabilities.current['2000'].childAccounts = allAPChildren.map(c => c.code);
+        balanceSheet.liabilities.current['2000'].originalBalance = originalBalance;
         
-        console.log(`✅ Updated account 2000: Original $${originalMainBalance} + Children $${totalAPBalance - originalMainBalance} = Total $${totalAPBalance}`);
-      }
-      
-      // 🆕 FIX: Set only child account balances to 0 to avoid double-counting
-      for (const childAccount of childAccounts) {
-        if (balanceSheet.liabilities.current[childAccount.code]) {
-          const originalBalance = balanceSheet.liabilities.current[childAccount.code].balance;
-          balanceSheet.liabilities.current[childAccount.code].balance = 0;
-          balanceSheet.liabilities.current[childAccount.code].aggregatedInto = '2000';
-          balanceSheet.liabilities.current[childAccount.code].originalBalance = originalBalance;
-          console.log(`   Set CHILD ${childAccount.code} balance to $0 (was $${originalBalance}) - aggregated into 2000`);
-        }
+        console.log(
+          `📊 Accounts Payable (2000) new total: $${balanceSheet.liabilities.current['2000'].balance.toFixed(2)} (added $${totalChildBalance.toFixed(2)} from ${allAPChildren.length} children)`
+        );
+      } else {
+        console.warn('⚠️ Parent AP account (2000) not found in balance sheet');
       }
       
       // Recalculate total current liabilities

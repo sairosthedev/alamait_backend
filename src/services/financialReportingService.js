@@ -2055,17 +2055,22 @@ class FinancialReportingService {
                 let accountsPayableTotal = 0;
                 const apMainAccount = Object.values(accountBalances).find(acc => acc.code === '2000');
                 if (apMainAccount) {
-                    accountsPayableTotal += apMainAccount.balance;
+                    // Start with main account balance
+                    accountsPayableTotal = apMainAccount.balance;
                     
-                    // Add child account balances
+                    // Add all 200-series child account balances (excluding 2000)
                     const apChildAccounts = Object.values(accountBalances).filter(acc => 
-                        acc.code && acc.code.startsWith('2000') && acc.code !== '2000'
+                        acc.code && acc.code.match(/^200(?!0$)/) && acc.type === 'Liability'
                     );
+                    
+                    let childTotal = 0;
                     apChildAccounts.forEach(child => {
                         accountsPayableTotal += child.balance;
+                        childTotal += child.balance;
+                        console.log(`   ↳ Aggregating ${child.code} (${child.name}): $${child.balance.toFixed(2)}`);
                     });
                     
-                    console.log(`📊 AP Aggregation for ${monthName}: Main $${apMainAccount.balance} + Children $${apChildAccounts.reduce((sum, child) => sum + child.balance, 0)} = Total $${accountsPayableTotal}`);
+                    console.log(`📊 AP Aggregation for ${monthName}: Main $${apMainAccount.balance.toFixed(2)} + Children $${childTotal.toFixed(2)} = Total $${accountsPayableTotal.toFixed(2)}`);
                 }
 
                 // Override standardized lines with monthSettled rollups
