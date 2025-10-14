@@ -1653,8 +1653,48 @@ class EmailNotificationService {
 	/**
 	 * Send payment confirmation email to student
 	 */
-	static async sendPaymentConfirmation({ studentEmail, studentName, amount, paymentId, method, date }) {
+	static async sendPaymentConfirmation({ studentEmail, studentName, amount, paymentId, method, date, allocation }) {
 		try {
+			// Generate allocation breakdown HTML
+			let allocationHtml = '';
+			if (allocation && allocation.monthlyBreakdown && allocation.monthlyBreakdown.length > 0) {
+				allocationHtml = `
+					<div style="background-color: #e8f5e8; padding: 15px; border-radius: 5px; margin: 15px 0;">
+						<h3 style="color: #28a745; margin-top: 0;">Payment Allocation</h3>
+						<p><strong>Total Allocated:</strong> $${allocation.summary?.totalAllocated?.toFixed(2) || '0.00'}</p>
+						<p><strong>Remaining Balance:</strong> $${allocation.summary?.remainingBalance?.toFixed(2) || '0.00'}</p>
+						<p><strong>Months Covered:</strong> ${allocation.summary?.monthsCovered || 0}</p>
+						${allocation.summary?.advancePaymentAmount > 0 ? `<p><strong>Advance Payment:</strong> $${allocation.summary.advancePaymentAmount.toFixed(2)}</p>` : ''}
+						
+						<h4 style="color: #28a745; margin-bottom: 10px;">Monthly Breakdown:</h4>
+						<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+							<thead>
+								<tr style="background-color: #f8f9fa;">
+									<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Month</th>
+									<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Type</th>
+									<th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Amount</th>
+									<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								${allocation.monthlyBreakdown.map(item => `
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px;">${item.monthName || item.month}</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${item.paymentType || 'N/A'}</td>
+										<td style="border: 1px solid #ddd; padding: 8px; text-align: right;">$${item.amountAllocated?.toFixed(2) || '0.00'}</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">
+											<span style="color: ${item.allocationType === 'rent_settlement' ? '#28a745' : '#007bff'}; font-weight: bold;">
+												${item.allocationType === 'rent_settlement' ? 'Settled' : 'Advance'}
+											</span>
+										</td>
+									</tr>
+								`).join('')}
+							</tbody>
+						</table>
+					</div>
+				`;
+			}
+
 			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
@@ -1670,6 +1710,7 @@ class EmailNotificationService {
 								<li><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Confirmed</span></li>
 							</ul>
 						</div>
+						${allocationHtml}
 						<p>Thank you for your payment. If you have any questions, please contact our finance team.</p>
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">

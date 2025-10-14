@@ -978,6 +978,55 @@ exports.processPayment = async (req, res) => {
                         for (const financeUser of financeUsers) {
                             if (financeUser.email && financeUser.email.includes('@')) {
                                 try {
+                                    // Generate allocation breakdown HTML for finance team
+                                    let allocationHtml = '';
+                                    if (updatedPayment.allocation && updatedPayment.allocation.monthlyBreakdown && updatedPayment.allocation.monthlyBreakdown.length > 0) {
+                                        allocationHtml = `
+                                            <div style="background-color: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                                                <h3 style="color: #007bff; margin-top: 0;">Payment Allocation Details</h3>
+                                                <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                                                    <div>
+                                                        <p><strong>Total Allocated:</strong> $${updatedPayment.allocation.summary?.totalAllocated?.toFixed(2) || '0.00'}</p>
+                                                        <p><strong>Remaining Balance:</strong> $${updatedPayment.allocation.summary?.remainingBalance?.toFixed(2) || '0.00'}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p><strong>Months Covered:</strong> ${updatedPayment.allocation.summary?.monthsCovered || 0}</p>
+                                                        <p><strong>Method:</strong> ${updatedPayment.allocation.summary?.allocationMethod || 'N/A'}</p>
+                                                    </div>
+                                                </div>
+                                                ${updatedPayment.allocation.summary?.advancePaymentAmount > 0 ? `<p><strong>Advance Payment:</strong> $${updatedPayment.allocation.summary.advancePaymentAmount.toFixed(2)}</p>` : ''}
+                                                
+                                                <h4 style="color: #007bff; margin-bottom: 10px;">Monthly Allocation Breakdown:</h4>
+                                                <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                                                    <thead>
+                                                        <tr style="background-color: #f8f9fa;">
+                                                            <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Month</th>
+                                                            <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Type</th>
+                                                            <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Amount</th>
+                                                            <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Status</th>
+                                                            <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Outstanding</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        ${updatedPayment.allocation.monthlyBreakdown.map(item => `
+                                                            <tr>
+                                                                <td style="border: 1px solid #ddd; padding: 8px;">${item.monthName || item.month}</td>
+                                                                <td style="border: 1px solid #ddd; padding: 8px;">${item.paymentType || 'N/A'}</td>
+                                                                <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">$${item.amountAllocated?.toFixed(2) || '0.00'}</td>
+                                                                <td style="border: 1px solid #ddd; padding: 8px;">
+                                                                    <span style="color: ${item.allocationType === 'rent_settlement' ? '#28a745' : '#007bff'}; font-weight: bold;">
+                                                                        ${item.allocationType === 'rent_settlement' ? 'Settled' : 'Advance'}
+                                                                    </span>
+                                                                </td>
+                                                                <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">$${item.newOutstanding?.toFixed(2) || '0.00'}</td>
+                                                            </tr>
+                                                        `).join('')}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        `;
+                                    }
+
                                     const emailContent = `
                                         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                                             <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
@@ -995,6 +1044,7 @@ exports.processPayment = async (req, res) => {
                                                         <li><strong>Allocation:</strong> $${updatedPayment.allocation?.summary?.totalAllocated || 0} allocated</li>
                                                     </ul>
                                                 </div>
+                                                ${allocationHtml}
                                                 <p>Please review the payment details in the finance dashboard.</p>
                                                 <hr style="margin: 20px 0;">
                                                 <p style="font-size: 12px; color: #666;">
