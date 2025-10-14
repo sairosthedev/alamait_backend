@@ -2051,26 +2051,78 @@ class FinancialReportingService {
                     }
                 });
 
-                // 🆕 FIX: Aggregate Accounts Payable with child accounts
+                // 🆕 FIX: Aggregate Accounts Payable with child accounts (robust database query)
                 let accountsPayableTotal = 0;
                 const apMainAccount = Object.values(accountBalances).find(acc => acc.code === '2000');
                 if (apMainAccount) {
                     // Start with main account balance
                     accountsPayableTotal = apMainAccount.balance;
                     
-                    // Add all 200-series child account balances (excluding 2000)
-                    const apChildAccounts = Object.values(accountBalances).filter(acc => 
-                        acc.code && acc.code.match(/^200(?!0$)/) && acc.type === 'Liability'
-                    );
-                    
-                    let childTotal = 0;
-                    apChildAccounts.forEach(child => {
-                        accountsPayableTotal += child.balance;
-                        childTotal += child.balance;
-                        console.log(`   ↳ Aggregating ${child.code} (${child.name}): $${child.balance.toFixed(2)}`);
-                    });
-                    
-                    console.log(`📊 AP Aggregation for ${monthName}: Main $${apMainAccount.balance.toFixed(2)} + Children $${childTotal.toFixed(2)} = Total $${accountsPayableTotal.toFixed(2)}`);
+                    try {
+                        // Get all child accounts from database (same logic as other services)
+                        const Account = require('../models/Account');
+                        const mainAPAccount = await Account.findOne({ code: '2000' });
+                        
+                        if (mainAPAccount) {
+                            console.log(`🔍 Found AP parent account 2000 with _id: ${mainAPAccount._id} (type: ${typeof mainAPAccount._id})`);
+                            
+                            // Get all child accounts of 2000 (handle both string and ObjectId)
+                            const apChildAccounts = await Account.find({
+                                $or: [
+                                    { parentAccount: mainAPAccount._id },
+                                    { parentAccount: mainAPAccount._id.toString() },
+                                    { mainAPAccountCode: '2000' },
+                                    { parent: '2000' }
+                                ],
+                                isActive: true
+                            });
+
+                            // Also include accounts that start with 200 but aren't 2000
+                            const apSeriesAccounts = await Account.find({
+                                code: { $regex: /^200(?!0$)/ }, // starts with 200 but not exactly 2000
+                                type: 'Liability',
+                                isActive: true
+                            });
+
+                            // Merge and remove duplicates by code
+                            const allAPChildrenMap = new Map();
+                            [...apChildAccounts, ...apSeriesAccounts].forEach(acc => {
+                                allAPChildrenMap.set(acc.code, acc);
+                            });
+                            const allAPChildren = Array.from(allAPChildrenMap.values());
+
+                            console.log(`🔗 Found ${allAPChildren.length} Accounts Payable child accounts for parent 2000:`);
+
+                            // Aggregate child account balances into parent
+                            let childTotal = 0;
+                            allAPChildren.forEach(childAccount => {
+                                // Check if child account has a balance in accountBalances
+                                const childBalance = Object.values(accountBalances).find(acc => acc.code === childAccount.code);
+                                if (childBalance && childAccount.code !== '2000') {
+                                    accountsPayableTotal += childBalance.balance;
+                                    childTotal += childBalance.balance;
+                                    console.log(`   ↳ Aggregating ${childAccount.code} (${childAccount.name}): $${childBalance.balance.toFixed(2)}`);
+                                }
+                            });
+                            
+                            console.log(`📊 AP Aggregation for ${monthName}: Main $${apMainAccount.balance.toFixed(2)} + Children $${childTotal.toFixed(2)} = Total $${accountsPayableTotal.toFixed(2)}`);
+                        }
+                    } catch (error) {
+                        console.error('❌ Error in AP aggregation:', error);
+                        // Fallback to original logic if database query fails
+                        const apChildAccounts = Object.values(accountBalances).filter(acc => 
+                            acc.code && acc.code.match(/^200(?!0$)/) && acc.type === 'Liability'
+                        );
+                        
+                        let childTotal = 0;
+                        apChildAccounts.forEach(child => {
+                            accountsPayableTotal += child.balance;
+                            childTotal += child.balance;
+                            console.log(`   ↳ Fallback aggregating ${child.code} (${child.name}): $${child.balance.toFixed(2)}`);
+                        });
+                        
+                        console.log(`📊 AP Fallback Aggregation for ${monthName}: Main $${apMainAccount.balance.toFixed(2)} + Children $${childTotal.toFixed(2)} = Total $${accountsPayableTotal.toFixed(2)}`);
+                    }
                 }
 
                 // Override standardized lines with monthSettled rollups
