@@ -23,7 +23,6 @@ class EmailNotificationService {
     static async sendFinancialSalariesRequestToCEO(request, submittedBy) {
         try {
             const User = require('../models/User');
-            const Residence = require('../models/Residence');
             const ceoUsers = await User.find({ role: 'ceo' });
 
             // Get residence name if not populated

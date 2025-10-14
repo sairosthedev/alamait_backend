@@ -335,13 +335,15 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                 console.log(`Request saved successfully with ID: ${reqDoc._id}`);
                 
                 // Send CEO notification for salary requests (non-blocking)
-                try {
-                    const EmailNotificationService = require('../../services/emailNotificationService');
-                    await EmailNotificationService.sendFinancialSalariesRequestToCEO(reqDoc, req.user);
-                    console.log(`✅ CEO notification sent for salary request: ${reqDoc._id}`);
-                } catch (emailError) {
-                    console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
-                }
+                setTimeout(async () => {
+                    try {
+                        const EmailNotificationService = require('../../services/emailNotificationService');
+                        await EmailNotificationService.sendFinancialSalariesRequestToCEO(reqDoc, req.user);
+                        console.log(`✅ CEO notification sent for salary request: ${reqDoc._id}`);
+                    } catch (emailError) {
+                        console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
+                    }
+                }, 100);
                 
                 // Log the salary request creation (non-blocking)
                 logSalaryRequestOperation(
@@ -543,13 +545,15 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                 console.log(`✅ Salary request saved for ${residenceName}: $${totalForResidence} (${allocatedEmployees.length} employees)`);
 
                 // Send CEO notification for salary requests (non-blocking)
-                try {
-                    const EmailNotificationService = require('../../services/emailNotificationService');
-                    await EmailNotificationService.sendFinancialSalariesRequestToCEO(reqDoc, req.user);
-                    console.log(`✅ CEO notification sent for salary request: ${reqDoc._id}`);
-                } catch (emailError) {
-                    console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
-                }
+                setTimeout(async () => {
+                    try {
+                        const EmailNotificationService = require('../../services/emailNotificationService');
+                        await EmailNotificationService.sendFinancialSalariesRequestToCEO(reqDoc, req.user);
+                        console.log(`✅ CEO notification sent for salary request: ${reqDoc._id}`);
+                    } catch (emailError) {
+                        console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
+                    }
+                }, 100);
 
                 // Log the salary request creation (non-blocking)
                 logSalaryRequestOperation(
@@ -757,13 +761,15 @@ exports.createSalaryRequest = async (req, res) => {
         await request.save();
 
         // Send CEO notification for salary requests (non-blocking)
-        try {
-            const EmailNotificationService = require('../../services/emailNotificationService');
-            await EmailNotificationService.sendFinancialSalariesRequestToCEO(request, req.user);
-            console.log(`✅ CEO notification sent for salary request: ${request._id}`);
-        } catch (emailError) {
-            console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
-        }
+        setTimeout(async () => {
+            try {
+                const EmailNotificationService = require('../../services/emailNotificationService');
+                await EmailNotificationService.sendFinancialSalariesRequestToCEO(request, req.user);
+                console.log(`✅ CEO notification sent for salary request: ${request._id}`);
+            } catch (emailError) {
+                console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
+            }
+        }, 100);
 
         return res.status(201).json({ message: 'Salary request created', request, total });
     } catch (error) {
