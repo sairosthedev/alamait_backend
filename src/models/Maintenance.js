@@ -49,7 +49,7 @@ const maintenanceSchema = new mongoose.Schema({
     },
     priority: {
         type: String,
-        enum: ['low', 'medium', 'high'],
+        enum: ['low', 'medium', 'high', 'urgent'],
         required: true,
         set: function(value) {
             if (value) {

@@ -13,7 +13,7 @@ const maintenanceValidation = [
     check('description', 'Description is required').notEmpty(),
     check('room', 'Room is required').notEmpty(),
     check('category').optional().isIn(['plumbing', 'electrical', 'hvac', 'appliance', 'structural', 'other']),
-    check('priority').optional().isIn(['low', 'medium', 'high']),
+    check('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
     check('residence').optional().isMongoId().withMessage('Invalid residence ID format'),
     check('residenceId').optional().isMongoId().withMessage('Invalid residence ID format'),
     check('paymentMethod').optional().custom((value) => {

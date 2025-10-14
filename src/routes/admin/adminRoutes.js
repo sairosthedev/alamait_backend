@@ -64,7 +64,7 @@ const maintenanceUpdateValidation = [
         .withMessage('Invalid date format'),
     check('priority')
         .optional()
-        .isIn(['low', 'medium', 'high', 'Low', 'Medium', 'High'])
+        .isIn(['low', 'medium', 'high', 'urgent', 'Low', 'Medium', 'High', 'Urgent'])
         .withMessage('Invalid priority level'),
     check('category')
         .optional()
@@ -99,7 +99,7 @@ const maintenanceCreateValidation = [
     check('description', 'Description is required').notEmpty().trim(),
     check('room', 'Room is required').notEmpty().trim(),
     check('residence', 'Residence ID is required').notEmpty().isMongoId().withMessage('Invalid residence ID format'),
-    check('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Invalid priority level'),
+    check('priority').optional().isIn(['low', 'medium', 'high', 'urgent']).withMessage('Invalid priority level'),
     check('status').optional().isIn(['pending', 'assigned', 'in-progress', 'on-hold', 'completed', 'approved', 'rejected']).withMessage('Invalid status'),
     check('amount').optional().isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
     check('assignedTo').optional().isMongoId().withMessage('Invalid assigned user ID')

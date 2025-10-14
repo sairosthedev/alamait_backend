@@ -34,7 +34,7 @@ class EmailOutboxService {
                         console.log(`📧 Attempting to send queued email to ${item.to} (attempt ${(item.attempts || 0) + 1})`);
                         
                         // Create a new transporter for each email to avoid connection issues
-                        const freshTransporter = nodemailer.createTransporter({
+                        const freshTransporter = nodemailer.createTransport({
                             service: 'gmail',
                             auth: { 
                                 user: process.env.EMAIL_USER, 

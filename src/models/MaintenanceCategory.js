@@ -17,7 +17,7 @@ const maintenanceCategorySchema = new mongoose.Schema({
     },
     priority: {
         type: String,
-        enum: ['Low', 'Medium', 'High'],
+        enum: ['Low', 'Medium', 'High', 'Urgent'],
         default: 'Medium'
     },
     estimatedTime: {

@@ -59,12 +59,12 @@ const monthlyRequestItemSchema = new mongoose.Schema({
     },
     category: {
         type: String,
-        enum: ['utilities', 'maintenance', 'supplies', 'equipment', 'services', 'other'],
+        enum: ['utilities','repair','upgrade','security','cleaning','management', 'maintenance', 'supplies', 'equipment', 'services', 'other'],
         default: 'other'
     },
     priority: {
         type: String,
-        enum: ['low', 'medium', 'high'],
+        enum: ['low', 'medium', 'high', 'urgent'],
         default: 'medium'
     },
     isRecurring: {
@@ -95,8 +95,8 @@ const monthlyRequestItemSchema = new mongoose.Schema({
         title: { type: String, trim: true },
         description: { type: String, trim: true },
         quantity: { type: Number, min: 1 },
-        category: { type: String, enum: ['utilities', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
-        priority: { type: String, enum: ['low', 'medium', 'high'] },
+        category: { type: String, enum: ['utilities','repair','upgrade','security','cleaning','management', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
+        priority: { type: String, enum: ['low', 'medium', 'high', 'urgent'] },
         isRecurring: { type: Boolean },
         notes: { type: String, trim: true }
     }],
@@ -113,8 +113,8 @@ const monthlyRequestItemSchema = new mongoose.Schema({
         quantity: { type: Number, min: 1 },
         title: { type: String, trim: true },
         description: { type: String, trim: true },
-        category: { type: String, enum: ['utilities', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
-        priority: { type: String, enum: ['low', 'medium', 'high'] },
+        category: { type: String, enum: ['utilities','repair','upgrade','security','cleaning','management', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
+        priority: { type: String, enum: ['low', 'medium', 'high', 'urgent'] },
         isRecurring: { type: Boolean },
         notes: { type: String, trim: true }
     }],
@@ -214,8 +214,8 @@ const monthlyRequestSchema = new mongoose.Schema({
             description: { type: String, required: true },
             quantity: { type: Number, required: true, min: 1 },
             estimatedCost: { type: Number, required: true, min: 0 },
-            category: { type: String, enum: ['utilities', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
-            priority: { type: String, enum: ['low', 'medium', 'high'] },
+            category: { type: String, enum: ['utilities','repair','upgrade','security','cleaning','management', 'maintenance', 'supplies', 'equipment', 'services', 'other'] },
+            priority: { type: String, enum: ['low', 'medium', 'high', 'urgent'] },
             notes: { type: String, trim: true },
             provider: { type: String, trim: true, required: false }
         }],
@@ -226,7 +226,7 @@ const monthlyRequestSchema = new mongoose.Schema({
     }],
     priority: {
         type: String,
-        enum: ['low', 'medium', 'high'],
+        enum: ['low', 'medium', 'high', 'urgent'],
         default: 'medium'
     },
     items: [monthlyRequestItemSchema],

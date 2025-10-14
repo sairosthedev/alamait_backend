@@ -65,7 +65,7 @@ const validateMaintenanceRequest = [
     // Only validate priority from the body, not headers
     (req, res, next) => {
         if (req.body.priority !== undefined) {
-            const allowed = ['low', 'medium', 'high'];
+            const allowed = ['low', 'medium', 'high', 'urgent'];
             if (!allowed.includes(req.body.priority)) {
                 return res.status(400).json({
                     errors: [{
@@ -77,7 +77,7 @@ const validateMaintenanceRequest = [
                     }],
                     debug: {
                         bodyPriority: req.body.priority,
-                        message: 'Priority must be one of low, medium, high if provided.'
+                        message: 'Priority must be one of low, medium, high, urgent if provided.'
                     }
                 });
             }

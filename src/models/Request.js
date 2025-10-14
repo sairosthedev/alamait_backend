@@ -487,7 +487,7 @@ const requestSchema = new mongoose.Schema({
     // Common fields
     priority: {
         type: String,
-        enum: ['low', 'medium', 'high'],
+        enum: ['low', 'medium', 'high', 'urgent'],
         default: 'medium'
     },
     status: {
