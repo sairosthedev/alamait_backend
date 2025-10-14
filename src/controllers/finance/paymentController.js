@@ -708,163 +708,334 @@ const safeDateFormat = (date) => {
 module.exports.findStudentById = findStudentById;
 
 /**
- * Process payment with double-entry accounting
+ * Process payment using admin payment creation method
  * POST /api/finance/payments/process-payment
  */
 exports.processPayment = async (req, res) => {
     try {
-        const {
-            paymentId,
-            student,
-            studentName,
-            studentEmail,
-            residence,
-            room,
-            date,
-            totalAmount,
-            deposit,
-            rentAmount,
-            adminFee,
-            method,
-            paymentMonth,
-            payments,
-            doubleEntry,
-            status,
-            description
-        } = req.body;
+        console.log('💰 Finance payment processing - delegating to admin payment system');
 
-        console.log('💰 Processing payment with double-entry:', { paymentId, studentName, totalAmount });
-
-        // Validate required fields
-        if (!paymentId || !student || !totalAmount || !doubleEntry) {
-            return res.status(400).json({
-                success: false,
-                message: 'Payment ID, student, total amount, and double entry data are required'
-            });
-        }
-
-        // Validate double entry structure
-        if (!doubleEntry.receivingAccount || !doubleEntry.payingAccount || !doubleEntry.description) {
-            return res.status(400).json({
-                success: false,
-                message: 'Double entry must include receiving account, paying account, and description'
-            });
-        }
-
-        // Create the payment record
-        const paymentData = {
-            paymentId,
-            student,
-            studentName,
-            studentEmail,
-            residence,
-            room,
-            date: date ? new Date(date) : new Date(),
-            totalAmount: parseFloat(totalAmount),
-            deposit: parseFloat(deposit || 0),
-            rentAmount: parseFloat(rentAmount || 0),
-            adminFee: parseFloat(adminFee || 0),
-            method: method || 'Cash',
-            paymentMonth,
-            payments: payments || [],
-            status: status || 'Confirmed',
-            description: description || '',
-            processedBy: req.user._id,
-            processedAt: new Date()
-        };
-
-        // Save payment record
-        const payment = new Payment(paymentData);
-        await payment.save();
-
-        console.log('✅ Payment record saved:', payment._id);
-
-        // Create double-entry transaction
-        const TransactionController = require('./transactionController');
-        
-        // Prepare double-entry transaction data
-        const transactionData = {
-            description: doubleEntry.description,
-            reference: paymentId,
-            residence: residence,
-            date: date ? new Date(date) : new Date(),
-            entries: [
-                {
-                    account: doubleEntry.receivingAccount, // Bank Account (1001)
-                    debit: parseFloat(totalAmount),
-                    credit: 0,
-                    description: `Payment received from ${studentName} - ${doubleEntry.description}`
-                },
-                {
-                    account: doubleEntry.payingAccount, // Rental Revenue (4000)
-                    debit: 0,
-                    credit: parseFloat(totalAmount),
-                    description: `Revenue from ${studentName} - ${doubleEntry.description}`
-                }
-            ]
-        };
-
-        // Create the double-entry transaction
-        const transactionResult = await TransactionController.createDoubleEntryTransaction(
-            { body: transactionData },
-            { status: () => ({ json: (data) => data }) }
-        );
-
-        if (!transactionResult.success) {
-            // If transaction creation fails, delete the payment record
-            await Payment.findByIdAndDelete(payment._id);
-            return res.status(400).json({
-                success: false,
-                message: 'Failed to create double-entry transaction',
-                error: transactionResult.message
-            });
-        }
-
-        // Update payment record with transaction reference
-        payment.transactionId = transactionResult.data.transactionId;
-        await payment.save();
-
-        console.log('✅ Double-entry transaction created:', transactionResult.data.transactionId);
-
-        // Send confirmation email to student (non-blocking)
-        if (studentEmail) {
-            setTimeout(async () => {
-                try {
-                    const EmailNotificationService = require('../../services/emailNotificationService');
-                    await EmailNotificationService.sendPaymentConfirmation({
-                        studentEmail,
-                        studentName,
-                        amount: totalAmount,
-                        paymentId,
-                        method,
-                        date: paymentData.date
+        // Handle student data - support both object and ID formats
+        const { student, studentData } = req.body;
+        if (student) {
+            const User = require('../../models/User');
+            const Application = require('../../models/Application');
+            
+            let studentId = student;
+            let studentInfo = studentData;
+            
+            // If student is an object, extract ID and use object as studentInfo
+            if (typeof student === 'object' && student._id) {
+                studentId = student._id;
+                studentInfo = student;
+            }
+            
+            // Check if student exists in User collection with role 'student'
+            let studentExists = await User.findOne({ _id: studentId, role: 'student' });
+            
+            if (!studentExists) {
+                console.log('🔍 Student not found in User collection, creating/updating User record...');
+                
+                // If we have student info from frontend, use it
+                if (studentInfo) {
+                    console.log('✅ Using student data from frontend request...');
+                    
+                    const newUser = new User({
+                        _id: studentId,
+                        firstName: studentInfo.firstName,
+                        lastName: studentInfo.lastName,
+                        email: studentInfo.email,
+                        phone: studentInfo.phone,
+                        role: 'student',
+                        isActive: true,
+                        createdAt: new Date(),
+                        updatedAt: new Date()
                     });
-                    console.log(`✅ Payment confirmation email sent to ${studentEmail}`);
-                } catch (emailError) {
-                    console.error('❌ Failed to send payment confirmation email:', emailError.message);
+                    
+                    try {
+                        await newUser.save();
+                        console.log('✅ Created User record from frontend data');
+                        studentExists = newUser;
+                    } catch (userError) {
+                        console.log('⚠️ Could not create User record, trying Application collection...');
+                    }
                 }
-            }, 100);
+                
+                // If still not found and no frontend data, try Application collection
+                if (!studentExists) {
+                    console.log('🔍 Checking Application collection...');
+                    const application = await Application.findById(studentId);
+                    if (application) {
+                        console.log('✅ Found student in Application collection, creating User record...');
+                        
+                        const newUser = new User({
+                            _id: application._id,
+                            firstName: application.firstName,
+                            lastName: application.lastName,
+                            email: application.email,
+                            phone: application.phone,
+                            role: 'student',
+                            isActive: true,
+                            createdAt: new Date(),
+                            updatedAt: new Date()
+                        });
+                        
+                        try {
+                            await newUser.save();
+                            console.log('✅ Created User record from Application');
+                            studentExists = newUser;
+                        } catch (userError) {
+                            console.log('⚠️ Could not create User record, but continuing with payment...');
+                        }
+                    } else {
+                        console.log('⚠️ Student not found in Application collection either');
+                    }
+                }
+            }
+            
+            // Update req.body to ensure student is just the ID for admin payment system
+            req.body.student = studentId;
         }
 
+        // Ensure student has proper debtor setup before delegating to admin system
+        const { student: studentIdForDebtor, residence, room, date, totalAmount } = req.body;
+        if (studentIdForDebtor) {
+            const Debtor = require('../../models/Debtor');
+            const User = require('../../models/User');
+            
+            // Check if student has a debtor record
+            let debtor = await Debtor.findOne({ user: studentIdForDebtor });
+            
+            if (!debtor) {
+                console.log('🏗️ No debtor record found - creating one like admin system does...');
+                
+                try {
+                    // Get student info (could be from User or Application)
+                    let studentInfo = await User.findById(studentIdForDebtor);
+                    if (!studentInfo) {
+                        const Application = require('../../models/Application');
+                        studentInfo = await Application.findById(studentIdForDebtor);
+                    }
+                    
+                    if (studentInfo) {
+                        // Create debtor using the same service as admin system
+                        const { createDebtorForStudent } = require('../../services/debtorService');
+                        
+                        // Ensure we have the right user object format
+                        const userForDebtor = {
+                            _id: studentInfo._id,
+                            firstName: studentInfo.firstName,
+                            lastName: studentInfo.lastName,
+                            email: studentInfo.email,
+                            phone: studentInfo.phone || '',
+                            role: 'student'
+                        };
+                        
+                        console.log('📝 Creating debtor with user object:', userForDebtor);
+                        
+                        debtor = await createDebtorForStudent(userForDebtor, {
+                            residenceId: residence,
+                            roomNumber: room,
+                            createdBy: req.user._id,
+                            startDate: date || new Date(),
+                            roomPrice: totalAmount, // Use payment amount as room price reference
+                            application: studentInfo._id // Pass application ID if it's an Application object
+                        });
+                        
+                        console.log('✅ Created debtor account for student');
+                        console.log(`   Debtor ID: ${debtor._id}`);
+                        console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                        console.log(`   Account Code: ${debtor.accountCode}`);
+                    } else {
+                        console.log('⚠️ Could not find student info for debtor creation');
+                    }
+                } catch (debtorError) {
+                    console.log('⚠️ Could not create debtor record, but continuing with payment...');
+                    console.log('   Error:', debtorError.message);
+                }
+            } else {
+                console.log('✅ Found existing debtor record');
+                console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                console.log(`   Account Code: ${debtor.accountCode}`);
+            }
+        }
+
+        // Create payment directly in finance endpoint to ensure proper allocation
+        console.log('🏗️ Creating payment directly in finance endpoint...');
+        
+        const Payment = require('../../models/Payment');
+        const { paymentId, student: studentIdForPayment, residence: residenceForPayment, room: roomForPayment, roomType, payments, totalAmount: totalAmountForPayment, paymentMonth, date: dateForPayment, method, status, description, rentAmount, adminFee, deposit } = req.body;
+        
+        // Create payment record
+        const payment = new Payment({
+            paymentId,
+            user: studentIdForPayment,
+            student: studentIdForPayment,
+            residence: residenceForPayment,
+            room: roomForPayment,
+            roomType,
+            payments: payments || [],
+            totalAmount: totalAmountForPayment,
+            paymentMonth,
+            date: dateForPayment,
+            method,
+            status: status || 'Confirmed',
+            description,
+            rentAmount: rentAmount || 0,
+            adminFee: adminFee || 0,
+            deposit: deposit || 0,
+            createdBy: req.user._id
+        });
+        
+        await payment.save();
+        console.log(`✅ Payment created: ${payment.paymentId}`);
+        
+        // Always trigger Smart FIFO allocation
+        try {
+            console.log('🎯 Starting Smart FIFO allocation...');
+            
+            const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
+            
+            const allocationData = {
+                paymentId: payment._id.toString(),
+                studentId: payment.student,
+                totalAmount: payment.totalAmount,
+                payments: payment.payments || [],
+                residence: payment.residence,
+                paymentMonth: payment.paymentMonth,
+                rentAmount: payment.rentAmount || 0,
+                adminFee: payment.adminFee || 0,
+                deposit: payment.deposit || 0,
+                method: payment.method,
+                date: payment.date
+            };
+            
+            console.log('📝 Allocation data:', allocationData);
+            
+            const allocationResult = await EnhancedPaymentAllocationService.smartFIFOAllocation(allocationData);
+            
+                        if (allocationResult.success) {
+                            console.log('✅ Smart FIFO allocation completed successfully');
+                            console.log('📊 Allocation summary:', allocationResult.allocation.summary);
+                            
+                            // Update payment with allocation results
+                            payment.allocation = allocationResult.allocation;
+                            await payment.save();
+                            
+                            console.log('✅ Payment updated with allocation breakdown');
+                            
+                            // Update the response with the new allocation data
+                            if (res.locals && res.locals.payment) {
+                                res.locals.payment.allocation = allocationResult.allocation;
+                            }
+                        } else {
+                            console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
+                        }
+        } catch (allocationError) {
+            console.error('❌ Error in Smart FIFO allocation:', allocationError.message);
+            console.error('   Stack:', allocationError.stack);
+        }
+        
+        // Refresh payment from database to get latest allocation data
+        const updatedPayment = await Payment.findById(payment._id);
+        
+        // Send payment confirmation email (non-blocking)
+        setTimeout(async () => {
+            try {
+                console.log('📧 Sending payment confirmation email...');
+                
+                const EmailNotificationService = require('../../services/emailNotificationService');
+                
+                // Get student details for email
+                const User = require('../../models/User');
+                const student = await User.findById(updatedPayment.student);
+                
+                if (student && student.email) {
+                    // Send payment confirmation email to student
+                    await EmailNotificationService.sendPaymentConfirmation({
+                        studentEmail: student.email,
+                        studentName: `${student.firstName} ${student.lastName}`,
+                        amount: updatedPayment.totalAmount,
+                        paymentId: updatedPayment.paymentId,
+                        method: updatedPayment.method,
+                        date: updatedPayment.date,
+                        allocation: updatedPayment.allocation
+                    });
+                } else {
+                    console.log('⚠️ Student email not found, skipping payment confirmation email');
+                }
+                
+                // Send notification to finance team
+                try {
+                    console.log('📧 Sending payment notification to finance team...');
+                    
+                    const User = require('../../models/User');
+                    const financeUsers = await User.find({ role: 'finance' });
+                    
+                    if (financeUsers && financeUsers.length > 0) {
+                        const sendEmail = require('../../utils/email');
+                        
+                        for (const financeUser of financeUsers) {
+                            if (financeUser.email && financeUser.email.includes('@')) {
+                                try {
+                                    const emailContent = `
+                                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                                            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+                                                <h2 style="color: #007bff;">New Payment Processed</h2>
+                                                <p>Dear Finance Team,</p>
+                                                <p>A new payment has been processed through the finance endpoint:</p>
+                                                <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                                                    <ul style="list-style: none; padding: 0;">
+                                                        <li><strong>Payment ID:</strong> ${updatedPayment.paymentId}</li>
+                                                        <li><strong>Student:</strong> ${student ? `${student.firstName} ${student.lastName}` : 'Unknown'}</li>
+                                                        <li><strong>Amount:</strong> $${updatedPayment.totalAmount.toFixed(2)}</li>
+                                                        <li><strong>Payment Method:</strong> ${updatedPayment.method}</li>
+                                                        <li><strong>Date:</strong> ${new Date(updatedPayment.date).toLocaleDateString()}</li>
+                                                        <li><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Confirmed</span></li>
+                                                        <li><strong>Allocation:</strong> $${updatedPayment.allocation?.summary?.totalAllocated || 0} allocated</li>
+                                                    </ul>
+                                                </div>
+                                                <p>Please review the payment details in the finance dashboard.</p>
+                                                <hr style="margin: 20px 0;">
+                                                <p style="font-size: 12px; color: #666;">
+                                                    This is an automated message from Alamait Student Accommodation Finance System.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    `;
+                                    
+                                    await sendEmail({
+                                        to: financeUser.email,
+                                        subject: `New Payment Processed - ${updatedPayment.paymentId}`,
+                                        html: emailContent
+                                    });
+                                    
+                                    console.log(`✅ Finance notification sent to: ${financeUser.email}`);
+                                } catch (emailError) {
+                                    console.error(`❌ Failed to send finance notification to ${financeUser.email}:`, emailError.message);
+                                }
+                            }
+                        }
+                    }
+                } catch (financeEmailError) {
+                    console.error('❌ Error sending finance team notification:', financeEmailError.message);
+                }
+                
+                console.log('✅ Payment confirmation email sent successfully');
+            } catch (emailError) {
+                console.error('❌ Error sending payment confirmation email:', emailError.message);
+                // Don't fail the payment if email fails
+            }
+        }, 1000); // Send email 1 second after response
+        
+        // Return success response
         return res.status(201).json({
             success: true,
-            message: 'Payment processed successfully with double-entry accounting',
-            data: {
-                payment: {
-                    id: payment._id,
-                    paymentId: payment.paymentId,
-                    studentName: payment.studentName,
-                    totalAmount: payment.totalAmount,
-                    status: payment.status,
-                    date: payment.date,
-                    method: payment.method
-                },
-                transaction: {
-                    transactionId: transactionResult.data.transactionId,
-                    description: transactionResult.data.description,
-                    totalDebit: transactionResult.data.totalDebit,
-                    totalCredit: transactionResult.data.totalCredit
-                }
+            message: "Payment created successfully with double-entry accounting",
+            payment: updatedPayment,
+            accounting: {
+                transactionCreated: true,
+                message: "Double-entry accounting transaction created"
             }
         });
 
