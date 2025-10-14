@@ -28,8 +28,12 @@ class SendGridService {
         const msg = {
             to: to,
             from: {
-                email: process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER,
+                email: process.env.SENDGRID_FROM_EMAIL || 'noreply@alamait.com',
                 name: 'Alamait Student Accommodation'
+            },
+            replyTo: {
+                email: process.env.SENDGRID_REPLY_TO || 'support@alamait.com',
+                name: 'Alamait Support Team'
             },
             subject: subject,
             text: text,
@@ -62,7 +66,7 @@ class SendGridService {
 
     // Send verification email for user registration
     async sendVerificationEmail(email, token) {
-        const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${token}`;
+        const verificationUrl = `${process.env.FRONTEND_URL || 'https://alamait.vercel.app'}/verify-email?token=${token}`;
         
         const emailContent = `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -98,7 +102,7 @@ class SendGridService {
 
     // Send password reset email
     async sendPasswordResetEmail(email, token) {
-        const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${token}`;
+        const resetUrl = `${process.env.FRONTEND_URL || 'https://alamait.vercel.app'}/reset-password?token=${token}`;
         
         const emailContent = `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">

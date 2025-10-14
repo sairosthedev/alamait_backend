@@ -244,22 +244,93 @@ class EmailNotificationService {
 				role: { $in: ['admin', 'property_manager'] }
 			});
 
-			const emailContent = `
+			// Helper function to format values with better fallbacks
+		const formatValue = (value, fallback = 'Not specified') => {
+			if (value === null || value === undefined || value === '') {
+				return fallback;
+			}
+			return value;
+		};
+		
+		// Format category with proper capitalization
+		const formatCategory = (category) => {
+			if (!category) return 'Not specified';
+			return category.split('_').map(word => 
+				word.charAt(0).toUpperCase() + word.slice(1)
+			).join(' ');
+		};
+		
+		// Format residence name
+		const residenceName = maintenance.residence?.name || 
+			(maintenance.residence && typeof maintenance.residence === 'string' ? maintenance.residence : 'Not specified');
+		
+		// Format room information
+		const roomInfo = formatValue(maintenance.room, 'Not specified');
+
+		const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
 						<h2 style="color: #333;">New Maintenance Request</h2>
 						<p>Dear Admin Team,</p>
-						<p>A new maintenance request has been submitted:</p>
-						<ul>
-							<li><strong>Issue:</strong> ${maintenance.issue}</li>
-							<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
-							<li><strong>Category:</strong> ${maintenance.category}</li>
-							<li><strong>Priority:</strong> ${maintenance.priority}</li>
-							<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
-							<li><strong>Submitted By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
-							<li><strong>Submitted Date:</strong> ${new Date().toLocaleDateString()}</li>
-						</ul>
-						<p>Please review and process this request.</p>
+						<p>A new maintenance request has been submitted by a student:</p>
+						
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #333; margin-top: 0;">Request Details</h3>
+							<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+								<tbody>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold; width: 30%;">Issue</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatValue(maintenance.issue, 'No issue specified')}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Description</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatValue(maintenance.description, 'No description provided')}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Category</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatCategory(maintenance.category)}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Priority</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">
+											<span style="color: ${maintenance.priority === 'urgent' ? '#dc3545' : maintenance.priority === 'high' ? '#fd7e14' : maintenance.priority === 'medium' ? '#ffc107' : '#28a745'}; font-weight: bold;">
+												${formatValue(maintenance.priority, 'Medium').charAt(0).toUpperCase() + formatValue(maintenance.priority, 'Medium').slice(1)}
+											</span>
+										</td>
+									</tr>
+									${roomInfo !== 'Not specified' ? `
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Room</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${roomInfo}</td>
+									</tr>
+									` : ''}
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Residence</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${residenceName}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Estimated Amount</td>
+										<td style="border: 1px solid #ddd; padding: 8px; text-align: right; font-weight: bold; color: #007bff; font-size: 16px;">
+											$${(maintenance.amount || 0).toFixed(2)}
+										</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Submitted By</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Submitted Date</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${new Date(maintenance.createdAt || Date.now()).toLocaleDateString()}</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+						
+						<div style="background-color: #fff3cd; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #856404; margin-top: 0;">Action Required</h3>
+							<p>Please review this student maintenance request and take appropriate action. Consider the priority level and estimated cost when scheduling the work.</p>
+						</div>
+						
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">
 							This is an automated message from Alamait Student Accommodation.<br>
@@ -654,18 +725,64 @@ class EmailNotificationService {
 						<h2 style="color: #333;">New Maintenance Request - Admin Created</h2>
 						<p>Dear Management Team,</p>
 						<p>An admin has created a new maintenance request that requires your attention:</p>
-						<ul>
-							<li><strong>Issue:</strong> ${formatValue(maintenance.issue, 'No issue specified')}</li>
-							<li><strong>Description:</strong> ${formatValue(maintenance.description, 'No description provided')}</li>
-							<li><strong>Category:</strong> ${formatCategory(maintenance.category)}</li>
-							<li><strong>Priority:</strong> ${formatValue(maintenance.priority, 'Medium').charAt(0).toUpperCase() + formatValue(maintenance.priority, 'Medium').slice(1)}</li>
-							${roomInfo !== 'Not specified' ? `<li><strong>Room:</strong> ${roomInfo}</li>` : ''}
-							<li><strong>Residence:</strong> ${residenceName}</li>
-							<li><strong>Amount:</strong> $${(maintenance.amount || 0).toFixed(2)}</li>
-							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
-							<li><strong>Created Date:</strong> ${new Date(maintenance.createdAt || Date.now()).toLocaleDateString()}</li>
-						</ul>
-						<p><strong>Action Required:</strong> Please review and process this maintenance request for approval.</p>
+						
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #333; margin-top: 0;">Request Details</h3>
+							<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+								<tbody>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold; width: 30%;">Issue</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatValue(maintenance.issue, 'No issue specified')}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Description</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatValue(maintenance.description, 'No description provided')}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Category</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatCategory(maintenance.category)}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Priority</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">
+											<span style="color: ${maintenance.priority === 'urgent' ? '#dc3545' : maintenance.priority === 'high' ? '#fd7e14' : maintenance.priority === 'medium' ? '#ffc107' : '#28a745'}; font-weight: bold;">
+												${formatValue(maintenance.priority, 'Medium').charAt(0).toUpperCase() + formatValue(maintenance.priority, 'Medium').slice(1)}
+											</span>
+										</td>
+									</tr>
+									${roomInfo !== 'Not specified' ? `
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Room</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${roomInfo}</td>
+									</tr>
+									` : ''}
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Residence</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${residenceName}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Amount</td>
+										<td style="border: 1px solid #ddd; padding: 8px; text-align: right; font-weight: bold; color: #007bff; font-size: 16px;">
+											$${(maintenance.amount || 0).toFixed(2)}
+										</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Created By</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Created Date</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${new Date(maintenance.createdAt || Date.now()).toLocaleDateString()}</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+						
+						<div style="background-color: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0;">
+							<h3 style="color: #1976d2; margin-top: 0;">Action Required</h3>
+							<p>Please review and process this maintenance request for approval. The request requires your attention due to its priority level and estimated cost.</p>
+						</div>
+						
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">
 							This is an automated message from Alamait Student Accommodation.<br>

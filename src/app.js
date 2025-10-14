@@ -423,58 +423,6 @@ app.use('/api/invoices', invoiceRoutes);
 
 // Request routes
 app.use('/api/requests', requestRoutes);
-
-// Test route for SendGrid configuration
-app.get('/test-sendgrid', async (req, res) => {
-    try {
-        const nodemailer = require('nodemailer');
-        
-        if (!process.env.SENDGRID_API_KEY) {
-            return res.json({ 
-                success: false, 
-                error: 'SENDGRID_API_KEY not configured',
-                message: 'Please set SENDGRID_API_KEY environment variable'
-            });
-        }
-        
-        const transporter = nodemailer.createTransport({
-            host: 'smtp.sendgrid.net',
-            port: 587,
-            auth: {
-                user: 'apikey',
-                pass: process.env.SENDGRID_API_KEY
-            }
-        });
-
-        const testEmail = {
-            from: `Alamait Test <${process.env.SENDGRID_FROM_EMAIL || process.env.FROM_EMAIL || 'notifications@alamait.com'}>`,
-            to: 'test@example.com', // This won't actually send
-            subject: 'SendGrid Test from Alamait Backend',
-            text: 'If you get this, SendGrid is working!',
-            html: '<p>If you get this, SendGrid is working!</p>'
-        };
-
-        // Test the connection without actually sending
-        await transporter.verify();
-        
-        res.json({ 
-            success: true, 
-            message: 'SendGrid configuration is valid!',
-            config: {
-                apiKey: process.env.SENDGRID_API_KEY ? 'Set (' + process.env.SENDGRID_API_KEY.substring(0, 15) + '...)' : 'Not set',
-                fromEmail: process.env.SENDGRID_FROM_EMAIL || process.env.FROM_EMAIL || 'notifications@alamait.com',
-                replyTo: process.env.SENDGRID_REPLY_TO || 'support@alamait.com'
-            }
-        });
-    } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.message,
-            message: 'SendGrid configuration test failed'
-        });
-    }
-});
-
 app.use('/api/maintenance-requests', requestRoutes); // Alias for frontend compatibility
 app.use('/api/monthly-requests', monthlyRequestRoutes);
 
