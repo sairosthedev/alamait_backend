@@ -1,23 +1,5 @@
-const nodemailer = require('nodemailer');
 const EmailOutbox = require('../models/EmailOutbox');
-
-// Create transporter with optimized Gmail configuration
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    pool: false, // Disable pooling to avoid connection issues
-    connectionTimeout: 60000, // 60 seconds
-    greetingTimeout: 30000,   // 30 seconds
-    socketTimeout: 90000,     // 90 seconds
-    secure: true,
-    tls: {
-        rejectUnauthorized: false,
-        ciphers: 'SSLv3'
-    },
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_APP_PASSWORD
-    }
-});
+const emailService = require('../services/emailService');
 
 /**
  * Send email using nodemailer
@@ -29,9 +11,9 @@ const transporter = nodemailer.createTransport({
  */
 exports.sendEmail = async (options) => {
     try {
-        // Check if email configuration is available
-        if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
-            console.warn('⚠️ Email configuration missing - EMAIL_USER or EMAIL_APP_PASSWORD not set');
+        // Check if any email service is available
+        if (!emailService.isAnyServiceReady()) {
+            console.warn('⚠️ No email services configured - Gmail and SendGrid both unavailable');
             console.warn('📧 Email will be queued but not sent until configuration is complete');
             
             // Try to create outbox entry, but don't fail if MongoDB is not connected
@@ -64,33 +46,12 @@ exports.sendEmail = async (options) => {
             scheduledAt: new Date()
         });
 
-        // 🚀 IMMEDIATE SEND MODE: Always try to send immediately, queue as fallback
-        const sendMode = (process.env.EMAIL_SEND_MODE || '').toLowerCase();
-        console.log(`📧 Email send mode: ${sendMode || 'immediate'} (NODE_ENV: ${process.env.NODE_ENV})`);
+        // 🚀 IMMEDIATE SEND: Try Gmail first, then SendGrid fallback
+        console.log(`📧 Attempting to send email to ${options.to}`);
         
-        // Skip queue-only mode - always attempt immediate send first
-        // if (process.env.NODE_ENV === 'production' && sendMode === 'queue') {
-        //     try {
-        //         console.log(`📬 Queued email (queue-first mode): ${options.to} → ${options.subject}`);
-        //     } catch (_) {}
-        //     return; // do not attempt immediate send; outbox service will deliver
-        // }
-
-        // 🚀 SEND EMAIL: Use the same method as invoice emails (simple and reliable)
-        console.log(`📧 Sending email to ${options.to} (same method as invoice emails)`);
-        
-        const mailOptions = {
-            from: `Alamait Student Accommodation <${process.env.EMAIL_USER}>`,
-            to: options.to,
-            subject: options.subject,
-            text: options.text,
-            html: options.html,
-            attachments: options.attachments
-        };
-
         try {
-            // Use the same transporter as invoice emails
-            await transporter.sendMail(mailOptions);
+            // Use the robust email service (Gmail → SendGrid fallback)
+            await emailService.sendEmail(options);
             console.log(`✅ Email sent successfully to ${options.to}`);
             
             // Mark outbox as sent
@@ -101,7 +62,7 @@ exports.sendEmail = async (options) => {
             return;
             
         } catch (error) {
-            console.error(`❌ Email send failed for ${options.to}:`, error.message);
+            console.error(`❌ All email services failed for ${options.to}:`, error.message);
             console.log(`📬 Email will be retried by EmailOutboxService`);
             
             // Mark outbox as failed for retry
