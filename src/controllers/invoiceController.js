@@ -535,6 +535,27 @@ exports.recordPayment = async (req, res) => {
 
         await invoice.save();
 
+        // Log invoice payment in audit logs
+        try {
+            const { logPaymentOperation } = require('../utils/auditLogger');
+            await logPaymentOperation('invoice_payment', invoice, req.user._id, {
+                invoiceId: invoice._id,
+                invoiceNumber: invoice.invoiceNumber,
+                paymentId: paymentId,
+                amount: amount,
+                paymentMethod: paymentMethod,
+                reference: reference,
+                notes: notes,
+                student: invoice.student?.firstName + ' ' + invoice.student?.lastName,
+                balanceBefore: invoice.balanceDue + amount,
+                balanceAfter: invoice.balanceDue,
+                status: invoice.status
+            });
+            console.log(`📝 Invoice payment audit logged: ${invoice.invoiceNumber} - $${amount} by ${req.user.email}`);
+        } catch (auditError) {
+            console.error('❌ Failed to log invoice payment audit:', auditError.message);
+        }
+
         // Send payment confirmation
         await invoice.populate('student', 'firstName lastName email phone');
         if (invoice.student.email) {

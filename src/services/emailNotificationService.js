@@ -67,14 +67,43 @@ class EmailNotificationService {
                         <h2 style="color: #333;">Financial Request: Salaries</h2>
                         <p>Dear CEO,</p>
                         <p>A financial request categorized as <strong>Salaries</strong> has been submitted:</p>
-                        <ul>
-                            <li><strong>Title:</strong> ${request.title || 'N/A'}</li>
-                            <li><strong>Description:</strong> ${request.description || 'N/A'}</li>
-                            <li><strong>Residence:</strong> ${residenceName}</li>
-                            <li><strong>Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</li>
-                            <li><strong>Submitted By:</strong> ${submittedBy?.firstName || ''} ${submittedBy?.lastName || ''}</li>
-                            <li><strong>Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
-                        </ul>
+                        
+                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #dc3545;">
+                            <h3 style="color: #333; margin-top: 0;">Request Details</h3>
+                            <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                                <tbody>
+                                    <tr>
+                                        <td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold; width: 30%;">Request Type</td>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">Financial Request - Salaries</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Title</td>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">${request.title || 'N/A'}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Description</td>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">${request.description || 'N/A'}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Residence</td>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">${residenceName}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Amount</td>
+                                        <td style="border: 1px solid #ddd; padding: 8px; font-weight: bold; color: #dc3545; font-size: 16px;">$${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Submitted By</td>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">${submittedBy?.firstName || ''} ${submittedBy?.lastName || ''}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Date</td>
+                                        <td style="border: 1px solid #ddd; padding: 8px;">${new Date(request.createdAt || Date.now()).toLocaleDateString()}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        
                         <p>Please review and take the necessary action.</p>
                         <hr style="margin: 20px 0;">
                         <p style="font-size: 12px; color: #666;">
@@ -139,13 +168,43 @@ class EmailNotificationService {
 						<h2 style="color: #333;">Monthly Request Pending Approval</h2>
 						<p>Dear Finance Team,</p>
 						<p>A new monthly request has been submitted for your approval:</p>
-						<ul>
-							<li><strong>Residence:</strong> ${monthlyRequest.residence?.name || 'N/A'}</li>
-							<li><strong>Month/Year:</strong> ${month}/${year}</li>
-							<li><strong>Total Amount:</strong> $${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</li>
-							<li><strong>Submitted By:</strong> ${user.firstName} ${user.lastName}</li>
-							<li><strong>Items Count:</strong> ${monthlyRequest.items?.length || 0}</li>
-						</ul>
+						
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #ffc107;">
+							<h3 style="color: #333; margin-top: 0;">Request Details</h3>
+							<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+								<tbody>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold; width: 30%;">Request Type</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">Monthly Request</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Residence</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${monthlyRequest.residence?.name || 'N/A'}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Month/Year</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${month}/${year}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Total Amount</td>
+										<td style="border: 1px solid #ddd; padding: 8px; font-weight: bold; color: #ffc107; font-size: 16px;">$${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Items Count</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${monthlyRequest.items?.length || 0}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Submitted By</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${user.firstName} ${user.lastName}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Submitted Date</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${new Date().toLocaleDateString()}</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+						
 						<p>Please review and approve/reject this request.</p>
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">
@@ -250,15 +309,51 @@ class EmailNotificationService {
 						<h2 style="color: #333;">New Maintenance Request</h2>
 						<p>Dear Admin Team,</p>
 						<p>A new maintenance request has been submitted:</p>
-						<ul>
-							<li><strong>Issue:</strong> ${maintenance.issue}</li>
-							<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
-							<li><strong>Category:</strong> ${maintenance.category}</li>
-							<li><strong>Priority:</strong> ${maintenance.priority}</li>
-							<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
-							<li><strong>Submitted By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
-							<li><strong>Submitted Date:</strong> ${new Date().toLocaleDateString()}</li>
-						</ul>
+						
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #28a745;">
+							<h3 style="color: #333; margin-top: 0;">Request Details</h3>
+							<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+								<tbody>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold; width: 30%;">Issue</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${maintenance.issue}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Description</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${maintenance.description || 'No description provided'}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Category</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${maintenance.category}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Priority</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">
+											<span style="color: ${maintenance.priority === 'urgent' ? '#dc3545' : maintenance.priority === 'high' ? '#fd7e14' : maintenance.priority === 'medium' ? '#ffc107' : '#28a745'}; font-weight: bold;">
+												${maintenance.priority}
+											</span>
+										</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Residence</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${maintenance.residence?.name || 'N/A'}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Amount</td>
+										<td style="border: 1px solid #ddd; padding: 8px; font-weight: bold; color: #28a745; font-size: 16px;">$${(maintenance.amount || 0).toFixed(2)}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Submitted By</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Submitted Date</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${new Date().toLocaleDateString()}</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+						
 						<p>Please review and process this request.</p>
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">
@@ -313,17 +408,48 @@ class EmailNotificationService {
 						<h2 style="color: #2d5a2d;">Maintenance Request Confirmation</h2>
 						<p>Dear ${submittedBy?.firstName || 'Student'},</p>
 						<p>Your maintenance request has been successfully submitted and is now under review.</p>
-						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
-							<h3 style="color: #333; margin-top: 0;">Request Details:</h3>
-							<ul>
-								<li><strong>Issue:</strong> ${maintenance.issue}</li>
-								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
-								<li><strong>Category:</strong> ${maintenance.category}</li>
-								<li><strong>Priority:</strong> ${maintenance.priority}</li>
-								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
-								<li><strong>Request ID:</strong> ${maintenance._id}</li>
-								<li><strong>Submitted Date:</strong> ${new Date().toLocaleDateString()}</li>
-							</ul>
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #28a745;">
+							<h3 style="color: #333; margin-top: 0;">Request Details</h3>
+							<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+								<tbody>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold; width: 30%;">Issue</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${maintenance.issue}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Description</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${maintenance.description || 'No description provided'}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Category</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${maintenance.category}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Priority</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">
+											<span style="color: ${maintenance.priority === 'urgent' ? '#dc3545' : maintenance.priority === 'high' ? '#fd7e14' : maintenance.priority === 'medium' ? '#ffc107' : '#28a745'}; font-weight: bold;">
+												${maintenance.priority}
+											</span>
+										</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Residence</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${maintenance.residence?.name || 'N/A'}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Amount</td>
+										<td style="border: 1px solid #ddd; padding: 8px; font-weight: bold; color: #28a745; font-size: 16px;">$${(maintenance.amount || 0).toFixed(2)}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Request ID</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${maintenance._id}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Submitted Date</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${new Date().toLocaleDateString()}</td>
+									</tr>
+								</tbody>
+							</table>
 						</div>
 						<p><strong>What happens next?</strong></p>
 						<ol>
@@ -654,18 +780,63 @@ class EmailNotificationService {
 						<h2 style="color: #333;">New Maintenance Request - Admin Created</h2>
 						<p>Dear Management Team,</p>
 						<p>An admin has created a new maintenance request that requires your attention:</p>
-						<ul>
-							<li><strong>Issue:</strong> ${formatValue(maintenance.issue, 'No issue specified')}</li>
-							<li><strong>Description:</strong> ${formatValue(maintenance.description, 'No description provided')}</li>
-							<li><strong>Category:</strong> ${formatCategory(maintenance.category)}</li>
-							<li><strong>Priority:</strong> ${formatValue(maintenance.priority, 'Medium').charAt(0).toUpperCase() + formatValue(maintenance.priority, 'Medium').slice(1)}</li>
-							${roomInfo !== 'Not specified' ? `<li><strong>Room:</strong> ${roomInfo}</li>` : ''}
-							<li><strong>Residence:</strong> ${residenceName}</li>
-							<li><strong>Amount:</strong> $${(maintenance.amount || 0).toFixed(2)}</li>
-							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
-							<li><strong>Created Date:</strong> ${new Date(maintenance.createdAt || Date.now()).toLocaleDateString()}</li>
-						</ul>
-						<p><strong>Action Required:</strong> Please review and process this maintenance request for approval.</p>
+						
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #007bff;">
+							<h3 style="color: #333; margin-top: 0;">Request Details</h3>
+							<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+								<tbody>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold; width: 30%;">Issue</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatValue(maintenance.issue, 'No issue specified')}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Description</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatValue(maintenance.description, 'No description provided')}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Category</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatCategory(maintenance.category)}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Priority</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">
+											<span style="color: ${maintenance.priority === 'urgent' ? '#dc3545' : maintenance.priority === 'high' ? '#fd7e14' : maintenance.priority === 'medium' ? '#ffc107' : '#28a745'}; font-weight: bold;">
+												${formatValue(maintenance.priority, 'Medium').charAt(0).toUpperCase() + formatValue(maintenance.priority, 'Medium').slice(1)}
+											</span>
+										</td>
+									</tr>
+									${roomInfo !== 'Not specified' ? `
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Room</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${roomInfo}</td>
+									</tr>
+									` : ''}
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Residence</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${residenceName}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Estimated Amount</td>
+										<td style="border: 1px solid #ddd; padding: 8px; font-weight: bold; color: #28a745; font-size: 16px;">$${(maintenance.amount || 0).toFixed(2)}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Created By</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Created Date</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${new Date(maintenance.createdAt || Date.now()).toLocaleDateString()}</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+						
+						<div style="background-color: #fff3cd; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #ffc107;">
+							<p style="margin: 0; font-weight: bold; color: #856404;">
+								⚠️ Action Required: Please review and process this maintenance request for approval.
+							</p>
+						</div>
+						
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">
 							This is an automated message from Alamait Student Accommodation.<br>
@@ -760,20 +931,73 @@ class EmailNotificationService {
 						<h2 style="color: #333;">New ${requestTypeDisplay} - Admin Created</h2>
 						<p>Dear Management Team,</p>
 						<p>An admin has created a new ${requestTypeDisplay.toLowerCase()} that requires your attention:</p>
-						<ul>
-							<li><strong>Request Type:</strong> ${requestTypeDisplay}</li>
-							<li><strong>Title:</strong> ${formatValue(request.title, 'No title provided')}</li>
-							<li><strong>Description:</strong> ${formatValue(request.description, 'No description provided')}</li>
-							${request.issue ? `<li><strong>Issue:</strong> ${request.issue}</li>` : ''}
-							<li><strong>Category:</strong> ${formatCategory(request.category)}</li>
-							<li><strong>Priority:</strong> ${formatValue(request.priority, 'Medium').charAt(0).toUpperCase() + formatValue(request.priority, 'Medium').slice(1)}</li>
-							${roomInfo !== 'Not specified' ? `<li><strong>Room:</strong> ${roomInfo}</li>` : ''}
-							<li><strong>Residence:</strong> ${residenceName}</li>
-							${departmentInfo !== 'Not specified' ? `<li><strong>Department:</strong> ${departmentInfo}</li>` : ''}
-							<li><strong>Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</li>
-							<li><strong>Created By:</strong> ${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</li>
-							<li><strong>Created Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
-						</ul>
+						
+						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #007bff;">
+							<h3 style="color: #333; margin-top: 0;">Request Details</h3>
+							<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+								<tbody>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold; width: 30%;">Request Type</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${requestTypeDisplay}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Title</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatValue(request.title, 'No title provided')}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Description</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatValue(request.description, 'No description provided')}</td>
+									</tr>
+									${request.issue ? `
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Issue</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${request.issue}</td>
+									</tr>
+									` : ''}
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Category</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${formatCategory(request.category)}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Priority</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">
+											<span style="color: ${request.priority === 'urgent' ? '#dc3545' : request.priority === 'high' ? '#fd7e14' : request.priority === 'medium' ? '#ffc107' : '#28a745'}; font-weight: bold;">
+												${formatValue(request.priority, 'Medium').charAt(0).toUpperCase() + formatValue(request.priority, 'Medium').slice(1)}
+											</span>
+										</td>
+									</tr>
+									${roomInfo !== 'Not specified' ? `
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Room</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${roomInfo}</td>
+									</tr>
+									` : ''}
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Residence</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${residenceName}</td>
+									</tr>
+									${departmentInfo !== 'Not specified' ? `
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Department</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${departmentInfo}</td>
+									</tr>
+									` : ''}
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Amount</td>
+										<td style="border: 1px solid #ddd; padding: 8px; font-weight: bold; color: #28a745; font-size: 16px;">$${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Created By</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${submittedBy?.firstName} ${submittedBy?.lastName} (${submittedBy?.email})</td>
+									</tr>
+									<tr>
+										<td style="border: 1px solid #ddd; padding: 8px; background-color: #f8f9fa; font-weight: bold;">Created Date</td>
+										<td style="border: 1px solid #ddd; padding: 8px;">${new Date(request.createdAt || Date.now()).toLocaleDateString()}</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+						
 						<p><strong>Action Required:</strong> Please review and process this ${requestTypeDisplay.toLowerCase()} for approval.</p>
 						<hr style="margin: 20px 0;">
 						<p style="font-size: 12px; color: #666;">

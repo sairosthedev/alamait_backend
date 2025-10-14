@@ -889,6 +889,29 @@ exports.processPayment = async (req, res) => {
         
         await payment.save();
         console.log(`✅ Payment created: ${payment.paymentId}`);
+
+        // Log payment creation in audit logs
+        try {
+            const { logPaymentOperation } = require('../../utils/auditLogger');
+            await logPaymentOperation('payment_create', payment, req.user._id, {
+                paymentId: payment.paymentId,
+                amount: payment.totalAmount,
+                method: payment.method,
+                student: studentIdForPayment,
+                residence: residenceForPayment,
+                room: roomForPayment,
+                paymentMonth: payment.paymentMonth,
+                breakdown: {
+                    rent: payment.rentAmount,
+                    admin: payment.adminFee,
+                    deposit: payment.deposit
+                },
+                source: 'Finance Controller'
+            });
+            console.log(`📝 Payment audit logged: ${payment.paymentId} - $${payment.totalAmount} by ${req.user.email}`);
+        } catch (auditError) {
+            console.error('❌ Failed to log payment audit:', auditError.message);
+        }
         
         // Always trigger Smart FIFO allocation
         try {
