@@ -1610,12 +1610,12 @@ exports.manualAddStudent = async (req, res) => {
                     3. Review and sign your lease agreement (attached)
                     4. Upload your signed lease agreement through your student portal
 
-                    LOGIN URL: https://alamait.vercel.app/login
+                    LOGIN URL: ${process.env.FRONTEND_URL || 'http://localhost:5173' ||'https://alamait.vercel.app' || 'https://alamait.com'}/login
 
-                    For assistance, please contact our support team at support@alamait.com
+                    If you have any questions, please contact our support team.
 
                     Best regards,
-                    The Alamait Team
+                    Alamait Student Accommodation Team
                 `;
                 
                 try {

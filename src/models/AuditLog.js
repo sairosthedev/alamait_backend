@@ -24,10 +24,7 @@ const AuditLogSchema = new mongoose.Schema({
       'admin_expense_paid_ecocash', 'admin_expense_paid_innbucks', 'admin_expense_paid_petty_cash',
       'admin_expense_approved_paid_cash', 'admin_expense_approved_paid_bank_transfer', 'admin_expense_approved_paid_online_payment',
       'admin_expense_approved_paid_ecocash', 'admin_expense_approved_paid_innbucks', 'admin_expense_approved_paid_petty_cash',
-      'admin_expense_created_ap_liability',
-      // Payment actions
-      'payment_create', 'payment_update', 'payment_delete', 'payment_confirm',
-      'invoice_payment', 'creditor_payment', 'debtor_payment'
+      'admin_expense_created_ap_liability'
     ]
   },
   collection: { 

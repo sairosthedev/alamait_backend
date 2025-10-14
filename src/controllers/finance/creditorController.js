@@ -429,24 +429,6 @@ exports.addPayment = async (req, res) => {
 
         await TransactionEntry.insertMany(entries);
 
-        // Log payment addition in audit logs
-        try {
-            const { logPaymentOperation } = require('../../utils/auditLogger');
-            await logPaymentOperation('creditor_payment', creditor, req.user._id, {
-                creditorId: creditor._id,
-                creditorName: creditor.contactInfo.name,
-                amount: amount,
-                paymentMethod: paymentMethod,
-                description: description,
-                paymentId: paymentId,
-                transactionId: transaction._id,
-                accountCode: creditor.accountCode
-            });
-            console.log(`📝 Creditor payment audit logged: ${creditor.contactInfo.name} - $${amount} by ${req.user.email}`);
-        } catch (auditError) {
-            console.error('❌ Failed to log creditor payment audit:', auditError.message);
-        }
-
         await creditor.populate('user', 'firstName lastName email phone');
 
         res.status(200).json({
