@@ -80,21 +80,44 @@ exports.sendEmail = async (options) => {
         // 🚀 IMMEDIATE SEND: Try SendGrid first, then Gmail fallback
         console.log(`📧 Attempting immediate email send to ${options.to}`);
         
-        // Try SendGrid first (most reliable for production)
-        if (sendGridService.isReady()) {
+        // 🚀 PRIORITY 1: Try SendGrid first (using SMTP for better reliability)
+        if (process.env.SENDGRID_API_KEY) {
             try {
-                console.log(`📧 Trying SendGrid first...`);
-                await sendGridService.sendEmail(options);
-                console.log(`✅ Email sent via SendGrid to ${options.to}`);
+                console.log('📧 Using SendGrid as primary service');
+                
+                const sgTransporter = nodemailer.createTransport({
+                    host: 'smtp.sendgrid.net',
+                    port: 587,
+                    auth: {
+                        user: 'apikey', // MUST be exactly 'apikey'
+                        pass: process.env.SENDGRID_API_KEY // Your SG.xxx key
+                    },
+                    connectionTimeout: 15000,
+                    greetingTimeout: 10000,
+                    socketTimeout: 20000
+                });
+
+                const mailOptions = {
+                    from: `Alamait Student Accommodation <${process.env.SENDGRID_FROM_EMAIL || process.env.FROM_EMAIL || 'notifications@alamait.com'}>`,
+                    to: options.to,
+                    subject: options.subject,
+                    text: options.text,
+                    html: options.html,
+                    attachments: options.attachments
+                };
+
+                await sgTransporter.sendMail(mailOptions);
+                console.log(`✅ SendGrid: Email sent successfully to ${options.to}`);
                 
                 // Mark outbox as sent
                 outbox.status = 'sent';
                 outbox.sentAt = new Date();
                 outbox.attempts = (outbox.attempts || 0) + 1;
+                outbox.service = 'sendgrid';
                 await outbox.save();
                 return;
-            } catch (error) {
-                console.error(`❌ SendGrid failed for ${options.to}:`, error.message);
+            } catch (sgError) {
+                console.error(`❌ SendGrid failed: ${sgError.message}`);
                 console.log(`📧 Falling back to Gmail...`);
             }
         } else {
@@ -143,11 +166,12 @@ exports.sendEmail = async (options) => {
                     await Promise.race([sendPromise, timeoutPromise]);
                     console.log(`✅ Email sent via Gmail to ${options.to} (attempt ${attempt})`);
                     
-                    // Mark outbox as sent
-                    outbox.status = 'sent';
-                    outbox.sentAt = new Date();
-                    outbox.attempts = (outbox.attempts || 0) + 1;
-                    await outbox.save();
+                        // Mark outbox as sent
+                        outbox.status = 'sent';
+                        outbox.sentAt = new Date();
+                        outbox.attempts = (outbox.attempts || 0) + 1;
+                        outbox.service = 'gmail';
+                        await outbox.save();
                     
                     // Close the fresh transporter
                     freshTransporter.close();

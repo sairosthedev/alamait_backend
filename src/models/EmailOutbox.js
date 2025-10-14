@@ -11,6 +11,7 @@ const EmailOutboxSchema = new mongoose.Schema({
     lastError: { type: String },
     scheduledAt: { type: Date, default: () => new Date() },
     sentAt: { type: Date },
+    service: { type: String, enum: ['sendgrid', 'gmail'], default: null }, // Track which service was used
 }, { timestamps: true });
 
 module.exports = mongoose.model('EmailOutbox', EmailOutboxSchema);

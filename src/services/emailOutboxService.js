@@ -36,25 +36,40 @@ class EmailOutboxService {
                         
                         let emailSent = false;
                         
-                            // Try SendGrid first
-                            if (sendGridService.isReady()) {
-                                try {
-                                    console.log(`📧 Outbox: Trying SendGrid for ${item.to}`);
-                                    await sendGridService.sendEmail({
-                                        to: item.to,
-                                        subject: item.subject,
-                                        text: item.text,
-                                        html: item.html,
-                                        attachments: item.attachments
-                                    });
-                                    emailSent = true;
-                                    console.log(`✅ Outbox: SendGrid success -> ${item.to}`);
-                                } catch (error) {
-                                    console.error(`❌ Outbox: SendGrid failed for ${item.to}:`, error.message);
-                                }
-                            } else {
-                                console.log(`📧 Outbox: SendGrid not configured, using Gmail for ${item.to}`);
+                        // Try SendGrid first (using SMTP for better reliability)
+                        if (process.env.SENDGRID_API_KEY) {
+                            try {
+                                console.log(`📧 Outbox: Trying SendGrid SMTP for ${item.to}`);
+                                
+                                const sgTransporter = nodemailer.createTransport({
+                                    host: 'smtp.sendgrid.net',
+                                    port: 587,
+                                    auth: {
+                                        user: 'apikey',
+                                        pass: process.env.SENDGRID_API_KEY
+                                    },
+                                    connectionTimeout: 15000,
+                                    greetingTimeout: 10000,
+                                    socketTimeout: 20000
+                                });
+
+                                await sgTransporter.sendMail({
+                                    from: `Alamait Student Accommodation <${process.env.SENDGRID_FROM_EMAIL || process.env.FROM_EMAIL || 'notifications@alamait.com'}>`,
+                                    to: item.to,
+                                    subject: item.subject,
+                                    text: item.text,
+                                    html: item.html,
+                                    attachments: item.attachments
+                                });
+                                
+                                emailSent = true;
+                                console.log(`✅ Outbox: SendGrid SMTP success -> ${item.to}`);
+                            } catch (error) {
+                                console.error(`❌ Outbox: SendGrid SMTP failed for ${item.to}:`, error.message);
                             }
+                        } else {
+                            console.log(`📧 Outbox: SendGrid not configured, using Gmail for ${item.to}`);
+                        }
                         
                         // Fallback to Gmail if SendGrid failed or not configured
                         if (!emailSent) {
@@ -98,12 +113,13 @@ class EmailOutboxService {
                             freshTransporter.close();
                         }
 
-                        item.status = 'sent';
-                        item.sentAt = new Date();
-                        item.attempts = (item.attempts || 0) + 1;
-                        item.lastError = undefined;
-                        await item.save();
-                        console.log(`✅ Outbox resend success -> ${item.to} (${item.subject})`);
+                            item.status = 'sent';
+                            item.sentAt = new Date();
+                            item.attempts = (item.attempts || 0) + 1;
+                            item.lastError = undefined;
+                            item.service = emailSent ? 'sendgrid' : 'gmail';
+                            await item.save();
+                            console.log(`✅ Outbox resend success -> ${item.to} (${item.subject}) via ${item.service}`);
                     } catch (err) {
                         item.status = 'failed';
                         item.attempts = (item.attempts || 0) + 1;
