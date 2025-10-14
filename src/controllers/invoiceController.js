@@ -217,6 +217,42 @@ exports.createInvoice = async (req, res) => {
             }
         };
 
+        // Send invoice email in background (non-blocking)
+        setTimeout(async () => {
+            try {
+                console.log(`📧 Sending manual invoice email to ${studentExists.email}...`);
+                console.log(`   Invoice: ${invoiceNumber}`);
+                console.log(`   Student: ${studentExists.firstName} ${studentExists.lastName}`);
+                console.log(`   Amount: $${totalAmount}`);
+                
+                const { sendEmail } = require('../utils/email');
+                await sendEmail({
+                    to: studentExists.email,
+                    subject: `Invoice ${invoiceNumber} - Alamait Student Accommodation`,
+                    text: `
+                        Dear ${studentExists.firstName} ${studentExists.lastName},
+                        
+                        Your invoice has been created:
+                        
+                        Invoice Number: ${invoiceNumber}
+                        Billing Period: ${billingPeriod}
+                        Total Amount: $${totalAmount}
+                        Due Date: ${new Date(dueDate).toLocaleDateString()}
+                        Residence: ${residenceExists.name}
+                        Room: ${roomNumber}
+                        
+                        Please check your student portal for full details and payment options.
+                        
+                        Best regards,
+                        Alamait Student Accommodation Team
+                    `
+                });
+                console.log(`✅ Manual invoice email sent successfully to ${studentExists.email}`);
+            } catch (emailError) {
+                console.error(`❌ Failed to send manual invoice email to ${studentExists.email}:`, emailError.message);
+            }
+        }, 100);
+
         res.status(201).json({
             message: 'Invoice created successfully',
             invoice: invoicePreview,

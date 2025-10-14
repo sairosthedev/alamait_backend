@@ -200,7 +200,7 @@ class SimpleBalanceSheetService {
       console.log(`💰 Sample account balances:`, Array.from(accountBalances.entries()).slice(0, 5).map(([code, acc]) => `${code}: $${acc.balance}`));
       
       // Aggregate parent-child accounts
-      const aggregatedBalances = this.aggregateParentChildAccounts(accountBalances, accountMap);
+      const aggregatedBalances = await this.aggregateParentChildAccounts(accountBalances, accountMap);
       
       // Build balance sheet structure
       const balanceSheet = this.buildBalanceSheetStructure(aggregatedBalances, accountMap);
@@ -249,7 +249,7 @@ class SimpleBalanceSheetService {
    * @param {Map} accountMap - Map of account objects
    * @returns {Map} Aggregated account balances
    */
-  static aggregateParentChildAccounts(accountBalances, accountMap) {
+  static async aggregateParentChildAccounts(accountBalances, accountMap) {
     const aggregatedBalances = new Map();
     
     // Copy all accounts first
@@ -257,36 +257,134 @@ class SimpleBalanceSheetService {
       aggregatedBalances.set(code, { ...account });
     });
     
-    // Define parent-child relationships - only for Accounts Payable and Accounts Receivable
-    const parentChildRelationships = {
-      // Accounts Payable parent-child relationships
-      '2000': ['200001', '200002', '200003', '200004', '200005', '200006', '200008', '20041'], // Main AP + all child AP accounts
+    try {
+      // Dynamically fetch parent-child relationships from database
+      const Account = require('../models/Account');
       
-      // Accounts Receivable parent-child relationships  
-      '1100': ['1100-68ecee931a1a3e93496ceed4', '1101'], // Main AR + child AR accounts (using actual account codes from database)
-    };
-    
-    // Aggregate child accounts into parent accounts
-    Object.entries(parentChildRelationships).forEach(([parentCode, childCodes]) => {
-      const parentAccount = aggregatedBalances.get(parentCode);
-      if (parentAccount) {
-        let totalChildBalance = 0;
-        
-        childCodes.forEach(childCode => {
-          const childAccount = aggregatedBalances.get(childCode);
-          if (childAccount) {
-            totalChildBalance += childAccount.balance;
-            console.log(`🔗 Aggregating child account ${childCode} (${childAccount.name}): $${childAccount.balance} into parent ${parentCode}`);
-          }
+      // Get Accounts Payable parent account (2000)
+      const apParentAccount = await Account.findOne({ code: '2000' });
+      if (apParentAccount) {
+        // Get all accounts that have 2000 as their parent account
+        const allAPChildren = await Account.find({
+          parentAccount: apParentAccount._id,
+          isActive: true
         });
         
-        // Add child balances to parent
-        parentAccount.balance += totalChildBalance;
-        console.log(`📊 Parent account ${parentCode} (${parentAccount.name}) total balance: $${parentAccount.balance} (including $${totalChildBalance} from children)`);
+        console.log(`🔗 Found ${allAPChildren.length} Accounts Payable child accounts for parent 2000`);
+        
+        // Aggregate AP child accounts into parent
+        const parentAccount = aggregatedBalances.get('2000');
+        if (parentAccount) {
+          let totalChildBalance = 0;
+          
+          allAPChildren.forEach(childAccount => {
+            const childBalance = aggregatedBalances.get(childAccount.code);
+            if (childBalance) {
+              totalChildBalance += childBalance.balance;
+              console.log(`🔗 Aggregating AP child account ${childAccount.code} (${childAccount.name}): $${childBalance.balance} into parent 2000`);
+            }
+          });
+          
+          // Add child balances to parent
+          parentAccount.balance += totalChildBalance;
+          console.log(`📊 Accounts Payable (2000) total balance: $${parentAccount.balance} (including $${totalChildBalance} from ${allAPChildren.length} children)`);
+        }
       }
-    });
+      
+      // Get Accounts Receivable parent account (1100)
+      const arParentAccount = await Account.findOne({ code: '1100' });
+      if (arParentAccount) {
+        // Get all child accounts of 1100
+        const arChildAccounts = await Account.find({ 
+          parentAccount: arParentAccount._id,
+          isActive: true
+        });
+        
+        // Also get any accounts receivable accounts that start with 1100 but aren't the main account
+        const arRelatedAccounts = await Account.find({
+          code: { $regex: '^1100' },
+          code: { $ne: '1100' },
+          isActive: true
+        });
+        
+        // Combine all AR child accounts
+        const allARChildren = [...arChildAccounts, ...arRelatedAccounts];
+        
+        console.log(`🔗 Found ${allARChildren.length} Accounts Receivable child accounts for parent 1100`);
+        
+        // Aggregate AR child accounts into parent
+        const parentAccount = aggregatedBalances.get('1100');
+        if (parentAccount) {
+          let totalChildBalance = 0;
+          
+          allARChildren.forEach(childAccount => {
+            const childBalance = aggregatedBalances.get(childAccount.code);
+            if (childBalance) {
+              totalChildBalance += childBalance.balance;
+              console.log(`🔗 Aggregating AR child account ${childAccount.code} (${childAccount.name}): $${childBalance.balance} into parent 1100`);
+            }
+          });
+          
+          // Add child balances to parent
+          parentAccount.balance += totalChildBalance;
+          console.log(`📊 Accounts Receivable (1100) total balance: $${parentAccount.balance} (including $${totalChildBalance} from ${allARChildren.length} children)`);
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ Error aggregating parent-child accounts:', error);
+      // Fallback to hardcoded relationships if database query fails
+      console.log('🔄 Falling back to hardcoded parent-child relationships...');
+      
+      const fallbackRelationships = {
+        '2000': ['200001', '200002', '200003', '200004', '200005', '200006', '200008', '20041'],
+        '1100': ['1100-68ecee931a1a3e93496ceed4', '1101']
+      };
+      
+      Object.entries(fallbackRelationships).forEach(([parentCode, childCodes]) => {
+        const parentAccount = aggregatedBalances.get(parentCode);
+        if (parentAccount) {
+          let totalChildBalance = 0;
+          
+          childCodes.forEach(childCode => {
+            const childAccount = aggregatedBalances.get(childCode);
+            if (childAccount) {
+              totalChildBalance += childAccount.balance;
+              console.log(`🔗 Fallback: Aggregating child account ${childCode}: $${childAccount.balance} into parent ${parentCode}`);
+            }
+          });
+          
+          parentAccount.balance += totalChildBalance;
+          console.log(`📊 Fallback: Parent account ${parentCode} total balance: $${parentAccount.balance}`);
+        }
+      });
+    }
     
     return aggregatedBalances;
+  }
+
+  /**
+   * Check if an account code is a child account of Accounts Payable (2000)
+   * @param {string} accountCode - The account code to check
+   * @param {Map} accountMap - Map of account objects to check parentAccount field
+   * @returns {boolean} True if it's an AP child account
+   */
+  static isAccountsPayableChildAccount(accountCode, accountMap) {
+    // Check if it's the main AP account
+    if (accountCode === '2000') {
+      return false; // Main account, not a child
+    }
+    
+    // Check if the account has 2000 as its parent account
+    const account = accountMap.get(accountCode);
+    if (account && account.parentAccount) {
+      // We need to check if the parent account is 2000
+      // For now, we'll use a simple approach and check if it's a known AP child account
+      const knownAPChildCodes = ['20041', '200001', '200002', '200003', '200004', '200006', '200008'];
+      return knownAPChildCodes.includes(accountCode);
+    }
+    
+    return false;
   }
 
   /**
@@ -388,8 +486,8 @@ class SimpleBalanceSheetService {
           balanceSheet.liabilities.current.deferredIncome.amount = account.balance;
           balanceSheet.liabilities.current.deferredIncome.accountCode = code;
           balanceSheet.liabilities.current.deferredIncome.accountName = account.name;
-        } else if (!code.startsWith('2000')) {
-          // Other liabilities (show individual accounts that are not child accounts of 2000)
+        } else if (!this.isAccountsPayableChildAccount(code, accountMap)) {
+          // Other liabilities (show individual accounts that are not child accounts of 2000 series)
           const key = this.getLiabilityKey(code);
           balanceSheet.liabilities.all[key] = {
             amount: account.balance,

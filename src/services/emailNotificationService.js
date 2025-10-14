@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const { sendEmail } = require('../utils/email');
+const Residence = require('../models/Residence');
 
 // Create email transporter
 const transporter = nodemailer.createTransport({
@@ -65,7 +66,7 @@ class EmailNotificationService {
 
             let sentCount = 0;
             for (const ceo of ceoUsers) {
-                if (!ceo.email || !ceo.email.includes('@gmail.com')) {
+                if (!ceo.email || !ceo.email.includes('@')) {
                     console.log(`⚠️ Skipping invalid CEO email: ${ceo.email}`);
                     continue;
                 }
@@ -135,7 +136,7 @@ class EmailNotificationService {
 			let sentCount = 0;
 			for (const financeUser of financeUsers) {
 				// Skip invalid email addresses (like alamait.com domain)
-				if (!financeUser.email || !financeUser.email.includes('@gmail.com')) {
+				if (!financeUser.email || !financeUser.email.includes('@')) {
 					console.log(`⚠️ Skipping invalid email: ${financeUser.email}`);
 					continue;
 				}
@@ -247,7 +248,7 @@ class EmailNotificationService {
 			let sentCount = 0;
 			for (const admin of admins) {
 				// Skip invalid email addresses (like alamait.com domain) - same logic as monthly requests
-				if (!admin.email || !admin.email.includes('@gmail.com')) {
+				if (!admin.email || !admin.email.includes('@')) {
 					console.log(`⚠️ Skipping invalid email: ${admin.email}`);
 					continue;
 				}
@@ -653,7 +654,7 @@ class EmailNotificationService {
 			let sentCount = 0;
 			for (const user of ceoAndFinanceUsers) {
 				// Skip invalid email addresses (like alamait.com domain) - same logic as monthly requests
-				if (!user.email || !user.email.includes('@gmail.com')) {
+				if (!user.email || !user.email.includes('@')) {
 					console.log(`⚠️ Skipping invalid email: ${user.email}`);
 					continue;
 				}
@@ -762,7 +763,7 @@ class EmailNotificationService {
 			let sentCount = 0;
 			for (const user of ceoAndFinanceUsers) {
 				// Skip invalid email addresses (like alamait.com domain) - same logic as monthly requests
-				if (!user.email || !user.email.includes('@gmail.com')) {
+				if (!user.email || !user.email.includes('@')) {
 					console.log(`⚠️ Skipping invalid email: ${user.email}`);
 					continue;
 				}
@@ -844,7 +845,7 @@ class EmailNotificationService {
 
 			for (const ceo of ceoUsers) {
 				// Skip invalid emails as elsewhere
-				if (!ceo.email || !ceo.email.includes('@gmail.com')) {
+				if (!ceo.email || !ceo.email.includes('@')) {
 					continue;
 				}
 				await sendEmail({

@@ -17,3 +17,6 @@ router.get('/schedule', DepreciationController.getDepreciationSchedule);
 router.get('/assets', DepreciationController.getFixedAssets);
 
 module.exports = router;
+
+
+

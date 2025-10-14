@@ -355,6 +355,44 @@ class FinanceController {
             // Record double-entry accounting transaction (Accrual Basis)
             const accountingResult = await DoubleEntryAccountingService.recordInvoiceIssuance(invoice, req.user);
 
+            // Send invoice email in background (non-blocking)
+            setTimeout(async () => {
+                try {
+                    // Get student details for email
+                    const student = await User.findById(studentId);
+                    if (student && student.email) {
+                        console.log(`📧 Sending finance invoice email to ${student.email}...`);
+                        console.log(`   Invoice: ${invoice.invoiceNumber}`);
+                        console.log(`   Student: ${student.firstName} ${student.lastName}`);
+                        console.log(`   Amount: $${invoice.totalAmount}`);
+                        
+                        const { sendEmail } = require('../utils/email');
+                        await sendEmail({
+                            to: student.email,
+                            subject: `Invoice ${invoice.invoiceNumber} - Alamait Student Accommodation`,
+                            text: `
+                                Dear ${student.firstName} ${student.lastName},
+                                
+                                Your invoice has been created:
+                                
+                                Invoice Number: ${invoice.invoiceNumber}
+                                Billing Period: ${invoice.billingPeriod}
+                                Total Amount: $${invoice.totalAmount}
+                                Due Date: ${invoice.dueDate.toLocaleDateString()}
+                                
+                                Please check your student portal for full details and payment options.
+                                
+                                Best regards,
+                                Alamait Student Accommodation Team
+                            `
+                        });
+                        console.log(`✅ Finance invoice email sent successfully to ${student.email}`);
+                    }
+                } catch (emailError) {
+                    console.error(`❌ Failed to send finance invoice email:`, emailError.message);
+                }
+            }, 100);
+
             console.log('✅ Invoice created and accounting recorded');
 
             res.json({

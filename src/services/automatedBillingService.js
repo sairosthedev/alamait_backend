@@ -166,13 +166,40 @@ class AutomatedBillingService {
 
             await newInvoice.save();
 
-            // Send notification to student
+            // Send notification to student in background (non-blocking)
             if (originalInvoice.student.email) {
-                await emailService.sendInvoiceNotification(
-                    originalInvoice.student.email,
-                    newInvoice,
-                    originalInvoice.student
-                );
+                setTimeout(async () => {
+                    try {
+                        console.log(`📧 Sending recurring invoice email to ${originalInvoice.student.email}...`);
+                        console.log(`   Invoice: ${newInvoice.invoiceNumber}`);
+                        console.log(`   Student: ${originalInvoice.student.firstName} ${originalInvoice.student.lastName}`);
+                        console.log(`   Amount: $${newInvoice.totalAmount}`);
+                        
+                        const { sendEmail } = require('../utils/email');
+                        await sendEmail({
+                            to: originalInvoice.student.email,
+                            subject: `Recurring Invoice ${newInvoice.invoiceNumber} - Alamait Student Accommodation`,
+                            text: `
+                                Dear ${originalInvoice.student.firstName} ${originalInvoice.student.lastName},
+                                
+                                Your recurring invoice has been generated:
+                                
+                                Invoice Number: ${newInvoice.invoiceNumber}
+                                Billing Period: ${newInvoice.billingPeriod}
+                                Total Amount: $${newInvoice.totalAmount}
+                                Due Date: ${newInvoice.dueDate.toLocaleDateString()}
+                                
+                                This is an automated recurring invoice. Please check your student portal for full details and payment options.
+                                
+                                Best regards,
+                                Alamait Student Accommodation Team
+                            `
+                        });
+                        console.log(`✅ Recurring invoice email sent successfully to ${originalInvoice.student.email}`);
+                    } catch (emailError) {
+                        console.error(`❌ Failed to send recurring invoice email to ${originalInvoice.student.email}:`, emailError.message);
+                    }
+                }, 100);
             }
 
             console.log(`Created recurring invoice: ${newInvoice.invoiceNumber}`);

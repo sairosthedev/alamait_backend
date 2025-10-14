@@ -1009,8 +1009,33 @@ class TransactionController {
             // Generate transaction ID
             const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
             
+            // Fetch account information for all entries
+            const Account = require('../../models/Account');
+            const accountIds = entries.map(entry => entry.account);
+            const accounts = await Account.find({ _id: { $in: accountIds } });
+            
+            // Create account lookup map
+            const accountMap = {};
+            accounts.forEach(account => {
+                accountMap[account._id.toString()] = {
+                    code: account.code,
+                    name: account.name,
+                    type: account.type
+                };
+            });
+            
+            // Validate all accounts exist
+            for (const entry of entries) {
+                if (!accountMap[entry.account]) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Account not found: ${entry.account}`
+                    });
+                }
+            }
+            
             // Determine transaction source based on account types and description
-            const transactionSource = this.determineTransactionSource(entries, description);
+            const transactionSource = TransactionController.determineTransactionSource(entries, description);
             
             // Create transaction entry with all the double-entry details
             const transactionEntry = new TransactionEntry({
@@ -1018,14 +1043,17 @@ class TransactionController {
                 date: date ? new Date(date) : new Date(),
                 description,
                 reference: reference || transactionId,
-                entries: entries.map(entry => ({
-                    accountCode: entry.account,
-                    accountName: entry.accountName || entry.account,
-                    accountType: entry.accountType || 'asset',
-                    debit: entry.debit || 0,
-                    credit: entry.credit || 0,
-                    description: entry.description || description
-                })),
+                entries: entries.map(entry => {
+                    const accountInfo = accountMap[entry.account];
+                    return {
+                        accountCode: accountInfo.code,
+                        accountName: accountInfo.name,
+                        accountType: accountInfo.type,
+                        debit: entry.debit || 0,
+                        credit: entry.credit || 0,
+                        description: entry.description || description
+                    };
+                }),
                 totalDebit,
                 totalCredit,
                 source: transactionSource,
