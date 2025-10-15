@@ -300,6 +300,31 @@ exports.createRequest = async (req, res) => {
             } catch (_) { return false; }
         })();
         
+        // Auto-enable async mode for complex requests that might timeout
+        const shouldUseAsync = isAsync || (
+            // Auto-async for requests with multiple items
+            (parsedItems && Array.isArray(parsedItems) && parsedItems.length > 3) ||
+            // Auto-async for requests with quotations (vendor processing)
+            (parsedItems && Array.isArray(parsedItems) && parsedItems.some(item => 
+                item.quotations && Array.isArray(item.quotations) && item.quotations.length > 0
+            )) ||
+            // Auto-async for financial requests
+            type === 'financial' ||
+            // Auto-async for requests with large total cost
+            (totalEstimatedCost && totalEstimatedCost > 10000)
+        );
+        
+        if (shouldUseAsync && !isAsync) {
+            console.log('🚀 Auto-enabling async mode for complex request to prevent timeout');
+        }
+        
+        // Set extended timeout for complex operations
+        if (shouldUseAsync) {
+            req.setTimeout(300000); // 5 minutes for complex request processing
+            res.setTimeout(300000);
+            console.log('🕐 Extended timeout set for complex request creation');
+        }
+        
         // Parse items if it's a string (from FormData)
         let parsedItems = items;
         if (typeof items === 'string') {
@@ -1004,9 +1029,14 @@ exports.createRequest = async (req, res) => {
         await request.save();
 
         // If async requested, return quickly and continue heavy work in background
-        if (isAsync) {
+        if (shouldUseAsync) {
             try {
-                res.status(202).json({ id: request._id, state: 'queued' });
+                res.status(202).json({ 
+                    id: request._id, 
+                    state: 'queued',
+                    message: 'Request created successfully. Processing will continue in the background.',
+                    async: true
+                });
             } catch (_) { /* ignore double-send protection */ }
 
             // Continue non-blocking processing

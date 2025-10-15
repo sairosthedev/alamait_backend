@@ -1101,9 +1101,9 @@ class FinancialReportsController {
             // Calculate yearly totals with detailed breakdowns
             const yearlyTotals = {
                 operating_activities: {
-                    inflows: detailedCashFlow.summary.total_income,
-                    outflows: detailedCashFlow.summary.total_expenses,
-                    net: detailedCashFlow.summary.total_income - detailedCashFlow.summary.total_expenses,
+                    inflows: detailedCashFlow.detailed_breakdown.income.total || 0,
+                    outflows: detailedCashFlow.detailed_breakdown.expenses.total || 0,
+                    net: (detailedCashFlow.detailed_breakdown.income.total || 0) - (detailedCashFlow.detailed_breakdown.expenses.total || 0),
                     breakdown: {
                         // Income breakdown
                         rental_income: { 
@@ -1180,14 +1180,14 @@ class FinancialReportsController {
                     monthlyBreakdown[month].net_cash_flow > monthlyBreakdown[best].net_cash_flow ? month : best, 'january'),
                 worst_cash_flow_month: monthNames.reduce((worst, month) => 
                     monthlyBreakdown[month].net_cash_flow < monthlyBreakdown[worst].net_cash_flow ? month : worst, 'january'),
-                average_monthly_cash_flow: detailedCashFlow.summary.net_change_in_cash / 12,
+                average_monthly_cash_flow: (detailedCashFlow.summary.net_change_in_cash || 0) / 12,
                 ending_cash_balance: runningBalance,
                 // Additional detailed insights
-                total_income: detailedCashFlow.summary.total_income,
-                total_expenses: detailedCashFlow.summary.total_expenses,
-                transaction_count: detailedCashFlow.summary.transaction_count,
-                payment_count: detailedCashFlow.summary.payment_count,
-                expense_count: detailedCashFlow.summary.expense_count,
+                total_income: detailedCashFlow.detailed_breakdown.income.total || 0,
+                total_expenses: detailedCashFlow.detailed_breakdown.expenses.total || 0,
+                transaction_count: detailedCashFlow.summary.transaction_count || 0,
+                payment_count: detailedCashFlow.summary.payment_count || 0,
+                expense_count: detailedCashFlow.summary.expense_count || 0,
                 // Income breakdown summary
                 income_breakdown: detailedCashFlow.detailed_breakdown.income.by_source,
                 // Expense breakdown summary
@@ -1201,22 +1201,62 @@ class FinancialReportsController {
                 }
             };
             
+            // RESTRUCTURED: Monthly-focused response structure
             const enhancedCashFlowData = {
                 period,
                 basis,
-                monthly_breakdown: monthlyBreakdown,
-                yearly_totals: yearlyTotals,
-                summary: summary,
+                
+                // PRIMARY: Monthly breakdown as main data
+                monthly_breakdown: detailedCashFlow.monthly_breakdown,
+                tabular_monthly_breakdown: detailedCashFlow.tabular_monthly_breakdown,
+                
+                // SECONDARY: Yearly totals derived from monthly data
+                yearly_totals: detailedCashFlow.yearly_totals,
+                
+                // CASH FLOW SUMMARY (monthly-focused)
                 cash_breakdown: detailedCashFlow.cash_breakdown,
+                
+                // MONTHLY-FOCUSED SUMMARY
+                summary: {
+                    best_cash_flow_month: detailedCashFlow.summary.best_cash_flow_month,
+                    worst_cash_flow_month: detailedCashFlow.summary.worst_cash_flow_month,
+                    average_monthly_cash_flow: detailedCashFlow.summary.average_monthly_cash_flow,
+                    total_months_with_data: detailedCashFlow.summary.total_months_with_data,
+                    monthly_consistency_score: detailedCashFlow.summary.monthly_consistency_score,
+                    total_transactions: detailedCashFlow.summary.total_transactions,
+                    net_change_in_cash: detailedCashFlow.summary.net_change_in_cash,
+                    total_income: detailedCashFlow.summary.total_income,
+                    total_expenses: detailedCashFlow.summary.total_expenses,
+                    transaction_count: detailedCashFlow.summary.transaction_count,
+                    payment_count: detailedCashFlow.summary.payment_count,
+                    expense_count: detailedCashFlow.summary.expense_count
+                },
+                
+                // FORMATTED STATEMENTS
                 formatted_cash_flow_statement: detailedCashFlow.formatted_cash_flow_statement,
-                // Include detailed breakdowns for frontend consumption
+                tabular_cash_flow_statement: detailedCashFlow.tabular_cash_flow_statement,
+                
+                // DETAILED BREAKDOWN (monthly-focused)
                 detailed_breakdown: {
                     income: detailedCashFlow.detailed_breakdown.income,
                     expenses: detailedCashFlow.detailed_breakdown.expenses,
+                    individual_expenses: detailedCashFlow.detailed_breakdown.individual_expenses, // NEW: Individual expenses
                     transactions: detailedCashFlow.detailed_breakdown.transactions,
                     payments: detailedCashFlow.detailed_breakdown.payments,
-                    expenses_detail: detailedCashFlow.detailed_breakdown.expenses_detail
-                }
+                    expenses_detail: detailedCashFlow.detailed_breakdown.expenses_detail,
+                    monthly_breakdown: detailedCashFlow.detailed_breakdown.monthly_breakdown
+                },
+                
+                // ACTIVITIES BREAKDOWN
+                operating_activities: detailedCashFlow.operating_activities,
+                investing_activities: detailedCashFlow.investing_activities,
+                financing_activities: detailedCashFlow.financing_activities,
+                
+                // CASH BALANCE BY ACCOUNT
+                cash_balance_by_account: detailedCashFlow.cash_balance_by_account,
+                
+                // METADATA
+                metadata: detailedCashFlow.metadata
             };
             
             res.json({
