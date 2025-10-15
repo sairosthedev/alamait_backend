@@ -1102,8 +1102,8 @@ class FinancialReportsController {
             const yearlyTotals = {
                 operating_activities: {
                     inflows: detailedCashFlow.detailed_breakdown.income.total || 0,
-                    outflows: detailedCashFlow.detailed_breakdown.expenses.total || 0,
-                    net: (detailedCashFlow.detailed_breakdown.income.total || 0) - (detailedCashFlow.detailed_breakdown.expenses.total || 0),
+                    outflows: detailedCashFlow.detailed_breakdown.expenses.total_amount || 0,
+                    net: (detailedCashFlow.detailed_breakdown.income.total || 0) - (detailedCashFlow.detailed_breakdown.expenses.total_amount || 0),
                     breakdown: {
                         // Income breakdown
                         rental_income: { 
@@ -1131,31 +1131,31 @@ class FinancialReportsController {
                             description: 'Total Other Income',
                             transactions: detailedCashFlow.detailed_breakdown.income.by_source.other_income.transactions.length
                         },
-                        // Expense breakdown
+                        // Expense breakdown - Updated to use expenses_by_category
                         maintenance_expenses: { 
-                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.maintenance.total, 
+                            amount: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.maintenance.total, 
                             description: 'Total Maintenance Expenses',
-                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.maintenance.transactions.length
+                            transactions: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.maintenance.transactions.length
                         },
                         utilities_expenses: { 
-                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.utilities.total, 
+                            amount: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.utilities.total, 
                             description: 'Total Utility Expenses',
-                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.utilities.transactions.length
+                            transactions: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.utilities.transactions.length
                         },
                         cleaning_expenses: { 
-                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.cleaning.total, 
+                            amount: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.cleaning.total, 
                             description: 'Total Cleaning Expenses',
-                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.cleaning.transactions.length
+                            transactions: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.cleaning.transactions.length
                         },
                         security_expenses: { 
-                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.security.total, 
+                            amount: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.security.total, 
                             description: 'Total Security Expenses',
-                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.security.transactions.length
+                            transactions: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.security.transactions.length
                         },
                         management_expenses: { 
-                            amount: detailedCashFlow.detailed_breakdown.expenses.by_category.management.total, 
+                            amount: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.management.total, 
                             description: 'Total Management Expenses',
-                            transactions: detailedCashFlow.detailed_breakdown.expenses.by_category.management.transactions.length
+                            transactions: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category.management.transactions.length
                         },
                     }
                 },
@@ -1184,14 +1184,14 @@ class FinancialReportsController {
                 ending_cash_balance: runningBalance,
                 // Additional detailed insights
                 total_income: detailedCashFlow.detailed_breakdown.income.total || 0,
-                total_expenses: detailedCashFlow.detailed_breakdown.expenses.total || 0,
+                total_expenses: detailedCashFlow.detailed_breakdown.expenses.total_amount || 0,
                 transaction_count: detailedCashFlow.summary.transaction_count || 0,
                 payment_count: detailedCashFlow.summary.payment_count || 0,
                 expense_count: detailedCashFlow.summary.expense_count || 0,
                 // Income breakdown summary
                 income_breakdown: detailedCashFlow.detailed_breakdown.income.by_source,
                 // Expense breakdown summary
-                expense_breakdown: detailedCashFlow.detailed_breakdown.expenses.by_category,
+                expense_breakdown: detailedCashFlow.detailed_breakdown.expenses_by_category.by_category,
                 // Advance payments summary
                 advance_payments: detailedCashFlow.detailed_breakdown.income.advance_payments,
                 // Residence breakdown

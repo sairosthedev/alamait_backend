@@ -104,7 +104,7 @@ class EnhancedCashFlowService {
             const individualExpenses = await this.processIndividualExpenses(transactionEntries, expenses, period, residenceId, transactionExpenseMapping);
             
             // Calculate cash flow by activity
-            const operatingActivities = this.calculateOperatingActivities(incomeBreakdown, expenseBreakdown);
+            const operatingActivities = this.calculateOperatingActivities(incomeBreakdown, individualExpenses);
             const investingActivities = this.calculateInvestingActivities(transactionEntries);
             const financingActivities = this.calculateFinancingActivities(transactionEntries);
             
@@ -243,17 +243,18 @@ class EnhancedCashFlowService {
                     total_transactions: transactionEntries.length,
                     net_change_in_cash: netChangeInCash,
                     total_income: incomeBreakdown.total,
-                    total_expenses: expenseBreakdown.total,
+                    total_expenses: individualExpenses.total_amount, // CHANGED: Now uses individual expenses total
+                    total_expenses_by_category: expenseBreakdown.total, // ADDED: Keep categorized total for reference
                     transaction_count: transactionEntries.length,
                     payment_count: payments.length,
-                    expense_count: expenses.length
+                    expense_count: individualExpenses.total_count // CHANGED: Now uses individual expenses count
                 },
                 
                 // DETAILED MONTHLY BREAKDOWN
                 detailed_breakdown: {
                     income: incomeBreakdown,
-                    expenses: expenseBreakdown,
-                    individual_expenses: individualExpenses, // NEW: Individual expenses not combined
+                    expenses: individualExpenses, // CHANGED: Now returns individual expenses instead of categories
+                    expenses_by_category: expenseBreakdown, // MOVED: Categorized expenses moved to separate field
                     transactions: this.processTransactionDetails(transactionEntries),
                     payments: this.processPaymentDetails(payments),
                     expenses_detail: this.processExpenseDetails(expenses),
@@ -1912,13 +1913,14 @@ class EnhancedCashFlowService {
     /**
      * Calculate operating activities
      */
-    static calculateOperatingActivities(incomeBreakdown, expenseBreakdown) {
+    static calculateOperatingActivities(incomeBreakdown, individualExpenses) {
         return {
             cash_received_from_customers: incomeBreakdown.total,
             cash_paid_to_suppliers: 0, // Would need to be calculated from specific supplier payments
-            cash_paid_for_expenses: expenseBreakdown.total,
+            cash_paid_for_expenses: individualExpenses.total_amount, // CHANGED: Now uses individual expenses total
             income_breakdown: incomeBreakdown.by_source,
-            expense_breakdown: expenseBreakdown.by_category
+            expense_breakdown: individualExpenses.by_type, // CHANGED: Now uses individual expenses by type
+            individual_expenses: individualExpenses.expenses // ADDED: Include individual expenses array
         };
     }
     

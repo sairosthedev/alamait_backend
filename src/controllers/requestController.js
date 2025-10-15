@@ -292,40 +292,7 @@ exports.createRequest = async (req, res) => {
             dateRequested
         } = req.body;
 
-        // Support async mode to return immediately and process heavy work in background
-        const isAsync = (() => {
-            try {
-                const flag = (req.query?.async ?? req.body?.async ?? '').toString().toLowerCase();
-                return flag === 'true' || flag === '1';
-            } catch (_) { return false; }
-        })();
-        
-        // Auto-enable async mode for complex requests that might timeout
-        const shouldUseAsync = isAsync || (
-            // Auto-async for requests with multiple items
-            (parsedItems && Array.isArray(parsedItems) && parsedItems.length > 3) ||
-            // Auto-async for requests with quotations (vendor processing)
-            (parsedItems && Array.isArray(parsedItems) && parsedItems.some(item => 
-                item.quotations && Array.isArray(item.quotations) && item.quotations.length > 0
-            )) ||
-            // Auto-async for financial requests
-            type === 'financial' ||
-            // Auto-async for requests with large total cost
-            (totalEstimatedCost && totalEstimatedCost > 10000)
-        );
-        
-        if (shouldUseAsync && !isAsync) {
-            console.log('🚀 Auto-enabling async mode for complex request to prevent timeout');
-        }
-        
-        // Set extended timeout for complex operations
-        if (shouldUseAsync) {
-            req.setTimeout(300000); // 5 minutes for complex request processing
-            res.setTimeout(300000);
-            console.log('🕐 Extended timeout set for complex request creation');
-        }
-        
-        // Parse items if it's a string (from FormData)
+        // Parse items if it's a string (from FormData) - MOVED UP to avoid initialization error
         let parsedItems = items;
         if (typeof items === 'string') {
             try {
@@ -567,6 +534,39 @@ exports.createRequest = async (req, res) => {
             console.log('Items built from FormData fields:', parsedItems.length, 'items');
         } else {
             console.log('Items received as object:', Array.isArray(items) ? items.length : 'not array');
+        }
+        
+        // Support async mode to return immediately and process heavy work in background
+        const isAsync = (() => {
+            try {
+                const flag = (req.query?.async ?? req.body?.async ?? '').toString().toLowerCase();
+                return flag === 'true' || flag === '1';
+            } catch (_) { return false; }
+        })();
+        
+        // Auto-enable async mode for complex requests that might timeout
+        const shouldUseAsync = isAsync || (
+            // Auto-async for requests with multiple items
+            (parsedItems && Array.isArray(parsedItems) && parsedItems.length > 3) ||
+            // Auto-async for requests with quotations (vendor processing)
+            (parsedItems && Array.isArray(parsedItems) && parsedItems.some(item => 
+                item.quotations && Array.isArray(item.quotations) && item.quotations.length > 0
+            )) ||
+            // Auto-async for financial requests
+            type === 'financial' ||
+            // Auto-async for requests with large total cost
+            (totalEstimatedCost && totalEstimatedCost > 10000)
+        );
+        
+        if (shouldUseAsync && !isAsync) {
+            console.log('🚀 Auto-enabling async mode for complex request to prevent timeout');
+        }
+        
+        // Set extended timeout for complex operations
+        if (shouldUseAsync) {
+            req.setTimeout(300000); // 5 minutes for complex request processing
+            res.setTimeout(300000);
+            console.log('🕐 Extended timeout set for complex request creation');
         }
         
         console.log('DEBUG: Items structure after parsing:');
