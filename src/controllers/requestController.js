@@ -1032,7 +1032,8 @@ exports.createRequest = async (req, res) => {
         if (shouldUseAsync) {
             try {
                 res.status(200).json({ 
-                    id: request._id, 
+                    _id: request._id,  // Changed from 'id' to '_id' for consistency
+                    id: request._id,   // Keep both for compatibility
                     state: 'queued',
                     message: 'Request created successfully. Processing will continue in the background.',
                     async: true,
@@ -1243,6 +1244,7 @@ exports.createRequest = async (req, res) => {
         
         res.status(201).json({
             ...populatedRequest.toObject(),
+            id: populatedRequest._id,  // Add 'id' field for consistency with async response
             success: true
         });
     } catch (error) {
