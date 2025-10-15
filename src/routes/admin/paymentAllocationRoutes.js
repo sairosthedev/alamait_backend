@@ -10,6 +10,7 @@ const {
     getPaymentAllocationHistory,
     getPaymentCoverageAnalysis,
     getStudentsWithOutstandingBalances,
+    getStudentsWithOutstandingBalancesByMonth,
     getOutstandingBalancesSummary,
     getARInvoices
 } = require('../../controllers/admin/paymentAllocationController');
@@ -77,6 +78,13 @@ router.post('/payment/manual-allocate',
 /**
  * ADMIN DASHBOARD ROUTES
  */
+
+// Get all students with outstanding balances organized by month (for admin dashboard)
+// NOTE: This route must come BEFORE the general /students/outstanding-balances route
+router.get('/students/outstanding-balances/monthly', 
+    checkRole(...allowedRoles), 
+    getStudentsWithOutstandingBalancesByMonth
+);
 
 // Get all students with outstanding balances (for admin dashboard)
 router.get('/students/outstanding-balances', 

@@ -805,6 +805,220 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
     }
 };
 
+// Get students with outstanding balances organized by month
+const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
+    try {
+        const { residence, limit = 20, sortBy = 'totalBalance', sortOrder = 'desc' } = req.query;
+
+        console.log(`👥 Getting students with outstanding balances by month (MONTHLY BREAKDOWN)`);
+
+        // Use aggregation pipeline to get monthly breakdown
+        const pipeline = [
+            // Match AR transactions
+            {
+                $match: {
+                    'entries.accountCode': { $regex: '^1100-' },
+                    'entries.accountType': 'Asset',
+                    'entries.debit': { $gt: 0 },
+                    ...(residence && { residence: new mongoose.Types.ObjectId(residence) })
+                }
+            },
+            // Unwind entries to process each AR entry
+            { $unwind: '$entries' },
+            // Match only AR entries
+            {
+                $match: {
+                    'entries.accountCode': { $regex: '^1100-' },
+                    'entries.accountType': 'Asset',
+                    'entries.debit': { $gt: 0 }
+                }
+            },
+            // Extract student ID from account code and create month key
+            {
+                $addFields: {
+                    studentId: { $arrayElemAt: [{ $split: ['$entries.accountCode', '-'] }, 1] },
+                    monthKey: {
+                        $dateToString: {
+                            format: "%Y-%m",
+                            date: "$date"
+                        }
+                    },
+                    year: { $year: "$date" },
+                    month: { $month: "$date" }
+                }
+            },
+            // Group by student ID and month to get monthly balances
+            {
+                $group: {
+                    _id: {
+                        studentId: '$studentId',
+                        monthKey: '$monthKey',
+                        year: '$year',
+                        month: '$month'
+                    },
+                    monthlyBalance: { $sum: '$entries.debit' },
+                    transactionCount: { $sum: 1 },
+                    latestTransaction: { $max: '$date' },
+                    residence: { $first: '$residence' }
+                }
+            },
+            // Group by student to get all their monthly balances
+            {
+                $group: {
+                    _id: '$_id.studentId',
+                    monthlyBalances: {
+                        $push: {
+                            monthKey: '$_id.monthKey',
+                            year: '$_id.year',
+                            month: '$_id.month',
+                            balance: '$monthlyBalance',
+                            transactionCount: '$transactionCount',
+                            latestTransaction: '$latestTransaction'
+                        }
+                    },
+                    totalBalance: { $sum: '$monthlyBalance' },
+                    totalTransactions: { $sum: '$transactionCount' },
+                    latestTransaction: { $max: '$latestTransaction' },
+                    residence: { $first: '$residence' }
+                }
+            },
+            // Sort by total balance
+            { $sort: { totalBalance: -1 } },
+            // Limit results
+            { $limit: parseInt(limit) }
+        ];
+
+        console.log(`🔍 Running monthly breakdown aggregation pipeline...`);
+        const studentBalances = await TransactionEntry.aggregate(pipeline);
+
+        console.log(`🔍 Found ${studentBalances.length} students with outstanding balances`);
+
+        // Get debtor information in batch for better performance
+        const studentIds = studentBalances.map(s => s._id);
+        const Debtor = require('../../models/Debtor');
+        
+        const debtors = await Debtor.find({
+            $or: [
+                { user: { $in: studentIds } },
+                { user: { $in: studentIds.map(id => new mongoose.Types.ObjectId(id)) } },
+                { accountCode: { $in: studentIds.map(id => `1100-${id}`) } }
+            ]
+        });
+
+        // Create a map for quick lookup
+        const debtorMap = new Map();
+        debtors.forEach(debtor => {
+            const userId = debtor.user?.toString();
+            const accountCode = debtor.accountCode;
+            if (userId) debtorMap.set(userId, debtor);
+            if (accountCode && accountCode.startsWith('1100-')) {
+                const studentId = accountCode.split('-')[1];
+                debtorMap.set(studentId, debtor);
+            }
+        });
+
+        // Build response with monthly breakdown data
+        const studentsWithMonthlyBalances = studentBalances.map(student => {
+            const debtor = debtorMap.get(student._id);
+            
+            // Sort monthly balances by date (newest first)
+            const sortedMonthlyBalances = student.monthlyBalances.sort((a, b) => {
+                if (a.year !== b.year) return b.year - a.year;
+                return b.month - a.month;
+            });
+
+            return {
+                studentId: student._id,
+                residence: student.residence,
+                totalBalance: debtor?.currentBalance || student.totalBalance,
+                totalTransactions: student.totalTransactions,
+                latestTransaction: student.latestTransaction,
+                hasDebtorAccount: !!debtor,
+                debtorCode: debtor?.debtorCode || null,
+                monthlyBalances: sortedMonthlyBalances
+            };
+        });
+
+        console.log(`📊 Found ${studentsWithMonthlyBalances.length} students with monthly outstanding balances`);
+
+        // Sort by specified criteria
+        const sortMultiplier = sortOrder === 'desc' ? -1 : 1;
+        studentsWithMonthlyBalances.sort((a, b) => {
+            if (sortBy === 'totalBalance') {
+                return (a.totalBalance - b.totalBalance) * sortMultiplier;
+            } else if (sortBy === 'totalTransactions') {
+                return (a.totalTransactions - b.totalTransactions) * sortMultiplier;
+            } else if (sortBy === 'latestTransaction') {
+                return (new Date(a.latestTransaction) - new Date(b.latestTransaction)) * sortMultiplier;
+            }
+            return 0;
+        });
+
+        // Apply limit
+        const limitedStudents = studentsWithMonthlyBalances.slice(0, parseInt(limit));
+
+        // Get student details for the results (including expired students)
+        const { getStudentInfo } = require('../../utils/studentUtils');
+        
+        // Get student details for all students (active and expired)
+        const studentsWithDetails = await Promise.all(
+            limitedStudents.map(async (student) => {
+                const studentInfo = await getStudentInfo(student.studentId);
+                console.log(`🔍 Student ${student.studentId}:`, {
+                    found: !!studentInfo,
+                    isExpired: studentInfo?.isExpired,
+                    name: studentInfo ? `${studentInfo.firstName} ${studentInfo.lastName}` : 'Unknown',
+                    email: studentInfo?.email,
+                    balance: student.totalBalance,
+                    monthlyCount: student.monthlyBalances.length
+                });
+                return {
+                    ...student,
+                    studentDetails: studentInfo ? {
+                        firstName: studentInfo.firstName,
+                        lastName: studentInfo.lastName,
+                        email: studentInfo.email,
+                        phone: studentInfo.phone,
+                        isExpired: studentInfo.isExpired,
+                        expiredAt: studentInfo.expiredAt,
+                        expirationReason: studentInfo.expirationReason
+                    } : null
+                };
+            })
+        );
+
+        // Add debug logging to see what we're returning
+        const expiredCount = studentsWithDetails.filter(s => s.studentDetails?.isExpired).length;
+        const activeCount = studentsWithDetails.filter(s => !s.studentDetails?.isExpired).length;
+        
+        console.log(`📊 Monthly outstanding balances summary: ${studentsWithDetails.length} total students (${activeCount} active, ${expiredCount} expired)`);
+        
+        res.status(200).json({
+            success: true,
+            message: 'Students with monthly outstanding balances retrieved successfully',
+            data: {
+                totalStudents: studentsWithDetails.length,
+                totalOutstanding: studentsWithDetails.reduce((sum, s) => sum + s.totalBalance, 0),
+                students: studentsWithDetails,
+                // Add summary for debugging
+                summary: {
+                    activeStudents: activeCount,
+                    expiredStudents: expiredCount,
+                    totalStudents: studentsWithDetails.length
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error getting students with monthly outstanding balances:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve students with monthly outstanding balances',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     getStudentARBalances,
     getPaymentAllocationSummary,
@@ -813,6 +1027,7 @@ module.exports = {
     getPaymentAllocationHistory,
     getPaymentCoverageAnalysis,
     getStudentsWithOutstandingBalances,
+    getStudentsWithOutstandingBalancesByMonth,
     getOutstandingBalancesSummary,
     getARInvoices
 };
