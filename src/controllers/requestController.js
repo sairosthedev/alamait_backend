@@ -1031,15 +1031,40 @@ exports.createRequest = async (req, res) => {
         // If async requested, return quickly and continue heavy work in background
         if (shouldUseAsync) {
             try {
-                res.status(200).json({ 
-                    _id: request._id,  // Changed from 'id' to '_id' for consistency
-                    id: request._id,   // Keep both for compatibility
+                const asyncResponse = { 
+                    _id: request._id,           // MongoDB ObjectId
+                    id: request._id,            // Standard ID field
+                    requestId: request._id,     // Alternative ID field
+                    request_id: request._id,    // Snake case ID field
+                    data: {
+                        id: request._id,        // Nested ID field
+                        _id: request._id        // Nested MongoDB ID
+                    },
                     state: 'queued',
                     message: 'Request created successfully. Processing will continue in the background.',
                     async: true,
                     success: true
+                };
+                console.log('🚀 Sending async response:', JSON.stringify(asyncResponse, null, 2));
+                res.status(200).json(asyncResponse);
+            } catch (responseError) { 
+                console.error('❌ Error sending async response:', responseError);
+                // Fallback response
+                res.status(200).json({
+                    _id: request._id,
+                    id: request._id,
+                    requestId: request._id,
+                    request_id: request._id,
+                    data: {
+                        id: request._id,
+                        _id: request._id
+                    },
+                    state: 'queued',
+                    message: 'Request created successfully.',
+                    async: true,
+                    success: true
                 });
-            } catch (_) { /* ignore double-send protection */ }
+            }
 
             // Continue non-blocking processing
             setImmediate(async () => {
@@ -1242,14 +1267,43 @@ exports.createRequest = async (req, res) => {
             }, 1000); // 1 second delay to avoid blocking
         }
         
-        res.status(201).json({
+        const regularResponse = {
             ...populatedRequest.toObject(),
-            id: populatedRequest._id,  // Add 'id' field for consistency with async response
+            id: populatedRequest._id,           // Standard ID field
+            requestId: populatedRequest._id,    // Alternative ID field
+            request_id: populatedRequest._id,   // Snake case ID field
+            data: {
+                id: populatedRequest._id,       // Nested ID field
+                _id: populatedRequest._id       // Nested MongoDB ID
+            },
             success: true
-        });
+        };
+        console.log('🚀 Sending regular response:', JSON.stringify(regularResponse, null, 2));
+        res.status(201).json(regularResponse);
     } catch (error) {
         console.error('Error creating request:', error);
-        res.status(500).json({ message: error.message });
+        console.error('Error details:', {
+            message: error.message,
+            stack: error.stack,
+            name: error.name
+        });
+        
+        // Return a response with an ID even on error for frontend compatibility
+        const errorId = 'error-' + Date.now();
+        res.status(500).json({ 
+            message: error.message,
+            error: true,
+            success: false,
+            // Add multiple ID fields so frontend doesn't crash
+            _id: errorId,
+            id: errorId,
+            requestId: errorId,
+            request_id: errorId,
+            data: {
+                id: errorId,
+                _id: errorId
+            }
+        });
     }
 };
 
