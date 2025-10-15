@@ -172,7 +172,9 @@ exports.createExpense = async (req, res) => {
             paidBy,
             paidDate,
             receiptImage,
-            period
+            period,
+            sourceAccount,
+            receivingAccount
         } = req.body;
 
         // Validate required fields
@@ -303,6 +305,268 @@ exports.createExpense = async (req, res) => {
         // Save expense
         await newExpense.save();
 
+        // Create double-entry transaction for the expense
+        try {
+            console.log('💰 Creating double-entry transaction for expense:', newExpense._id);
+            console.log('   Category:', newExpense.category);
+            console.log('   Amount:', newExpense.amount);
+            console.log('   Payment Method:', newExpense.paymentMethod);
+            
+            // Get expense account - use provided receivingAccount first, then fallback to dynamic resolver
+            let expenseAccount = null;
+            
+            if (receivingAccount) {
+                console.log('   Using provided receivingAccount:', receivingAccount);
+                expenseAccount = await Account.findById(receivingAccount);
+                console.log('   Provided receivingAccount result:', expenseAccount ? `${expenseAccount.code} - ${expenseAccount.name}` : 'null');
+            }
+            
+            // Fallback to dynamic resolver if no receivingAccount provided or not found
+            if (!expenseAccount) {
+                try {
+                    expenseAccount = await DynamicAccountResolver.getExpenseAccount(newExpense.category);
+                    console.log('   Dynamic resolver result:', expenseAccount ? `${expenseAccount.code} - ${expenseAccount.name}` : 'null');
+                } catch (resolverError) {
+                    console.log('   Dynamic resolver error:', resolverError.message);
+                }
+            }
+            
+            // Fallback to legacy mapping if dynamic resolver fails
+            if (!expenseAccount) {
+                console.log(`⚠️ Dynamic resolver failed for category ${newExpense.category}, trying legacy mapping...`);
+                const expenseAccountCode = CATEGORY_TO_ACCOUNT_CODE[newExpense.category] || '5099';
+                console.log('   Trying account code:', expenseAccountCode);
+                expenseAccount = await Account.findOne({ code: expenseAccountCode, type: 'Expense' });
+                console.log('   Legacy mapping result:', expenseAccount ? `${expenseAccount.code} - ${expenseAccount.name}` : 'null');
+            }
+            
+            if (!expenseAccount) {
+                console.error('❌ Expense account not found for category:', newExpense.category);
+                console.error('   Available expense accounts:');
+                const allExpenseAccounts = await Account.find({ type: 'Expense' });
+                allExpenseAccounts.forEach(acc => console.error(`     ${acc.code} - ${acc.name}`));
+                
+                // Try to find any expense account as fallback
+                const fallbackExpenseAccount = await Account.findOne({ type: 'Expense' });
+                if (fallbackExpenseAccount) {
+                    console.log('   Using fallback expense account:', fallbackExpenseAccount.code, '-', fallbackExpenseAccount.name);
+                    expenseAccount = fallbackExpenseAccount;
+                } else {
+                    throw new Error(`Expense account not found for category: ${newExpense.category}. Please ensure you have a suitable expense account in your chart of accounts.`);
+                }
+            }
+            
+            // Determine source account - use provided sourceAccount first, then fallback to payment method logic
+            const finalPaymentMethod = newExpense.paymentMethod || 'Cash';
+            let sourceAccountObj;
+            
+            console.log('   Looking for source account for payment method:', finalPaymentMethod);
+            console.log('   User role:', req.user.role);
+            
+            if (sourceAccount) {
+                console.log('   Using provided sourceAccount:', sourceAccount);
+                sourceAccountObj = await Account.findById(sourceAccount);
+                console.log('   Provided sourceAccount result:', sourceAccountObj ? `${sourceAccountObj.code} - ${sourceAccountObj.name}` : 'null');
+            }
+            
+            // Fallback to payment method logic if no sourceAccount provided or not found
+            if (!sourceAccountObj) {
+                if (finalPaymentMethod === 'Petty Cash' || finalPaymentMethod === 'Cash') {
+                    // Get role-specific petty cash account based on user role
+                    try {
+                        sourceAccountObj = await getPettyCashAccountByRole(req.user.role);
+                        console.log('   Role-specific account result:', sourceAccountObj ? `${sourceAccountObj.code} - ${sourceAccountObj.name}` : 'null');
+                    } catch (roleError) {
+                        console.log('   Role-specific account error:', roleError.message);
+                    }
+                    
+                    // If role-specific account not found, try fallback accounts
+                    if (!sourceAccountObj) {
+                        console.log(`⚠️ Role-specific petty cash account not found for ${req.user.role}, trying fallback accounts...`);
+                        
+                        // Try common cash accounts as fallback
+                        const fallbackAccounts = ['1015', '1000', '1010', '1011', '1012']; // Cash, Bank, General Petty Cash, Admin Petty Cash, Finance Petty Cash
+                        
+                        for (const accountCode of fallbackAccounts) {
+                            console.log(`   Trying fallback account: ${accountCode}`);
+                            sourceAccountObj = await Account.findOne({ code: accountCode, type: 'Asset' });
+                            if (sourceAccountObj) {
+                                console.log(`✅ Using fallback account: ${sourceAccountObj.code} - ${sourceAccountObj.name}`);
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // Use the mapping for other payment methods
+                    const sourceAccountCode = PAYMENT_METHOD_TO_ACCOUNT_CODE[finalPaymentMethod] || '1011'; // Default to Admin Petty Cash
+                    console.log('   Trying payment method mapping for code:', sourceAccountCode);
+                    sourceAccountObj = await Account.findOne({ code: sourceAccountCode });
+                    console.log('   Payment method mapping result:', sourceAccountObj ? `${sourceAccountObj.code} - ${sourceAccountObj.name}` : 'null');
+                }
+            }
+            
+            if (!sourceAccountObj) {
+                console.error('❌ Source account not found for payment method:', finalPaymentMethod);
+                console.error('   Available asset accounts:');
+                const allAssetAccounts = await Account.find({ type: 'Asset' });
+                allAssetAccounts.forEach(acc => console.error(`     ${acc.code} - ${acc.name}`));
+                
+                // Try to find any asset account as fallback
+                const fallbackAssetAccount = await Account.findOne({ type: 'Asset' });
+                if (fallbackAssetAccount) {
+                    console.log('   Using fallback asset account:', fallbackAssetAccount.code, '-', fallbackAssetAccount.name);
+                    sourceAccountObj = fallbackAssetAccount;
+                } else {
+                    throw new Error('Source account not found for payment method: ' + finalPaymentMethod);
+                }
+            }
+            
+            // Generate transaction ID
+            const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+            console.log('   Generated transaction ID:', transactionId);
+            
+            // Determine transaction description based on payment status
+            const isPaid = newExpense.paymentStatus === 'Paid';
+            const transactionDescription = isPaid ?
+                `Expense Payment: ${newExpense.description}` :
+                `Expense Accrual: ${newExpense.description}`;
+
+            // Create transaction
+            console.log('   Creating Transaction record...');
+            const txn = await Transaction.create({
+                transactionId: transactionId,
+                date: newExpense.expenseDate,
+                description: transactionDescription,
+                reference: newExpense.expenseId,
+                residence: newExpense.residence,
+                type: isPaid ? 'payment' : 'accrual', // Use valid enum values
+                amount: newExpense.amount,
+                expenseId: newExpense._id,
+                createdBy: req.user._id
+            });
+            console.log('   ✅ Transaction created:', txn._id);
+
+            // Determine if this should be an accrual or payment transaction
+            const transactionType = isPaid ? 'expense_payment' : 'expense_accrual'; // Use valid enum values
+            
+            console.log('   Transaction type:', transactionType);
+            console.log('   Payment status:', newExpense.paymentStatus);
+            
+            // Create double-entry transaction entry
+            console.log('   Creating TransactionEntry record...');
+            const transactionEntry = await TransactionEntry.create({
+                transactionId: transactionId,
+                date: newExpense.expenseDate,
+                description: transactionDescription,
+                reference: newExpense.expenseId,
+                entries: isPaid ? [
+                    // Payment transaction: Debit expense, Credit cash/bank
+                    {
+                        accountCode: expenseAccount.code,
+                        accountName: expenseAccount.name,
+                        accountType: expenseAccount.type,
+                        debit: newExpense.amount,
+                        credit: 0,
+                        description: `Expense: ${newExpense.description}`
+                    },
+                    {
+                        accountCode: sourceAccountObj.code,
+                        accountName: sourceAccountObj.name,
+                        accountType: sourceAccountObj.type,
+                        debit: 0,
+                        credit: newExpense.amount,
+                        description: `Payment via ${finalPaymentMethod}`
+                    }
+                ] : [
+                    // Accrual transaction: Debit expense, Credit accounts payable
+                    {
+                        accountCode: expenseAccount.code,
+                        accountName: expenseAccount.name,
+                        accountType: expenseAccount.type,
+                        debit: newExpense.amount,
+                        credit: 0,
+                        description: `Expense Accrual: ${newExpense.description}`
+                    },
+                        {
+                            accountCode: '2000', // Main Accounts Payable account
+                            accountName: 'Accounts Payable',
+                            accountType: 'Liability',
+                            debit: 0,
+                            credit: newExpense.amount,
+                            description: `Accrued Expense: ${newExpense.description}`
+                        }
+                ],
+                    totalDebit: newExpense.amount,
+                    totalCredit: newExpense.amount,
+                    source: transactionType, // This will be 'expense_payment' or 'expense_accrual'
+                sourceId: newExpense._id,
+                sourceModel: 'Expense',
+                residence: newExpense.residence,
+                createdBy: req.user.email || 'finance@alamait.com',
+                status: 'posted',
+                metadata: {
+                    paymentMethod: finalPaymentMethod,
+                    expenseId: newExpense._id,
+                    originalAmount: newExpense.amount,
+                    expenseCategory: newExpense.category,
+                    residenceId: newExpense.residence,
+                    residenceName: 'Unknown',
+                    transactionType: transactionType,
+                    isAccrual: !isPaid,
+                    isPayment: isPaid
+                }
+            });
+            console.log('   ✅ TransactionEntry created:', transactionEntry._id);
+            
+            // Link entry to transaction
+            console.log('   Linking TransactionEntry to Transaction...');
+            await Transaction.findByIdAndUpdate(txn._id, { 
+                $push: { entries: transactionEntry._id },
+                $set: { amount: newExpense.amount }
+            });
+            console.log('   ✅ TransactionEntry linked to Transaction');
+            
+            // Link transaction to expense
+            console.log('   Linking Transaction to Expense...');
+            await Expense.findByIdAndUpdate(newExpense._id, {
+                $set: { transactionId: txn._id }
+            });
+            console.log('   ✅ Transaction linked to Expense');
+            
+            // Update the newExpense object to include transactionId for response
+            newExpense.transactionId = txn._id;
+            
+            console.log('✅ Double-entry transaction created for expense:', newExpense._id, 'txn:', txn._id);
+            
+            // Verify the transaction was actually created
+            if (!txn || !txn._id) {
+                throw new Error('Transaction creation failed - no transaction ID returned');
+            }
+            
+            if (!transactionEntry || !transactionEntry._id) {
+                throw new Error('TransactionEntry creation failed - no transaction entry ID returned');
+            }
+            
+        } catch (transactionError) {
+            console.error('❌ Error creating double-entry transaction for expense:', transactionError);
+            console.error('   Error details:', {
+                message: transactionError.message,
+                stack: transactionError.stack,
+                expenseId: newExpense._id,
+                category: newExpense.category,
+                amount: newExpense.amount,
+                paymentMethod: newExpense.paymentMethod
+            });
+            
+            // Return error response instead of silently continuing
+            return res.status(500).json({
+                error: 'Failed to create double-entry transaction',
+                message: transactionError.message,
+                expense: newExpense,
+                details: 'The expense was created but the accounting transaction failed. Please check the server logs for details.'
+            });
+        }
+
         // Audit log
         await AuditLog.create({
             user: req.user._id,
@@ -313,8 +577,19 @@ exports.createExpense = async (req, res) => {
             after: newExpense.toObject()
         });
 
+        // Final verification that transaction was created
+        if (!newExpense.transactionId) {
+            console.error('❌ CRITICAL: Expense created but no transactionId found!');
+            return res.status(500).json({
+                error: 'Transaction creation failed',
+                message: 'The expense was created but no accounting transaction was generated',
+                expense: newExpense,
+                details: 'This indicates a critical issue with the double-entry transaction creation process.'
+            });
+        }
+
         res.status(201).json({
-            message: 'Expense created successfully',
+            message: 'Expense created successfully with double-entry transaction',
             expense: newExpense
         });
     } catch (error) {

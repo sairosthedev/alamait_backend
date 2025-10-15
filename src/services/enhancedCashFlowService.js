@@ -19,7 +19,7 @@ class EnhancedCashFlowService {
     
     /**
      * Generate comprehensive detailed cash flow statement
-     * @param {string} period - Year (e.g., "2024")
+     * @param {string} period - Year (e.g., "2024") or Month (e.g., "2025-09")
      * @param {string} basis - "cash" or "accrual"
      * @param {string} residenceId - Optional residence filter
      * @returns {Object} Detailed cash flow analysis
@@ -28,8 +28,19 @@ class EnhancedCashFlowService {
         try {
             console.log(`💰 Generating Enhanced Detailed Cash Flow Statement for ${period} (${basis} basis)${residenceId ? ` - Residence: ${residenceId}` : ''}`);
             
-            const startDate = new Date(`${period}-01-01`);
-            const endDate = new Date(`${period}-12-31`);
+            // Determine if period is monthly (YYYY-MM) or yearly (YYYY)
+            let startDate, endDate;
+            if (period.includes('-')) {
+                // Monthly period (e.g., "2025-09")
+                startDate = new Date(`${period}-01`);
+                endDate = new Date(startDate);
+                endDate.setMonth(endDate.getMonth() + 1);
+                endDate.setDate(0); // Last day of the month
+            } else {
+                // Yearly period (e.g., "2024")
+                startDate = new Date(`${period}-01-01`);
+                endDate = new Date(`${period}-12-31`);
+            }
             
             // Get all transaction entries for the period (exclude forfeiture transactions - no cash movement)
             const transactionQuery = {
@@ -107,11 +118,32 @@ class EnhancedCashFlowService {
             
             const netChangeInCash = netOperatingCashFlow + netInvestingCashFlow + netFinancingCashFlow;
             
+            // Calculate actual opening cash balance at beginning of period
+            // For cashflow, we need the balance BEFORE the period starts
+            const openingDate = new Date(startDate);
+            openingDate.setDate(openingDate.getDate() - 1); // Day before period starts
+            
+            // Ensure the opening date is valid
+            let openingCashBalance;
+            if (isNaN(openingDate.getTime())) {
+                console.log('⚠️ Invalid opening date, using start date instead');
+                openingCashBalance = await this.getOpeningCashBalance(startDate, residenceId);
+            } else {
+                openingCashBalance = await this.getOpeningCashBalance(openingDate, residenceId);
+            }
+            
+            // Calculate actual closing cash balance at end of period
+            const closingCashBalance = await this.getClosingCashBalance(endDate, residenceId);
+            
+            // Get cash balance breakdown by account
+            const cashBalanceByAccount = await this.getCashBalanceByAccount(endDate, residenceId);
+            console.log('💰 Cash balance by account result:', cashBalanceByAccount);
+            
             // Calculate cash breakdown
-            const cashBreakdown = await this.calculateCashBreakdown(transactionEntries, payments, period);
+            const cashBreakdown = await this.calculateCashBreakdown(transactionEntries, payments, period, residenceId);
             
             // Generate monthly breakdown
-            const monthlyBreakdown = this.generateMonthlyBreakdown(transactionEntries, payments, expenses, period);
+            const monthlyBreakdown = this.generateMonthlyBreakdown(transactionEntries, payments, expenses, period, openingCashBalance, startDate, endDate);
             
             // Calculate yearly totals from monthly breakdown
             const yearlyTotals = this.calculateYearlyTotals(monthlyBreakdown);
@@ -123,8 +155,8 @@ class EnhancedCashFlowService {
                 monthly_breakdown: monthlyBreakdown,
                 yearly_totals: yearlyTotals,
                 net_cash_flow: netChangeInCash,
-                opening_balance: 0,
-                closing_balance: netChangeInCash,
+                opening_balance: openingCashBalance,
+                closing_balance: closingCashBalance,
                 summary: {
                     best_cash_flow_month: this.getBestCashFlowMonth(monthlyBreakdown),
                     worst_cash_flow_month: this.getWorstCashFlowMonth(monthlyBreakdown),
@@ -132,6 +164,7 @@ class EnhancedCashFlowService {
                 },
                 // Enhanced detailed breakdown
                 cash_breakdown: cashBreakdown,
+                cash_balance_by_account: cashBalanceByAccount,
                 operating_activities: operatingActivities,
                 investing_activities: investingActivities,
                 financing_activities: financingActivities,
@@ -1464,6 +1497,27 @@ class EnhancedCashFlowService {
             const expenseTransactionId = expense.transactionId || expense._id;
             const expenseId = expense._id.toString();
             
+            // Enhanced duplicate detection - check if this expense has a corresponding transaction entry
+            // that was already processed in the transaction entries loop above
+            const hasCorrespondingTransaction = transactionEntries.some(entry => {
+                // Check if this transaction entry was created from this expense
+                return entry.sourceId && entry.sourceId.toString() === expenseId ||
+                       entry.sourceId && entry.sourceId.toString() === expenseTransactionId ||
+                       entry.metadata && entry.metadata.expenseId && entry.metadata.expenseId.toString() === expenseId ||
+                       entry.metadata && entry.metadata.expenseRecordId && entry.metadata.expenseRecordId.toString() === expenseId ||
+                       entry.reference && entry.reference === expense.expenseId ||
+                       entry.reference && entry.reference === expenseId ||
+                       // Check if expense was created from this journal entry
+                       (expense.metadata && expense.metadata.sourceTransactionEntryId && 
+                        expense.metadata.sourceTransactionEntryId.toString() === entry._id.toString()) ||
+                       (expense.metadata && expense.metadata.sourceTransactionId && 
+                        expense.metadata.sourceTransactionId === entry.transactionId) ||
+                       // NEW: Check if transaction entry and expense have same description, amount, and date
+                       (entry.description === expense.description && 
+                        entry.totalDebit === expense.amount && 
+                        Math.abs(new Date(entry.date) - new Date(expense.expenseDate)) < 24 * 60 * 60 * 1000); // Within 24 hours
+            });
+            
             // Check if this expense was already processed by checking:
             // 1. Direct transaction ID match
             // 2. Expense ID match (in case expense._id was used as reference)
@@ -1473,12 +1527,14 @@ class EnhancedCashFlowService {
             // 6. Check if the expense reference matches any processed expense ID
             // 7. Check if this expense's reference field matches any processed expense ID
             // 8. Check if this expense's expenseId field matches any processed expense ID
+            // 9. NEW: Check if this expense has a corresponding transaction entry that was already processed
             const isAlreadyProcessed = processedTransactions.has(expenseTransactionId) || 
                 processedTransactions.has(expenseId) ||
                 processedTransactions.has(expense.reference) ||
                 processedExpenses.has(expenseId) ||
                 processedExpenses.has(expense.reference) ||
                 processedExpenses.has(expense.expenseId) || // Check expenseId field
+                hasCorrespondingTransaction || // NEW: Skip if corresponding transaction was already processed
                 Array.from(processedExpenses).some(processedId => {
                     // Safely coerce to strings before using .includes to avoid TypeError
                     const pid = (processedId !== undefined && processedId !== null) ? String(processedId) : '';
@@ -1498,6 +1554,9 @@ class EnhancedCashFlowService {
                 });
             
             if (isAlreadyProcessed) {
+                console.log(`🔄 Skipping expense ${expense.expenseId} - already processed via transaction entry`);
+                console.log(`   Expense: ${expense.description} ($${expense.amount}) on ${expense.expenseDate}`);
+                console.log(`   Reason: ${hasCorrespondingTransaction ? 'Has corresponding transaction entry' : 'Already processed'}`);
                 return; // Skip this expense
             }
             
@@ -1768,12 +1827,13 @@ class EnhancedCashFlowService {
     /**
      * Generate monthly breakdown
      */
-    static generateMonthlyBreakdown(transactionEntries, payments, expenses, period) {
+    static generateMonthlyBreakdown(transactionEntries, payments, expenses, period, openingBalance = 0, startDate = null, endDate = null) {
         const months = {};
         
-        // Initialize all months
-        for (let month = 1; month <= 12; month++) {
-            const monthKey = `${period}-${String(month).padStart(2, '0')}`;
+        // Determine if this is a monthly period or yearly period
+        if (period.includes('-')) {
+            // Monthly period - only initialize the specific month
+            const monthKey = period; // e.g., "2025-09"
             months[monthKey] = {
                 income: {
                     total: 0,
@@ -1793,11 +1853,50 @@ class EnhancedCashFlowService {
                     management: 0,
                     transactions: [] // Add detailed expense transactions
                 },
+                cash_accounts: {
+                    // Individual cash account balances for this month
+                    breakdown: {},
+                    total: 0
+                },
                 net_cash_flow: 0,
                 transaction_count: 0,
                 payment_count: 0,
                 expense_count: 0
             };
+        } else {
+            // Yearly period - initialize all 12 months
+            for (let month = 1; month <= 12; month++) {
+                const monthKey = `${period}-${String(month).padStart(2, '0')}`;
+                months[monthKey] = {
+                    income: {
+                        total: 0,
+                        rental_income: 0,
+                        admin_fees: 0,
+                        deposits: 0,
+                        utilities: 0,
+                        advance_payments: 0,
+                        other_income: 0
+                    },
+                    expenses: {
+                        total: 0,
+                        maintenance: 0,
+                        utilities: 0,
+                        cleaning: 0,
+                        security: 0,
+                        management: 0,
+                        transactions: [] // Add detailed expense transactions
+                    },
+                    cash_accounts: {
+                        // Individual cash account balances for this month
+                        breakdown: {},
+                        total: 0
+                    },
+                    net_cash_flow: 0,
+                    transaction_count: 0,
+                    payment_count: 0,
+                    expense_count: 0
+                };
+            }
         }
         
         // Create a map of transaction entries to their corresponding payments for accurate date handling
@@ -1877,19 +1976,78 @@ class EnhancedCashFlowService {
             let effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
             const monthKey = effectiveDate.toISOString().slice(0, 7);
             
+            // For monthly periods, only process transactions in the specific month
+            if (period.includes('-') && monthKey !== period) {
+                return; // Skip transactions not in the specified month
+            }
+            
             if (months[monthKey]) {
                 months[monthKey].transaction_count++;
                 
+                // Track cash account balances for this month
                 if (entry.entries && entry.entries.length > 0) {
-                    // Process Cash/Bank debits (income) - check both Cash and Bank Account
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode || line.account?.code;
+                        const accountName = line.accountName || line.account?.name;
+                        
+                        // Include all cash accounts (1000-1999)
+                        if (accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101'))) {
+                            if (!months[monthKey].cash_accounts.breakdown[accountCode]) {
+                                months[monthKey].cash_accounts.breakdown[accountCode] = {
+                                    account_code: accountCode,
+                                    account_name: accountName,
+                                    balance: 0
+                                };
+                            }
+                            
+                            // Update balance (debit increases, credit decreases)
+                            months[monthKey].cash_accounts.breakdown[accountCode].balance += (line.debit || 0) - (line.credit || 0);
+                        }
+                    });
+                }
+                
+                if (entry.entries && entry.entries.length > 0) {
+                    // Process Cash/Bank debits (income) - include ALL cash accounts (1000-1999)
                     const cashDebit = entry.entries.find(line => {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
-                        return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.debit > 0;
+                        return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.debit > 0;
                     });
                     
                     if (cashDebit) {
                         const incomeAmount = cashDebit.debit;
+                        
+                        // Check for balance adjustments first (these are not income in balance sheet context)
+                        if (entry.description && (
+                            entry.description.toLowerCase().includes('balance adjustment') || 
+                            entry.description.toLowerCase().includes('opening balance') || 
+                            entry.transactionId.startsWith('ADJ-') || 
+                            entry.reference?.startsWith('ADJ-')
+                        )) {
+                            // This is a balance sheet adjustment, not income - don't count as income
+                            console.log(`💰 Balance adjustment excluded from monthly income: ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                            return; // Skip this transaction entry
+                        }
+                        
+                        // Check if this is an internal cash transfer (vault to petty cash, etc.)
+                        const isInternalTransfer = entry.description && (
+                            entry.description.toLowerCase().includes('gas') ||
+                            entry.description.toLowerCase().includes('petty cash') ||
+                            entry.description.toLowerCase().includes('cash allocation') ||
+                            entry.description.toLowerCase().includes('transfer')
+                        );
+                        
+                        // Check if this is actually a gas expense (debit to expense account) or internal transfer
+                        const hasExpenseAccount = entry.entries.some(line => 
+                            line.accountCode && line.accountCode.startsWith('5') && line.debit > 0
+                        );
+                        
+                        if (isInternalTransfer && !hasExpenseAccount) {
+                            // This is an internal transfer (no expense account) - don't count as income
+                            console.log(`💰 Internal transfer excluded from monthly income: ${incomeAmount}`);
+                            return; // Skip this transaction entry
+                        }
+                        
                         months[monthKey].income.total += incomeAmount;
                         
                         // Categorize income
@@ -1976,6 +2134,7 @@ class EnhancedCashFlowService {
                         let monthlyCategory = 'other_income';
                         if (entry.description) {
                             const desc = entry.description.toLowerCase();
+                            
                             // Check for admin payments first (exclude from advance payments)
                             if (desc.includes('admin') || (entry.metadata && entry.metadata.paymentType === 'admin') || (entry.metadata && entry.metadata.paymentType === 'advance_admin')) {
                                 // Admin payments should NOT be categorized as advance payments
@@ -2179,15 +2338,34 @@ class EnhancedCashFlowService {
                         }
                     }
                     
-                    // Process Cash/Bank credits (expenses) - check both Cash and Bank Account
+                    // Process Cash/Bank credits (expenses) - include ALL cash accounts (1000-1999)
                     const cashCredit = entry.entries.find(line => {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
-                        return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
+                        return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.credit > 0;
                     });
                     
                     if (cashCredit) {
                         const expenseAmount = cashCredit.credit;
+                        
+                        // Check if this is an internal cash transfer (vault to petty cash, etc.)
+                        const isInternalTransfer = entry.description && (
+                            entry.description.toLowerCase().includes('gas') ||
+                            entry.description.toLowerCase().includes('petty cash') ||
+                            entry.description.toLowerCase().includes('cash allocation') ||
+                            entry.description.toLowerCase().includes('transfer')
+                        );
+                        
+                        // Check if this is actually a gas expense (debit to expense account) or internal transfer
+                        const hasExpenseAccount = entry.entries.some(line => 
+                            line.accountCode && line.accountCode.startsWith('5') && line.debit > 0
+                        );
+                        
+                        if (isInternalTransfer && !hasExpenseAccount) {
+                            // This is an internal transfer (no expense account)
+                            console.log(`💰 Internal transfer excluded from monthly expenses: ${expenseAmount}`);
+                            return; // Skip this transaction entry
+                        }
                         
                         // Check if this is a petty cash allocation (should not be counted as expense)
                         const isPettyCashTransfer = entry.description && (
@@ -2224,7 +2402,7 @@ class EnhancedCashFlowService {
                             if (desc.includes('maintenance')) {
                                 months[monthKey].expenses.maintenance += expenseAmount;
                                 expenseTransaction.category = 'maintenance';
-                            } else if (desc.includes('utilit')) {
+                            } else if (desc.includes('utilit') || desc.includes('gas')) {
                                 months[monthKey].expenses.utilities += expenseAmount;
                                 expenseTransaction.category = 'utilities';
                             } else if (desc.includes('clean')) {
@@ -2394,15 +2572,32 @@ class EnhancedCashFlowService {
             months[monthKey].net_cash_flow = months[monthKey].income.total - months[monthKey].expenses.total;
         });
         
+        // Calculate opening and closing balances for each month
+        let runningBalance = openingBalance;
+        const sortedMonths = Object.keys(months).sort();
+        
+        sortedMonths.forEach(monthKey => {
+            months[monthKey].opening_balance = runningBalance;
+            months[monthKey].closing_balance = runningBalance + months[monthKey].net_cash_flow;
+            runningBalance = months[monthKey].closing_balance;
+        });
+        
         return months;
     }
     
     /**
      * Calculate comprehensive cash breakdown
      */
-    static async calculateCashBreakdown(transactionEntries, payments, period) {
+    static async calculateCashBreakdown(transactionEntries, payments, period, residenceId = null) {
+        // Calculate actual beginning cash balance
+        // For cashflow, we need the balance BEFORE the period starts
+        const startDate = new Date(`${period}-01-01`);
+        const openingDate = new Date(startDate);
+        openingDate.setDate(openingDate.getDate() - 1); // Day before period starts
+        const beginningCash = await this.getOpeningCashBalance(openingDate, residenceId);
+        
         const cashBreakdown = {
-            beginning_cash: 0,
+            beginning_cash: beginningCash,
             ending_cash: 0,
             cash_inflows: {
                 total: 0,
@@ -2534,24 +2729,120 @@ class EnhancedCashFlowService {
                 
                 const monthKey = effectiveDate.toISOString().slice(0, 7);
                 
-                // Process cash inflows (debits to cash accounts)
+                // Process cash inflows (debits to cash accounts) - include ALL cash accounts (1000-1999)
                 const cashInflow = entry.entries.find(line => {
                     const accountCode = line.accountCode || line.account?.code;
                     const accountName = line.accountName || line.account?.name;
-                    return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.debit > 0;
+                    // Include all cash accounts (1000-1999 series)
+                    return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.debit > 0;
                 });
                 
                 // Also check for petty cash account inflows (internal transfers)
                 const pettyCashInflow = entry.entries.find(line => {
                     const accountCode = line.accountCode || line.account?.code;
                     const accountName = line.accountName || line.account?.name;
-                    return accountCode === '1011' && accountName === 'Admin Petty Cash' && line.debit > 0;
+                    return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.debit > 0;
                 });
                 
                 if (cashInflow) {
                     const amount = cashInflow.debit;
-                    cashBreakdown.cash_inflows.total += amount;
-                    cashBreakdown.cash_inflows.from_customers += amount;
+                    const accountCode = cashInflow.accountCode || cashInflow.account?.code;
+                    const accountName = cashInflow.accountName || cashInflow.account?.name;
+                    
+                    console.log(`💰 Cash inflow detected: $${amount} to ${accountCode} (${accountName}) - Transaction: ${entry.transactionId}`);
+                    
+                    // Check if this is an internal cash transfer (vault to petty cash, etc.)
+                    // Only count as internal transfer if it's purely moving cash between accounts
+                    // Gas payments are actual expenses, not internal transfers
+                    const isInternalTransfer = entry.description && (
+                        entry.description.toLowerCase().includes('petty cash') ||
+                        entry.description.toLowerCase().includes('cash allocation') ||
+                        entry.description.toLowerCase().includes('transfer')
+                    ) && !entry.description.toLowerCase().includes('gas');
+                    
+                    if (isInternalTransfer) {
+                        // This is an internal cash transfer - don't count as inflow
+                        console.log(`💰 Internal cash transfer detected: $${amount} to ${accountCode} - not counted as inflow`);
+                        
+                        // Track as internal cash transfer
+                        if (!cashBreakdown.internal_cash_transfers) {
+                            cashBreakdown.internal_cash_transfers = {
+                                total: 0,
+                                by_month: {},
+                                transactions: []
+                            };
+                        }
+                        cashBreakdown.internal_cash_transfers.total += amount;
+                        cashBreakdown.internal_cash_transfers.transactions.push({
+                            transactionId: entry.transactionId,
+                            date: effectiveDate,
+                            amount: amount,
+                            to_account: accountName,
+                            description: entry.description
+                        });
+                        
+                        if (cashBreakdown.by_month[monthKey]) {
+                            if (!cashBreakdown.by_month[monthKey].internal_transfers) {
+                                cashBreakdown.by_month[monthKey].internal_transfers = 0;
+                            }
+                            cashBreakdown.by_month[monthKey].internal_transfers += amount;
+                        }
+                        
+                        return; // Skip to next entry - don't count as inflow
+                    }
+                    
+                    // Categorize the inflow based on transaction type first
+                    if (entry.description && entry.description.includes('Balance adjustment')) {
+                        // This is a balance adjustment (like vault opening balance)
+                        cashBreakdown.cash_inflows.total += amount;
+                        cashBreakdown.cash_inflows.from_other_sources += amount;
+                        console.log(`💰 Balance adjustment inflow: $${amount} to ${accountCode}`);
+                    } else if (entry.description && entry.description.toLowerCase().includes('gas')) {
+                        // This is part of a gas transaction - check if it's an internal transfer
+                        const hasExpenseAccount = entry.entries.some(line => 
+                            line.accountCode && line.accountCode.startsWith('5') && line.debit > 0
+                        );
+                        
+                        
+                        if (!hasExpenseAccount) {
+                            // This is an internal transfer (no expense account)
+                            console.log(`💰 Internal transfer inflow: $${amount} to ${accountCode} - not counted as inflow`);
+                            
+                            // Track as internal cash transfer
+                            if (!cashBreakdown.internal_cash_transfers) {
+                                cashBreakdown.internal_cash_transfers = {
+                                    total: 0,
+                                    by_month: {},
+                                    transactions: []
+                                };
+                            }
+                            cashBreakdown.internal_cash_transfers.total += amount;
+                            cashBreakdown.internal_cash_transfers.transactions.push({
+                                transactionId: entry.transactionId,
+                                date: effectiveDate,
+                                amount: amount,
+                                to_account: accountName,
+                                description: entry.description
+                            });
+                            
+                            if (cashBreakdown.by_month[monthKey]) {
+                                if (!cashBreakdown.by_month[monthKey].internal_transfers) {
+                                    cashBreakdown.by_month[monthKey].internal_transfers = 0;
+                                }
+                                cashBreakdown.by_month[monthKey].internal_transfers += amount;
+                            }
+                            
+                            return; // Skip to next entry - don't count as inflow
+                        } else {
+                            // This is a real gas expense inflow (has expense account)
+                            cashBreakdown.cash_inflows.total += amount;
+                            cashBreakdown.cash_inflows.from_customers += amount;
+                        }
+                    } else {
+                        // Default to customer payments
+                        cashBreakdown.cash_inflows.total += amount;
+                        cashBreakdown.cash_inflows.from_customers += amount;
+                    }
                     
                     // Check if this is an advance payment
                     const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
@@ -2639,15 +2930,60 @@ class EnhancedCashFlowService {
                     }
                 }
                 
-                // Process cash outflows (credits to cash accounts)
+                // Process cash outflows (credits to cash accounts) - include ALL cash accounts (1000-1999)
                 const cashOutflow = entry.entries.find(line => {
                     const accountCode = line.accountCode || line.account?.code;
                     const accountName = line.accountName || line.account?.name;
-                    return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
+                    // Include all cash accounts (1000-1999 series)
+                    return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.credit > 0;
                 });
                 
                 if (cashOutflow) {
                     const amount = cashOutflow.credit;
+                    const accountCode = cashOutflow.accountCode || cashOutflow.account?.code;
+                    const accountName = cashOutflow.accountName || cashOutflow.account?.name;
+                    
+                    console.log(`💰 Cash outflow detected: $${amount} from ${accountCode} (${accountName}) - Transaction: ${entry.transactionId}`);
+                    
+                    // Check if this is an internal cash transfer (vault to petty cash, etc.)
+                    // Only count as internal transfer if it's purely moving cash between accounts
+                    // Gas payments are actual expenses, not internal transfers
+                    const isInternalTransfer = entry.description && (
+                        entry.description.toLowerCase().includes('petty cash') ||
+                        entry.description.toLowerCase().includes('cash allocation') ||
+                        entry.description.toLowerCase().includes('transfer')
+                    ) && !entry.description.toLowerCase().includes('gas');
+                    
+                    if (isInternalTransfer) {
+                        // This is an internal cash transfer - don't count as outflow
+                        console.log(`💰 Internal cash transfer detected: $${amount} from ${accountCode} - not counted as outflow`);
+                        
+                        // Track as internal cash transfer
+                        if (!cashBreakdown.internal_cash_transfers) {
+                            cashBreakdown.internal_cash_transfers = {
+                                total: 0,
+                                by_month: {},
+                                transactions: []
+                            };
+                        }
+                        cashBreakdown.internal_cash_transfers.total += amount;
+                        cashBreakdown.internal_cash_transfers.transactions.push({
+                            transactionId: entry.transactionId,
+                            date: effectiveDate,
+                            amount: amount,
+                            from_account: accountName,
+                            description: entry.description
+                        });
+                        
+                        if (cashBreakdown.by_month[monthKey]) {
+                            if (!cashBreakdown.by_month[monthKey].internal_transfers) {
+                                cashBreakdown.by_month[monthKey].internal_transfers = 0;
+                            }
+                            cashBreakdown.by_month[monthKey].internal_transfers += amount;
+                        }
+                        
+                        return; // Skip to next entry - don't count as outflow
+                    }
                     
                     // Check if this is a petty cash allocation (cash transfer, not expense)
                     const isPettyCashTransfer = entry.description && (
@@ -2689,8 +3025,55 @@ class EnhancedCashFlowService {
                     }
                     
                     // Only count actual business expenses as cash outflows
-                    cashBreakdown.cash_outflows.total += amount;
-                    cashBreakdown.cash_outflows.for_expenses += amount;
+                    // Don't add to total yet - we'll add it after checking if it's an internal transfer
+                    
+                    // Categorize the outflow based on transaction type
+                    if (entry.description && entry.description.toLowerCase().includes('gas')) {
+                        // Check if this is actually a gas expense (debit to expense account) or internal transfer
+                        const hasExpenseAccount = entry.entries.some(line => 
+                            line.accountCode && line.accountCode.startsWith('5') && line.debit > 0
+                        );
+                        
+                        if (hasExpenseAccount) {
+                            // This is a real gas expense (has expense account debit)
+                            cashBreakdown.cash_outflows.total += amount;
+                            cashBreakdown.cash_outflows.for_expenses += amount;
+                            console.log(`💰 Gas expense outflow: $${amount} from ${accountCode}`);
+                        } else {
+                            // This is an internal transfer (no expense account)
+                            console.log(`💰 Internal transfer outflow: $${amount} from ${accountCode} - not counted as expense`);
+                            
+                            // Track as internal cash transfer
+                            if (!cashBreakdown.internal_cash_transfers) {
+                                cashBreakdown.internal_cash_transfers = {
+                                    total: 0,
+                                    by_month: {},
+                                    transactions: []
+                                };
+                            }
+                            cashBreakdown.internal_cash_transfers.total += amount;
+                            cashBreakdown.internal_cash_transfers.transactions.push({
+                                transactionId: entry.transactionId,
+                                date: effectiveDate,
+                                amount: amount,
+                                from_account: accountName,
+                                description: entry.description
+                            });
+                            
+                            if (cashBreakdown.by_month[monthKey]) {
+                                if (!cashBreakdown.by_month[monthKey].internal_transfers) {
+                                    cashBreakdown.by_month[monthKey].internal_transfers = 0;
+                                }
+                                cashBreakdown.by_month[monthKey].internal_transfers += amount;
+                            }
+                            
+                            return; // Skip to next entry - don't count as expense
+                        }
+                    } else {
+                        // Default to expenses
+                        cashBreakdown.cash_outflows.total += amount;
+                        cashBreakdown.cash_outflows.for_expenses += amount;
+                    }
                     
                     if (cashBreakdown.by_month[monthKey]) {
                         cashBreakdown.by_month[monthKey].cash_outflows += amount;
@@ -2717,6 +3100,7 @@ class EnhancedCashFlowService {
         
         // Calculate cash reconciliation
         // Note: Internal transfers don't affect net cash flow, so they're excluded from reconciliation
+        cashBreakdown.cash_reconciliation.beginning_cash = cashBreakdown.beginning_cash;
         cashBreakdown.cash_reconciliation.cash_inflows = cashBreakdown.cash_inflows.total;
         cashBreakdown.cash_reconciliation.cash_outflows = cashBreakdown.cash_outflows.total;
         cashBreakdown.cash_reconciliation.calculated_ending_cash = cashBreakdown.beginning_cash + cashBreakdown.net_change_in_cash;
@@ -2782,19 +3166,56 @@ class EnhancedCashFlowService {
      * Format cash flow statement in standard format
      */
     static formatCashFlowStatement(cashFlowData) {
-        const { period, cash_breakdown, operating_activities, investing_activities, financing_activities, summary } = cashFlowData;
+        const { period, cash_breakdown, cash_balance_by_account, operating_activities, investing_activities, financing_activities, summary } = cashFlowData;
+        
+        // Format cash and cash equivalents with clear account names
+        const cashAndEquivalents = {
+            total_cash: cash_breakdown.ending_cash,
+            breakdown: {}
+        };
+        
+        if (cash_balance_by_account) {
+            console.log('💰 Formatting cash balance by account:', cash_balance_by_account);
+            Object.values(cash_balance_by_account).forEach(account => {
+                cashAndEquivalents.breakdown[account.accountName] = {
+                    account_code: account.accountCode,
+                    balance: account.balance,
+                    description: this.getCashAccountDescription(account.accountName)
+                };
+            });
+            console.log('💰 Formatted cash and equivalents breakdown:', cashAndEquivalents.breakdown);
+        } else {
+            console.log('❌ No cash_balance_by_account data provided to formatCashFlowStatement');
+        }
         
         return {
             period,
             cash_flow_statement: {
+                // Cash and Cash Equivalents at Beginning of Period
+                cash_and_cash_equivalents_beginning: {
+                    total_cash: cash_breakdown.beginning_cash,
+                    breakdown: this.getBeginningCashBreakdown(cash_breakdown.beginning_cash)
+                },
+                
                 // Operating Activities
                 operating_activities: {
-                    cash_received_from_customers: operating_activities.cash_received_from_customers,
-                    cash_paid_to_suppliers: operating_activities.cash_paid_to_suppliers,
-                    cash_paid_for_expenses: operating_activities.cash_paid_for_expenses,
-                    net_cash_from_operating_activities: operating_activities.cash_received_from_customers - 
-                                                       operating_activities.cash_paid_to_suppliers - 
-                                                       operating_activities.cash_paid_for_expenses
+                    // Cash Inflows (Income)
+                    cash_inflows: {
+                        rental_income: cash_breakdown.cash_inflows.from_customers,
+                        advance_payments: cash_breakdown.cash_inflows.from_advance_payments,
+                        other_income: cash_breakdown.cash_inflows.from_other_sources,
+                        total_cash_inflows: cash_breakdown.cash_inflows.total
+                    },
+                    
+                    // Cash Outflows (Expenses)
+                    cash_outflows: {
+                        supplier_payments: cash_breakdown.cash_outflows.to_suppliers,
+                        operating_expenses: cash_breakdown.cash_outflows.for_expenses,
+                        other_payments: cash_breakdown.cash_outflows.for_other_purposes,
+                        total_cash_outflows: cash_breakdown.cash_outflows.total
+                    },
+                    
+                    net_cash_from_operating_activities: cash_breakdown.cash_inflows.total - cash_breakdown.cash_outflows.total
                 },
                 
                 // Investing Activities
@@ -2816,20 +3237,13 @@ class EnhancedCashFlowService {
                 // Net Change in Cash
                 net_change_in_cash: summary.net_change_in_cash,
                 
-                // Cash at Beginning of Period
-                cash_at_beginning_of_period: cash_breakdown.beginning_cash,
+                // Cash and Cash Equivalents at End of Period
+                cash_and_cash_equivalents_ending: cashAndEquivalents,
                 
-                // Cash at End of Period
-                cash_at_end_of_period: cash_breakdown.ending_cash,
-                
-                // Cash Reconciliation
-                cash_reconciliation: {
-                    beginning_cash: cash_breakdown.beginning_cash,
-                    net_change_in_cash: summary.net_change_in_cash,
-                    calculated_ending_cash: cash_breakdown.beginning_cash + summary.net_change_in_cash,
-                    actual_ending_cash: cash_breakdown.ending_cash,
-                    difference: cash_breakdown.ending_cash - (cash_breakdown.beginning_cash + summary.net_change_in_cash),
-                    note: "Internal cash transfers are excluded from net cash flow calculation"
+                // Internal Cash Transfers (for reference)
+                internal_cash_transfers: {
+                    total_transfers: cash_breakdown.internal_cash_transfers.total,
+                    note: "Internal transfers between cash accounts do not affect net cash flow"
                 }
             },
             
@@ -2851,6 +3265,189 @@ class EnhancedCashFlowService {
                 advance_payments_impact: cash_breakdown.advance_payments_impact
             }
         };
+    }
+    
+    /**
+     * Get description for cash account names
+     */
+    static getCashAccountDescription(accountName) {
+        const descriptions = {
+            'Admin Petty Cash': 'Petty cash for small expenses',
+            'Cbz Vault': 'Main cash vault for large amounts',
+            'Bank Account': 'Primary business bank account',
+            'Cash on Hand': 'Physical cash available',
+            'Petty Cash': 'Small cash fund for minor expenses',
+            'Ecocash Wallet': 'Mobile money wallet for digital payments',
+            'Finance Petty Cash': 'Petty cash managed by finance department',
+            'General Petty Cash': 'General purpose petty cash fund',
+            'Property Manager Petty Cash': 'Petty cash for property management expenses',
+            'Maintenance Petty Cash': 'Petty cash for maintenance expenses',
+            'Innbucks': 'Innbucks digital wallet',
+            'Ecocash': 'Ecocash mobile money service'
+        };
+        return descriptions[accountName] || 'Cash account';
+    }
+    
+    /**
+     * Get beginning cash breakdown (simplified for now)
+     */
+    static getBeginningCashBreakdown(beginningCash) {
+        if (beginningCash === 0) {
+            return {
+                'No Opening Balance': {
+                    balance: 0,
+                    description: 'No cash balance at beginning of period'
+                }
+            };
+        }
+        
+        return {
+            'Opening Balance': {
+                balance: beginningCash,
+                description: 'Cash balance at beginning of period'
+            }
+        };
+    }
+    
+    /**
+     * Get opening cash balance at a specific date
+     * This includes all cash accounts (1000-1999) up to the specified date
+     */
+    static async getOpeningCashBalance(asOfDate, residenceId = null) {
+        try {
+            console.log(`💰 Calculating opening cash balance as of ${asOfDate.toISOString().slice(0, 10)}`);
+            
+            // Get all transaction entries up to the specified date
+            const query = {
+                date: { $lte: asOfDate },
+                // Exclude forfeiture transactions as they don't involve cash movement
+                'metadata.isForfeiture': { $ne: true }
+            };
+            
+            if (residenceId) {
+                query.residence = new mongoose.Types.ObjectId(residenceId);
+            }
+            
+            const entries = await TransactionEntry.find(query)
+                .populate('entries')
+                .sort({ date: 1 });
+            
+            let cashBalance = 0;
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    // Include all cash accounts (1000-1999)
+                    if (line.accountCode && (line.accountCode.startsWith('100') || line.accountCode.startsWith('101'))) {
+                        cashBalance += (line.debit || 0) - (line.credit || 0);
+                        console.log(`💰 Cash transaction: ${line.accountCode} (${line.accountName}) - Debit: ${line.debit || 0}, Credit: ${line.credit || 0}, Balance: ${cashBalance}`);
+                    }
+                });
+            });
+            
+            console.log(`💰 Total opening cash balance: $${cashBalance}`);
+            return cashBalance;
+            
+        } catch (error) {
+            console.error('❌ Error calculating opening cash balance:', error);
+            return 0;
+        }
+    }
+    
+    /**
+     * Get cash balance breakdown by account at a specific date
+     * This shows the cash balance in each cash account (1000-1999)
+     */
+    static async getCashBalanceByAccount(asOfDate, residenceId = null) {
+        try {
+            console.log(`💰 Calculating cash balance by account as of ${asOfDate.toISOString().slice(0, 10)}`);
+            
+            // Get all transaction entries up to the specified date
+            const query = {
+                date: { $lte: asOfDate },
+                // Exclude forfeiture transactions as they don't involve cash movement
+                'metadata.isForfeiture': { $ne: true }
+            };
+            
+            if (residenceId) {
+                query.residence = new mongoose.Types.ObjectId(residenceId);
+            }
+            
+            const entries = await TransactionEntry.find(query)
+                .populate('entries')
+                .sort({ date: 1 });
+            
+            const accountBalances = {};
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    // Include all cash accounts (1000-1999)
+                    if (line.accountCode && (line.accountCode.startsWith('100') || line.accountCode.startsWith('101'))) {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        
+                        if (!accountBalances[accountCode]) {
+                            accountBalances[accountCode] = {
+                                accountCode,
+                                accountName,
+                                balance: 0
+                            };
+                        }
+                        
+                        accountBalances[accountCode].balance += (line.debit || 0) - (line.credit || 0);
+                    }
+                });
+            });
+            
+            console.log(`💰 Cash balance by account:`, accountBalances);
+            return accountBalances;
+            
+        } catch (error) {
+            console.error('❌ Error calculating cash balance by account:', error);
+            return {};
+        }
+    }
+
+    /**
+     * Get closing cash balance at a specific date
+     * This includes all cash accounts (1000-1999) up to the specified date
+     */
+    static async getClosingCashBalance(asOfDate, residenceId = null) {
+        try {
+            console.log(`💰 Calculating closing cash balance as of ${asOfDate.toISOString().slice(0, 10)}`);
+            
+            // Get all transaction entries up to the specified date
+            const query = {
+                date: { $lte: asOfDate },
+                // Exclude forfeiture transactions as they don't involve cash movement
+                'metadata.isForfeiture': { $ne: true }
+            };
+            
+            if (residenceId) {
+                query.residence = new mongoose.Types.ObjectId(residenceId);
+            }
+            
+            const entries = await TransactionEntry.find(query)
+                .populate('entries')
+                .sort({ date: 1 });
+            
+            let cashBalance = 0;
+            
+            entries.forEach(entry => {
+                entry.entries.forEach(line => {
+                    // Include all cash accounts (1000-1999)
+                    if (line.accountCode && (line.accountCode.startsWith('100') || line.accountCode.startsWith('101'))) {
+                        cashBalance += (line.debit || 0) - (line.credit || 0);
+                    }
+                });
+            });
+            
+            console.log(`💰 Total closing cash balance: $${cashBalance}`);
+            return cashBalance;
+            
+        } catch (error) {
+            console.error('❌ Error calculating closing cash balance:', error);
+            return 0;
+        }
     }
 }
 

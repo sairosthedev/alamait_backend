@@ -1075,6 +1075,83 @@ class TransactionController {
             await transactionEntry.save();
             console.log('✅ Transaction entry created:', transactionEntry._id);
             
+            // Check if this transaction involves expense accounts and create expense record
+            let createdExpense = null;
+            const expenseEntry = entries.find(entry => {
+                const accountInfo = accountMap[entry.account];
+                return accountInfo.type === 'Expense' && entry.debit > 0;
+            });
+            
+            if (expenseEntry) {
+                try {
+                    console.log('💰 Creating expense record for manual journal entry...');
+                    
+                    const accountInfo = accountMap[expenseEntry.account];
+                    const expenseAmount = expenseEntry.debit;
+                    
+                    // Generate unique expense ID
+                    const { generateUniqueId } = require('../../utils/idGenerator');
+                    const expenseId = await generateUniqueId('EXP');
+                    
+                    // Determine expense category based on account name
+                    let category = 'Other';
+                    const accountName = accountInfo.name.toLowerCase();
+                    if (accountName.includes('maintenance')) category = 'Maintenance';
+                    else if (accountName.includes('utility') || accountName.includes('gas') || accountName.includes('water') || accountName.includes('electricity')) category = 'Utilities';
+                    else if (accountName.includes('tax')) category = 'Taxes';
+                    else if (accountName.includes('insurance')) category = 'Insurance';
+                    else if (accountName.includes('salary') || accountName.includes('wage')) category = 'Salaries';
+                    else if (accountName.includes('supply')) category = 'Supplies';
+                    
+                    // Create expense record with proper linking
+                    const newExpense = new Expense({
+                        expenseId,
+                        residence: residence._id || residence,
+                        category,
+                        amount: expenseAmount,
+                        description: description,
+                        expenseDate: date ? new Date(date) : new Date(),
+                        paymentStatus: 'Paid', // Manual journal entries are considered paid
+                        createdBy: req.user._id,
+                        period: 'monthly',
+                        paymentMethod: 'Cash', // Default for manual entries
+                        approvedBy: req.user._id,
+                        approvedAt: new Date(),
+                        approvedByEmail: req.user.email,
+                        transactionId: transactionEntry._id, // Link to transaction entry
+                        notes: `Created from manual journal entry: ${transactionId}`,
+                        // Add metadata to track the relationship
+                        metadata: {
+                            source: 'journal_entry',
+                            sourceTransactionId: transactionId,
+                            sourceTransactionEntryId: transactionEntry._id,
+                            createdFrom: 'manual_journal_entry'
+                        }
+                    });
+                    
+                    await newExpense.save();
+                    createdExpense = newExpense;
+                    
+                    // Update transaction entry to link to expense
+                    await TransactionEntry.findByIdAndUpdate(transactionEntry._id, {
+                        $set: { 
+                            sourceId: newExpense._id,
+                            sourceModel: 'Expense',
+                            // Add metadata to track the relationship
+                            'metadata.expenseId': newExpense._id,
+                            'metadata.expenseRecordId': newExpense._id,
+                            'metadata.linkedExpense': true
+                        }
+                    });
+                    
+                    console.log('✅ Expense record created:', newExpense._id);
+                    
+                } catch (expenseError) {
+                    console.error('❌ Error creating expense record:', expenseError);
+                    // Don't fail the transaction creation if expense creation fails
+                }
+            }
+            
             console.log('✅ Double-entry transaction created successfully');
             
             res.status(201).json({
@@ -1091,6 +1168,13 @@ class TransactionController {
                         entries: transactionEntry.entries,
                         balanced: transactionEntry.totalDebit === transactionEntry.totalCredit
                     },
+                    expense: createdExpense ? {
+                        _id: createdExpense._id,
+                        expenseId: createdExpense.expenseId,
+                        category: createdExpense.category,
+                        amount: createdExpense.amount,
+                        description: createdExpense.description
+                    } : null,
                     summary: {
                         totalDebit,
                         totalCredit,
