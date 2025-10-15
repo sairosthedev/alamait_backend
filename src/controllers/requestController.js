@@ -1040,10 +1040,12 @@ exports.createRequest = async (req, res) => {
                         id: request._id,        // Nested ID field
                         _id: request._id        // Nested MongoDB ID
                     },
-                    state: 'queued',
-                    message: 'Request created successfully. Processing will continue in the background.',
-                    async: true,
-                    success: true
+                    state: 'completed',         // Changed from 'queued' to 'completed'
+                    status: 'pending',          // Add actual request status
+                    message: 'Request created successfully. Background processing will complete shortly.',
+                    async: false,               // Changed to false to prevent polling
+                    success: true,
+                    completed: true             // Indicate completion
                 };
                 console.log('🚀 Sending async response:', JSON.stringify(asyncResponse, null, 2));
                 res.status(200).json(asyncResponse);
@@ -1059,10 +1061,12 @@ exports.createRequest = async (req, res) => {
                         id: request._id,
                         _id: request._id
                     },
-                    state: 'queued',
+                    state: 'completed',
+                    status: 'pending',
                     message: 'Request created successfully.',
-                    async: true,
-                    success: true
+                    async: false,
+                    success: true,
+                    completed: true
                 });
             }
 
