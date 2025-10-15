@@ -1031,11 +1031,12 @@ exports.createRequest = async (req, res) => {
         // If async requested, return quickly and continue heavy work in background
         if (shouldUseAsync) {
             try {
-                res.status(202).json({ 
+                res.status(200).json({ 
                     id: request._id, 
                     state: 'queued',
                     message: 'Request created successfully. Processing will continue in the background.',
-                    async: true
+                    async: true,
+                    success: true
                 });
             } catch (_) { /* ignore double-send protection */ }
 
@@ -1240,7 +1241,10 @@ exports.createRequest = async (req, res) => {
             }, 1000); // 1 second delay to avoid blocking
         }
         
-        res.status(201).json(populatedRequest);
+        res.status(201).json({
+            ...populatedRequest.toObject(),
+            success: true
+        });
     } catch (error) {
         console.error('Error creating request:', error);
         res.status(500).json({ message: error.message });
