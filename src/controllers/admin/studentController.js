@@ -1729,18 +1729,89 @@ function getLeaseTemplateFile(residenceName) {
  */
 exports.uploadCsvStudents = async (req, res) => {
     try {
-        const { csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent } = req.body;
+        let { csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent } = req.body;
         
         console.log('📁 Processing CSV upload for students in residence:', residenceId);
+        console.log('📊 Original csvData type:', typeof csvData);
+        console.log('📊 Original csvData is array:', Array.isArray(csvData));
+        console.log('📊 Original csvData length:', Array.isArray(csvData) ? csvData.length : 'Not an array');
         
+        // DEBUG: Log the exact structure received
+        console.log('🔍 FULL REQUEST BODY STRUCTURE:');
+        console.log(JSON.stringify({
+            csvDataLength: Array.isArray(csvData) ? csvData.length : 'not array',
+            csvDataFirst3: Array.isArray(csvData) ? csvData.slice(0, 3) : csvData,
+            residenceId: residenceId,
+            hasDefaultDates: !!defaultStartDate && !!defaultEndDate
+        }, null, 2));
+
         // Set extended timeout for bulk operations
         req.setTimeout(300000); // 5 minutes
         res.setTimeout(300000); // 5 minutes
-        
-        if (!csvData || !Array.isArray(csvData) || csvData.length === 0) {
+
+        // FIX: Ensure csvData is always an array and properly formatted
+        if (!csvData) {
             return res.status(400).json({
                 success: false,
-                message: 'CSV data is required and must be an array'
+                message: 'CSV data is required'
+            });
+        }
+        
+        // Convert single object to array if needed
+        if (!Array.isArray(csvData)) {
+            console.log('🔄 Converting single object to array');
+            csvData = [csvData];
+        }
+        
+        // FIX: Handle case where csvData might be an array-like object instead of true array
+        if (Array.isArray(csvData) && csvData.length > 0) {
+            // Ensure each item is a proper object
+            csvData = csvData.map((item, index) => {
+                if (item && typeof item === 'object') {
+                    return item;
+                } else {
+                    console.log(`⚠️ Item ${index} is not an object:`, item);
+                    return null;
+                }
+            }).filter(item => item !== null);
+        }
+
+        console.log('✅ Final csvData length:', csvData.length);
+        console.log('📋 All student emails:', csvData.map(s => s?.email).filter(Boolean));
+
+        // FILTER OUT FAILING STUDENTS
+        const nonFailingStudents = csvData.filter(student => {
+            if (!student || typeof student !== 'object') {
+                console.log('❌ Invalid student data:', student);
+                return false;
+            }
+            
+            // Define what "failing" means - adjust these conditions as needed
+            const isFailing = 
+                student.status === 'failed' || 
+                student.status === 'inactive' ||
+                student.status === 'suspended' ||
+                student.failing === true ||
+                student.failing === 'true' ||
+                (student.grade && parseFloat(student.grade) < 60) || // Example: grade below 60%
+                student.remarks?.toLowerCase().includes('fail'); // Example: remarks contain "fail"
+            
+            if (student.email) {
+                console.log(`📊 Student ${student.email}: failing = ${isFailing}, status = ${student.status}`);
+            }
+            return !isFailing;
+        });
+
+        console.log(`📊 CSV Filter Results:`);
+        console.log(`   - Total students in CSV: ${csvData.length}`);
+        console.log(`   - Non-failing students: ${nonFailingStudents.length}`);
+        console.log(`   - Failing students filtered out: ${csvData.length - nonFailingStudents.length}`);
+        console.log(`   - Non-failing emails:`, nonFailingStudents.map(s => s.email));
+
+        if (nonFailingStudents.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No non-failing students found in CSV data'
             });
         }
         
@@ -1763,27 +1834,24 @@ exports.uploadCsvStudents = async (req, res) => {
         const results = {
             successful: [],
             failed: [],
+            filtered: csvData.length - nonFailingStudents.length,
             summary: {
-                totalProcessed: csvData.length,
+                totalProcessed: nonFailingStudents.length,
                 totalSuccessful: 0,
                 totalFailed: 0,
                 totalStudents: 0
             }
         };
         
-        // Force ALL CSV uploads to use async processing to prevent timeouts
-        const shouldUseAsync = true; // Always use async for CSV uploads
+        // Use async processing for multiple students
+        const shouldUseAsync = nonFailingStudents.length > 1;
         
         console.log(`📊 CSV Upload Analysis:`);
-        console.log(`   - Total students: ${csvData.length}`);
+        console.log(`   - Total non-failing students: ${nonFailingStudents.length}`);
         console.log(`   - Should use async: ${shouldUseAsync}`);
-        console.log(`   - Async threshold: 1 student`);
-        console.log(`   - CSV data type: ${typeof csvData}`);
-        console.log(`   - CSV data is array: ${Array.isArray(csvData)}`);
-        console.log(`   - First student email: ${csvData[0]?.email || 'No email'}`);
         
         if (shouldUseAsync) {
-            console.log(`🔄 CSV upload detected (${csvData.length} students). Using async processing...`);
+            console.log(`🔄 CSV upload detected (${nonFailingStudents.length} students). Using async processing...`);
             
             // Return immediately with processing status
             const asyncResponse = {
@@ -1797,14 +1865,15 @@ exports.uploadCsvStudents = async (req, res) => {
                 },
                 state: 'processing',
                 status: 'processing',
-                message: `CSV upload started. Processing ${csvData.length} students in the background.`,
+                message: `CSV upload started. Processing ${nonFailingStudents.length} non-failing students in the background.`,
                 async: true,
                 success: true,
-                totalStudents: csvData.length,
-                completed: false
+                totalStudents: nonFailingStudents.length,
+                completed: false,
+                filteredCount: csvData.length - nonFailingStudents.length
             };
             
-            console.log('🚀 Sending async response for CSV upload:', JSON.stringify(asyncResponse, null, 2));
+            console.log('🚀 Sending async response for CSV upload');
             
             // Send response immediately
             try {
@@ -1815,12 +1884,20 @@ exports.uploadCsvStudents = async (req, res) => {
                 return;
             }
             
-            // Process in background
+            // Process in background - USE nonFailingStudents instead of csvData
             setImmediate(async () => {
                 try {
-                    console.log(`🔄 Starting background processing for ${csvData.length} students...`);
-                    await processCsvStudentsInBackground(csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent, req.user._id);
-                    console.log(`✅ Background CSV processing completed for ${csvData.length} students`);
+                    console.log(`🔄 Starting background processing for ${nonFailingStudents.length} NON-FAILING students...`);
+                    await processCsvStudentsInBackground(
+                        nonFailingStudents, // Use the filtered list
+                        residenceId, 
+                        defaultRoomNumber, 
+                        defaultStartDate, 
+                        defaultEndDate, 
+                        defaultMonthlyRent, 
+                        req.user._id
+                    );
+                    console.log(`✅ Background CSV processing completed for ${nonFailingStudents.length} non-failing students`);
                 } catch (error) {
                     console.error('❌ Error in background CSV processing:', error);
                 }
@@ -1829,62 +1906,15 @@ exports.uploadCsvStudents = async (req, res) => {
             return;
         }
         
-        // This should never be reached since we force async for all CSV uploads
-        console.log(`⚠️ WARNING: Reached synchronous processing for ${csvData.length} students - this should not happen!`);
+        // If only one student, process synchronously
+        console.log(`🔄 Processing ${nonFailingStudents.length} student(s) synchronously...`);
         
-        // Process each CSV row synchronously for single student uploads
-        console.log(`🔄 Processing ${csvData.length} student(s) synchronously...`);
-        console.log(`📋 CSV Data structure:`, JSON.stringify(csvData.slice(0, 2), null, 2)); // Log first 2 rows for debugging
-        
-        // Add timeout safety for synchronous processing
-        const processingStartTime = Date.now();
-        const maxProcessingTime = 60000; // 1 minute max for sync processing
-        
-        for (let i = 0; i < csvData.length; i++) {
-            console.log(`🔄 Processing student ${i + 1}/${csvData.length}: ${csvData[i]?.email || 'Unknown'}`);
-            // Check if we're taking too long
-            if (Date.now() - processingStartTime > maxProcessingTime) {
-                console.log(`⏰ Synchronous processing taking too long, switching to async...`);
-                
-                // Switch to async processing
-                const remainingData = csvData.slice(i);
-                const asyncResponse = {
-                    _id: `csv-upload-${Date.now()}`,
-                    id: `csv-upload-${Date.now()}`,
-                    requestId: `csv-upload-${Date.now()}`,
-                    request_id: `csv-upload-${Date.now()}`,
-                    data: {
-                        id: `csv-upload-${Date.now()}`,
-                        _id: `csv-upload-${Date.now()}`
-                    },
-                    state: 'processing',
-                    status: 'processing',
-                    message: `CSV upload started. Processing ${csvData.length} students in the background.`,
-                    async: true,
-                    success: true,
-                    totalStudents: csvData.length,
-                    processedSoFar: i,
-                    remainingStudents: remainingData.length
-                };
-                
-                console.log('🚀 Switching to async response due to timeout:', JSON.stringify(asyncResponse, null, 2));
-                res.status(200).json(asyncResponse);
-                
-                // Process remaining in background
-                setImmediate(async () => {
-                    try {
-                        console.log(`🔄 Processing remaining ${remainingData.length} students in background...`);
-                        await processCsvStudentsInBackground(remainingData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent, req.user._id);
-                        console.log(`✅ Background CSV processing completed for remaining students`);
-                    } catch (error) {
-                        console.error('❌ Error in background CSV processing:', error);
-                    }
-                });
-                
-                return;
-            }
-            const row = csvData[i];
+        // Process each student synchronously
+        for (let i = 0; i < nonFailingStudents.length; i++) {
+            const row = nonFailingStudents[i];
             const rowNumber = i + 1;
+            
+            console.log(`🔄 Processing student ${i + 1}/${nonFailingStudents.length}: ${row?.email || 'Unknown'}`);
             
             try {
                 // Validate required fields
@@ -2160,6 +2190,7 @@ exports.uploadCsvStudents = async (req, res) => {
         console.log(`   - Total processed: ${results.summary.totalProcessed}`);
         console.log(`   - Total successful: ${results.summary.totalSuccessful}`);
         console.log(`   - Total failed: ${results.summary.totalFailed}`);
+        console.log(`   - Filtered out: ${results.filtered}`);
         console.log(`   - Successful students:`, results.successful.map(s => s.email));
         console.log(`   - Failed students:`, results.failed.map(f => `${f.row}: ${f.error}`));
         
@@ -2174,18 +2205,19 @@ exports.uploadCsvStudents = async (req, res) => {
                 totalProcessed: results.summary.totalProcessed,
                 totalSuccessful: results.summary.totalSuccessful,
                 totalFailed: results.summary.totalFailed,
+                filteredOut: results.filtered,
                 residenceId: residenceId,
                 defaultRoomNumber: defaultRoomNumber,
                 defaultStartDate: defaultStartDate,
                 defaultEndDate: defaultEndDate,
                 defaultMonthlyRent: defaultMonthlyRent
             },
-            details: `CSV bulk student upload - ${results.summary.totalSuccessful} students created, ${results.summary.totalFailed} failed`
+            details: `CSV bulk student upload - ${results.summary.totalSuccessful} non-failing students created, ${results.summary.totalFailed} failed, ${results.filtered} filtered out`
         });
         
         res.status(200).json({
             success: true,
-            message: 'CSV upload processed successfully',
+            message: `CSV upload processed successfully. ${results.filtered} failing students were filtered out.`,
             data: results
         });
         
@@ -3183,33 +3215,31 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                 console.log(`🔄 Re-application detected for existing student: ${row.email}`);
             }
             
-            // Validate room if provided
-            let roomNumber = row.roomNumber || defaultRoomNumber;
-            let room = null;
-            
-            if (roomNumber) {
-                room = residence.rooms.find(r => r.roomNumber === roomNumber);
-                if (!room) {
-                    results.failed.push({
-                        row: rowNumber,
-                        error: `Room ${roomNumber} not found in residence`,
-                        data: row
-                    });
-                    results.summary.totalFailed++;
-                    continue;
-                }
+                // Validate room if provided
+                let roomNumber = row.roomNumber || defaultRoomNumber;
+                let room = null;
                 
-                // Check room availability
-                if (room.currentOccupancy >= room.capacity) {
-                    results.failed.push({
-                        row: rowNumber,
-                        error: `Room ${roomNumber} is at full capacity`,
-                        data: row
-                    });
-                    results.summary.totalFailed++;
-                    continue;
+                if (roomNumber) {
+                    room = residence.rooms.find(r => r.roomNumber === roomNumber);
+                    if (!room) {
+                        console.log(`❌ Room ${roomNumber} not found in residence for student ${row.email}`);
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Room ${roomNumber} not found in residence`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                    
+                    console.log(`✅ Room ${roomNumber} found for student ${row.email} (current occupancy: ${room.currentOccupancy}/${room.capacity})`);
+                    
+                    // Check room availability (allow multiple students in same room for CSV upload)
+                    if (room.currentOccupancy >= room.capacity) {
+                        console.log(`⚠️ Room ${roomNumber} is at capacity (${room.currentOccupancy}/${room.capacity}), but allowing CSV upload to proceed for student ${row.email}`);
+                        // Don't fail - allow the upload to proceed and update occupancy
+                    }
                 }
-            }
             
             // Parse dates
             const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
@@ -3339,6 +3369,7 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
             
             // Update room occupancy if room is assigned
             if (room && roomNumber) {
+                console.log(`🏠 Updating room ${roomNumber} occupancy for student ${row.email}`);
                 room.currentOccupancy = (room.currentOccupancy || 0) + 1;
                 room.occupants = [...(room.occupants || []), student._id];
                 
@@ -3348,11 +3379,13 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                     room.status = 'reserved';
                 }
                 
+                console.log(`✅ Room ${roomNumber} updated: occupancy ${room.currentOccupancy}/${room.capacity}, status: ${room.status}`);
                 await residence.save();
             }
             
             // Update student with room assignment
             if (roomNumber) {
+                console.log(`👤 Updating student ${row.email} with room assignment ${roomNumber}`);
                 student.currentRoom = roomNumber;
                 student.roomValidUntil = endDate;
                 student.roomApprovalDate = new Date();
@@ -3404,7 +3437,10 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
             results.summary.totalSuccessful++;
             results.summary.totalStudents++;
             
+            console.log(`✅ Successfully processed student ${rowNumber}/${csvData.length}: ${student.email}`);
+            
         } catch (error) {
+            console.error(`❌ Error processing student ${rowNumber} (background):`, error);
             results.failed.push({
                 row: rowNumber,
                 error: error.message,
@@ -3412,9 +3448,18 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
             });
             results.summary.totalFailed++;
         }
+        
+        // Add a small delay to prevent overwhelming the database
+        await new Promise(resolve => setTimeout(resolve, 100));
     }
     
     console.log(`✅ Background CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
+    console.log(`📊 Background Processing Summary:`);
+    console.log(`   - Total processed: ${results.summary.totalProcessed}`);
+    console.log(`   - Total successful: ${results.summary.totalSuccessful}`);
+    console.log(`   - Total failed: ${results.summary.totalFailed}`);
+    console.log(`   - Successful students:`, results.successful.map(s => s.email));
+    console.log(`   - Failed students:`, results.failed.map(f => `${f.row}: ${f.error}`));
     
     // Create audit log for CSV bulk upload
     try {
