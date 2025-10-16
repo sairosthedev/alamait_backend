@@ -1771,8 +1771,13 @@ exports.uploadCsvStudents = async (req, res) => {
             }
         };
         
-        // For large CSV uploads (>10 students), use async processing
-        const shouldUseAsync = csvData.length > 10;
+        // For CSV uploads (>3 students), use async processing to prevent timeouts
+        const shouldUseAsync = csvData.length > 3;
+        
+        console.log(`📊 CSV Upload Analysis:`);
+        console.log(`   - Total students: ${csvData.length}`);
+        console.log(`   - Should use async: ${shouldUseAsync}`);
+        console.log(`   - Async threshold: 3 students`);
         
         if (shouldUseAsync) {
             console.log(`🔄 Large CSV upload detected (${csvData.length} students). Using async processing...`);
@@ -1801,7 +1806,9 @@ exports.uploadCsvStudents = async (req, res) => {
             // Process in background
             setImmediate(async () => {
                 try {
+                    console.log(`🔄 Starting background processing for ${csvData.length} students...`);
                     await processCsvStudentsInBackground(csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent, req.user._id);
+                    console.log(`✅ Background CSV processing completed for ${csvData.length} students`);
                 } catch (error) {
                     console.error('❌ Error in background CSV processing:', error);
                 }
@@ -1810,8 +1817,57 @@ exports.uploadCsvStudents = async (req, res) => {
             return;
         }
         
-        // Process each CSV row synchronously for small uploads
+        // Process each CSV row synchronously for small uploads (≤3 students)
+        console.log(`🔄 Processing ${csvData.length} students synchronously...`);
+        console.log(`📋 CSV Data structure:`, JSON.stringify(csvData.slice(0, 2), null, 2)); // Log first 2 rows for debugging
+        
+        // Add timeout safety for synchronous processing
+        const processingStartTime = Date.now();
+        const maxProcessingTime = 60000; // 1 minute max for sync processing
+        
         for (let i = 0; i < csvData.length; i++) {
+            console.log(`🔄 Processing student ${i + 1}/${csvData.length}: ${csvData[i]?.email || 'Unknown'}`);
+            // Check if we're taking too long
+            if (Date.now() - processingStartTime > maxProcessingTime) {
+                console.log(`⏰ Synchronous processing taking too long, switching to async...`);
+                
+                // Switch to async processing
+                const remainingData = csvData.slice(i);
+                const asyncResponse = {
+                    _id: `csv-upload-${Date.now()}`,
+                    id: `csv-upload-${Date.now()}`,
+                    requestId: `csv-upload-${Date.now()}`,
+                    request_id: `csv-upload-${Date.now()}`,
+                    data: {
+                        id: `csv-upload-${Date.now()}`,
+                        _id: `csv-upload-${Date.now()}`
+                    },
+                    state: 'processing',
+                    status: 'processing',
+                    message: `CSV upload started. Processing ${csvData.length} students in the background.`,
+                    async: true,
+                    success: true,
+                    totalStudents: csvData.length,
+                    processedSoFar: i,
+                    remainingStudents: remainingData.length
+                };
+                
+                console.log('🚀 Switching to async response due to timeout:', JSON.stringify(asyncResponse, null, 2));
+                res.status(200).json(asyncResponse);
+                
+                // Process remaining in background
+                setImmediate(async () => {
+                    try {
+                        console.log(`🔄 Processing remaining ${remainingData.length} students in background...`);
+                        await processCsvStudentsInBackground(remainingData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent, req.user._id);
+                        console.log(`✅ Background CSV processing completed for remaining students`);
+                    } catch (error) {
+                        console.error('❌ Error in background CSV processing:', error);
+                    }
+                });
+                
+                return;
+            }
             const row = csvData[i];
             const rowNumber = i + 1;
             
@@ -2074,6 +2130,7 @@ exports.uploadCsvStudents = async (req, res) => {
                 results.summary.totalStudents++;
                 
             } catch (error) {
+                console.error(`❌ Error processing student ${rowNumber} (sync):`, error);
                 results.failed.push({
                     row: rowNumber,
                     error: error.message,
@@ -2084,6 +2141,12 @@ exports.uploadCsvStudents = async (req, res) => {
         }
         
         console.log(`✅ CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
+        console.log(`📊 Final Results Summary:`);
+        console.log(`   - Total processed: ${results.summary.totalProcessed}`);
+        console.log(`   - Total successful: ${results.summary.totalSuccessful}`);
+        console.log(`   - Total failed: ${results.summary.totalFailed}`);
+        console.log(`   - Successful students:`, results.successful.map(s => s.email));
+        console.log(`   - Failed students:`, results.failed.map(f => `${f.row}: ${f.error}`));
         
         // Create audit log for CSV bulk upload
         await createAuditLog({
@@ -3062,9 +3125,11 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
     }
     
     // Process each CSV row
+    console.log(`🔄 Background processing: Starting loop for ${csvData.length} students`);
     for (let i = 0; i < csvData.length; i++) {
         const row = csvData[i];
         const rowNumber = i + 1;
+        console.log(`🔄 Background processing student ${i + 1}/${csvData.length}: ${row?.email || 'Unknown'}`);
         
         try {
             // Validate required fields
