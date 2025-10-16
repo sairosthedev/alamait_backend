@@ -17,6 +17,47 @@ const { logTransactionOperation, logSystemOperation } = require('../utils/auditL
  */
 class RentalAccrualService {
     /**
+     * Check if a monthly rent accrual already exists for a student/month/year
+     * Uses comprehensive duplicate detection logic
+     */
+    static async checkExistingMonthlyAccrual(studentId, month, year, applicationId = null, debtorId = null) {
+        const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+        
+        const query = {
+            source: 'rental_accrual',
+            status: { $ne: 'deleted' }, // Exclude deleted transactions
+            $and: [
+                {
+                    $or: [
+                        { 'metadata.type': 'monthly_rent_accrual' },
+                        { description: { $regex: /Monthly rent accrual/ } }
+                    ]
+                },
+                {
+                    $or: [
+                        { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+                        { 'metadata.month': monthKey },
+                        { description: { $regex: new RegExp(monthKey) } },
+                        { description: { $regex: new RegExp(`\\b${month}\\b.*\\b${year}\\b`) } }
+                    ]
+                }
+            ]
+        };
+
+        // Add student identification criteria
+        const studentCriteria = [];
+        if (studentId) studentCriteria.push({ 'metadata.studentId': studentId.toString() });
+        if (applicationId) studentCriteria.push({ 'metadata.applicationId': applicationId.toString() });
+        if (debtorId) studentCriteria.push({ sourceModel: 'Debtor', sourceId: debtorId });
+
+        if (studentCriteria.length > 0) {
+            query.$and.push({ $or: studentCriteria });
+        }
+
+        return await TransactionEntry.findOne(query);
+    }
+
+    /**
      * Calculate prorated rent based on residence paymentConfiguration.rentProration
      * Falls back to existing logic if config missing/disabled
      */
@@ -696,12 +737,14 @@ class RentalAccrualService {
 
                     try {
                         // Skip if accrual already exists for this application/month/year
-                        const existingAccrual = await TransactionEntry.findOne({
-                            'metadata.applicationId': app._id.toString(),
-                            'metadata.accrualMonth': month,
-                            'metadata.accrualYear': year,
-                            'metadata.type': 'monthly_rent_accrual'
-                        });
+                        // Use improved duplicate detection logic
+                        const existingAccrual = await this.checkExistingMonthlyAccrual(
+                            app.student, 
+                            month, 
+                            year, 
+                            app._id, 
+                            app.debtor
+                        );
 
                         if (existingAccrual) {
                             totalSkipped++;
@@ -780,18 +823,14 @@ class RentalAccrualService {
                 }
             }
 
-            // Check if accrual already exists for this month (from either rental accrual service or backfill service)
-            const monthKey = `${year}-${String(month).padStart(2, '0')}`;
-            const existingAccrual = await TransactionEntry.findOne({
-                $or: [
-                    // Rental accrual service created transactions
-                    { 'metadata.studentId': student.student.toString(), 'metadata.accrualMonth': month, 'metadata.accrualYear': year, 'metadata.type': 'monthly_rent_accrual' },
-                    // Backfill service created transactions
-                    { 'metadata.studentId': student.student.toString(), 'metadata.month': monthKey, 'metadata.type': 'monthly_rent_accrual' },
-                    { source: 'rental_accrual', 'metadata.studentId': student.student.toString(), description: { $regex: new RegExp(monthKey) } },
-                    { 'entries.accountCode': { $regex: `^1100-${student.student.toString()}` }, description: { $regex: /Monthly rent accrual/ }, description: { $regex: new RegExp(monthKey) } }
-                ]
-            });
+            // Check if accrual already exists for this month using improved duplicate detection
+            const existingAccrual = await this.checkExistingMonthlyAccrual(
+                student.student, 
+                month, 
+                year, 
+                student._id, 
+                student.debtor
+            );
             
             if (existingAccrual) {
                 console.log(`   ⚠️ Monthly accrual already exists for ${student.firstName} ${student.lastName} - ${monthKey} (created by ${existingAccrual.createdBy || 'unknown service'})`);

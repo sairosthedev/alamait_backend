@@ -344,32 +344,15 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 			// No separate monthly accrual needed for the start month
 
 			// Skip if any existing accrual exists for this student+period from either model
-			// Check for both backfill-created and rental accrual service-created monthly accruals
-			const existingMonthlyAccrual = await TransactionEntry.findOne({
-                source: 'rental_accrual',
-				$and: [
-					{
-						$or: [
-							{ 'metadata.type': 'monthly_rent_accrual' },
-							{ description: { $regex: /Monthly rent accrual/ } }
-						]
-					},
-					{
-                $or: [
-                    { 'metadata.month': monthKey },
-							{ 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
-							{ description: { $regex: new RegExp(monthKey) } }
-						]
-					},
-					{
-						$or: [
-							{ 'metadata.studentId': getId(debtor.user) },
-							{ sourceModel: 'Debtor', sourceId: debtor._id },
-							{ 'entries.accountCode': debtor.accountCode }
-						]
-                    }
-                ]
-            });
+			// Use improved duplicate detection logic
+			const RentalAccrualService = require('./rentalAccrualService');
+			const existingMonthlyAccrual = await RentalAccrualService.checkExistingMonthlyAccrual(
+				getId(debtor.user), 
+				month, 
+				year, 
+				debtor.application, 
+				debtor._id
+			);
             
             // Skip creating monthly accrual for lease start month
             if (month === leaseStartMonth && year === leaseStartYear) {

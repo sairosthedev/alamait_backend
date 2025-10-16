@@ -1733,6 +1733,10 @@ exports.uploadCsvStudents = async (req, res) => {
         
         console.log('📁 Processing CSV upload for students in residence:', residenceId);
         
+        // Set extended timeout for bulk operations
+        req.setTimeout(300000); // 5 minutes
+        res.setTimeout(300000); // 5 minutes
+        
         if (!csvData || !Array.isArray(csvData) || csvData.length === 0) {
             return res.status(400).json({
                 success: false,
@@ -1767,7 +1771,46 @@ exports.uploadCsvStudents = async (req, res) => {
             }
         };
         
-        // Process each CSV row
+        // For large CSV uploads (>10 students), use async processing
+        const shouldUseAsync = csvData.length > 10;
+        
+        if (shouldUseAsync) {
+            console.log(`🔄 Large CSV upload detected (${csvData.length} students). Using async processing...`);
+            
+            // Return immediately with processing status
+            const asyncResponse = {
+                _id: `csv-upload-${Date.now()}`,
+                id: `csv-upload-${Date.now()}`,
+                requestId: `csv-upload-${Date.now()}`,
+                request_id: `csv-upload-${Date.now()}`,
+                data: {
+                    id: `csv-upload-${Date.now()}`,
+                    _id: `csv-upload-${Date.now()}`
+                },
+                state: 'processing',
+                status: 'processing',
+                message: `CSV upload started. Processing ${csvData.length} students in the background.`,
+                async: true,
+                success: true,
+                totalStudents: csvData.length
+            };
+            
+            console.log('🚀 Sending async response for CSV upload:', JSON.stringify(asyncResponse, null, 2));
+            res.status(200).json(asyncResponse);
+            
+            // Process in background
+            setImmediate(async () => {
+                try {
+                    await processCsvStudentsInBackground(csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent, req.user._id);
+                } catch (error) {
+                    console.error('❌ Error in background CSV processing:', error);
+                }
+            });
+            
+            return;
+        }
+        
+        // Process each CSV row synchronously for small uploads
         for (let i = 0; i < csvData.length; i++) {
             const row = csvData[i];
             const rowNumber = i + 1;
@@ -2992,4 +3035,330 @@ exports.backfillDebtorTransactions = async (req, res) => {
 			error: error.message
 		});
 	}
-}; 
+};
+
+/**
+ * Background processing function for large CSV uploads
+ */
+async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent, userId) {
+    console.log(`🔄 Starting background CSV processing for ${csvData.length} students...`);
+    
+    const results = {
+        successful: [],
+        failed: [],
+        summary: {
+            totalProcessed: csvData.length,
+            totalSuccessful: 0,
+            totalFailed: 0,
+            totalStudents: 0
+        }
+    };
+    
+    // Validate residence exists
+    const residence = await Residence.findById(residenceId);
+    if (!residence) {
+        console.error('❌ Residence not found in background processing');
+        return;
+    }
+    
+    // Process each CSV row
+    for (let i = 0; i < csvData.length; i++) {
+        const row = csvData[i];
+        const rowNumber = i + 1;
+        
+        try {
+            // Validate required fields
+            if (!row.email || !row.firstName || !row.lastName) {
+                results.failed.push({
+                    row: rowNumber,
+                    error: 'Missing required fields: email, firstName, lastName',
+                    data: row
+                });
+                results.summary.totalFailed++;
+                continue;
+            }
+            
+            // Check if user already exists and has an active lease
+            const existingUser = await User.findOne({ email: row.email });
+            if (existingUser) {
+                // Check if user has any active leases that haven't ended
+                const currentDate = new Date();
+                const activeLease = await Application.findOne({
+                    email: row.email.toLowerCase(),
+                    status: 'approved',
+                    endDate: { $gt: currentDate } // Lease hasn't ended yet
+                });
+                
+                if (activeLease) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: `User has an active lease ending ${activeLease.endDate.toDateString()}. Cannot create new application.`,
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                // If no active lease, allow re-application
+                console.log(`🔄 Re-application detected for existing student: ${row.email}`);
+            }
+            
+            // Validate room if provided
+            let roomNumber = row.roomNumber || defaultRoomNumber;
+            let room = null;
+            
+            if (roomNumber) {
+                room = residence.rooms.find(r => r.roomNumber === roomNumber);
+                if (!room) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: `Room ${roomNumber} not found in residence`,
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                // Check room availability
+                if (room.currentOccupancy >= room.capacity) {
+                    results.failed.push({
+                        row: rowNumber,
+                        error: `Room ${roomNumber} is at full capacity`,
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+            }
+            
+            // Parse dates
+            const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
+            const endDate = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
+            const monthlyRent = parseFloat(row.monthlyRent) || parseFloat(defaultMonthlyRent) || 150; // Default to $150
+            
+            if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                results.failed.push({
+                    row: rowNumber,
+                    error: 'Invalid date format',
+                    data: row
+                });
+                results.summary.totalFailed++;
+                continue;
+            }
+            
+            if (endDate <= startDate) {
+                results.failed.push({
+                    row: rowNumber,
+                    error: 'End date must be after start date',
+                    data: row
+                });
+                results.summary.totalFailed++;
+                continue;
+            }
+            
+            // Handle existing user or create new one
+            let student = existingUser;
+            let tempPassword = null; // Initialize tempPassword
+            
+            if (!student) {
+                // Generate temporary password for new user
+                tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+                
+                // Create new student user
+                student = new User({
+                    email: row.email,
+                    firstName: row.firstName,
+                    lastName: row.lastName,
+                    phone: row.phone || '',
+                    password: tempPassword,
+                    status: row.status || 'active',
+                    emergencyContact: row.emergencyContact || {},
+                    role: 'student',
+                    isVerified: true,
+                    residence: residenceId
+                });
+                
+                await student.save();
+                console.log(`✅ New student created: ${student.email}`);
+            } else {
+                // Update existing user information if needed
+                let updated = false;
+                if (student.firstName !== row.firstName) {
+                    student.firstName = row.firstName;
+                    updated = true;
+                }
+                if (student.lastName !== row.lastName) {
+                    student.lastName = row.lastName;
+                    updated = true;
+                }
+                if (student.phone !== (row.phone || '')) {
+                    student.phone = row.phone || '';
+                    updated = true;
+                }
+                
+                if (updated) {
+                    await student.save();
+                    console.log(`✅ Existing student updated: ${student.email}`);
+                } else {
+                    console.log(`✅ Using existing student: ${student.email}`);
+                }
+            }
+            
+            // Generate application code
+            const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+            
+            // Create application record
+            const application = new Application({
+                student: student._id,
+                email: row.email,
+                firstName: row.firstName,
+                lastName: row.lastName,
+                phone: row.phone || '',
+                requestType: 'new',
+                status: 'approved',
+                paymentStatus: 'paid',
+                startDate: startDate,
+                endDate: endDate,
+                preferredRoom: roomNumber,
+                allocatedRoom: roomNumber,
+                residence: residenceId,
+                applicationCode: applicationCode,
+                applicationDate: new Date(),
+                actionDate: new Date(),
+                actionBy: userId
+            });
+            
+            await application.save();
+            
+            // Update student with application code
+            student.applicationCode = application.applicationCode;
+            await student.save();
+            
+            // Create debtor account
+            let debtor = null;
+            try {
+                debtor = await createDebtorForStudent(student, {
+                    residenceId: residenceId,
+                    roomNumber: roomNumber,
+                    createdBy: userId,
+                    application: application._id,
+                    applicationCode: application.applicationCode,
+                    startDate: startDate,
+                    endDate: endDate,
+                    roomPrice: monthlyRent
+                });
+                
+                if (debtor) {
+                    application.debtor = debtor._id;
+                    await application.save();
+                }
+            } catch (debtorError) {
+                console.error(`❌ Failed to create debtor for CSV student ${row.email}:`, debtorError);
+                // Continue with student creation even if debtor fails
+            }
+            
+            // Update room occupancy if room is assigned
+            if (room && roomNumber) {
+                room.currentOccupancy = (room.currentOccupancy || 0) + 1;
+                room.occupants = [...(room.occupants || []), student._id];
+                
+                if (room.currentOccupancy >= room.capacity) {
+                    room.status = 'occupied';
+                } else if (room.currentOccupancy > 0) {
+                    room.status = 'reserved';
+                }
+                
+                await residence.save();
+            }
+            
+            // Update student with room assignment
+            if (roomNumber) {
+                student.currentRoom = roomNumber;
+                student.roomValidUntil = endDate;
+                student.roomApprovalDate = new Date();
+                await student.save();
+            }
+            
+            // Create booking record
+            const booking = new Booking({
+                student: student._id,
+                residence: residenceId,
+                room: room ? {
+                    roomNumber: roomNumber,
+                    type: room.type,
+                    price: room.price
+                } : null,
+                startDate: startDate,
+                endDate: endDate,
+                totalAmount: monthlyRent,
+                paymentStatus: 'paid',
+                status: 'confirmed',
+                paidAmount: monthlyRent,
+                payments: [{
+                    amount: monthlyRent,
+                    date: new Date(),
+                    method: 'admin_csv_upload',
+                    status: 'completed',
+                    transactionId: `CSV_${Date.now()}_${i}`
+                }]
+            });
+            
+            await booking.save();
+            
+            // Update student with current booking
+            student.currentBooking = booking._id;
+            await student.save();
+            
+            results.successful.push({
+                row: rowNumber,
+                studentId: student._id,
+                email: student.email,
+                name: `${student.firstName} ${student.lastName}`,
+                roomNumber: roomNumber,
+                applicationCode: application.applicationCode,
+                debtorCreated: !!debtor,
+                temporaryPassword: tempPassword || 'Existing user - no new password generated',
+                isExistingUser: !!existingUser
+            });
+            
+            results.summary.totalSuccessful++;
+            results.summary.totalStudents++;
+            
+        } catch (error) {
+            results.failed.push({
+                row: rowNumber,
+                error: error.message,
+                data: row
+            });
+            results.summary.totalFailed++;
+        }
+    }
+    
+    console.log(`✅ Background CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
+    
+    // Create audit log for CSV bulk upload
+    try {
+        await createAuditLog({
+            action: 'bulk_create',
+            collection: 'User',
+            recordId: null, // Bulk operation doesn't have a single record ID
+            userId: userId,
+            before: null,
+            after: {
+                totalProcessed: results.summary.totalProcessed,
+                totalSuccessful: results.summary.totalSuccessful,
+                totalFailed: results.summary.totalFailed,
+                residenceId: residenceId,
+                defaultRoomNumber: defaultRoomNumber,
+                defaultStartDate: defaultStartDate,
+                defaultEndDate: defaultEndDate,
+                defaultMonthlyRent: defaultMonthlyRent
+            },
+            details: `Background CSV bulk student upload - ${results.summary.totalSuccessful} students created, ${results.summary.totalFailed} failed`
+        });
+    } catch (auditError) {
+        console.error('❌ Failed to create audit log for background CSV upload:', auditError);
+    }
+    
+    return results;
+}
