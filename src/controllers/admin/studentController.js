@@ -1771,16 +1771,19 @@ exports.uploadCsvStudents = async (req, res) => {
             }
         };
         
-        // For CSV uploads (>3 students), use async processing to prevent timeouts
-        const shouldUseAsync = csvData.length > 3;
+        // Force ALL CSV uploads to use async processing to prevent timeouts
+        const shouldUseAsync = true; // Always use async for CSV uploads
         
         console.log(`📊 CSV Upload Analysis:`);
         console.log(`   - Total students: ${csvData.length}`);
         console.log(`   - Should use async: ${shouldUseAsync}`);
-        console.log(`   - Async threshold: 3 students`);
+        console.log(`   - Async threshold: 1 student`);
+        console.log(`   - CSV data type: ${typeof csvData}`);
+        console.log(`   - CSV data is array: ${Array.isArray(csvData)}`);
+        console.log(`   - First student email: ${csvData[0]?.email || 'No email'}`);
         
         if (shouldUseAsync) {
-            console.log(`🔄 Large CSV upload detected (${csvData.length} students). Using async processing...`);
+            console.log(`🔄 CSV upload detected (${csvData.length} students). Using async processing...`);
             
             // Return immediately with processing status
             const asyncResponse = {
@@ -1797,11 +1800,20 @@ exports.uploadCsvStudents = async (req, res) => {
                 message: `CSV upload started. Processing ${csvData.length} students in the background.`,
                 async: true,
                 success: true,
-                totalStudents: csvData.length
+                totalStudents: csvData.length,
+                completed: false
             };
             
             console.log('🚀 Sending async response for CSV upload:', JSON.stringify(asyncResponse, null, 2));
-            res.status(200).json(asyncResponse);
+            
+            // Send response immediately
+            try {
+                res.status(200).json(asyncResponse);
+                console.log('✅ Async response sent successfully');
+            } catch (responseError) {
+                console.error('❌ Error sending async response:', responseError);
+                return;
+            }
             
             // Process in background
             setImmediate(async () => {
@@ -1817,8 +1829,11 @@ exports.uploadCsvStudents = async (req, res) => {
             return;
         }
         
-        // Process each CSV row synchronously for small uploads (≤3 students)
-        console.log(`🔄 Processing ${csvData.length} students synchronously...`);
+        // This should never be reached since we force async for all CSV uploads
+        console.log(`⚠️ WARNING: Reached synchronous processing for ${csvData.length} students - this should not happen!`);
+        
+        // Process each CSV row synchronously for single student uploads
+        console.log(`🔄 Processing ${csvData.length} student(s) synchronously...`);
         console.log(`📋 CSV Data structure:`, JSON.stringify(csvData.slice(0, 2), null, 2)); // Log first 2 rows for debugging
         
         // Add timeout safety for synchronous processing
