@@ -158,37 +158,55 @@ class PaymentAllocationService {
       
       console.log(`📊 Found ${arBalances.length} AR balances:`, arBalances);
       
-      // 🆕 NEW: Detect the correct payment month from AR balances
-      const oldestARMonth = arBalances[0]?.monthKey;
+      // 🆕 FIXED: Use the actual payment month from the payment data
       const requestedPaymentMonth = paymentData.paymentMonth;
+      const oldestARMonth = arBalances[0]?.monthKey;
       
       console.log(`🎯 Payment Month Analysis:`);
       console.log(`   Requested Month: ${requestedPaymentMonth}`);
       console.log(`   Oldest AR Month: ${oldestARMonth}`);
       
-      // 🆕 NEW: Override payment month if it doesn't match the oldest AR month
+      // 🆕 FIXED: Only use the requested payment month (don't override)
       let effectivePaymentMonth = requestedPaymentMonth;
-      if (oldestARMonth && requestedPaymentMonth !== oldestARMonth) {
-        console.log(`⚠️  Payment month mismatch detected!`);
-        console.log(`   Requested: ${requestedPaymentMonth} (current month)`);
-        console.log(`   Should be: ${oldestARMonth} (oldest AR accrual)`);
-        console.log(`   🔄 Overriding payment month to ${oldestARMonth}`);
-        effectivePaymentMonth = oldestARMonth;
+      
+      // Check if the payment month has outstanding balances
+      const hasOutstandingForPaymentMonth = arBalances.some(balance => balance.monthKey === requestedPaymentMonth);
+      
+      if (!hasOutstandingForPaymentMonth && oldestARMonth) {
+        console.log(`⚠️  No outstanding balance for payment month ${requestedPaymentMonth}`);
+        console.log(`   Available months with balances: ${arBalances.map(b => b.monthKey).join(', ')}`);
+        console.log(`   🔄 Will allocate to oldest outstanding month: ${oldestARMonth}`);
+      } else {
+        console.log(`✅ Payment month ${requestedPaymentMonth} has outstanding balance - will allocate to current month`);
       }
       
-      // 2. Sort AR balances by date (oldest first)
-      const sortedAR = arBalances.sort((a, b) => new Date(a.date) - new Date(b.date));
-      console.log('📅 Sorted AR balances (oldest first):', sortedAR.map(item => ({
+      // 2. Sort AR balances with priority for current payment month
+      let sortedAR;
+      if (hasOutstandingForPaymentMonth) {
+        // If payment month has outstanding balance, prioritize it first
+        const paymentMonthBalance = arBalances.find(balance => balance.monthKey === requestedPaymentMonth);
+        const otherBalances = arBalances.filter(balance => balance.monthKey !== requestedPaymentMonth)
+          .sort((a, b) => new Date(a.date) - new Date(b.date));
+        
+        sortedAR = [paymentMonthBalance, ...otherBalances];
+        console.log(`🎯 Prioritizing current payment month ${requestedPaymentMonth} for allocation`);
+      } else {
+        // Otherwise, use FIFO (oldest first)
+        sortedAR = arBalances.sort((a, b) => new Date(a.date) - new Date(b.date));
+        console.log(`📅 Using FIFO allocation (oldest first)`);
+      }
+      
+      console.log('📅 Sorted AR balances for allocation:', sortedAR.map(item => ({
         month: item.monthKey,
         balance: item.balance,
         date: item.date
       })));
       
-      // 3. Allocate payment to oldest balances first (FIFO principle)
+      // 3. Allocate payment to balances in priority order
       let remainingAmount = totalAmount;
       const allocationResults = [];
       
-      console.log(`💰 Starting FIFO allocation of $${totalAmount} to oldest unpaid months first`);
+      console.log(`💰 Starting allocation of $${totalAmount} with current month priority`);
       
       for (const arItem of sortedAR) {
         if (remainingAmount <= 0) break;
@@ -205,6 +223,16 @@ class PaymentAllocationService {
             arItem.balance // Pass the current remaining balance
           );
           
+          // Determine allocation type based on payment month vs allocation month
+          let allocationType = 'debt_settlement';
+          if (arItem.monthKey === requestedPaymentMonth) {
+            allocationType = 'current_month_payment';
+            console.log(`✅ Current month payment: $${amountToAllocate} for ${arItem.monthKey}`);
+          } else {
+            allocationType = 'debt_settlement';
+            console.log(`📅 Debt settlement: $${amountToAllocate} for ${arItem.monthKey}`);
+          }
+          
           allocationResults.push({
             month: arItem.monthKey,
             originalBalance: arItem.balance,
@@ -213,7 +241,7 @@ class PaymentAllocationService {
             amountAllocated: amountToAllocate,
             newBalance: arItem.balance - amountToAllocate,
             transactionId: arItem.transactionId,
-            allocationType: 'debt_settlement'
+            allocationType: allocationType
           });
           
           remainingAmount -= amountToAllocate;
@@ -287,15 +315,16 @@ class PaymentAllocationService {
             totalAllocated: totalAmount - remainingAmount,
             remainingBalance: remainingAmount,
             monthsCovered: allocationResults.filter(r => r.allocationType === 'debt_settlement').length,
+            currentMonthPayments: allocationResults.filter(r => r.allocationType === 'current_month_payment').length,
             advancePaymentAmount: advancePayment ? advancePayment.amount : 0,
-            allocationMethod: 'FIFO (First In, First Out)',
+            allocationMethod: hasOutstandingForPaymentMonth ? 'Current Month Priority' : 'FIFO (First In, First Out)',
             oldestMonthSettled: allocationResults.length > 0 ? allocationResults[0].month : null,
             newestMonthSettled: allocationResults.filter(r => r.allocationType === 'debt_settlement').length > 0 ? 
               allocationResults.filter(r => r.allocationType === 'debt_settlement').slice(-1)[0].month : null
           }
         },
         allocationRecord,
-        message: `Payment allocated using FIFO method: ${allocationResults.filter(r => r.allocationType === 'debt_settlement').length} months settled${advancePayment ? `, $${advancePayment.amount} advance payment` : ''}`
+        message: `Payment allocated using ${hasOutstandingForPaymentMonth ? 'Current Month Priority' : 'FIFO'} method: ${allocationResults.filter(r => r.allocationType === 'current_month_payment').length} current month payment(s), ${allocationResults.filter(r => r.allocationType === 'debt_settlement').length} debt settlement(s)${advancePayment ? `, $${advancePayment.amount} advance payment` : ''}`
       };
       
     } catch (error) {

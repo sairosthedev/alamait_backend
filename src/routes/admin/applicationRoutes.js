@@ -6,6 +6,7 @@ const {
     getApplications,
     getApplicationById,
     updateApplicationStatus,
+    updateApplicationData,
     testUpdateApplicationStatus,
     updatePaymentStatus,
     deleteApplication,
@@ -42,6 +43,9 @@ router.get('/expired', auth, checkAdminOrFinance, getExpiredStudents);
 
 // Update application status (approve/reject/waitlist)
 router.put('/:applicationId', auth, checkAdminOrFinance, updateApplicationStatus);
+
+// Update application data (firstName, lastName, email, phone, etc.)
+router.put('/:applicationId/data', auth, checkAdminOrFinance, updateApplicationData);
 
 // Test route to see if the route is being hit
 router.put('/:applicationId/test', auth, checkAdminOrFinance, testUpdateApplicationStatus);

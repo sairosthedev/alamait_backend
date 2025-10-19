@@ -46,7 +46,8 @@ class EnhancedCashFlowService {
             const transactionQuery = {
                 date: { $gte: startDate, $lte: endDate },
                 // Exclude forfeiture transactions as they don't involve cash movement
-                'metadata.isForfeiture': { $ne: true }
+                'metadata.isForfeiture': { $ne: true },
+                status: { $nin: ['reversed', 'draft'] }
             };
             
             // Don't filter transactions by residence - we'll filter by expense residence instead
@@ -56,6 +57,9 @@ class EnhancedCashFlowService {
                     $in: ['payment', 'expense_payment', 'rental_payment', 'manual', 'payment_collection', 'bank_transfer', 'advance_payment', 'debt_settlement', 'current_payment']
                 };
             }
+            
+            // Exclude reversed and draft transactions from cash flow
+            transactionQuery.status = { $nin: ['reversed', 'draft'] };
             
             const transactionEntries = await TransactionEntry.find(transactionQuery)
                 .populate('residence')
@@ -1826,13 +1830,19 @@ class EnhancedCashFlowService {
                     return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
                 });
                 
-                // Skip petty cash transfers
-                const isPettyCashTransfer = entry.description && (
+                // Skip internal cash transfers and movements between cash accounts
+                const isInternalTransfer = entry.description && (
                     entry.description.toLowerCase().includes('petty cash') ||
-                    entry.description.toLowerCase().includes('cash allocation')
+                    entry.description.toLowerCase().includes('cash allocation') ||
+                    entry.description.toLowerCase().includes('funds to') ||
+                    entry.description.toLowerCase().includes('cash to') ||
+                    entry.description.toLowerCase().includes('vault') ||
+                    entry.description.toLowerCase().includes('transfer to') ||
+                    entry.description.toLowerCase().includes('move to') ||
+                    entry.description.toLowerCase().includes('internal transfer')
                 );
                 
-                if (cashEntry && !isPettyCashTransfer && !processedTransactions.has(entry.transactionId)) {
+                if (cashEntry && !isInternalTransfer && !processedTransactions.has(entry.transactionId)) {
                     const expenseAmount = cashEntry.credit;
                     const description = entry.description || 'Cash Expense';
                     const residenceName = getResidenceName(entry, expenses);
@@ -3118,21 +3128,46 @@ class EnhancedCashFlowService {
                         utilities: 0,
                         advance_payments: 0,
                         other_income: 0,
+                        // Individual expense categories
+                        electricity: 0,
+                        water: 0,
+                        gas: 0,
+                        internet: 0,
                         maintenance: 0,
-                        utilities_expenses: 0,
                         cleaning: 0,
                         security: 0,
-                        management: 0
+                        management: 0,
+                        insurance: 0,
+                        council_rates: 0,
+                        other_expenses: 0
                     }
                 },
-                income: { total: 0 },
+                income: { 
+                    total: 0,
+                    // Individual income categories
+                    rental_income: 0,
+                    admin_fees: 0,
+                    deposits: 0,
+                    utilities: 0,
+                    advance_payments: 0,
+                    other_income: 0
+                },
                 expenses: { 
                     total: 0, 
+                    // Individual expense categories
+                    electricity: 0,
+                    water: 0,
+                    gas: 0,
+                    internet: 0,
                     maintenance: 0, 
-                    utilities: 0, 
                     cleaning: 0, 
                     security: 0, 
                     management: 0,
+                    insurance: 0,
+                    council_rates: 0,
+                    other_expenses: 0,
+                    // Legacy categories for backward compatibility
+                    utilities: 0,
                     transactions: [] 
                 },
                 investing_activities: { inflows: 0, outflows: 0, net: 0 },
@@ -3155,6 +3190,8 @@ class EnhancedCashFlowService {
         console.log(`🔧 RELIABLE METHOD - Processing ${transactionEntries.length} transactions`);
 
         // SIMPLE DIRECT MAPPING: Use transaction date directly
+        const processedTransactions = new Set();
+        
         transactionEntries.forEach(entry => {
             const entryDate = new Date(entry.date);
             const monthIndex = entryDate.getMonth(); // 0-11
@@ -3173,45 +3210,139 @@ class EnhancedCashFlowService {
                 const isDebit = line.debit > 0;
                 const isCredit = line.credit > 0;
                 const accountCode = line.accountCode;
+                const accountName = line.accountName;
                 const accountType = line.accountType;
 
-                // INCOME: Credit to Income accounts (4000 series)
-                if (isCredit && accountCode && accountCode.startsWith('4')) {
+                // INCOME: Debit to Cash accounts (1000 series) - money received
+                if (isDebit && accountCode && accountCode.startsWith('1') && 
+                    (accountName?.toLowerCase().includes('cash') || accountName?.toLowerCase().includes('bank')) &&
+                    !processedTransactions.has(entry.transactionId + '_income')) {
                     monthlyData[monthName].operating_activities.inflows += amount;
                     monthlyData[monthName].income.total += amount;
+                    processedTransactions.add(entry.transactionId + '_income');
                     
-                    // Categorize income
-                    if (accountCode.startsWith('4001') || entry.description?.toLowerCase().includes('rent')) {
-                        monthlyData[monthName].operating_activities.breakdown.rental_income += amount;
-                    } else if (accountCode.startsWith('4002') || entry.description?.toLowerCase().includes('admin')) {
-                        monthlyData[monthName].operating_activities.breakdown.admin_fees += amount;
-                    } else if (accountCode.startsWith('4003') || entry.description?.toLowerCase().includes('deposit')) {
-                        monthlyData[monthName].operating_activities.breakdown.deposits += amount;
-                    } else if (accountCode.startsWith('4004') || entry.description?.toLowerCase().includes('utilit')) {
-                        monthlyData[monthName].operating_activities.breakdown.utilities += amount;
-                    } else if (entry.description?.toLowerCase().includes('advance')) {
+                    // Categorize income based on description and payment timing
+                    const desc = entry.description?.toLowerCase() || '';
+                    let isAdvancePayment = false;
+                    
+                    // Check if this is an advance payment by looking at the description for allocation month
+                    if (desc.includes('for 20')) {
+                        // Extract allocation month from description (format: "for 2025-10")
+                        const match = desc.match(/for (\d{4}-\d{2})/);
+                        if (match) {
+                            const allocationMonthStr = match[1];
+                            const [year, month] = allocationMonthStr.split('-').map(n => parseInt(n));
+                            const allocationMonthDate = new Date(year, month - 1, 1); // month is 1-based in description
+                            
+                            // Use transaction date as payment date
+                            const paymentDate = new Date(entry.date);
+                            const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
+                            
+                            // If payment date is BEFORE allocation month, it's an advance payment
+                            // If payment date is IN or AFTER allocation month, it's regular rent
+                            if (paymentDateMonth < allocationMonthDate) {
+                                isAdvancePayment = true;
+                            }
+                        }
+                    }
+                    
+                    // Categorize based on description and timing
+                    // PRIORITY ORDER: Check for explicit advance payment keywords first, then rent, then others
+                    if (desc.includes('advance') || desc.includes('prepaid') || desc.includes('future') || isAdvancePayment) {
+                        monthlyData[monthName].income.advance_payments += amount;
                         monthlyData[monthName].operating_activities.breakdown.advance_payments += amount;
+                    } else if (desc.includes('rent') || desc.includes('rental') || desc.includes('accommodation') || desc.includes('payment allocation')) {
+                        // Rent income - prioritize this over other categories
+                        monthlyData[monthName].income.rental_income += amount;
+                        monthlyData[monthName].operating_activities.breakdown.rental_income += amount;
+                    } else if (desc.includes('admin') || desc.includes('administrative')) {
+                        monthlyData[monthName].income.admin_fees += amount;
+                        monthlyData[monthName].operating_activities.breakdown.admin_fees += amount;
+                    } else if (desc.includes('deposit') || desc.includes('security')) {
+                        monthlyData[monthName].income.deposits += amount;
+                        monthlyData[monthName].operating_activities.breakdown.deposits += amount;
+                    } else if (desc.includes('utilit') || desc.includes('internet') || desc.includes('wifi')) {
+                        monthlyData[monthName].income.utilities += amount;
+                        monthlyData[monthName].operating_activities.breakdown.utilities += amount;
                     } else {
+                        monthlyData[monthName].income.other_income += amount;
+                        monthlyData[monthName].operating_activities.breakdown.other_income += amount;
+                    }
+                }
+                
+                // FALLBACK: Credit to Income accounts (4000 series) - for completeness
+                else if (isCredit && accountCode && accountCode.startsWith('4') && 
+                         !processedTransactions.has(entry.transactionId + '_income')) {
+                    monthlyData[monthName].operating_activities.inflows += amount;
+                    monthlyData[monthName].income.total += amount;
+                    processedTransactions.add(entry.transactionId + '_income');
+                    
+                    // Categorize income (prioritize advance payments, then rent)
+                    const fallbackDesc = entry.description?.toLowerCase() || '';
+                    if (fallbackDesc.includes('advance') || fallbackDesc.includes('prepaid') || fallbackDesc.includes('future')) {
+                        monthlyData[monthName].income.advance_payments += amount;
+                        monthlyData[monthName].operating_activities.breakdown.advance_payments += amount;
+                    } else if (accountCode.startsWith('4001') || fallbackDesc.includes('rent') || fallbackDesc.includes('rental') || fallbackDesc.includes('accommodation') || fallbackDesc.includes('payment allocation')) {
+                        // Rental income - prioritize this
+                        monthlyData[monthName].income.rental_income += amount;
+                        monthlyData[monthName].operating_activities.breakdown.rental_income += amount;
+                    } else if (accountCode.startsWith('4002') || fallbackDesc.includes('admin')) {
+                        monthlyData[monthName].income.admin_fees += amount;
+                        monthlyData[monthName].operating_activities.breakdown.admin_fees += amount;
+                    } else if (accountCode.startsWith('4003') || fallbackDesc.includes('deposit')) {
+                        monthlyData[monthName].income.deposits += amount;
+                        monthlyData[monthName].operating_activities.breakdown.deposits += amount;
+                    } else if (accountCode.startsWith('4004') || accountCode.startsWith('4005') || fallbackDesc.includes('utilit') || fallbackDesc.includes('internet') || fallbackDesc.includes('wifi')) {
+                        monthlyData[monthName].income.utilities += amount;
+                        monthlyData[monthName].operating_activities.breakdown.utilities += amount;
+                    } else {
+                        monthlyData[monthName].income.other_income += amount;
                         monthlyData[monthName].operating_activities.breakdown.other_income += amount;
                     }
                 }
 
-                // EXPENSES: Debit to Expense accounts (5000 series) OR Cash outflows
-                if ((isDebit && accountCode && accountCode.startsWith('5')) || 
-                    (isCredit && accountCode && accountCode.startsWith('1') && 
-                     entry.description?.toLowerCase().includes('payment for expense'))) {
+                // EXPENSES: Credit to Cash accounts (1000 series) - money paid out
+                if (isCredit && accountCode && accountCode.startsWith('1') && 
+                    (accountName?.toLowerCase().includes('cash') || accountName?.toLowerCase().includes('bank'))) {
                     
+                    // Skip internal cash transfers and movements between cash accounts
+                    const desc = entry.description?.toLowerCase() || '';
+                    const isInternalTransfer = desc.includes('petty cash') || 
+                                             desc.includes('cash allocation') || 
+                                             desc.includes('internal transfer') ||
+                                             desc.includes('balance adjustment') ||
+                                             desc.includes('funds to') ||
+                                             desc.includes('cash to') ||
+                                             desc.includes('vault') ||
+                                             desc.includes('transfer to') ||
+                                             desc.includes('move to');
+                    
+                    
+                    if (!isInternalTransfer && !processedTransactions.has(entry.transactionId + '_expense')) {
                     monthlyData[monthName].operating_activities.outflows += amount;
                     monthlyData[monthName].expenses.total += amount;
+                        processedTransactions.add(entry.transactionId + '_expense');
 
-                    // Categorize expenses
-                    const desc = entry.description?.toLowerCase() || '';
-                    if (desc.includes('maintenance') || desc.includes('repair')) {
+                        // Categorize expenses based on description - individual categories
+                        if (desc.includes('electricity') || desc.includes('power')) {
+                            monthlyData[monthName].expenses.utilities += amount;
+                            monthlyData[monthName].expenses.electricity += amount;
+                            monthlyData[monthName].operating_activities.breakdown.electricity += amount;
+                        } else if (desc.includes('water')) {
+                            monthlyData[monthName].expenses.utilities += amount;
+                            monthlyData[monthName].expenses.water += amount;
+                            monthlyData[monthName].operating_activities.breakdown.water += amount;
+                        } else if (desc.includes('gas')) {
+                            monthlyData[monthName].expenses.utilities += amount;
+                            monthlyData[monthName].expenses.gas += amount;
+                            monthlyData[monthName].operating_activities.breakdown.gas += amount;
+                        } else if (desc.includes('internet') || desc.includes('wifi')) {
+                            monthlyData[monthName].expenses.utilities += amount;
+                            monthlyData[monthName].expenses.internet += amount;
+                            monthlyData[monthName].operating_activities.breakdown.internet += amount;
+                        } else if (desc.includes('maintenance') || desc.includes('repair')) {
                         monthlyData[monthName].expenses.maintenance += amount;
                         monthlyData[monthName].operating_activities.breakdown.maintenance += amount;
-                    } else if (desc.includes('electricity') || desc.includes('utility') || desc.includes('gas')) {
-                        monthlyData[monthName].expenses.utilities += amount;
-                        monthlyData[monthName].operating_activities.breakdown.utilities_expenses += amount;
                     } else if (desc.includes('cleaning')) {
                         monthlyData[monthName].expenses.cleaning += amount;
                         monthlyData[monthName].operating_activities.breakdown.cleaning += amount;
@@ -3221,10 +3352,82 @@ class EnhancedCashFlowService {
                     } else if (desc.includes('management')) {
                         monthlyData[monthName].expenses.management += amount;
                         monthlyData[monthName].operating_activities.breakdown.management += amount;
+                        } else if (desc.includes('insurance')) {
+                            monthlyData[monthName].expenses.utilities += amount;
+                            monthlyData[monthName].expenses.insurance += amount;
+                            monthlyData[monthName].operating_activities.breakdown.insurance += amount;
+                        } else if (desc.includes('council') || desc.includes('rates')) {
+                            monthlyData[monthName].expenses.utilities += amount;
+                            monthlyData[monthName].expenses.council_rates += amount;
+                            monthlyData[monthName].operating_activities.breakdown.council_rates += amount;
                     } else {
-                        // Default to maintenance
+                            // Default to other expenses for uncategorized expenses
+                            monthlyData[monthName].expenses.maintenance += amount;
+                            monthlyData[monthName].expenses.other_expenses += amount;
+                            monthlyData[monthName].operating_activities.breakdown.other_expenses += amount;
+                        }
+
+                        // Add to transactions
+                        monthlyData[monthName].expenses.transactions.push({
+                            transactionId: entry.transactionId,
+                            date: entry.date,
+                            amount: amount,
+                            description: entry.description,
+                            category: 'expense'
+                        });
+                    }
+                }
+                
+                // FALLBACK: Debit to Expense accounts (5000 series) - for completeness
+                else if (isDebit && accountCode && accountCode.startsWith('5') && 
+                         !processedTransactions.has(entry.transactionId + '_expense')) {
+                    monthlyData[monthName].operating_activities.outflows += amount;
+                    monthlyData[monthName].expenses.total += amount;
+                    processedTransactions.add(entry.transactionId + '_expense');
+
+                    // Categorize expenses - individual categories
+                    const desc = entry.description?.toLowerCase() || '';
+                    if (desc.includes('electricity') || desc.includes('power')) {
+                        monthlyData[monthName].expenses.utilities += amount;
+                        monthlyData[monthName].expenses.electricity += amount;
+                        monthlyData[monthName].operating_activities.breakdown.electricity += amount;
+                    } else if (desc.includes('water')) {
+                        monthlyData[monthName].expenses.utilities += amount;
+                        monthlyData[monthName].expenses.water += amount;
+                        monthlyData[monthName].operating_activities.breakdown.water += amount;
+                    } else if (desc.includes('gas')) {
+                        monthlyData[monthName].expenses.utilities += amount;
+                        monthlyData[monthName].expenses.gas += amount;
+                        monthlyData[monthName].operating_activities.breakdown.gas += amount;
+                    } else if (desc.includes('internet') || desc.includes('wifi')) {
+                        monthlyData[monthName].expenses.utilities += amount;
+                        monthlyData[monthName].expenses.internet += amount;
+                        monthlyData[monthName].operating_activities.breakdown.internet += amount;
+                    } else if (desc.includes('maintenance') || desc.includes('repair')) {
                         monthlyData[monthName].expenses.maintenance += amount;
                         monthlyData[monthName].operating_activities.breakdown.maintenance += amount;
+                    } else if (desc.includes('cleaning')) {
+                        monthlyData[monthName].expenses.cleaning += amount;
+                        monthlyData[monthName].operating_activities.breakdown.cleaning += amount;
+                    } else if (desc.includes('security')) {
+                        monthlyData[monthName].expenses.security += amount;
+                        monthlyData[monthName].operating_activities.breakdown.security += amount;
+                    } else if (desc.includes('management')) {
+                        monthlyData[monthName].expenses.management += amount;
+                        monthlyData[monthName].operating_activities.breakdown.management += amount;
+                    } else if (desc.includes('insurance')) {
+                        monthlyData[monthName].expenses.utilities += amount;
+                        monthlyData[monthName].expenses.insurance += amount;
+                        monthlyData[monthName].operating_activities.breakdown.insurance += amount;
+                    } else if (desc.includes('council') || desc.includes('rates')) {
+                        monthlyData[monthName].expenses.utilities += amount;
+                        monthlyData[monthName].expenses.council_rates += amount;
+                        monthlyData[monthName].operating_activities.breakdown.council_rates += amount;
+                    } else {
+                        // Default to other expenses
+                        monthlyData[monthName].expenses.maintenance += amount;
+                        monthlyData[monthName].expenses.other_expenses += amount;
+                        monthlyData[monthName].operating_activities.breakdown.other_expenses += amount;
                     }
 
                     // Add to transactions
@@ -5179,7 +5382,8 @@ class EnhancedCashFlowService {
             const query = {
                 date: { $lte: asOfDate },
                 // Exclude forfeiture transactions as they don't involve cash movement
-                'metadata.isForfeiture': { $ne: true }
+                'metadata.isForfeiture': { $ne: true },
+                status: { $nin: ['reversed', 'draft'] }
             };
             
             if (residenceId) {
@@ -5223,7 +5427,8 @@ class EnhancedCashFlowService {
             const query = {
                 date: { $lte: asOfDate },
                 // Exclude forfeiture transactions as they don't involve cash movement
-                'metadata.isForfeiture': { $ne: true }
+                'metadata.isForfeiture': { $ne: true },
+                status: { $nin: ['reversed', 'draft'] }
             };
             
             if (residenceId) {
@@ -5277,7 +5482,8 @@ class EnhancedCashFlowService {
             const query = {
                 date: { $lte: asOfDate },
                 // Exclude forfeiture transactions as they don't involve cash movement
-                'metadata.isForfeiture': { $ne: true }
+                'metadata.isForfeiture': { $ne: true },
+                status: { $nin: ['reversed', 'draft'] }
             };
             
             if (residenceId) {

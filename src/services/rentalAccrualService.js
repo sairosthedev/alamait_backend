@@ -318,10 +318,10 @@ class RentalAccrualService {
                         const proratedDays = daysInMonth - startDay + 1;
                         
                         // Calculate prorated rent using residence proration config
-                        let proratedRent = this.constructor.calculateProratedRent(residence, room, application.startDate);
+                        let proratedRent = this.calculateProratedRent(residence, room, application.startDate);
                         
                         // Calculate fees based on residence payment configuration
-                        const fees = this.constructor.calculateFeesFromPaymentConfig(residence, room);
+                        const fees = this.calculateFeesFromPaymentConfig(residence, room);
                         const adminFee = fees.adminFee;
                         const securityDeposit = fees.securityDeposit;
                         
@@ -337,9 +337,19 @@ class RentalAccrualService {
                         };
                     } else {
                         console.log(`📄 Lease start invoice already exists: ${existingInvoice.invoiceNumber}`);
+                        
+                        // 🆕 AUTO-WELCOME: Send welcome email even if invoice already exists
+                        try {
+                            await this.sendWelcomeEmail(application, existingInvoice);
+                            console.log(`📧 Welcome email sent to: ${application.email}`);
+                        } catch (welcomeError) {
+                            console.error(`⚠️ Failed to send welcome email:`, welcomeError.message);
+                            // Don't fail the entire process if welcome email fails
+                        }
+                        
                         return { 
                             success: true, 
-                            message: 'Both transactions and invoice already exist',
+                            message: 'Both transactions and invoice already exist, welcome email sent',
                             existingTransaction: existingEntries._id,
                             existingInvoice: existingInvoice._id
                         };
@@ -376,11 +386,11 @@ class RentalAccrualService {
             const proratedDays = daysInMonth - startDay + 1;
             
             // Calculate prorated rent using residence proration config
-            let proratedRent = this.constructor.calculateProratedRent(residence, room, application.startDate);
+            let proratedRent = this.calculateProratedRent(residence, room, application.startDate);
             console.log(`📅 Prorated rent computed via config: $${proratedRent.toFixed(2)}`);
             
             // Calculate fees based on residence payment configuration
-            const fees = this.constructor.calculateFeesFromPaymentConfig(residence, room);
+            const fees = this.calculateFeesFromPaymentConfig(residence, room);
             const adminFee = fees.adminFee;
             const securityDeposit = fees.securityDeposit;
             
@@ -549,6 +559,16 @@ class RentalAccrualService {
             try {
                 const invoice = await this.createAndSendLeaseStartInvoice(application, proratedRent, adminFee, securityDeposit);
                 console.log(`📄 Lease start invoice created and sent: ${invoice.invoiceNumber}`);
+                
+                // 🆕 AUTO-WELCOME: Send welcome email at the same time as invoice
+                try {
+                    await this.sendWelcomeEmail(application, invoice);
+                    console.log(`📧 Welcome email sent to: ${application.email}`);
+                } catch (welcomeError) {
+                    console.error(`⚠️ Failed to send welcome email:`, welcomeError.message);
+                    // Don't fail the entire process if welcome email fails
+                }
+                
             } catch (invoiceError) {
                 console.error(`⚠️ Failed to create/send lease start invoice:`, invoiceError.message);
                 // Don't fail the entire process if invoice creation fails
@@ -833,6 +853,7 @@ class RentalAccrualService {
             );
             
             if (existingAccrual) {
+                const monthKey = `${year}-${String(month).padStart(2, '0')}`;
                 console.log(`   ⚠️ Monthly accrual already exists for ${student.firstName} ${student.lastName} - ${monthKey} (created by ${existingAccrual.createdBy || 'unknown service'})`);
                 return { success: false, error: 'Accrual already exists for this month', existingTransaction: existingAccrual._id };
             }
@@ -1221,6 +1242,94 @@ class RentalAccrualService {
             
         } catch (error) {
             console.error('❌ Error creating/sending lease start invoice:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * 🆕 Send welcome email for lease start
+     */
+    static async sendWelcomeEmail(application, invoice) {
+        try {
+            const { sendEmail } = require('../utils/email');
+            const User = require('../models/User');
+            const { Residence } = require('../models/Residence');
+            
+            // Get student and residence details
+            const student = await User.findById(application.student);
+            const residence = await Residence.findById(application.residence);
+            
+            if (!student || !residence) {
+                throw new Error('Student or residence not found for welcome email');
+            }
+            
+            const welcomeEmailContent = `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+                        <h2 style="color: #333;">Welcome to Alamait Student Accommodation!</h2>
+                        <p>Dear ${application.firstName} ${application.lastName},</p>
+                        
+                        <p>Congratulations! Your application has been approved and your lease has started.</p>
+                        
+                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                            <h3 style="color: #333; margin-top: 0;">Account Details</h3>
+                            <p><strong>Email:</strong> ${application.email}</p>
+                            <p><strong>Application Code:</strong> ${application.applicationCode}</p>
+                            <p><strong>Allocated Room:</strong> ${application.allocatedRoom || 'TBD'}</p>
+                            <p><strong>Residence:</strong> ${residence.name}</p>
+                            <p><strong>Lease Start Date:</strong> ${new Date(application.startDate).toLocaleDateString()}</p>
+                            <p><strong>Lease End Date:</strong> ${new Date(application.endDate).toLocaleDateString()}</p>
+                        </div>
+                        
+                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                            <h3 style="color: #333; margin-top: 0;">Payment Information</h3>
+                            <p><strong>Monthly Rent:</strong> $${application.monthlyRent || 0}</p>
+                            <p><strong>Admin Fee:</strong> $${invoice.metadata?.adminFee || 0}</p>
+                            <p><strong>Security Deposit:</strong> $${invoice.metadata?.securityDeposit || 0}</p>
+                            <p><strong>Invoice Number:</strong> ${invoice.invoiceNumber}</p>
+                            <p><strong>Total Amount Due:</strong> $${invoice.totalAmount}</p>
+                        </div>
+                        
+                        <div style="background-color: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                            <h3 style="color: #1976d2; margin-top: 0;">Next Steps</h3>
+                            <p>1. Please check your email for your invoice details</p>
+                            <p>2. Make payment by the due date to avoid late fees</p>
+                            <p>3. Contact our office to arrange move-in</p>
+                            <p>4. Review and sign your lease agreement</p>
+                        </div>
+                        
+                        <div style="background-color: #f3e5f5; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                            <h3 style="color: #7b1fa2; margin-top: 0;">Important Contact Information</h3>
+                            <p><strong>Support Email:</strong> support@alamait.com</p>
+                            <p><strong>Finance Team:</strong> finance@alamait.com</p>
+                            <p><strong>Student Portal:</strong> https://alamait.vercel.app/login</p>
+                        </div>
+                        
+                        <hr style="margin: 20px 0;">
+                        <p style="font-size: 12px; color: #666;">
+                            This is an automated message from Alamait Student Accommodation.<br>
+                            For assistance, please contact our support team.
+                        </p>
+                    </div>
+                </div>
+            `;
+            
+            // Send welcome email in background (non-blocking)
+            setTimeout(async () => {
+                try {
+                    await sendEmail({
+                        to: application.email,
+                        subject: `Welcome to Alamait Student Accommodation - Your Account Details`,
+                        html: welcomeEmailContent
+                    });
+                    console.log(`📧 Welcome email sent to ${application.email}`);
+                } catch (emailError) {
+                    console.error(`❌ Failed to send welcome email to ${application.email}:`, emailError.message);
+                }
+            }, 100);
+            
+        } catch (error) {
+            console.error('❌ Error sending welcome email:', error);
             throw error;
         }
     }
@@ -1671,13 +1780,13 @@ class RentalAccrualService {
                     if (roomData && roomData.price) {
                         rentAmount = roomData.price;
                         // Calculate admin fee based on residence payment configuration
-                        const fees = this.constructor.calculateFeesFromPaymentConfig(residence, roomData);
+                        const fees = this.calculateFeesFromPaymentConfig(residence, roomData);
                         adminFee = fees.adminFee;
                     } else {
                         // Fallback pricing if room not found
                         rentAmount = 200;
                         // Check payment config for admin fee even in fallback
-                        const fees = this.constructor.calculateFeesFromPaymentConfig(residence, { price: 200 });
+                        const fees = this.calculateFeesFromPaymentConfig(residence, { price: 200 });
                         adminFee = fees.adminFee;
                     }
             } else {

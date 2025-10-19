@@ -735,6 +735,82 @@ exports.updateApplicationStatus = async (req, res) => {
     }
 };
 
+// Update application data (firstName, lastName, email, phone, etc.)
+exports.updateApplicationData = async (req, res) => {
+    try {
+        console.log('🔄 updateApplicationData called with:', {
+            body: req.body,
+            params: req.params,
+            user: req.user ? { id: req.user._id, email: req.user.email } : 'No user'
+        });
+
+        const { applicationId } = req.params;
+        const updateData = req.body;
+
+        console.log('📋 Updating application data:', { applicationId, updateData });
+
+        const application = await Application.findById(applicationId);
+        if (!application) {
+            console.log('❌ Application not found:', applicationId);
+            return res.status(404).json({ error: 'Application not found' });
+        }
+
+        console.log('✅ Found application:', {
+            id: application._id,
+            studentName: `${application.firstName} ${application.lastName}`,
+            email: application.email
+        });
+
+        // Update the application with new data
+        const allowedFields = [
+            'firstName', 'lastName', 'email', 'phone', 
+            'emergencyContact', 'startDate', 'endDate', 
+            'roomNumber', 'residenceId', 'monthlyRent'
+        ];
+
+        // Field mapping for frontend to backend field names
+        const fieldMapping = {
+            'roomNumber': 'allocatedRoom',
+            'residenceId': 'residence'
+        };
+
+        const updateFields = {};
+        for (const field of allowedFields) {
+            if (updateData[field] !== undefined) {
+                // Use mapped field name if it exists, otherwise use original field name
+                const backendFieldName = fieldMapping[field] || field;
+                updateFields[backendFieldName] = updateData[field];
+            }
+        }
+
+        console.log('📝 Updating fields:', updateFields);
+
+        // Update the application
+        const updatedApplication = await Application.findByIdAndUpdate(
+            applicationId,
+            { $set: updateFields },
+            { new: true, runValidators: true }
+        );
+
+        console.log('✅ Application updated successfully:', {
+            id: updatedApplication._id,
+            studentName: `${updatedApplication.firstName} ${updatedApplication.lastName}`,
+            email: updatedApplication.email
+        });
+
+        res.json({
+            success: true,
+            message: 'Application data updated successfully',
+            application: updatedApplication
+        });
+
+    } catch (error) {
+        console.error('❌ Error in updateApplicationData:', error);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
 // Update payment status
 exports.updatePaymentStatus = async (req, res) => {
     try {

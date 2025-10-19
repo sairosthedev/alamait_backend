@@ -560,46 +560,12 @@ class FinancialReportingService {
                         }
                     }
                     
-                    // Step 3: Aggressive month extraction from description (consistent patterns)
-                    if (monthIndex === null) {
-                        const desc = entry.description.toLowerCase();
-                        const monthPatterns = [
-                            { pattern: ['september', 'sep'], month: 8 },
-                            { pattern: ['october', 'oct'], month: 9 },
-                            { pattern: ['november', 'nov'], month: 10 },
-                            { pattern: ['december', 'dec'], month: 11 },
-                            { pattern: ['january', 'jan'], month: 0 },
-                            { pattern: ['february', 'feb'], month: 1 },
-                            { pattern: ['march', 'mar'], month: 2 },
-                            { pattern: ['april', 'apr'], month: 3 },
-                            { pattern: ['may'], month: 4 },
-                            { pattern: ['june', 'jun'], month: 5 },
-                            { pattern: ['july', 'jul'], month: 6 },
-                            { pattern: ['august', 'aug'], month: 7 }
-                        ];
-                        
-                        for (const { pattern, month } of monthPatterns) {
-                            if (pattern.some(p => desc.includes(p))) {
-                                monthIndex = month;
-                                incurredDate = new Date(parseInt(period), month, 1);
-                                console.log(`  ✅ Using extracted month from description: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // Step 4: Last resort - use transaction date (but ensure it's within the year)
+                    // Step 3: Use transaction date (reliable and accurate)
                     if (monthIndex === null) {
                         const transactionDate = new Date(entry.date);
-                        if (transactionDate.getFullYear() == parseInt(period)) {
-                            monthIndex = transactionDate.getMonth();
-                            incurredDate = transactionDate;
-                            console.log(`  ⚠️ Using transaction date as fallback: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
-                        } else {
-                            // Skip entries from different years
-                            console.log(`  ❌ Skipping entry from different year: ${transactionDate.getFullYear()} != ${period}`);
-                            return;
-                        }
+                        monthIndex = transactionDate.getMonth();
+                        incurredDate = new Date(transactionDate.getFullYear(), monthIndex, 1);
+                        console.log(`  ✅ Using transaction date: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
                     }
                     
                     // Ensure month index is valid

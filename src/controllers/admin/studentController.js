@@ -1454,19 +1454,20 @@ exports.manualAddStudent = async (req, res) => {
                     await application.save();
                     console.log(`🔗 Linked debtor ${debtor._id} to application ${application._id}`);
                     
-                    // Now trigger rental accrual service
-                    console.log(`🏠 Starting background rental accrual service for ${application.firstName} ${application.lastName}...`);
+                    // 🆕 AUTO-LEASE-START: Trigger lease start process immediately for single student
+                    console.log(`🏠 Starting lease start process for ${application.firstName} ${application.lastName}...`);
                     const RentalAccrualService = require('../../services/rentalAccrualService');
                     
                     const accrualResult = await RentalAccrualService.processLeaseStart(application);
                     
                     if (accrualResult && accrualResult.success) {
-                        console.log(`✅ Background rental accrual service completed successfully`);
+                        console.log(`✅ Lease start process completed successfully`);
                         console.log(`   - Initial accounting entries created`);
                         console.log(`   - Prorated rent, admin fees, and deposits recorded`);
+                        console.log(`   - Invoice and welcome email sent`);
                         console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
                     } else {
-                        console.log(`⚠️  Background rental accrual service completed with warnings:`, accrualResult?.error || 'Unknown issue');
+                        console.log(`⚠️ Lease start process completed with warnings:`, accrualResult?.error || 'Unknown issue');
                     }
 
                     // Trigger monthly accrual process after rental accrual is complete
@@ -1843,71 +1844,12 @@ exports.uploadCsvStudents = async (req, res) => {
             }
         };
         
-        // Use async processing for multiple students
-        const shouldUseAsync = nonFailingStudents.length > 1;
-        
+        // Process all students synchronously to avoid connection issues
         console.log(`📊 CSV Upload Analysis:`);
         console.log(`   - Total non-failing students: ${nonFailingStudents.length}`);
-        console.log(`   - Should use async: ${shouldUseAsync}`);
+        console.log(`   - Processing synchronously to maintain connection`);
         
-        if (shouldUseAsync) {
-            console.log(`🔄 CSV upload detected (${nonFailingStudents.length} students). Using async processing...`);
-            
-            // Return immediately with processing status
-            const asyncResponse = {
-                _id: `csv-upload-${Date.now()}`,
-                id: `csv-upload-${Date.now()}`,
-                requestId: `csv-upload-${Date.now()}`,
-                request_id: `csv-upload-${Date.now()}`,
-                data: {
-                    id: `csv-upload-${Date.now()}`,
-                    _id: `csv-upload-${Date.now()}`
-                },
-                state: 'processing',
-                status: 'processing',
-                message: `CSV upload started. Processing ${nonFailingStudents.length} non-failing students in the background.`,
-                async: true,
-                success: true,
-                totalStudents: nonFailingStudents.length,
-                completed: false,
-                filteredCount: csvData.length - nonFailingStudents.length
-            };
-            
-            console.log('🚀 Sending async response for CSV upload');
-            
-            // Send response immediately
-            try {
-                res.status(200).json(asyncResponse);
-                console.log('✅ Async response sent successfully');
-            } catch (responseError) {
-                console.error('❌ Error sending async response:', responseError);
-                return;
-            }
-            
-            // Process in background - USE nonFailingStudents instead of csvData
-            setImmediate(async () => {
-                try {
-                    console.log(`🔄 Starting background processing for ${nonFailingStudents.length} NON-FAILING students...`);
-                    await processCsvStudentsInBackground(
-                        nonFailingStudents, // Use the filtered list
-                        residenceId, 
-                        defaultRoomNumber, 
-                        defaultStartDate, 
-                        defaultEndDate, 
-                        defaultMonthlyRent, 
-                        req.user._id
-                    );
-                    console.log(`✅ Background CSV processing completed for ${nonFailingStudents.length} non-failing students`);
-                } catch (error) {
-                    console.error('❌ Error in background CSV processing:', error);
-                }
-            });
-            
-            return;
-        }
-        
-        // If only one student, process synchronously
-        console.log(`🔄 Processing ${nonFailingStudents.length} student(s) synchronously...`);
+        console.log(`🔄 Processing ${nonFailingStudents.length} students synchronously...`);
         
         // Process each student synchronously
         for (let i = 0; i < nonFailingStudents.length; i++) {
@@ -2171,6 +2113,12 @@ exports.uploadCsvStudents = async (req, res) => {
                     isExistingUser: !!existingUser
                 });
                 
+                // Store application for lease start processing after all students are created
+                if (!results.applicationsForLeaseStart) {
+                    results.applicationsForLeaseStart = [];
+                }
+                results.applicationsForLeaseStart.push(application);
+                
                 results.summary.totalSuccessful++;
                 results.summary.totalStudents++;
                 
@@ -2183,6 +2131,43 @@ exports.uploadCsvStudents = async (req, res) => {
                 });
                 results.summary.totalFailed++;
             }
+        }
+        
+        // 🆕 AUTO-LEASE-START: Trigger lease start process for all created students
+        if (results.applicationsForLeaseStart && results.applicationsForLeaseStart.length > 0) {
+            console.log(`\n🏠 === STARTING LEASE START PROCESS FOR ${results.applicationsForLeaseStart.length} STUDENTS ===`);
+            
+            const RentalAccrualService = require('../../services/rentalAccrualService');
+            let leaseStartSuccessCount = 0;
+            let leaseStartErrorCount = 0;
+            
+            for (const application of results.applicationsForLeaseStart) {
+                try {
+                    console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}...`);
+                    
+                    const accrualResult = await RentalAccrualService.processLeaseStart(application);
+                    
+                    if (accrualResult && accrualResult.success) {
+                        console.log(`✅ Lease start process completed successfully for ${application.firstName} ${application.lastName}`);
+                        console.log(`   - Initial accounting entries created`);
+                        console.log(`   - Prorated rent, admin fees, and deposits recorded`);
+                        console.log(`   - Invoice and welcome email sent`);
+                        console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
+                        leaseStartSuccessCount++;
+                    } else {
+                        console.log(`⚠️ Lease start process completed with warnings for ${application.firstName} ${application.lastName}:`, accrualResult?.error || 'Unknown issue');
+                        leaseStartErrorCount++;
+                    }
+                } catch (leaseStartError) {
+                    console.error(`❌ Lease start process failed for ${application.firstName} ${application.lastName}:`, leaseStartError.message);
+                    leaseStartErrorCount++;
+                }
+            }
+            
+            console.log(`\n📊 === LEASE START PROCESS SUMMARY ===`);
+            console.log(`✅ Successful: ${leaseStartSuccessCount}`);
+            console.log(`❌ Failed: ${leaseStartErrorCount}`);
+            console.log(`📧 Invoices and welcome emails sent for ${leaseStartSuccessCount} students`);
         }
         
         console.log(`✅ CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
@@ -2770,6 +2755,20 @@ exports.uploadExcelStudents = async (req, res) => {
                     // Continue with student creation even if debtor fails
                 }
                 
+                // 🆕 STUDENT CREATION COMPLETED: Will trigger lease start process after all students are created
+                console.log(`✅ Student creation completed for ${application.firstName} ${application.lastName}`);
+                console.log(`   - Student account created`);
+                console.log(`   - Application created and approved`);
+                console.log(`   - Debtor account created`);
+                console.log(`   - Room assigned`);
+                console.log(`   - Ready for lease start process`);
+                
+                // Store application for lease start processing after all students are created
+                if (!results.applicationsForLeaseStart) {
+                    results.applicationsForLeaseStart = [];
+                }
+                results.applicationsForLeaseStart.push(application);
+                
                 // Update room occupancy if room is assigned
                 if (room && roomNumber) {
                     room.currentOccupancy = (room.currentOccupancy || 0) + 1;
@@ -2848,6 +2847,50 @@ exports.uploadExcelStudents = async (req, res) => {
         }
         
         console.log(`✅ Excel upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
+        
+        // 🆕 AUTO-LEASE-START: Trigger lease start process for all created students
+        if (results.applicationsForLeaseStart && results.applicationsForLeaseStart.length > 0) {
+            console.log(`\n🏠 === STARTING LEASE START PROCESS FOR ${results.applicationsForLeaseStart.length} STUDENTS ===`);
+            
+            // Ensure MongoDB connection is available for lease start process
+            const mongoose = require('mongoose');
+            if (mongoose.connection.readyState !== 1) {
+                console.log('🔄 Reconnecting to MongoDB for lease start process...');
+                await mongoose.connect(process.env.MONGODB_URI);
+            }
+            
+            const RentalAccrualService = require('../../services/rentalAccrualService');
+            let leaseStartSuccessCount = 0;
+            let leaseStartErrorCount = 0;
+            
+            for (const application of results.applicationsForLeaseStart) {
+                try {
+                    console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}...`);
+                    
+                    const accrualResult = await RentalAccrualService.processLeaseStart(application);
+                    
+                    if (accrualResult && accrualResult.success) {
+                        console.log(`✅ Lease start process completed successfully for ${application.firstName} ${application.lastName}`);
+                        console.log(`   - Initial accounting entries created`);
+                        console.log(`   - Prorated rent, admin fees, and deposits recorded`);
+                        console.log(`   - Invoice and welcome email sent`);
+                        console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
+                        leaseStartSuccessCount++;
+                    } else {
+                        console.log(`⚠️ Lease start process completed with warnings for ${application.firstName} ${application.lastName}:`, accrualResult?.error || 'Unknown issue');
+                        leaseStartErrorCount++;
+                    }
+                } catch (leaseStartError) {
+                    console.error(`❌ Lease start process failed for ${application.firstName} ${application.lastName}:`, leaseStartError.message);
+                    leaseStartErrorCount++;
+                }
+            }
+            
+            console.log(`\n📊 === LEASE START PROCESS SUMMARY ===`);
+            console.log(`✅ Successful: ${leaseStartSuccessCount}`);
+            console.log(`❌ Failed: ${leaseStartErrorCount}`);
+            console.log(`📧 Invoices and welcome emails sent for ${leaseStartSuccessCount} students`);
+        }
         
         // Create audit log for Excel bulk upload
         await createAuditLog({
@@ -3148,10 +3191,23 @@ exports.backfillDebtorTransactions = async (req, res) => {
 };
 
 /**
- * Background processing function for large CSV uploads
+ * Background processing function for large CSV uploads - COMPLETE FIXED VERSION
  */
 async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomNumber, defaultStartDate, defaultEndDate, defaultMonthlyRent, userId) {
-    console.log(`🔄 Starting background CSV processing for ${csvData.length} students...`);
+    console.log(`\n🔄 === STARTING BACKGROUND PROCESSING FOR ${csvData.length} STUDENTS ===`);
+    console.log(`📊 Function called with data:`, {
+        csvDataLength: csvData.length,
+        residenceId: residenceId,
+        userId: userId,
+        defaultRoomNumber: defaultRoomNumber
+    });
+    
+    // Ensure MongoDB connection is available
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState !== 1) {
+        console.log('🔄 Reconnecting to MongoDB in background processing...');
+        await mongoose.connect(process.env.MONGODB_URI);
+    }
     
     const results = {
         successful: [],
@@ -3164,65 +3220,79 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
         }
     };
     
-    // Validate residence exists
-    const residence = await Residence.findById(residenceId);
-    if (!residence) {
-        console.error('❌ Residence not found in background processing');
-        return;
-    }
-    
-    // Process each CSV row
-    console.log(`🔄 Background processing: Starting loop for ${csvData.length} students`);
-    for (let i = 0; i < csvData.length; i++) {
-        const row = csvData[i];
-        const rowNumber = i + 1;
-        console.log(`🔄 Background processing student ${i + 1}/${csvData.length}: ${row?.email || 'Unknown'}`);
+    try {
+        // Validate residence exists and cache it
+        let residence = await Residence.findById(residenceId);
+        if (!residence) {
+            console.error('❌ Residence not found in background processing');
+            return results;
+        }
+
+        console.log(`✅ Residence found: ${residence.name}`);
+        console.log(`📋 Students to process:`, csvData.map(s => s?.email).filter(Boolean));
         
-        try {
-            // Validate required fields
-            if (!row.email || !row.firstName || !row.lastName) {
-                results.failed.push({
-                    row: rowNumber,
-                    error: 'Missing required fields: email, firstName, lastName',
-                    data: row
-                });
-                results.summary.totalFailed++;
-                continue;
-            }
+        // Process each CSV row
+        for (let i = 0; i < csvData.length; i++) {
+            const row = csvData[i];
+            const rowNumber = i + 1;
             
-            // Check if user already exists and has an active lease
-            const existingUser = await User.findOne({ email: row.email });
-            if (existingUser) {
-                // Check if user has any active leases that haven't ended
-                const currentDate = new Date();
-                const activeLease = await Application.findOne({
-                    email: row.email.toLowerCase(),
-                    status: 'approved',
-                    endDate: { $gt: currentDate } // Lease hasn't ended yet
-                });
-                
-                if (activeLease) {
+            console.log(`\n🔄 === PROCESSING STUDENT ${i + 1}/${csvData.length} ===`);
+            console.log(`📧 Email: ${row?.email || 'Unknown'}`);
+            console.log(`👤 Name: ${row?.firstName || 'N/A'} ${row?.lastName || 'N/A'}`);
+            console.log(`🏠 Room: ${row?.roomNumber || defaultRoomNumber || 'N/A'}`);
+            
+            try {
+                // Validate required fields
+                if (!row.email || !row.firstName || !row.lastName) {
+                    console.log(`❌ Missing required fields for student ${rowNumber}`);
                     results.failed.push({
                         row: rowNumber,
-                        error: `User has an active lease ending ${activeLease.endDate.toDateString()}. Cannot create new application.`,
+                        error: 'Missing required fields: email, firstName, lastName',
                         data: row
                     });
                     results.summary.totalFailed++;
                     continue;
                 }
                 
-                // If no active lease, allow re-application
-                console.log(`🔄 Re-application detected for existing student: ${row.email}`);
-            }
-            
+                // Check if user already exists and has an active lease
+                const existingUser = await User.findOne({ email: row.email });
+                if (existingUser) {
+                    // Check if user has any active leases that haven't ended
+                    const currentDate = new Date();
+                    const activeLease = await Application.findOne({
+                        email: row.email.toLowerCase(),
+                        status: 'approved',
+                        endDate: { $gt: currentDate }
+                    });
+                    
+                    if (activeLease) {
+                        console.log(`❌ User ${row.email} has active lease ending ${activeLease.endDate}`);
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `User has an active lease ending ${activeLease.endDate.toDateString()}. Cannot create new application.`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                    
+                    console.log(`🔄 Re-application detected for existing student: ${row.email}`);
+                }
+                
                 // Validate room if provided
                 let roomNumber = row.roomNumber || defaultRoomNumber;
-                let room = null;
+                let roomData = null;
+                
+                console.log(`🏠 Room validation for student ${row.email}:`);
+                console.log(`   - Requested room: ${roomNumber}`);
                 
                 if (roomNumber) {
-                    room = residence.rooms.find(r => r.roomNumber === roomNumber);
-                    if (!room) {
-                        console.log(`❌ Room ${roomNumber} not found in residence for student ${row.email}`);
+                    // Get fresh residence data for room validation
+                    const freshResidence = await Residence.findById(residenceId);
+                    roomData = freshResidence.rooms.find(r => r.roomNumber === roomNumber);
+                    
+                    if (!roomData) {
+                        console.log(`❌ Room ${roomNumber} not found in residence`);
                         results.failed.push({
                             row: rowNumber,
                             error: `Room ${roomNumber} not found in residence`,
@@ -3232,258 +3302,390 @@ async function processCsvStudentsInBackground(csvData, residenceId, defaultRoomN
                         continue;
                     }
                     
-                    console.log(`✅ Room ${roomNumber} found for student ${row.email} (current occupancy: ${room.currentOccupancy}/${room.capacity})`);
+                    console.log(`✅ Room ${roomNumber} found`);
+                    console.log(`   - Current occupancy: ${roomData.currentOccupancy}/${roomData.capacity}`);
                     
-                    // Check room availability (allow multiple students in same room for CSV upload)
-                    if (room.currentOccupancy >= room.capacity) {
-                        console.log(`⚠️ Room ${roomNumber} is at capacity (${room.currentOccupancy}/${room.capacity}), but allowing CSV upload to proceed for student ${row.email}`);
-                        // Don't fail - allow the upload to proceed and update occupancy
+                    // Check room availability
+                    if (roomData.currentOccupancy >= roomData.capacity) {
+                        console.log(`❌ Room ${roomNumber} is at full capacity`);
+                        results.failed.push({
+                            row: rowNumber,
+                            error: `Room ${roomNumber} is at full capacity`,
+                            data: row
+                        });
+                        results.summary.totalFailed++;
+                        continue;
+                    }
+                } else {
+                    console.log(`ℹ️ No room specified, will use default`);
+                }
+                
+                // Parse dates
+                const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
+                const endDate = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
+                const monthlyRent = parseFloat(row.monthlyRent) || parseFloat(defaultMonthlyRent) || 150;
+                
+                if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                    console.log(`❌ Invalid date format`);
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'Invalid date format',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                if (endDate <= startDate) {
+                    console.log(`❌ End date must be after start date`);
+                    results.failed.push({
+                        row: rowNumber,
+                        error: 'End date must be after start date',
+                        data: row
+                    });
+                    results.summary.totalFailed++;
+                    continue;
+                }
+                
+                // Handle existing user or create new one
+                let student = existingUser;
+                let tempPassword = null;
+                
+                console.log(`👤 Student creation/update for ${row.email}:`);
+                
+                if (!student) {
+                    console.log(`   - Creating new student`);
+                    // Generate temporary password for new user
+                    tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
+                    
+                    // Create new student user
+                    student = new User({
+                        email: row.email,
+                        firstName: row.firstName,
+                        lastName: row.lastName,
+                        phone: row.phone || '',
+                        password: tempPassword,
+                        status: row.status || 'active',
+                        emergencyContact: row.emergencyContact || {},
+                        role: 'student',
+                        isVerified: true,
+                        residence: residenceId
+                    });
+                    
+                    await student.save();
+                    console.log(`✅ New student created: ${student.email} (ID: ${student._id})`);
+                } else {
+                    console.log(`   - Updating existing student`);
+                    // Update existing user information if needed
+                    let updated = false;
+                    if (student.firstName !== row.firstName) {
+                        student.firstName = row.firstName;
+                        updated = true;
+                    }
+                    if (student.lastName !== row.lastName) {
+                        student.lastName = row.lastName;
+                        updated = true;
+                    }
+                    if (student.phone !== (row.phone || '')) {
+                        student.phone = row.phone || '';
+                        updated = true;
+                    }
+                    
+                    if (updated) {
+                        await student.save();
+                        console.log(`✅ Existing student updated: ${student.email}`);
+                    } else {
+                        console.log(`✅ Using existing student: ${student.email}`);
                     }
                 }
-            
-            // Parse dates
-            const startDate = row.startDate ? new Date(row.startDate) : (defaultStartDate ? new Date(defaultStartDate) : new Date());
-            const endDate = row.endDate ? new Date(row.endDate) : (defaultEndDate ? new Date(defaultEndDate) : new Date());
-            const monthlyRent = parseFloat(row.monthlyRent) || parseFloat(defaultMonthlyRent) || 150; // Default to $150
-            
-            if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-                results.failed.push({
-                    row: rowNumber,
-                    error: 'Invalid date format',
-                    data: row
-                });
-                results.summary.totalFailed++;
-                continue;
-            }
-            
-            if (endDate <= startDate) {
-                results.failed.push({
-                    row: rowNumber,
-                    error: 'End date must be after start date',
-                    data: row
-                });
-                results.summary.totalFailed++;
-                continue;
-            }
-            
-            // Handle existing user or create new one
-            let student = existingUser;
-            let tempPassword = null; // Initialize tempPassword
-            
-            if (!student) {
-                // Generate temporary password for new user
-                tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4);
                 
-                // Create new student user
-                student = new User({
+                // Generate application code
+                const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+                
+                // Create application record
+                const application = new Application({
+                    student: student._id,
                     email: row.email,
                     firstName: row.firstName,
                     lastName: row.lastName,
                     phone: row.phone || '',
-                    password: tempPassword,
-                    status: row.status || 'active',
-                    emergencyContact: row.emergencyContact || {},
-                    role: 'student',
-                    isVerified: true,
-                    residence: residenceId
-                });
-                
-                await student.save();
-                console.log(`✅ New student created: ${student.email}`);
-            } else {
-                // Update existing user information if needed
-                let updated = false;
-                if (student.firstName !== row.firstName) {
-                    student.firstName = row.firstName;
-                    updated = true;
-                }
-                if (student.lastName !== row.lastName) {
-                    student.lastName = row.lastName;
-                    updated = true;
-                }
-                if (student.phone !== (row.phone || '')) {
-                    student.phone = row.phone || '';
-                    updated = true;
-                }
-                
-                if (updated) {
-                    await student.save();
-                    console.log(`✅ Existing student updated: ${student.email}`);
-                } else {
-                    console.log(`✅ Using existing student: ${student.email}`);
-                }
-            }
-            
-            // Generate application code
-            const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
-            
-            // Create application record
-            const application = new Application({
-                student: student._id,
-                email: row.email,
-                firstName: row.firstName,
-                lastName: row.lastName,
-                phone: row.phone || '',
-                requestType: 'new',
-                status: 'approved',
-                paymentStatus: 'paid',
-                startDate: startDate,
-                endDate: endDate,
-                preferredRoom: roomNumber,
-                allocatedRoom: roomNumber,
-                residence: residenceId,
-                applicationCode: applicationCode,
-                applicationDate: new Date(),
-                actionDate: new Date(),
-                actionBy: userId
-            });
-            
-            await application.save();
-            
-            // Update student with application code
-            student.applicationCode = application.applicationCode;
-            await student.save();
-            
-            // Create debtor account
-            let debtor = null;
-            try {
-                debtor = await createDebtorForStudent(student, {
-                    residenceId: residenceId,
-                    roomNumber: roomNumber,
-                    createdBy: userId,
-                    application: application._id,
-                    applicationCode: application.applicationCode,
+                    requestType: 'new',
+                    status: 'approved',
+                    paymentStatus: 'paid',
                     startDate: startDate,
                     endDate: endDate,
-                    roomPrice: monthlyRent
+                    preferredRoom: roomNumber,
+                    allocatedRoom: roomNumber,
+                    residence: residenceId,
+                    applicationCode: applicationCode,
+                    applicationDate: new Date(),
+                    actionDate: new Date(),
+                    actionBy: userId
                 });
                 
-                if (debtor) {
-                    application.debtor = debtor._id;
-                    await application.save();
-                }
-            } catch (debtorError) {
-                console.error(`❌ Failed to create debtor for CSV student ${row.email}:`, debtorError);
-                // Continue with student creation even if debtor fails
-            }
-            
-            // Update room occupancy if room is assigned
-            if (room && roomNumber) {
-                console.log(`🏠 Updating room ${roomNumber} occupancy for student ${row.email}`);
-                room.currentOccupancy = (room.currentOccupancy || 0) + 1;
-                room.occupants = [...(room.occupants || []), student._id];
+                await application.save();
+                console.log(`✅ Application created: ${applicationCode}`);
                 
-                if (room.currentOccupancy >= room.capacity) {
-                    room.status = 'occupied';
-                } else if (room.currentOccupancy > 0) {
-                    room.status = 'reserved';
-                }
-                
-                console.log(`✅ Room ${roomNumber} updated: occupancy ${room.currentOccupancy}/${room.capacity}, status: ${room.status}`);
-                await residence.save();
-            }
-            
-            // Update student with room assignment
-            if (roomNumber) {
-                console.log(`👤 Updating student ${row.email} with room assignment ${roomNumber}`);
-                student.currentRoom = roomNumber;
-                student.roomValidUntil = endDate;
-                student.roomApprovalDate = new Date();
+                // Update student with application code
+                student.applicationCode = application.applicationCode;
                 await student.save();
+                
+                // Create debtor account
+                let debtor = null;
+                try {
+                    console.log(`💰 Creating debtor account`);
+                    debtor = await createDebtorForStudent(student, {
+                        residenceId: residenceId,
+                        roomNumber: roomNumber,
+                        createdBy: userId,
+                        application: application._id,
+                        applicationCode: application.applicationCode,
+                        startDate: startDate,
+                        endDate: endDate,
+                        roomPrice: monthlyRent
+                    });
+                    
+                    if (debtor) {
+                        application.debtor = debtor._id;
+                        await application.save();
+                        console.log(`✅ Debtor account created: ${debtor.debtorCode}`);
+                    }
+                } catch (debtorError) {
+                    console.error(`⚠️ Debtor creation failed:`, debtorError.message);
+                }
+                
+                // 🆕 STUDENT CREATION COMPLETED: Will trigger lease start process after all students are created
+                console.log(`✅ Student creation completed for ${application.firstName} ${application.lastName}`);
+                console.log(`   - Student account created`);
+                console.log(`   - Application created and approved`);
+                console.log(`   - Debtor account created`);
+                console.log(`   - Room assigned`);
+                console.log(`   - Ready for lease start process`);
+                
+                // Store application for lease start processing after all students are created
+                if (!results.applicationsForLeaseStart) {
+                    results.applicationsForLeaseStart = [];
+                }
+                results.applicationsForLeaseStart.push(application);
+                
+                // Update room occupancy if room is assigned
+                if (roomNumber && roomData) {
+                    console.log(`🏠 Updating room occupancy for ${roomNumber}`);
+                    const currentResidence = await Residence.findById(residenceId);
+                    const roomToUpdate = currentResidence.rooms.find(r => r.roomNumber === roomNumber);
+                    
+                    if (roomToUpdate) {
+                        roomToUpdate.currentOccupancy = (roomToUpdate.currentOccupancy || 0) + 1;
+                        roomToUpdate.occupants = [...(roomToUpdate.occupants || []), student._id];
+                        
+                        if (roomToUpdate.currentOccupancy >= roomToUpdate.capacity) {
+                            roomToUpdate.status = 'occupied';
+                        } else if (roomToUpdate.currentOccupancy > 0) {
+                            roomToUpdate.status = 'reserved';
+                        }
+                        
+                        await currentResidence.save();
+                        console.log(`✅ Room ${roomNumber} updated: ${roomToUpdate.currentOccupancy}/${roomToUpdate.capacity}`);
+                    }
+                }
+                
+                // Update student with room assignment
+                if (roomNumber) {
+                    console.log(`👤 Assigning room ${roomNumber} to student`);
+                    student.currentRoom = roomNumber;
+                    student.roomValidUntil = endDate;
+                    student.roomApprovalDate = new Date();
+                    student.residence = residenceId;
+                    await student.save();
+                }
+                
+                // Create booking record
+                const booking = new Booking({
+                    student: student._id,
+                    residence: residenceId,
+                    room: roomData ? {
+                        roomNumber: roomNumber,
+                        type: roomData.type,
+                        price: roomData.price
+                    } : null,
+                    startDate: startDate,
+                    endDate: endDate,
+                    totalAmount: monthlyRent,
+                    paymentStatus: 'paid',
+                    status: 'confirmed',
+                    paidAmount: monthlyRent,
+                    payments: [{
+                        amount: monthlyRent,
+                        date: new Date(),
+                        method: 'admin_csv_upload',
+                        status: 'completed',
+                        transactionId: `CSV_${Date.now()}_${i}`
+                    }]
+                });
+                
+                await booking.save();
+                console.log(`✅ Booking created`);
+                
+                // Update student with current booking
+                student.currentBooking = booking._id;
+                await student.save();
+                
+                // Add to successful results
+                results.successful.push({
+                    row: rowNumber,
+                    studentId: student._id,
+                    email: student.email,
+                    name: `${student.firstName} ${student.lastName}`,
+                    roomNumber: roomNumber,
+                    applicationCode: application.applicationCode,
+                    debtorCreated: !!debtor,
+                    temporaryPassword: tempPassword || 'Existing user - no new password generated',
+                    isExistingUser: !!existingUser
+                });
+                
+                results.summary.totalSuccessful++;
+                results.summary.totalStudents++;
+                
+                console.log(`✅ === STUDENT ${rowNumber}/${csvData.length} COMPLETED ===`);
+                console.log(`📧 Email: ${student.email}`);
+                console.log(`🆔 ID: ${student._id}`);
+                console.log(`🏠 Room: ${roomNumber}`);
+                console.log(`📊 Success count: ${results.summary.totalSuccessful}`);
+                
+            } catch (error) {
+                console.error(`❌ === ERROR PROCESSING STUDENT ${rowNumber}/${csvData.length} ===`);
+                console.error(`📧 Email: ${row?.email || 'Unknown'}`);
+                console.error(`❌ Error: ${error.message}`);
+                console.error(`🔍 Stack:`, error.stack);
+                
+                results.failed.push({
+                    row: rowNumber,
+                    error: error.message,
+                    data: row
+                });
+                results.summary.totalFailed++;
+                
+                console.error(`📊 Failed count: ${results.summary.totalFailed}`);
             }
             
-            // Create booking record
-            const booking = new Booking({
-                student: student._id,
-                residence: residenceId,
-                room: room ? {
-                    roomNumber: roomNumber,
-                    type: room.type,
-                    price: room.price
-                } : null,
-                startDate: startDate,
-                endDate: endDate,
-                totalAmount: monthlyRent,
-                paymentStatus: 'paid',
-                status: 'confirmed',
-                paidAmount: monthlyRent,
-                payments: [{
-                    amount: monthlyRent,
-                    date: new Date(),
-                    method: 'admin_csv_upload',
-                    status: 'completed',
-                    transactionId: `CSV_${Date.now()}_${i}`
-                }]
-            });
-            
-            await booking.save();
-            
-            // Update student with current booking
-            student.currentBooking = booking._id;
-            await student.save();
-            
-            results.successful.push({
-                row: rowNumber,
-                studentId: student._id,
-                email: student.email,
-                name: `${student.firstName} ${student.lastName}`,
-                roomNumber: roomNumber,
-                applicationCode: application.applicationCode,
-                debtorCreated: !!debtor,
-                temporaryPassword: tempPassword || 'Existing user - no new password generated',
-                isExistingUser: !!existingUser
-            });
-            
-            results.summary.totalSuccessful++;
-            results.summary.totalStudents++;
-            
-            console.log(`✅ Successfully processed student ${rowNumber}/${csvData.length}: ${student.email}`);
-            
-        } catch (error) {
-            console.error(`❌ Error processing student ${rowNumber} (background):`, error);
-            results.failed.push({
-                row: rowNumber,
-                error: error.message,
-                data: row
-            });
-            results.summary.totalFailed++;
+            // Small delay between students to prevent database overload
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
         
-        // Add a small delay to prevent overwhelming the database
-        await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    
-    console.log(`✅ Background CSV upload completed: ${results.summary.totalSuccessful} successful, ${results.summary.totalFailed} failed`);
-    console.log(`📊 Background Processing Summary:`);
-    console.log(`   - Total processed: ${results.summary.totalProcessed}`);
-    console.log(`   - Total successful: ${results.summary.totalSuccessful}`);
-    console.log(`   - Total failed: ${results.summary.totalFailed}`);
-    console.log(`   - Successful students:`, results.successful.map(s => s.email));
-    console.log(`   - Failed students:`, results.failed.map(f => `${f.row}: ${f.error}`));
-    
-    // Create audit log for CSV bulk upload
-    try {
-        await createAuditLog({
-            action: 'bulk_create',
-            collection: 'User',
-            recordId: null, // Bulk operation doesn't have a single record ID
-            userId: userId,
-            before: null,
-            after: {
-                totalProcessed: results.summary.totalProcessed,
-                totalSuccessful: results.summary.totalSuccessful,
-                totalFailed: results.summary.totalFailed,
-                residenceId: residenceId,
-                defaultRoomNumber: defaultRoomNumber,
-                defaultStartDate: defaultStartDate,
-                defaultEndDate: defaultEndDate,
-                defaultMonthlyRent: defaultMonthlyRent
-            },
-            details: `Background CSV bulk student upload - ${results.summary.totalSuccessful} students created, ${results.summary.totalFailed} failed`
-        });
-    } catch (auditError) {
-        console.error('❌ Failed to create audit log for background CSV upload:', auditError);
+        console.log(`\n✅ === BACKGROUND PROCESSING COMPLETED ===`);
+        console.log(`📊 Total processed: ${results.summary.totalProcessed}`);
+        console.log(`✅ Successful: ${results.summary.totalSuccessful}`);
+        console.log(`❌ Failed: ${results.summary.totalFailed}`);
+        console.log(`📧 Successful emails:`, results.successful.map(s => s.email));
+        
+        // Create audit log
+        try {
+            await createAuditLog({
+                action: 'bulk_create',
+                collection: 'User',
+                recordId: null,
+                userId: userId,
+                before: null,
+                after: {
+                    totalProcessed: results.summary.totalProcessed,
+                    totalSuccessful: results.summary.totalSuccessful,
+                    totalFailed: results.summary.totalFailed,
+                    residenceId: residenceId
+                },
+                details: `Background CSV bulk upload - ${results.summary.totalSuccessful} students created, ${results.summary.totalFailed} failed`
+            });
+            console.log(`✅ Audit log created`);
+        } catch (auditError) {
+            console.error('⚠️ Audit log failed:', auditError.message);
+        }
+        
+        // 🆕 AUTO-LEASE-START: Trigger lease start process for all created students
+        if (results.applicationsForLeaseStart && results.applicationsForLeaseStart.length > 0) {
+            console.log(`\n🏠 === STARTING LEASE START PROCESS FOR ${results.applicationsForLeaseStart.length} STUDENTS ===`);
+            
+            // Ensure MongoDB connection is available for lease start process
+            if (mongoose.connection.readyState !== 1) {
+                console.log('🔄 Reconnecting to MongoDB for lease start process...');
+                await mongoose.connect(process.env.MONGODB_URI);
+            }
+            
+            const RentalAccrualService = require('../../services/rentalAccrualService');
+            let leaseStartSuccessCount = 0;
+            let leaseStartErrorCount = 0;
+            
+            for (const application of results.applicationsForLeaseStart) {
+                try {
+                    console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}...`);
+                    
+                    const accrualResult = await RentalAccrualService.processLeaseStart(application);
+                    
+                    if (accrualResult && accrualResult.success) {
+                        console.log(`✅ Lease start process completed successfully for ${application.firstName} ${application.lastName}`);
+                        console.log(`   - Initial accounting entries created`);
+                        console.log(`   - Prorated rent, admin fees, and deposits recorded`);
+                        console.log(`   - Invoice and welcome email sent`);
+                        console.log(`   - Lease start transaction: ${accrualResult.transactionId || 'N/A'}`);
+                        leaseStartSuccessCount++;
+                    } else {
+                        console.log(`⚠️ Lease start process completed with warnings for ${application.firstName} ${application.lastName}:`, accrualResult?.error || 'Unknown issue');
+                        leaseStartErrorCount++;
+                    }
+                } catch (leaseStartError) {
+                    console.error(`❌ Lease start process failed for ${application.firstName} ${application.lastName}:`, leaseStartError.message);
+                    leaseStartErrorCount++;
+                }
+            }
+            
+            console.log(`\n📊 === LEASE START PROCESS SUMMARY ===`);
+            console.log(`✅ Successful: ${leaseStartSuccessCount}`);
+            console.log(`❌ Failed: ${leaseStartErrorCount}`);
+            console.log(`📧 Invoices and welcome emails sent for ${leaseStartSuccessCount} students`);
+        }
+        
+    } catch (error) {
+        console.error('❌ Critical error in background processing:', error);
+        console.error('🔍 Stack:', error.stack);
     }
     
     return results;
 }
+
+/**
+ * Check background processing status
+ */
+exports.checkBackgroundProcessing = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        
+        // Check if students were created recently (last 10 minutes)
+        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+        
+        const recentStudents = await User.find({
+            createdAt: { $gte: tenMinutesAgo },
+            role: 'student'
+        }).select('email firstName lastName createdAt').sort({ createdAt: -1 });
+
+        const recentApplications = await Application.find({
+            createdAt: { $gte: tenMinutesAgo }
+        }).select('applicationCode email status createdAt').sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            message: 'Background processing status',
+            data: {
+                requestId,
+                recentStudents: recentStudents.length,
+                recentApplications: recentApplications.length,
+                students: recentStudents,
+                applications: recentApplications
+            }
+        });
+    } catch (error) {
+        console.error('Error checking background processing:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to check background processing status',
+            error: error.message
+        });
+    }
+};
