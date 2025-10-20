@@ -1108,16 +1108,16 @@ const createPayment = async (req, res) => {
                                 });
                                 console.log(`💰 PAST DUE RENT: $${amount.toFixed(2)} settles debt for ${payment.paymentMonth || 'past period'}`);
                             } else {
-                                // Current period rent - recognize as income
+                                // Current period rent - reduce AR (ledger-style)
                                 entries.push({
                                     transaction: txn._id,
-                                    account: rentAccount._id,
+                                    account: studentAccount._id,
                                     debit: 0,
                                     credit: amount,
-                                    type: rentAccount.type || 'income',
-                                    description: `Rent income from ${studentName} for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
+                                    type: studentAccount.type || 'asset',
+                                    description: `Rent payment applied to AR for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
                                 });
-                                console.log(`💰 CURRENT RENT: $${amount.toFixed(2)} recorded as Rental Income`);
+                                console.log(`🏦 CURRENT RENT: $${amount.toFixed(2)} applied to Accounts Receivable`);
                             }
                             break;
                             
@@ -1219,7 +1219,7 @@ const createPayment = async (req, res) => {
                     console.log(`💰 ADVANCE PAYMENT: ${totalAmount.toFixed(2)} recorded as Deferred Income for ${payment.paymentMonth}`);
                     
                 } else {
-                    // Student has no outstanding debt and this is current period payment
+                    // Student has no outstanding debt and this is current period payment → apply to AR (ledger-style)
                     transactionType = 'current_payment';
                     
                     entries = [
@@ -1233,15 +1233,15 @@ const createPayment = async (req, res) => {
                         },
                         {
                             transaction: txn._id,
-                            account: rentAccount._id,
+                            account: studentAccount._id,
                             debit: 0,
                             credit: totalAmount,
-                            type: rentAccount.type || 'income',
-                            description: `Rental income from ${studentName} for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
+                            type: studentAccount.type || 'asset',
+                            description: `Rent payment applied to AR for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
                         }
                     ];
                     
-                    console.log(`💰 CURRENT PERIOD PAYMENT: ${totalAmount.toFixed(2)} recorded as Rental Income`);
+                    console.log(`🏦 CURRENT PERIOD PAYMENT: ${totalAmount.toFixed(2)} applied to Accounts Receivable`);
                 }
             }
 
