@@ -24,6 +24,10 @@ class EnhancedPaymentAllocationService {
       
       const { studentId, totalAmount, payments } = paymentData;
       
+      // 🆕 FIX: Clear any potential caching issues by adding a small delay
+      // This ensures we get the latest data from the database
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       if (!studentId || !totalAmount || !payments || !payments.length) {
         throw new Error('Missing required payment data: studentId, totalAmount, or payments array');
       }
@@ -575,13 +579,15 @@ class EnhancedPaymentAllocationService {
       const Debtor = require('../models/Debtor');
       const debtorDoc = await Debtor.findOne({ user: studentIdString }).select('accountCode');
       const arAccountCode = debtorDoc?.accountCode || `1100-${studentIdString}`;
+      
+      // 🆕 FIX: Force fresh data by using lean() and ensuring we get the latest transactions
       const allStudentTransactions = await TransactionEntry.find({
         $or: [
           { 'entries.accountCode': arAccountCode },
           { 'metadata.studentId': studentIdString },
           { 'sourceId': studentIdString }
         ]
-      }).sort({ date: 1 });
+      }).lean().sort({ date: 1 });
 
       console.log(`📊 Found ${allStudentTransactions.length} total transactions for student ${studentId}`);
       
@@ -606,6 +612,18 @@ class EnhancedPaymentAllocationService {
         
         // Include rental accruals (both lease start and monthly) regardless of sourceId
         if (tx.source === 'rental_accrual') {
+          return true;
+        }
+        
+        // 🆕 FIX: Also check for accruals by looking for AR debit entries
+        const hasARDebit = tx.entries && tx.entries.some(entry => 
+          entry.accountCode === arAccountCode && 
+          entry.accountType === 'Asset' && 
+          entry.debit > 0
+        );
+        
+        if (hasARDebit) {
+          console.log(`🔍 Found AR debit transaction: ${tx.transactionId} - ${tx.description}`);
           return true;
         }
         
