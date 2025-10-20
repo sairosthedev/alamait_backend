@@ -2054,6 +2054,323 @@ class FinancialReportsController {
         }
     }
 
+    /**
+     * Get account details for cash flow report
+     * GET /api/financial-reports/cash-flow/account-details?period=2025&month=october&accountCode=4001
+     */
+    static async getCashFlowAccountDetails(req, res) {
+        try {
+            const { period, month, accountCode } = req.query;
+            
+            console.log(`📊 Getting cash flow account details for account ${accountCode} in ${month} ${period}`);
+            
+            if (!period || !accountCode) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Period and accountCode are required'
+                });
+            }
+            
+            // Get the account details
+            const account = await Account.findOne({ code: accountCode });
+            if (!account) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Account not found'
+                });
+            }
+            
+            // Generate cash flow data for the specific account
+            let cashFlowData = null;
+            let accountData = null;
+            
+            try {
+                cashFlowData = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, 'cash');
+                
+                // Find the account in the cash flow data
+                // Search in income section (check both individual accounts and aggregated data)
+                if (cashFlowData.income && cashFlowData.income[accountCode]) {
+                    accountData = {
+                        ...cashFlowData.income[accountCode],
+                        type: 'income',
+                        category: 'income'
+                    };
+                } else if (account.type === 'Income' && cashFlowData.monthly_breakdown) {
+                    // For income accounts, check if they're part of aggregated income
+                    const monthlyBreakdown = cashFlowData.monthly_breakdown;
+                    
+                    // Check all months for income data
+                    for (const [monthKey, monthData] of Object.entries(monthlyBreakdown)) {
+                        if (monthData && monthData.income) {
+                            const incomeData = monthData.income;
+                            
+                            // Map account codes to income categories
+                            if (accountCode === '4001' && incomeData.rental_income) {
+                                // This is the rental income account
+                                accountData = {
+                                    totalCredit: incomeData.rental_income,
+                                    totalDebit: 0,
+                                    netAmount: incomeData.rental_income,
+                                    transactionCount: 0, // Will be calculated from transactions
+                                    type: 'income',
+                                    category: 'income',
+                                    month: monthKey
+                                };
+                                break;
+                            } else if (accountCode === '4002' && incomeData.admin_fees) {
+                                // Admin fees account
+                                accountData = {
+                                    totalCredit: incomeData.admin_fees,
+                                    totalDebit: 0,
+                                    netAmount: incomeData.admin_fees,
+                                    transactionCount: 0,
+                                    type: 'income',
+                                    category: 'income',
+                                    month: monthKey
+                                };
+                                break;
+                            } else if (accountCode === '4003' && incomeData.deposits) {
+                                // Deposits account
+                                accountData = {
+                                    totalCredit: incomeData.deposits,
+                                    totalDebit: 0,
+                                    netAmount: incomeData.deposits,
+                                    transactionCount: 0,
+                                    type: 'income',
+                                    category: 'income',
+                                    month: monthKey
+                                };
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // Search in expenses section
+                if (!accountData && cashFlowData.expenses && cashFlowData.expenses[accountCode]) {
+                    accountData = {
+                        ...cashFlowData.expenses[accountCode],
+                        type: 'expense',
+                        category: 'expense'
+                    };
+                }
+                
+                // Search in cash flow section
+                if (!accountData && cashFlowData.cashFlow && cashFlowData.cashFlow[accountCode]) {
+                    accountData = {
+                        ...cashFlowData.cashFlow[accountCode],
+                        type: 'cash_flow',
+                        category: 'cash_flow'
+                    };
+                }
+            } catch (error) {
+                console.log('⚠️ Cash flow service error, using fallback method:', error.message);
+                
+                // Fallback: Calculate account data from transactions directly
+                const TransactionEntry = require('../models/TransactionEntry');
+                const query = {
+                    'entries.accountCode': accountCode,
+                    status: { $nin: ['reversed', 'draft'] }
+                };
+                
+                // Add date filter if period is specified
+                if (period && period.length === 4) {
+                    // Year filter
+                    const startDate = new Date(`${period}-01-01`);
+                    const endDate = new Date(`${period}-12-31`);
+                    query.date = { $gte: startDate, $lte: endDate };
+                } else if (period && period.includes('-')) {
+                    // Month filter (YYYY-MM)
+                    const startDate = new Date(`${period}-01`);
+                    const endDate = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0);
+                    query.date = { $gte: startDate, $lte: endDate };
+                }
+                
+                const accountTransactions = await TransactionEntry.find(query);
+                
+                // Calculate totals
+                let totalDebit = 0;
+                let totalCredit = 0;
+                
+                accountTransactions.forEach(transaction => {
+                    const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
+                    if (accountEntry) {
+                        totalDebit += accountEntry.debit || 0;
+                        totalCredit += accountEntry.credit || 0;
+                    }
+                });
+                
+                // Create fallback account data
+                accountData = {
+                    totalDebit,
+                    totalCredit,
+                    netAmount: totalDebit - totalCredit,
+                    transactionCount: accountTransactions.length,
+                    type: account.type === 'Income' ? 'income' : account.type === 'Expense' ? 'expense' : 'cash_flow',
+                    category: account.type === 'Income' ? 'income' : account.type === 'Expense' ? 'expense' : 'cash_flow'
+                };
+            }
+            
+            if (!accountData) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Account not found in cash flow data'
+                });
+            }
+            
+            // Get detailed transactions for this account
+            const TransactionEntry = require('../models/TransactionEntry');
+            
+            // For cash flow account details, we want to show cash payments, not accruals
+            // Look for payment allocation transactions that represent cash coming in for rent
+            const query = {
+                status: { $nin: ['reversed', 'draft'] },
+                // Look for payment allocation transactions that represent cash payments for rent
+                $or: [
+                    { 
+                        source: 'payment_allocation',
+                        description: { $regex: /rent.*payment|payment.*rent/i }
+                    },
+                    {
+                        description: { $regex: /Payment allocation: rent/i }
+                    },
+                    {
+                        source: 'payment',
+                        description: { $regex: /rent/i }
+                    }
+                ]
+            };
+            
+            // Add date filter if period is specified
+            if (period && period.length === 4) {
+                // Year filter
+                const startDate = new Date(`${period}-01-01`);
+                const endDate = new Date(`${period}-12-31`);
+                query.date = { $gte: startDate, $lte: endDate };
+            } else if (period && period.includes('-')) {
+                // Month filter (YYYY-MM)
+                const startDate = new Date(`${period}-01`);
+                const endDate = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0);
+                query.date = { $gte: startDate, $lte: endDate };
+            }
+            
+            const transactions = await TransactionEntry.find(query)
+                .sort({ date: -1 })
+                .limit(100); // Limit to recent 100 transactions
+            
+            // Calculate monthly breakdown
+            const monthlyBreakdown = {};
+            transactions.forEach(transaction => {
+                const monthKey = transaction.date.toISOString().slice(0, 7); // YYYY-MM
+                if (!monthlyBreakdown[monthKey]) {
+                    monthlyBreakdown[monthKey] = {
+                        month: monthKey,
+                        totalDebit: 0,
+                        totalCredit: 0,
+                        netAmount: 0,
+                        transactionCount: 0
+                    };
+                }
+                
+                const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
+                if (accountEntry) {
+                    monthlyBreakdown[monthKey].totalDebit += accountEntry.debit || 0;
+                    monthlyBreakdown[monthKey].totalCredit += accountEntry.credit || 0;
+                    monthlyBreakdown[monthKey].netAmount += (accountEntry.debit || 0) - (accountEntry.credit || 0);
+                    monthlyBreakdown[monthKey].transactionCount += 1;
+                }
+            });
+            
+            const response = {
+                success: true,
+                account: {
+                    code: account.code,
+                    name: account.name,
+                    type: account.type,
+                    category: account.category
+                },
+                cashFlowData: accountData,
+                transactions: await Promise.all(transactions.map(async (tx) => {
+                    // For cash flow, we want to show the cash amount that came in
+                    // Look for cash account entries (1000 series) in payment transactions
+                    const cashEntry = tx.entries.find(e => e.accountCode.match(/^100/));
+                    const accountEntry = tx.entries.find(e => e.accountCode === accountCode);
+                    
+                    let amount = 0;
+                    let type = 'credit';
+                    
+                    if (cashEntry) {
+                        // For payment transactions, cash is debited (money coming in)
+                        amount = cashEntry.debit || 0;
+                        type = 'debit';
+                    } else if (accountEntry) {
+                        // Fallback to account entry if no cash entry found
+                        amount = accountEntry.debit || accountEntry.credit || 0;
+                        type = accountEntry.debit > 0 ? 'debit' : 'credit';
+                    }
+                    
+                    // Try to get student information from the transaction
+                    let studentName = null;
+                    let studentId = null;
+                    
+                    try {
+                        // Look for student ID in AR account entries (1100-<studentId>)
+                        const arEntry = tx.entries.find(e => e.accountCode.match(/^1100-/));
+                        if (arEntry) {
+                            studentId = arEntry.accountCode.replace('1100-', '');
+                            
+                            // Try to get student name from User collection
+                            const User = require('../models/User');
+                            const student = await User.findById(studentId).select('firstName lastName');
+                            if (student) {
+                                studentName = `${student.firstName} ${student.lastName}`;
+                            } else {
+                                // Try Application collection as fallback
+                                const Application = require('../models/Application');
+                                const application = await Application.findOne({ student: studentId }).select('firstName lastName');
+                                if (application) {
+                                    studentName = `${application.firstName} ${application.lastName}`;
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        console.log('Could not fetch student name for transaction:', tx.transactionId);
+                    }
+                    
+                    return {
+                        id: tx._id,
+                        transactionId: tx.transactionId,
+                        date: tx.date,
+                        description: tx.description,
+                        amount: amount,
+                        type: type,
+                        source: tx.source,
+                        status: tx.status,
+                        studentId: studentId,
+                        studentName: studentName
+                    };
+                })),
+                monthlyBreakdown: Object.values(monthlyBreakdown).sort((a, b) => b.month.localeCompare(a.month)),
+                summary: {
+                    totalTransactions: transactions.length,
+                    totalDebit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalDebit, 0),
+                    totalCredit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalCredit, 0),
+                    netAmount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.netAmount, 0)
+                }
+            };
+            
+            res.json(response);
+            
+        } catch (error) {
+            console.error('Error getting cash flow account details:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error getting cash flow account details',
+                error: error.message
+            });
+        }
+    }
+
 }
 
 module.exports = FinancialReportsController; 

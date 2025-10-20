@@ -1036,6 +1036,19 @@ exports.getAccountTransactionDetails = async (req, res) => {
                 message: 'Period, month, and accountCode parameters are required'
             });
         }
+
+        // Check if this is an income account (4000 series) - for these, we should show cash flow data instead of balance sheet data
+        const Account = require('../../models/Account');
+        const account = await Account.findOne({ code: accountCode });
+        
+        if (account && account.type === 'Income' && accountCode.startsWith('400')) {
+            console.log(`💰 Income account detected (${accountCode}), redirecting to cash flow data...`);
+            
+            // For income accounts, we want to show cash payments, not balance sheet data
+            // Call our cash flow account details logic
+            const FinancialReportsController = require('../financialReportsController');
+            return await FinancialReportsController.getCashFlowAccountDetails(req, res);
+        }
         
         // Convert month name to month number
         const monthNames = {
@@ -1059,7 +1072,6 @@ exports.getAccountTransactionDetails = async (req, res) => {
         console.log(`🔍 Searching for transactions for account ${accountCode} as of ${asOfDate.toLocaleDateString()}`);
         
         // Check if this is a parent account that should include child accounts
-        const Account = require('../../models/Account');
         const mainAccount = await Account.findOne({ code: accountCode });
         let childAccounts = [];
         let allAccountCodes = [accountCode];

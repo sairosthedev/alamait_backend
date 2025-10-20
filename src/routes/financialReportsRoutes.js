@@ -174,4 +174,10 @@ const incomeStatementController = require('../controllers/finance/incomeStatemen
  */
 router.get('/income-statement/account-details', incomeStatementController.getAccountTransactionDetails);
 
+/**
+ * Cash Flow Account Details (Drill-down)
+ * GET /api/financial-reports/cash-flow/account-details?period=2025&month=october&accountCode=4001
+ */
+router.get('/cash-flow/account-details', FinancialReportsController.getCashFlowAccountDetails);
+
 module.exports = router; 
