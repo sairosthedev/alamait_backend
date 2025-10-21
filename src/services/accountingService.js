@@ -693,17 +693,9 @@ class AccountingService {
             
             console.log(`📊 Month ${month}/${year} expenses: $${totalExpenses} (${Object.keys(expenseBreakdown).length} categories)`);
             
-            // 🆕 Calculate Alamait Management Fee (25% of rental income)
-            const managementFee = totalRevenue * 0.25;
-            console.log(`💰 Alamait Management Fee (25% of rental income): $${managementFee.toFixed(2)}`);
+            const netIncome = totalRevenue - totalExpenses;
             
-            // Add management fee to expenses
-            expenseBreakdown['5001 - Alamait Management Fees'] = managementFee;
-            const totalExpensesWithManagementFee = totalExpenses + managementFee;
-            
-            const netIncome = totalRevenue - totalExpensesWithManagementFee;
-            
-            console.log(`📊 Calculated: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total Revenue $${totalRevenue}, Management Fee $${managementFee.toFixed(2)}, Net Income $${netIncome.toFixed(2)}`);
+            console.log(`📊 Calculated: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total Revenue $${totalRevenue}, Net Income $${netIncome.toFixed(2)}`);
             
             return {
                 month,
@@ -716,9 +708,8 @@ class AccountingService {
                     total: totalRevenue
                 },
                 expenses: {
-                    total: totalExpensesWithManagementFee,
-                    breakdown: expenseBreakdown,
-                    managementFee: managementFee
+                    total: totalExpenses,
+                    breakdown: expenseBreakdown
                 },
                 netIncome,
                 basis: 'accrual',
@@ -726,8 +717,7 @@ class AccountingService {
                 summary: {
                     totalNetIncome: netIncome,
                     totalRevenue: totalRevenue,
-                    totalExpenses: totalExpensesWithManagementFee,
-                    managementFee: managementFee
+                    totalExpenses: totalExpenses
                 }
             };
             

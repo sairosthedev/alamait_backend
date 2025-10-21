@@ -127,15 +127,7 @@ class FinancialReportingService {
                     }
             });
             
-            // 🆕 Calculate Alamait Management Fee (25% of rental income) - PER RESIDENCE
-            const managementFee = totalRevenue * 0.25;
-            console.log(`💰 Alamait Management Fee (25% of rental income): $${managementFee.toFixed(2)}${residenceId ? ` for residence: ${residenceId}` : ''}`);
-            
-            // Add management fee to expenses
-            expensesByAccount['5001 - Alamait Management Fees'] = managementFee;
-            const totalExpensesWithManagementFee = totalExpenses + managementFee;
-            
-            const netIncome = totalRevenue - totalExpensesWithManagementFee;
+            const netIncome = totalRevenue - totalExpenses;
             
                 // Create monthly breakdown for revenue
                 const monthlyRevenue = {};
@@ -191,12 +183,11 @@ class FinancialReportingService {
                 expenses: {
                         ...expensesByAccount,
                         monthly: monthlyExpenses,
-                        total_expenses: totalExpensesWithManagementFee,
-                        managementFee: managementFee
+                        total_expenses: totalExpenses
                     },
                     net_income: netIncome,
-                    gross_profit: totalRevenue - totalExpensesWithManagementFee,
-                    operating_income: totalRevenue - totalExpensesWithManagementFee,
+                    gross_profit: totalRevenue - totalExpenses,
+                    operating_income: totalRevenue - totalExpenses,
                     residences_included: residences.size > 0,
                     residences_processed: Array.from(residences),
                     transaction_count: accrualEntries.length + expenseEntries.length,
@@ -650,29 +641,6 @@ class FinancialReportingService {
                     monthlyBreakdown[monthIndex].transaction_count++;
             });
             
-                // Add Alamait Management Fee (25% of monthly revenue) as an expense (Accrual basis)
-                monthNames.forEach((month, index) => {
-                    const managementFee = (monthlyBreakdown[index].total_revenue || 0) * 0.25;
-                    if (managementFee > 0) {
-                        const feeKey = '5001 - Alamait Management Fees';
-                        monthlyBreakdown[index].expenses[feeKey] = (monthlyBreakdown[index].expenses[feeKey] || 0) + managementFee;
-                        monthlyBreakdown[index].total_expenses += managementFee;
-
-                        // Ensure expense_details exists (it does for accrual branch)
-                        const feeDate = new Date(parseInt(period), index + 1, 0); // Month end
-                        monthlyBreakdown[index].expense_details.push({
-                            transactionId: 'MGMT-FEE',
-                            date: feeDate,
-                            description: 'Alamait Management Fee (25% of revenue)',
-                            accountCode: '5001',
-                            accountName: 'Alamait Management Fees',
-                            amount: managementFee,
-                            source: 'system',
-                            reference: null,
-                            lineItemDescription: 'Auto-calculated management fee'
-                        });
-                    }
-                });
 
             // Calculate net income for each month
                 monthNames.forEach((month, index) => {
@@ -858,32 +826,6 @@ class FinancialReportingService {
                     monthlyBreakdown[monthIndex].transaction_count++;
                 });
                 
-                // Add Alamait Management Fee (25% of monthly cash revenue) as an expense (Cash basis)
-                monthNames.forEach((month, index) => {
-                    const managementFee = (monthlyBreakdown[index].total_revenue || 0) * 0.25;
-                    if (managementFee > 0) {
-                        const feeKey = '5001 - Alamait Management Fees';
-                        monthlyBreakdown[index].expenses[feeKey] = (monthlyBreakdown[index].expenses[feeKey] || 0) + managementFee;
-                        monthlyBreakdown[index].total_expenses += managementFee;
-
-                        // Ensure expense details array exists for cash branch too
-                        if (!monthlyBreakdown[index].expense_details) {
-                            monthlyBreakdown[index].expense_details = [];
-                        }
-                        const feeDate = new Date(parseInt(period), index + 1, 0); // Month end
-                        monthlyBreakdown[index].expense_details.push({
-                            transactionId: 'MGMT-FEE',
-                            date: feeDate,
-                            description: 'Alamait Management Fee (25% of revenue)',
-                            accountCode: '5001',
-                            accountName: 'Alamait Management Fees',
-                            amount: managementFee,
-                            source: 'system',
-                            reference: null,
-                            lineItemDescription: 'Auto-calculated management fee'
-                        });
-                    }
-                });
 
                 // Calculate net income for each month
                 monthNames.forEach((month, index) => {
