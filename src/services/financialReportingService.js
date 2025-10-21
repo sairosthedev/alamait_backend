@@ -418,7 +418,7 @@ class FinancialReportingService {
                 
                 // Add residence filter if specified
                 if (residence) {
-                    accrualQuery.residence = residence;
+                    accrualQuery.residence = new mongoose.Types.ObjectId(residence);
                     console.log(`🔍 Filtering accrual entries by residence: ${residence}`);
                 }
                 
@@ -433,7 +433,7 @@ class FinancialReportingService {
                 
                 // Add residence filter if specified
                 if (residence) {
-                    expenseQuery.residence = residence;
+                    expenseQuery.residence = new mongoose.Types.ObjectId(residence);
                 }
                 
                 const expenseEntries = await TransactionEntry.find(expenseQuery).sort({ transactionId: 1 });
@@ -757,8 +757,8 @@ class FinancialReportingService {
                 
                 // Add residence filter if specified
                 if (residence) {
-                    paymentQuery.residence = residence;
-                    expenseQuery.residence = residence;
+                    paymentQuery.residence = new mongoose.Types.ObjectId(residence);
+                    expenseQuery.residence = new mongoose.Types.ObjectId(residence);
                     console.log(`🔍 Filtering cash basis entries by residence: ${residence}`);
                 }
                 
@@ -1089,6 +1089,7 @@ class FinancialReportingService {
                 if (!residenceInfo) {
                     throw new Error(`Residence not found with ID: ${residenceId}`);
                 }
+                actualResidenceId = new mongoose.Types.ObjectId(residenceId);
                 console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
             }
             
@@ -3323,6 +3324,7 @@ class FinancialReportingService {
                 if (!residenceInfo) {
                     throw new Error(`Residence not found with ID: ${residenceId}`);
                 }
+                actualResidenceId = new mongoose.Types.ObjectId(residenceId);
                 console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
             }
             
@@ -3511,6 +3513,7 @@ class FinancialReportingService {
                 if (!residenceInfo) {
                     throw new Error(`Residence not found with ID: ${residenceId}`);
                 }
+                actualResidenceId = new mongoose.Types.ObjectId(residenceId);
                 console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
             }
             
@@ -3784,7 +3787,7 @@ class FinancialReportingService {
                 };
                 
                 if (residence) {
-                    query.residence = residence;
+                    query.residence = new mongoose.Types.ObjectId(residence);
                 }
                 
                 const entries = await TransactionEntry.find(query).populate('residence');
@@ -3973,6 +3976,220 @@ class FinancialReportingService {
             
         } catch (error) {
             console.error('Error generating detailed cash flow statement:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate Residence-Filtered Monthly Balance Sheet
+     */
+    static async generateResidenceFilteredMonthlyBalanceSheet(period, residenceId, basis = 'cash') {
+        try {
+            const startDate = new Date(`${period}-01-01`);
+            const endDate = new Date(`${period}-12-31`);
+            
+            console.log(`Generating residence-filtered monthly balance sheet for ${period}, residence: ${residenceId}`);
+            
+            // Handle residence parameter - could be ObjectId or residence name
+            let actualResidenceId = residenceId;
+            let residenceInfo = null;
+            
+            // Check if residenceId is a valid ObjectId
+            if (!mongoose.Types.ObjectId.isValid(residenceId)) {
+                // If not a valid ObjectId, treat it as a residence name and look it up
+                console.log(`Residence parameter "${residenceId}" is not a valid ObjectId, searching by name...`);
+                residenceInfo = await Residence.findOne({ name: { $regex: new RegExp(residenceId, 'i') } });
+                
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found: ${residenceId}`);
+                }
+                
+                actualResidenceId = residenceInfo._id;
+                console.log(`Found residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            } else {
+                // If it's a valid ObjectId, get residence info for logging
+                residenceInfo = await Residence.findById(residenceId).select('name');
+                if (!residenceInfo) {
+                    throw new Error(`Residence not found with ID: ${residenceId}`);
+                }
+                actualResidenceId = new mongoose.Types.ObjectId(residenceId);
+                console.log(`Using residence: ${residenceInfo.name} (ID: ${actualResidenceId})`);
+            }
+            
+            // Initialize monthly breakdown
+            const monthlyBreakdown = {};
+            const monthNames = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+            ];
+            
+            monthNames.forEach((month, index) => {
+                monthlyBreakdown[index] = {
+                    month,
+                    monthNumber: index + 1,
+                    assets: {},
+                    liabilities: {},
+                    equity: {},
+                    total_assets: 0,
+                    total_liabilities: 0,
+                    total_equity: 0,
+                    residences: [residenceInfo.name],
+                    transaction_count: 0,
+                    accounting_equation_balanced: false
+                };
+            });
+            
+            // Process each month to build monthly balance sheet
+            for (let monthIndex = 0; monthIndex < 12; monthIndex++) {
+                const monthStartDate = new Date(period, monthIndex, 1);
+                const monthEndDate = new Date(period, monthIndex + 1, 0);
+                
+                console.log(`Processing balance sheet for ${monthNames[monthIndex]} (${monthStartDate.toLocaleDateString()} to ${monthEndDate.toLocaleDateString()})`);
+                
+                // Get transaction entries for THIS MONTH ONLY, filtered by residence
+                const query = {
+                    date: { 
+                        $gte: new Date(period, monthIndex, 1, 0, 0, 0, 0),
+                        $lt: new Date(period, monthIndex + 1, 1, 0, 0, 0, 0)
+                    },
+                    residence: actualResidenceId
+                };
+                
+                const entries = await TransactionEntry.find(query).populate('residence');
+                
+                console.log(`Found ${entries.length} transaction entries for ${monthNames[monthIndex]} and residence ${residenceId}`);
+                
+                // Calculate account balances for this month
+                const accountBalances = {};
+                
+                entries.forEach(entry => {
+                    if (entry.entries && entry.entries.length > 0) {
+                        entry.entries.forEach(line => {
+                            const accountCode = line.accountCode;
+                            const accountName = line.accountName;
+                            const accountType = line.accountType;
+                            const debit = line.debit || 0;
+                            const credit = line.credit || 0;
+                            
+                            const key = `${accountCode} - ${accountName}`;
+                            if (!accountBalances[key]) {
+                                accountBalances[key] = {
+                                    code: accountCode,
+                                    name: accountName,
+                                    type: accountType,
+                                    balance: 0,
+                                    debit_total: 0,
+                                    credit_total: 0
+                                };
+                            }
+                            
+                            accountBalances[key].debit_total += debit;
+                            accountBalances[key].credit_total += credit;
+                            
+                            if (accountType === 'Asset' || accountType === 'Expense') {
+                                accountBalances[key].balance += debit - credit;
+                            } else {
+                                accountBalances[key].balance += credit - debit;
+                            }
+                        });
+                    }
+                });
+                
+                // Group by account type for this month
+                const assets = {};
+                const liabilities = {};
+                const equity = {};
+                
+                Object.values(accountBalances).forEach(account => {
+                    const key = `${account.code} - ${account.name}`;
+                    switch (account.type) {
+                        case 'Asset':
+                            assets[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                            break;
+                        case 'Liability':
+                            liabilities[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                            break;
+                        case 'Equity':
+                            equity[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                            break;
+                    }
+                });
+                
+                // Calculate totals for this month
+                const totalAssets = Object.values(assets).reduce((sum, account) => sum + account.balance, 0);
+                const totalLiabilities = Object.values(liabilities).reduce((sum, account) => sum + account.balance, 0);
+                const explicitEquity = Object.values(equity).reduce((sum, account) => sum + account.balance, 0);
+                
+                // Calculate implied equity from accounting equation: Equity = Assets - Liabilities
+                const calculatedEquity = totalAssets - totalLiabilities;
+                const retainedEarnings = calculatedEquity - explicitEquity;
+                
+                // Add retained earnings to equity if it's positive
+                if (retainedEarnings > 0) {
+                    equity['Retained Earnings'] = {
+                        balance: retainedEarnings,
+                        debit_total: 0,
+                        credit_total: retainedEarnings,
+                        code: '3101',
+                        name: 'Retained Earnings'
+                    };
+                }
+                
+                const totalEquity = calculatedEquity;
+                
+                // Update monthly breakdown
+                monthlyBreakdown[monthIndex].assets = assets;
+                monthlyBreakdown[monthIndex].liabilities = liabilities;
+                monthlyBreakdown[monthIndex].equity = equity;
+                monthlyBreakdown[monthIndex].total_assets = totalAssets;
+                monthlyBreakdown[monthIndex].total_liabilities = totalLiabilities;
+                monthlyBreakdown[monthIndex].total_equity = totalEquity;
+                monthlyBreakdown[monthIndex].transaction_count = entries.length;
+                monthlyBreakdown[monthIndex].accounting_equation_balanced = Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01;
+                
+                console.log(`  ${monthNames[monthIndex]} Balance Sheet Changes:`);
+                console.log(`    Asset Changes: $${totalAssets.toFixed(2)}`);
+                console.log(`    Liability Changes: $${totalLiabilities.toFixed(2)}`);
+                console.log(`    Equity Changes: $${totalEquity.toFixed(2)}`);
+                console.log(`    Balanced: ${monthlyBreakdown[monthIndex].accounting_equation_balanced ? '✅' : '❌'}`);
+            }
+            
+            // Calculate annual summary
+            const annualSummary = {
+                totalAnnualAssets: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.total_assets, 0) / 12,
+                totalAnnualLiabilities: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.total_liabilities, 0) / 12,
+                totalAnnualEquity: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.total_equity, 0) / 12
+            };
+            
+            return {
+                success: true,
+                data: {
+                    monthly: monthlyBreakdown,
+                    annualSummary
+                },
+                message: `Monthly balance sheet breakdown generated for ${period} (${basis} basis) - Residence: ${residenceInfo.name}`
+            };
+            
+        } catch (error) {
+            console.error('Error generating residence-filtered monthly balance sheet:', error);
             throw error;
         }
     }

@@ -1378,11 +1378,21 @@ exports.getBalanceSheetWithDrillDown = async (req, res) => {
         
         if (period) {
             // Generate comprehensive monthly balance sheet
-            balanceSheetData = await FinancialReportingService.generateComprehensiveMonthlyBalanceSheet(
-                period || new Date().getFullYear().toString(),
-                basis || 'cash',
-                residenceId
-            );
+            if (residenceId) {
+                // Use residence-filtered method when residence is specified
+                balanceSheetData = await FinancialReportingService.generateResidenceFilteredMonthlyBalanceSheet(
+                    period || new Date().getFullYear().toString(),
+                    residenceId,
+                    basis || 'cash'
+                );
+            } else {
+                // Use general method when no residence filter
+                balanceSheetData = await FinancialReportingService.generateComprehensiveMonthlyBalanceSheet(
+                    period || new Date().getFullYear().toString(),
+                    basis || 'cash',
+                    residenceId
+                );
+            }
             
             // Add drill-down URLs to each account in monthly breakdown
             const addDrillDownLinks = (accounts, month) => {

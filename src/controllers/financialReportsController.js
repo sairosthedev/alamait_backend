@@ -749,6 +749,10 @@ class FinancialReportsController {
             
             // 🚀 OPTIMIZATION: Add timeout and progress tracking
             console.log(`🚀 Starting optimized monthly balance sheet generation for ${period}... [DEPLOYED]`);
+            console.log(`🏠 Residence parameter: ${residence ? residence : 'NOT PROVIDED'}`);
+            console.log(`📊 Type parameter: ${type}`);
+            console.log(`💰 Basis parameter: ${basis}`);
+            console.log(`🔍 Full query parameters:`, req.query);
             const startTime = Date.now();
             
             // Set a timeout promise to prevent hanging
@@ -758,9 +762,23 @@ class FinancialReportsController {
                 }, 240000); // 4 minutes timeout (increased to allow parallel processing)
             });
             
-            // Use original balance sheet service (optimized balance sheet had calculation issues)
-            const BalanceSheetService = require('../services/balanceSheetService');
-            const balanceSheetPromise = BalanceSheetService.generateMonthlyBalanceSheet(period, residence, type);
+            // Use residence-filtered service when residence is provided, otherwise use original service
+            let balanceSheetPromise;
+            if (residence) {
+                // Use residence-filtered method when residence is specified
+                console.log(`✅ Using RESIDENCE-FILTERED balance sheet for residence: ${residence}`);
+                console.log(`🔍 Calling generateResidenceFilteredMonthlyBalanceSheet with: period=${period}, residence=${residence}, basis=${basis}`);
+                balanceSheetPromise = FinancialReportingService.generateResidenceFilteredMonthlyBalanceSheet(
+                    period,
+                    residence,
+                    basis
+                );
+            } else {
+                // Use original balance sheet service when no residence filter
+                console.log(`⚠️ Using ORIGINAL balance sheet (no residence filter)`);
+                const BalanceSheetService = require('../services/balanceSheetService');
+                balanceSheetPromise = BalanceSheetService.generateMonthlyBalanceSheet(period, residence, type);
+            }
             
             const monthlyBalanceSheet = await Promise.race([balanceSheetPromise, timeoutPromise]);
             
@@ -776,6 +794,13 @@ class FinancialReportsController {
                 optimizations: ['cached_accounts', 'parallel_processing', 'batch_transactions', 'zero_balance_skip']
             };
             
+            
+            // Add cache-busting headers to prevent 304 responses
+            res.set({
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            });
             
             res.json({
                 success: true,
@@ -1322,8 +1347,26 @@ class FinancialReportsController {
                     
                     console.log(`🔧 Generating FIXED balance sheet for ${month}/${year} (${monthEndDateStr})`);
                     
-                    // Use the fixed balance sheet service
-                    const monthData = await FinancialReportingService.generateBalanceSheet(monthEndDateStr, basis);
+                    // Use the residence-filtered balance sheet service when residence is provided
+                    let monthData;
+                    if (residence) {
+                        // Use residence-filtered method
+                        const residenceFilteredData = await FinancialReportingService.generateResidenceFilteredMonthlyBalanceSheet(
+                            period, residence, basis
+                        );
+                        // Extract the specific month data
+                        if (residenceFilteredData.data && residenceFilteredData.data.monthly) {
+                            const monthKey = (month - 1).toString(); // Convert to 0-based index
+                            const monthBreakdown = residenceFilteredData.data.monthly[monthKey];
+                            if (monthBreakdown) {
+                                // Transform the residence-filtered data to match the expected structure
+                                monthData = transformResidenceFilteredToFixed(monthBreakdown, month, year);
+                            }
+                        }
+                    } else {
+                        // Use the original fixed balance sheet service
+                        monthData = await FinancialReportingService.generateBalanceSheet(monthEndDateStr, basis);
+                    }
                     
                     if (monthData) {
                         // Transform the fixed balance sheet data to match expected structure
@@ -2371,6 +2414,119 @@ class FinancialReportsController {
         }
     }
 
+}
+
+// Helper function to transform residence-filtered data to fixed balance sheet format
+function transformResidenceFilteredToFixed(monthBreakdown, month, year) {
+    try {
+        // Extract data from the residence-filtered monthly breakdown
+        const assets = monthBreakdown.assets || {};
+        const liabilities = monthBreakdown.liabilities || {};
+        const equity = monthBreakdown.equity || {};
+        
+        // Calculate totals from the residence-filtered data
+        const totalAssets = monthBreakdown.total_assets || 0;
+        const totalLiabilities = monthBreakdown.total_liabilities || 0;
+        const totalEquity = monthBreakdown.total_equity || 0;
+        
+        console.log(`🔧 Transforming residence-filtered data for ${month}/${year}:`);
+        console.log(`   Assets: $${totalAssets}, Liabilities: $${totalLiabilities}, Equity: $${totalEquity}`);
+        
+        // Calculate total AR from all individual AR accounts
+        let totalAR = 0;
+        Object.entries(assets).forEach(([key, account]) => {
+            if (account.code && account.code.startsWith('1100')) {
+                totalAR += account.balance || 0;
+            }
+        });
+        
+        // Calculate total cash from all cash accounts
+        let totalCash = 0;
+        let totalBank = 0;
+        let totalPettyCash = 0;
+        let totalVault = 0;
+        let totalClearing = 0;
+        
+        Object.entries(assets).forEach(([key, account]) => {
+            if (account.code === '1000') {
+                totalCash += account.balance || 0;
+            } else if (account.code === '1001') {
+                totalBank += account.balance || 0;
+            } else if (account.code === '1011') {
+                totalPettyCash += account.balance || 0;
+            } else if (account.code === '10003') {
+                totalVault += account.balance || 0;
+            } else if (account.code === '10005') {
+                totalClearing += account.balance || 0;
+            }
+        });
+        
+        // Calculate individual liability balances
+        const liabilityAccounts = {};
+        Object.entries(liabilities).forEach(([key, account]) => {
+            liabilityAccounts[key] = { balance: account.balance || 0, code: account.code, name: account.name };
+        });
+        
+        // Calculate individual equity balances
+        const equityAccounts = {};
+        Object.entries(equity).forEach(([key, account]) => {
+            equityAccounts[key] = { balance: account.balance || 0, code: account.code, name: account.name };
+        });
+        
+        console.log(`🔧 Account totals: Cash: $${totalCash}, Bank: $${totalBank}, AR: $${totalAR}, Petty: $${totalPettyCash}, Vault: $${totalVault}, Clearing: $${totalClearing}`);
+        console.log(`🔧 Liability totals: $${totalLiabilities}, Equity totals: $${totalEquity}`);
+        
+        // Transform to match the EXACT structure expected by transformFixedBalanceSheetToMonthly
+        return {
+            assets: {
+                total_assets: totalAssets,
+                current_assets: {
+                    // Individual cash accounts that transformFixedBalanceSheetToMonthly expects
+                    '1000 - Cash': { balance: totalCash, code: '1000', name: 'Cash' },
+                    '1001 - Bank Account': { balance: totalBank, code: '1001', name: 'Bank Account' },
+                    '1002 - Ecocash': { balance: 0, code: '1002', name: 'Ecocash' },
+                    '1003 - Innbucks': { balance: 0, code: '1003', name: 'Innbucks' },
+                    '1004 - Petty Cash': { balance: 0, code: '1004', name: 'Petty Cash' },
+                    '1005 - Cash on Hand': { balance: 0, code: '1005', name: 'Cash on Hand' },
+                    '1010 - General Petty Cash': { balance: 0, code: '1010', name: 'General Petty Cash' },
+                    '1011 - Admin Petty Cash': { balance: totalPettyCash, code: '1011', name: 'Admin Petty Cash' },
+                    '1012 - Finance Petty Cash': { balance: 0, code: '1012', name: 'Finance Petty Cash' },
+                    '1013 - Property Manager Petty Cash': { balance: 0, code: '1013', name: 'Property Manager Petty Cash' },
+                    '1014 - Maintenance Petty Cash': { balance: 0, code: '1014', name: 'Maintenance Petty Cash' },
+                    '10003 - Cbz Vault': { balance: totalVault, code: '10003', name: 'Cbz Vault' },
+                    '10005 - Opening balance clearing account': { balance: totalClearing, code: '10005', name: 'Opening balance clearing account' },
+                    // AR accounts - aggregate all individual AR accounts
+                    '1100 - Accounts Receivable': { balance: totalAR, code: '1100', name: 'Accounts Receivable' }
+                },
+                non_current_assets: {
+                    '1500 - Property, Plant & Equipment': { balance: 0, code: '1500', name: 'Property, Plant & Equipment' },
+                    '1600 - Other Non-Current Assets': { balance: 0, code: '1600', name: 'Other Non-Current Assets' }
+                }
+            },
+            liabilities: {
+                total_liabilities: totalLiabilities,
+                // Include actual liability accounts from residence-filtered data
+                ...liabilityAccounts,
+                // Add standard liability accounts with $0 if not present
+                '2000 - Accounts Payable': { balance: 0, code: '2000', name: 'Accounts Payable' },
+                '2020 - Tenant Deposits': { balance: 0, code: '2020', name: 'Tenant Deposits' },
+                '2100 - Other Current Liabilities': { balance: 0, code: '2100', name: 'Other Current Liabilities' },
+                '2500 - Long Term Debt': { balance: 0, code: '2500', name: 'Long Term Debt' },
+                '2600 - Other Non-Current Liabilities': { balance: 0, code: '2600', name: 'Other Non-Current Liabilities' }
+            },
+            equity: {
+                total_equity: totalEquity,
+                // Include actual equity accounts from residence-filtered data
+                ...equityAccounts,
+                // Add standard equity accounts with $0 if not present
+                '3001 - Owner Capital': { balance: 0, code: '3001', name: 'Owner Capital' },
+                '3201 - Current Year Earnings': { balance: 0, code: '3201', name: 'Current Year Earnings' }
+            }
+        };
+    } catch (error) {
+        console.error('Error transforming residence-filtered data:', error);
+        return null;
+    }
 }
 
 module.exports = FinancialReportsController; 
