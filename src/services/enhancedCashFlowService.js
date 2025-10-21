@@ -348,6 +348,9 @@ class EnhancedCashFlowService {
             }
         };
         
+        // Set to track processed transactions to prevent double-counting
+        const processedTransactions = new Set();
+        
         // Create a map of transaction entries to their corresponding payments for accurate date handling
         const transactionToPaymentMap = new Map();
         
@@ -615,6 +618,16 @@ class EnhancedCashFlowService {
                 
                 if (cashEntry) {
                     const incomeAmount = cashEntry.debit;
+                    
+                    // Check if this transaction has already been processed to prevent double-counting
+                    if (processedTransactions.has(entry.transactionId)) {
+                        console.log(`⚠️ Transaction ${entry.transactionId} already processed, skipping to prevent double-counting`);
+                        return;
+                    }
+                    
+                    // Mark this transaction as processed
+                    processedTransactions.add(entry.transactionId);
+                    
                     incomeBreakdown.total += incomeAmount;
                     
                     // Special logging for R180 transaction
@@ -624,6 +637,23 @@ class EnhancedCashFlowService {
                             accountCode: cashEntry.accountCode,
                             accountName: cashEntry.accountName
                         });
+                    }
+                    
+                    // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
+                    if (entry.description && (
+                        entry.description.toLowerCase().includes('opening balance') || 
+                        entry.description.toLowerCase().includes('opening balances') ||
+                        entry.description.toLowerCase().includes('balance adjustment') ||
+                        entry.description.toLowerCase().includes('funds to petty cash') ||
+                        entry.description.toLowerCase().includes('funds from vault') ||
+                        entry.description.toLowerCase().includes('funds to vault') ||
+                        entry.description.toLowerCase().includes('internal transfer') ||
+                        entry.transactionId.startsWith('ADJ-') || 
+                        entry.reference?.startsWith('ADJ-')
+                    )) {
+                        // This is a balance sheet adjustment or internal transfer, not income - don't count as income
+                        console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from income: ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                        return; // Skip this transaction entry
                     }
                     
                     // Categorize based on description and source
@@ -1161,6 +1191,23 @@ class EnhancedCashFlowService {
                                 description: entry.description || 'Utilities Income'
                             });
                         } else {
+                            // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
+                            if (entry.description && (
+                                entry.description.toLowerCase().includes('opening balance') || 
+                                entry.description.toLowerCase().includes('opening balances') ||
+                                entry.description.toLowerCase().includes('balance adjustment') ||
+                                entry.description.toLowerCase().includes('funds to petty cash') ||
+                                entry.description.toLowerCase().includes('funds from vault') ||
+                                entry.description.toLowerCase().includes('funds to vault') ||
+                                entry.description.toLowerCase().includes('internal transfer') ||
+                                entry.transactionId.startsWith('ADJ-') || 
+                                entry.reference?.startsWith('ADJ-')
+                            )) {
+                                // This is a balance sheet adjustment or internal transfer, not income - don't count as income
+                                console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${credit} - Transaction: ${entry.transactionId}`);
+                                return; // Skip this transaction entry
+                            }
+                            
                             incomeBreakdown.by_source.other_income.total += credit;
                             incomeBreakdown.by_source.other_income.transactions.push({
                                 transactionId: entry.transactionId,
@@ -1796,22 +1843,9 @@ class EnhancedCashFlowService {
             return residenceName;
         };
         
-        // Helper function to determine expense type from description
+        // Helper function to return the actual expense description as the type
         const getExpenseType = (description) => {
-            if (!description) return 'other';
-            
-            const desc = description.toLowerCase();
-            if (desc.includes('electricity') || desc.includes('power')) return 'electricity';
-            if (desc.includes('water')) return 'water';
-            if (desc.includes('gas')) return 'gas';
-            if (desc.includes('internet') || desc.includes('wifi')) return 'internet';
-            if (desc.includes('maintenance') || desc.includes('repair')) return 'maintenance';
-            if (desc.includes('cleaning')) return 'cleaning';
-            if (desc.includes('security')) return 'security';
-            if (desc.includes('management')) return 'management';
-            if (desc.includes('rent')) return 'rent';
-            if (desc.includes('insurance')) return 'insurance';
-            return 'other';
+            return description || 'Unnamed Expense';
         };
         
         transactionEntries.forEach(entry => {
@@ -1823,8 +1857,8 @@ class EnhancedCashFlowService {
             }
             
             if (entry.entries && entry.entries.length > 0) {
-                // Look for Cash/Bank credits (expenses paid)
-                const cashEntry = entry.entries.find(line => {
+                // Look for ALL Cash/Bank credits (expenses paid) - not just the first one
+                const cashEntries = entry.entries.filter(line => {
                     const accountCode = line.accountCode || line.account?.code;
                     const accountName = line.accountName || line.account?.name;
                     return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
@@ -1842,71 +1876,75 @@ class EnhancedCashFlowService {
                     entry.description.toLowerCase().includes('internal transfer')
                 );
                 
-                if (cashEntry && !isInternalTransfer && !processedTransactions.has(entry.transactionId)) {
-                    const expenseAmount = cashEntry.credit;
-                    const description = entry.description || 'Cash Expense';
-                    const residenceName = getResidenceName(entry, expenses);
-                    const expenseType = getExpenseType(description);
-                    
-                    // Create individual expense object
-                    const individualExpense = {
-                        id: entry.transactionId,
-                        expense_id: entry.reference || entry.sourceId || null,
-                        date: entry.date,
-                        amount: expenseAmount,
-                        description: description,
-                        type: expenseType,
-                        residence: residenceName,
-                        account_code: cashEntry.accountCode,
-                        account_name: cashEntry.accountName,
-                        transaction_details: {
-                            transaction_id: entry.transactionId,
-                            reference: entry.reference,
-                            source_id: entry.sourceId
+                // Process each cash credit as a separate expense
+                if (cashEntries.length > 0 && !isInternalTransfer && !processedTransactions.has(entry.transactionId)) {
+                    cashEntries.forEach((cashEntry, index) => {
+                        const expenseAmount = cashEntry.credit;
+                        const description = cashEntry.description || entry.description || 'Cash Expense';
+                        const residenceName = getResidenceName(entry, expenses);
+                        const expenseType = getExpenseType(description);
+                        
+                        // Create individual expense object
+                        const individualExpense = {
+                            id: `${entry.transactionId}-${index + 1}`, // Unique ID for each cash credit
+                            expense_id: entry.reference || entry.sourceId || null,
+                            date: entry.date,
+                            amount: expenseAmount,
+                            description: description,
+                            type: expenseType,
+                            residence: residenceName,
+                            account_code: cashEntry.accountCode,
+                            account_name: cashEntry.accountName,
+                            transaction_details: {
+                                transaction_id: entry.transactionId,
+                                reference: entry.reference,
+                                source_id: entry.sourceId,
+                                entry_index: index + 1
+                            }
+                        };
+                        
+                        // Add to main expenses array
+                        individualExpenses.expenses.push(individualExpense);
+                        individualExpenses.total_count++;
+                        individualExpenses.total_amount += expenseAmount;
+                        
+                        // Group by month
+                        const monthKey = entry.date.toISOString().slice(0, 7); // YYYY-MM
+                        if (!individualExpenses.by_month[monthKey]) {
+                            individualExpenses.by_month[monthKey] = {
+                                count: 0,
+                                total_amount: 0,
+                                expenses: []
+                            };
                         }
-                    };
-                    
-                    // Add to main expenses array
-                    individualExpenses.expenses.push(individualExpense);
-                    individualExpenses.total_count++;
-                    individualExpenses.total_amount += expenseAmount;
-                    
-                    // Group by month
-                    const monthKey = entry.date.toISOString().slice(0, 7); // YYYY-MM
-                    if (!individualExpenses.by_month[monthKey]) {
-                        individualExpenses.by_month[monthKey] = {
-                            count: 0,
-                            total_amount: 0,
-                            expenses: []
-                        };
-                    }
-                    individualExpenses.by_month[monthKey].count++;
-                    individualExpenses.by_month[monthKey].total_amount += expenseAmount;
-                    individualExpenses.by_month[monthKey].expenses.push(individualExpense);
-                    
-                    // Group by residence
-                    if (!individualExpenses.by_residence[residenceName]) {
-                        individualExpenses.by_residence[residenceName] = {
-                            count: 0,
-                            total_amount: 0,
-                            expenses: []
-                        };
-                    }
-                    individualExpenses.by_residence[residenceName].count++;
-                    individualExpenses.by_residence[residenceName].total_amount += expenseAmount;
-                    individualExpenses.by_residence[residenceName].expenses.push(individualExpense);
-                    
-                    // Group by type
-                    if (!individualExpenses.by_type[expenseType]) {
-                        individualExpenses.by_type[expenseType] = {
-                            count: 0,
-                            total_amount: 0,
-                            expenses: []
-                        };
-                    }
-                    individualExpenses.by_type[expenseType].count++;
-                    individualExpenses.by_type[expenseType].total_amount += expenseAmount;
-                    individualExpenses.by_type[expenseType].expenses.push(individualExpense);
+                        individualExpenses.by_month[monthKey].count++;
+                        individualExpenses.by_month[monthKey].total_amount += expenseAmount;
+                        individualExpenses.by_month[monthKey].expenses.push(individualExpense);
+                        
+                        // Group by residence
+                        if (!individualExpenses.by_residence[residenceName]) {
+                            individualExpenses.by_residence[residenceName] = {
+                                count: 0,
+                                total_amount: 0,
+                                expenses: []
+                            };
+                        }
+                        individualExpenses.by_residence[residenceName].count++;
+                        individualExpenses.by_residence[residenceName].total_amount += expenseAmount;
+                        individualExpenses.by_residence[residenceName].expenses.push(individualExpense);
+                        
+                        // Group by type
+                        if (!individualExpenses.by_type[expenseType]) {
+                            individualExpenses.by_type[expenseType] = {
+                                count: 0,
+                                total_amount: 0,
+                                expenses: []
+                            };
+                        }
+                        individualExpenses.by_type[expenseType].count++;
+                        individualExpenses.by_type[expenseType].total_amount += expenseAmount;
+                        individualExpenses.by_type[expenseType].expenses.push(individualExpense);
+                    }); // Close forEach loop
                     
                     // Mark as processed
                     processedTransactions.add(entry.transactionId);
@@ -2073,11 +2111,6 @@ class EnhancedCashFlowService {
             },
             expenses: {
                 total: 0,
-                maintenance: 0,
-                utilities: 0,
-                cleaning: 0,
-                security: 0,
-                management: 0,
                 transactions: []
             },
             operating_activities: {
@@ -2090,12 +2123,7 @@ class EnhancedCashFlowService {
                     deposits: { amount: 0, description: "Security Deposits" },
                     utilities_income: { amount: 0, description: "Utilities Income" },
                     advance_payments: { amount: 0, description: "Advance Payments from Students" },
-                    other_income: { amount: 0, description: "Other Income Sources" },
-                    maintenance_expenses: { amount: 0, description: "Property Maintenance" },
-                    utilities_expenses: { amount: 0, description: "Utility Bills" },
-                    cleaning_expenses: { amount: 0, description: "Cleaning Services" },
-                    security_expenses: { amount: 0, description: "Security Services" },
-                    management_expenses: { amount: 0, description: "Management Fees" }
+                    other_income: { amount: 0, description: "Other Income Sources" }
                 }
             },
             investing_activities: {
@@ -2267,6 +2295,7 @@ class EnhancedCashFlowService {
                         if (entry.description && (
                             entry.description.toLowerCase().includes('balance adjustment') || 
                             entry.description.toLowerCase().includes('opening balance') || 
+                            entry.description.toLowerCase().includes('opening balances') ||
                             entry.transactionId.startsWith('ADJ-') || 
                             entry.reference?.startsWith('ADJ-')
                         )) {
@@ -2580,6 +2609,23 @@ class EnhancedCashFlowService {
                         } else if (monthlyCategory === 'utilities') {
                             months[monthKey].income.utilities += incomeAmount;
                         } else {
+                            // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
+                            if (entry.description && (
+                                entry.description.toLowerCase().includes('opening balance') || 
+                                entry.description.toLowerCase().includes('opening balances') ||
+                                entry.description.toLowerCase().includes('balance adjustment') ||
+                                entry.description.toLowerCase().includes('funds to petty cash') ||
+                                entry.description.toLowerCase().includes('funds from vault') ||
+                                entry.description.toLowerCase().includes('funds to vault') ||
+                                entry.description.toLowerCase().includes('internal transfer') ||
+                                entry.transactionId.startsWith('ADJ-') || 
+                                entry.reference?.startsWith('ADJ-')
+                            )) {
+                                // This is a balance sheet adjustment or internal transfer, not income - don't count as income
+                                console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                                return; // Skip this transaction entry
+                            }
+                            
                             months[monthKey].income.other_income += incomeAmount;
                         }
                     }
@@ -3139,6 +3185,9 @@ class EnhancedCashFlowService {
                         management: 0,
                         insurance: 0,
                         council_rates: 0,
+                        plumbing: 0,
+                        sanitary: 0,
+                        solar: 0,
                         other_expenses: 0
                     }
                 },
@@ -3165,6 +3214,9 @@ class EnhancedCashFlowService {
                     management: 0,
                     insurance: 0,
                     council_rates: 0,
+                    plumbing: 0,
+                    sanitary: 0,
+                    solar: 0,
                     other_expenses: 0,
                     // Legacy categories for backward compatibility
                     utilities: 0,
@@ -3265,6 +3317,23 @@ class EnhancedCashFlowService {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
                     } else {
+                        // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
+                        if (entry.description && (
+                            entry.description.toLowerCase().includes('opening balance') || 
+                            entry.description.toLowerCase().includes('opening balances') ||
+                            entry.description.toLowerCase().includes('balance adjustment') ||
+                            entry.description.toLowerCase().includes('funds to petty cash') ||
+                            entry.description.toLowerCase().includes('funds from vault') ||
+                            entry.description.toLowerCase().includes('funds to vault') ||
+                            entry.description.toLowerCase().includes('internal transfer') ||
+                            entry.transactionId.startsWith('ADJ-') || 
+                            entry.reference?.startsWith('ADJ-')
+                        )) {
+                            // This is a balance sheet adjustment or internal transfer, not income - don't count as income
+                            console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId}`);
+                            return; // Skip this transaction entry
+                        }
+                        
                         monthlyData[monthName].income.other_income += amount;
                         monthlyData[monthName].operating_activities.breakdown.other_income += amount;
                     }
@@ -3296,6 +3365,23 @@ class EnhancedCashFlowService {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
                     } else {
+                        // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
+                        if (entry.description && (
+                            entry.description.toLowerCase().includes('opening balance') || 
+                            entry.description.toLowerCase().includes('opening balances') ||
+                            entry.description.toLowerCase().includes('balance adjustment') ||
+                            entry.description.toLowerCase().includes('funds to petty cash') ||
+                            entry.description.toLowerCase().includes('funds from vault') ||
+                            entry.description.toLowerCase().includes('funds to vault') ||
+                            entry.description.toLowerCase().includes('internal transfer') ||
+                            entry.transactionId.startsWith('ADJ-') || 
+                            entry.reference?.startsWith('ADJ-')
+                        )) {
+                            // This is a balance sheet adjustment or internal transfer, not income - don't count as income
+                            console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId}`);
+                            return; // Skip this transaction entry
+                        }
+                        
                         monthlyData[monthName].income.other_income += amount;
                         monthlyData[monthName].operating_activities.breakdown.other_income += amount;
                     }
@@ -3323,49 +3409,20 @@ class EnhancedCashFlowService {
                     monthlyData[monthName].expenses.total += amount;
                         processedTransactions.add(entry.transactionId + '_expense');
 
-                        // Categorize expenses based on description - individual categories
-                        if (desc.includes('electricity') || desc.includes('power')) {
-                            monthlyData[monthName].expenses.utilities += amount;
-                            monthlyData[monthName].expenses.electricity += amount;
-                            monthlyData[monthName].operating_activities.breakdown.electricity += amount;
-                        } else if (desc.includes('water')) {
-                            monthlyData[monthName].expenses.utilities += amount;
-                            monthlyData[monthName].expenses.water += amount;
-                            monthlyData[monthName].operating_activities.breakdown.water += amount;
-                        } else if (desc.includes('gas')) {
-                            monthlyData[monthName].expenses.utilities += amount;
-                            monthlyData[monthName].expenses.gas += amount;
-                            monthlyData[monthName].operating_activities.breakdown.gas += amount;
-                        } else if (desc.includes('internet') || desc.includes('wifi')) {
-                            monthlyData[monthName].expenses.utilities += amount;
-                            monthlyData[monthName].expenses.internet += amount;
-                            monthlyData[monthName].operating_activities.breakdown.internet += amount;
-                        } else if (desc.includes('maintenance') || desc.includes('repair')) {
-                        monthlyData[monthName].expenses.maintenance += amount;
-                        monthlyData[monthName].operating_activities.breakdown.maintenance += amount;
-                    } else if (desc.includes('cleaning')) {
-                        monthlyData[monthName].expenses.cleaning += amount;
-                        monthlyData[monthName].operating_activities.breakdown.cleaning += amount;
-                    } else if (desc.includes('security')) {
-                        monthlyData[monthName].expenses.security += amount;
-                        monthlyData[monthName].operating_activities.breakdown.security += amount;
-                    } else if (desc.includes('management')) {
-                        monthlyData[monthName].expenses.management += amount;
-                        monthlyData[monthName].operating_activities.breakdown.management += amount;
-                        } else if (desc.includes('insurance')) {
-                            monthlyData[monthName].expenses.utilities += amount;
-                            monthlyData[monthName].expenses.insurance += amount;
-                            monthlyData[monthName].operating_activities.breakdown.insurance += amount;
-                        } else if (desc.includes('council') || desc.includes('rates')) {
-                            monthlyData[monthName].expenses.utilities += amount;
-                            monthlyData[monthName].expenses.council_rates += amount;
-                            monthlyData[monthName].operating_activities.breakdown.council_rates += amount;
-                    } else {
-                            // Default to other expenses for uncategorized expenses
-                            monthlyData[monthName].expenses.maintenance += amount;
-                            monthlyData[monthName].expenses.other_expenses += amount;
-                            monthlyData[monthName].operating_activities.breakdown.other_expenses += amount;
+                        // Use actual expense description as category name instead of generic categorization
+                        const expenseName = entry.description || 'Unnamed Expense';
+                        
+                        // Initialize the expense category if it doesn't exist
+                        if (!monthlyData[monthName].expenses[expenseName]) {
+                            monthlyData[monthName].expenses[expenseName] = 0;
                         }
+                        if (!monthlyData[monthName].operating_activities.breakdown[expenseName]) {
+                            monthlyData[monthName].operating_activities.breakdown[expenseName] = 0;
+                        }
+                        
+                        // Add amount to the specific expense name
+                        monthlyData[monthName].expenses[expenseName] += amount;
+                        monthlyData[monthName].operating_activities.breakdown[expenseName] += amount;
 
                         // Add to transactions
                         monthlyData[monthName].expenses.transactions.push({
@@ -3385,50 +3442,20 @@ class EnhancedCashFlowService {
                     monthlyData[monthName].expenses.total += amount;
                     processedTransactions.add(entry.transactionId + '_expense');
 
-                    // Categorize expenses - individual categories
-                    const desc = entry.description?.toLowerCase() || '';
-                    if (desc.includes('electricity') || desc.includes('power')) {
-                        monthlyData[monthName].expenses.utilities += amount;
-                        monthlyData[monthName].expenses.electricity += amount;
-                        monthlyData[monthName].operating_activities.breakdown.electricity += amount;
-                    } else if (desc.includes('water')) {
-                        monthlyData[monthName].expenses.utilities += amount;
-                        monthlyData[monthName].expenses.water += amount;
-                        monthlyData[monthName].operating_activities.breakdown.water += amount;
-                    } else if (desc.includes('gas')) {
-                        monthlyData[monthName].expenses.utilities += amount;
-                        monthlyData[monthName].expenses.gas += amount;
-                        monthlyData[monthName].operating_activities.breakdown.gas += amount;
-                    } else if (desc.includes('internet') || desc.includes('wifi')) {
-                        monthlyData[monthName].expenses.utilities += amount;
-                        monthlyData[monthName].expenses.internet += amount;
-                        monthlyData[monthName].operating_activities.breakdown.internet += amount;
-                    } else if (desc.includes('maintenance') || desc.includes('repair')) {
-                        monthlyData[monthName].expenses.maintenance += amount;
-                        monthlyData[monthName].operating_activities.breakdown.maintenance += amount;
-                    } else if (desc.includes('cleaning')) {
-                        monthlyData[monthName].expenses.cleaning += amount;
-                        monthlyData[monthName].operating_activities.breakdown.cleaning += amount;
-                    } else if (desc.includes('security')) {
-                        monthlyData[monthName].expenses.security += amount;
-                        monthlyData[monthName].operating_activities.breakdown.security += amount;
-                    } else if (desc.includes('management')) {
-                        monthlyData[monthName].expenses.management += amount;
-                        monthlyData[monthName].operating_activities.breakdown.management += amount;
-                    } else if (desc.includes('insurance')) {
-                        monthlyData[monthName].expenses.utilities += amount;
-                        monthlyData[monthName].expenses.insurance += amount;
-                        monthlyData[monthName].operating_activities.breakdown.insurance += amount;
-                    } else if (desc.includes('council') || desc.includes('rates')) {
-                        monthlyData[monthName].expenses.utilities += amount;
-                        monthlyData[monthName].expenses.council_rates += amount;
-                        monthlyData[monthName].operating_activities.breakdown.council_rates += amount;
-                    } else {
-                        // Default to other expenses
-                        monthlyData[monthName].expenses.maintenance += amount;
-                        monthlyData[monthName].expenses.other_expenses += amount;
-                        monthlyData[monthName].operating_activities.breakdown.other_expenses += amount;
+                    // Use actual expense description as category name instead of generic categorization
+                    const expenseName = entry.description || 'Unnamed Expense';
+                    
+                    // Initialize the expense category if it doesn't exist
+                    if (!monthlyData[monthName].expenses[expenseName]) {
+                        monthlyData[monthName].expenses[expenseName] = 0;
                     }
+                    if (!monthlyData[monthName].operating_activities.breakdown[expenseName]) {
+                        monthlyData[monthName].operating_activities.breakdown[expenseName] = 0;
+                    }
+                    
+                    // Add amount to the specific expense name
+                    monthlyData[monthName].expenses[expenseName] += amount;
+                    monthlyData[monthName].operating_activities.breakdown[expenseName] += amount;
 
                     // Add to transactions
                     monthlyData[monthName].expenses.transactions.push({
@@ -4249,6 +4276,23 @@ class EnhancedCashFlowService {
                         months[monthKey].operating_activities.breakdown.advance_payments.amount += amount;
                         months[monthKey].operating_activities.breakdown.advance_payments.transactions.push(entry);
                     } else {
+                        // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
+                        if (entry.description && (
+                            entry.description.toLowerCase().includes('opening balance') || 
+                            entry.description.toLowerCase().includes('opening balances') ||
+                            entry.description.toLowerCase().includes('balance adjustment') ||
+                            entry.description.toLowerCase().includes('funds to petty cash') ||
+                            entry.description.toLowerCase().includes('funds from vault') ||
+                            entry.description.toLowerCase().includes('funds to vault') ||
+                            entry.description.toLowerCase().includes('internal transfer') ||
+                            entry.transactionId.startsWith('ADJ-') || 
+                            entry.reference?.startsWith('ADJ-')
+                        )) {
+                            // This is a balance sheet adjustment or internal transfer, not income - don't count as income
+                            console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId}`);
+                            return; // Skip this transaction entry
+                        }
+                        
                         months[monthKey].income.other_income += amount;
                         months[monthKey].operating_activities.breakdown.other_income.amount += amount;
                         months[monthKey].operating_activities.breakdown.other_income.transactions.push(entry);
