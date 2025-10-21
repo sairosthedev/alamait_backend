@@ -183,7 +183,7 @@ class EnhancedCashFlowService {
                 }
             });
             
-            const oldFormatMonthlyBreakdown = EnhancedCashFlowService.generateReliableMonthlyBreakdown(transactionEntries, period, openingCashBalance);
+            const oldFormatMonthlyBreakdown = EnhancedCashFlowService.generateReliableMonthlyBreakdown(transactionEntries, period, openingCashBalance, cashBalanceByAccount);
             
             // Generate tabular monthly breakdown with proper cash balances
             const tabularMonthlyBreakdown = await EnhancedCashFlowService.generateTabularMonthlyBreakdown(oldFormatMonthlyBreakdown, period, openingCashBalance, cashBalanceByAccount);
@@ -643,16 +643,18 @@ class EnhancedCashFlowService {
                     if (entry.description && (
                         entry.description.toLowerCase().includes('opening balance') || 
                         entry.description.toLowerCase().includes('opening balances') ||
+                        entry.description.toLowerCase().includes('opening bank') ||
                         entry.description.toLowerCase().includes('balance adjustment') ||
                         entry.description.toLowerCase().includes('funds to petty cash') ||
                         entry.description.toLowerCase().includes('funds from vault') ||
                         entry.description.toLowerCase().includes('funds to vault') ||
                         entry.description.toLowerCase().includes('internal transfer') ||
+                        entry.description.toLowerCase().includes('clearing account') ||
                         entry.transactionId.startsWith('ADJ-') || 
                         entry.reference?.startsWith('ADJ-')
                     )) {
                         // This is a balance sheet adjustment or internal transfer, not income - don't count as income
-                        console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from income: ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                        console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from income: ${incomeAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                         return; // Skip this transaction entry
                     }
                     
@@ -1195,16 +1197,18 @@ class EnhancedCashFlowService {
                             if (entry.description && (
                                 entry.description.toLowerCase().includes('opening balance') || 
                                 entry.description.toLowerCase().includes('opening balances') ||
+                                entry.description.toLowerCase().includes('opening bank') ||
                                 entry.description.toLowerCase().includes('balance adjustment') ||
                                 entry.description.toLowerCase().includes('funds to petty cash') ||
                                 entry.description.toLowerCase().includes('funds from vault') ||
                                 entry.description.toLowerCase().includes('funds to vault') ||
                                 entry.description.toLowerCase().includes('internal transfer') ||
+                                entry.description.toLowerCase().includes('clearing account') ||
                                 entry.transactionId.startsWith('ADJ-') || 
                                 entry.reference?.startsWith('ADJ-')
                             )) {
                                 // This is a balance sheet adjustment or internal transfer, not income - don't count as income
-                                console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${credit} - Transaction: ${entry.transactionId}`);
+                                console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${credit} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                                 return; // Skip this transaction entry
                             }
                             
@@ -2613,16 +2617,18 @@ class EnhancedCashFlowService {
                             if (entry.description && (
                                 entry.description.toLowerCase().includes('opening balance') || 
                                 entry.description.toLowerCase().includes('opening balances') ||
+                                entry.description.toLowerCase().includes('opening bank') ||
                                 entry.description.toLowerCase().includes('balance adjustment') ||
                                 entry.description.toLowerCase().includes('funds to petty cash') ||
                                 entry.description.toLowerCase().includes('funds from vault') ||
                                 entry.description.toLowerCase().includes('funds to vault') ||
                                 entry.description.toLowerCase().includes('internal transfer') ||
+                                entry.description.toLowerCase().includes('clearing account') ||
                                 entry.transactionId.startsWith('ADJ-') || 
                                 entry.reference?.startsWith('ADJ-')
                             )) {
                                 // This is a balance sheet adjustment or internal transfer, not income - don't count as income
-                                console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                                console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${incomeAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                                 return; // Skip this transaction entry
                             }
                             
@@ -2978,6 +2984,12 @@ class EnhancedCashFlowService {
                     const accountName = account.accountName;
                     const accountCode = account.accountCode;
                     
+                    // Only include proper cash accounts, exclude clearing accounts
+                    if (!this.isCashAccount(accountName, accountCode)) {
+                        console.log(`🚫 Excluding non-cash account from monthly cash equivalents: ${accountName} (${accountCode})`);
+                        return;
+                    }
+                    
                     // Use running balance for this month
                     const monthlyBalance = runningCashBalances[accountCode] || 0;
                     
@@ -3012,7 +3024,7 @@ class EnhancedCashFlowService {
             monthlyData[month] = {
                 operating_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 income: { total: 0 },
-                expenses: { total: 0, utilities: 0, maintenance: 0, cleaning: 0, security: 0, management: 0, transactions: [] },
+                expenses: { total: 0, transactions: [] },
                 investing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 financing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 net_cash_flow: 0,
@@ -3155,7 +3167,7 @@ class EnhancedCashFlowService {
     /**
      * FIXED: Simple and reliable monthly breakdown
      */
-    static generateReliableMonthlyBreakdown(transactionEntries, period, openingBalance) {
+    static generateReliableMonthlyBreakdown(transactionEntries, period, openingBalance, cashBalanceByAccount = null) {
         const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
                            'july', 'august', 'september', 'october', 'november', 'december'];
         
@@ -3321,16 +3333,19 @@ class EnhancedCashFlowService {
                         if (entry.description && (
                             entry.description.toLowerCase().includes('opening balance') || 
                             entry.description.toLowerCase().includes('opening balances') ||
+                            entry.description.toLowerCase().includes('opening bank') ||
                             entry.description.toLowerCase().includes('balance adjustment') ||
+                            entry.description.toLowerCase().includes('clearing account') ||
                             entry.description.toLowerCase().includes('funds to petty cash') ||
                             entry.description.toLowerCase().includes('funds from vault') ||
                             entry.description.toLowerCase().includes('funds to vault') ||
                             entry.description.toLowerCase().includes('internal transfer') ||
+                            entry.description.toLowerCase().includes('clearing account') ||
                             entry.transactionId.startsWith('ADJ-') || 
                             entry.reference?.startsWith('ADJ-')
                         )) {
                             // This is a balance sheet adjustment or internal transfer, not income - don't count as income
-                            console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId}`);
+                            console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                             return; // Skip this transaction entry
                         }
                         
@@ -3369,16 +3384,19 @@ class EnhancedCashFlowService {
                         if (entry.description && (
                             entry.description.toLowerCase().includes('opening balance') || 
                             entry.description.toLowerCase().includes('opening balances') ||
+                            entry.description.toLowerCase().includes('opening bank') ||
                             entry.description.toLowerCase().includes('balance adjustment') ||
+                            entry.description.toLowerCase().includes('clearing account') ||
                             entry.description.toLowerCase().includes('funds to petty cash') ||
                             entry.description.toLowerCase().includes('funds from vault') ||
                             entry.description.toLowerCase().includes('funds to vault') ||
                             entry.description.toLowerCase().includes('internal transfer') ||
+                            entry.description.toLowerCase().includes('clearing account') ||
                             entry.transactionId.startsWith('ADJ-') || 
                             entry.reference?.startsWith('ADJ-')
                         )) {
                             // This is a balance sheet adjustment or internal transfer, not income - don't count as income
-                            console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId}`);
+                            console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                             return; // Skip this transaction entry
                         }
                         
@@ -3494,36 +3512,32 @@ class EnhancedCashFlowService {
             month.closing_balance = runningBalance + month.net_cash_flow;
             runningBalance = month.closing_balance;
             
-            // Calculate cash accounts for this month
-            // This is a simplified approach - in a real system, you'd track individual account balances
-            if (month.net_cash_flow !== 0) {
-                // Distribute cash flow across common cash accounts
-                const cashAccounts = {
-                    '1000': { accountCode: '1000', accountName: 'Cash', balance: 0 },
-                    '1003': { accountCode: '1003', accountName: 'Ecocash Wallet', balance: 0 },
-                    '1011': { accountCode: '1011', accountName: 'Admin Petty Cash', balance: 0 },
-                    '10003': { accountCode: '10003', accountName: 'Cbz Vault', balance: 0 }
-                };
-                
-                // Simple distribution logic - in practice, you'd track actual account movements
-                if (month.net_cash_flow > 0) {
-                    // Positive cash flow - distribute to accounts
-                    const perAccount = month.net_cash_flow / Object.keys(cashAccounts).length;
-                    Object.values(cashAccounts).forEach(account => {
-                        account.balance = perAccount;
-                    });
-                } else {
-                    // Negative cash flow - reduce from accounts
-                    const perAccount = Math.abs(month.net_cash_flow) / Object.keys(cashAccounts).length;
-                    Object.values(cashAccounts).forEach(account => {
-                        account.balance = -perAccount;
-                    });
-                }
-                
-                // Add to monthly cash accounts
-                month.cash_accounts.breakdown = cashAccounts;
-                month.cash_accounts.total = month.net_cash_flow;
+            // Calculate cash accounts for this month using actual account balances
+            // Use actual account balances from the database
+            const cashAccounts = {};
+            let totalCash = 0;
+            
+            // Get actual cash account balances from the database
+            if (cashBalanceByAccount) {
+                Object.values(cashBalanceByAccount).forEach(account => {
+                    const accountName = account.accountName;
+                    const accountCode = account.accountCode;
+                    
+                    // Only include proper cash accounts, exclude clearing accounts
+                    if (this.isCashAccount(accountName, accountCode)) {
+                        cashAccounts[accountCode] = {
+                            accountCode: accountCode,
+                            accountName: accountName,
+                            balance: account.balance
+                        };
+                        totalCash += account.balance;
+                    }
+                });
             }
+            
+            // Add to monthly cash accounts
+            month.cash_accounts.breakdown = cashAccounts;
+            month.cash_accounts.total = totalCash;
         });
 
         console.log('✅ RELIABLE METHOD - Monthly breakdown completed');
@@ -3575,6 +3589,12 @@ class EnhancedCashFlowService {
                     const accountCode = account.accountCode;
                     const balance = account.balance;
                     
+                    // Only include proper cash accounts, exclude clearing accounts
+                    if (!this.isCashAccount(accountName, accountCode)) {
+                        console.log(`🚫 Excluding non-cash account from tabular monthly cash equivalents: ${accountName} (${accountCode})`);
+                        return;
+                    }
+                    
                     // Show balance if there was cash activity in this month or if the account has a balance
                     if (monthData && (
                         monthData.net_cash_flow !== 0 ||
@@ -3595,6 +3615,12 @@ class EnhancedCashFlowService {
                             const accountName = account.accountName;
                             const accountCode = account.accountCode;
                             
+                            // Only include proper cash accounts, exclude clearing accounts
+                            if (!this.isCashAccount(accountName, accountCode)) {
+                                console.log(`🚫 Excluding non-cash account from tabular monthly consistency check: ${accountName} (${accountCode})`);
+                                return;
+                            }
+                            
                             // If this account is not already in the monthly data, add it with zero balance
                             if (!tabularMonths[month].cash_and_cash_equivalents[accountName]) {
                                 tabularMonths[month].cash_and_cash_equivalents[accountName] = {
@@ -3613,6 +3639,12 @@ class EnhancedCashFlowService {
                             const accountName = account.accountName;
                             const accountCode = account.accountCode;
                             const balance = account.balance;
+                            
+                            // Only include proper cash accounts, exclude clearing accounts
+                            if (!this.isCashAccount(accountName, accountCode)) {
+                                console.log(`🚫 Excluding non-cash account from tabular monthly fallback: ${accountName} (${accountCode})`);
+                                return;
+                            }
                             
                             if (balance && balance !== 0) {
                                 tabularMonths[month].cash_and_cash_equivalents[accountName] = {
@@ -3642,7 +3674,7 @@ class EnhancedCashFlowService {
             monthlyData[month] = {
                 operating_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 income: { total: 0 },
-                expenses: { total: 0, utilities: 0, maintenance: 0, cleaning: 0, security: 0, management: 0, transactions: [] },
+                expenses: { total: 0, transactions: [] },
                 investing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 financing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 net_cash_flow: 0,
@@ -4280,16 +4312,19 @@ class EnhancedCashFlowService {
                         if (entry.description && (
                             entry.description.toLowerCase().includes('opening balance') || 
                             entry.description.toLowerCase().includes('opening balances') ||
+                            entry.description.toLowerCase().includes('opening bank') ||
                             entry.description.toLowerCase().includes('balance adjustment') ||
+                            entry.description.toLowerCase().includes('clearing account') ||
                             entry.description.toLowerCase().includes('funds to petty cash') ||
                             entry.description.toLowerCase().includes('funds from vault') ||
                             entry.description.toLowerCase().includes('funds to vault') ||
                             entry.description.toLowerCase().includes('internal transfer') ||
+                            entry.description.toLowerCase().includes('clearing account') ||
                             entry.transactionId.startsWith('ADJ-') || 
                             entry.reference?.startsWith('ADJ-')
                         )) {
                             // This is a balance sheet adjustment or internal transfer, not income - don't count as income
-                            console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId}`);
+                            console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                             return; // Skip this transaction entry
                         }
                         
@@ -5180,11 +5215,16 @@ class EnhancedCashFlowService {
         if (cash_balance_by_account) {
             console.log('💰 Formatting cash balance by account:', cash_balance_by_account);
             Object.values(cash_balance_by_account).forEach(account => {
-                cashAndEquivalents.breakdown[account.accountName] = {
-                    account_code: account.accountCode,
-                    balance: account.balance,
-                    description: this.getCashAccountDescription(account.accountName)
-                };
+                // Only include proper cash accounts, exclude clearing accounts
+                if (this.isCashAccount(account.accountName, account.accountCode)) {
+                    cashAndEquivalents.breakdown[account.accountName] = {
+                        account_code: account.accountCode,
+                        balance: account.balance,
+                        description: this.getCashAccountDescription(account.accountName)
+                    };
+                } else {
+                    console.log(`🚫 Excluding non-cash account from cash equivalents: ${account.accountName} (${account.accountCode})`);
+                }
             });
             console.log('💰 Formatted cash and equivalents breakdown:', cashAndEquivalents.breakdown);
         } else {
@@ -5270,6 +5310,59 @@ class EnhancedCashFlowService {
         };
     }
     
+    /**
+     * Check if an account should be included in cash and cash equivalents
+     */
+    static isCashAccount(accountName, accountCode) {
+        // Exclude clearing accounts and balance adjustment accounts
+        const excludedPatterns = [
+            'clearing',
+            'opening balance',
+            'balance adjustment',
+            'adjustment',
+            'clearing account'
+        ];
+        
+        const excludedAccountNames = [
+            'Opening balance clearing account',
+            'Balance Adjustment Account',
+            'Clearing Account',
+            'Adjustment Account'
+        ];
+        
+        // Check account name for excluded patterns
+        if (accountName) {
+            const lowerName = accountName.toLowerCase();
+            for (const pattern of excludedPatterns) {
+                if (lowerName.includes(pattern)) {
+                    return false;
+                }
+            }
+            
+            // Check for exact excluded account names
+            if (excludedAccountNames.includes(accountName)) {
+                return false;
+            }
+        }
+        
+        // Check account code - only include 1000-1099 series (cash accounts)
+        // Exclude 1100+ series which are other assets (like Accounts Receivable)
+        if (accountCode) {
+            const code = accountCode.toString();
+            if (!code.startsWith('1')) {
+                return false;
+            }
+            // Exclude 1100+ series (other assets, not cash)
+            if (code.startsWith('11') || code.startsWith('12') || code.startsWith('13') || 
+                code.startsWith('14') || code.startsWith('15') || code.startsWith('16') || 
+                code.startsWith('17') || code.startsWith('18') || code.startsWith('19')) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
     /**
      * Get description for cash account names
      */
@@ -5383,6 +5476,14 @@ class EnhancedCashFlowService {
         if (cash_balance_by_account && Object.keys(cash_balance_by_account).length > 0) {
             Object.values(cash_balance_by_account).forEach(account => {
                 const accountName = account.accountName;
+                const accountCode = account.accountCode;
+                
+                // Only include proper cash accounts, exclude clearing accounts
+                if (!this.isCashAccount(accountName, accountCode)) {
+                    console.log(`🚫 Excluding non-cash account from tabular cash equivalents: ${accountName} (${accountCode})`);
+                    return;
+                }
+                
                 tabularFormat.cash_flow_statement_monthly.cash_and_cash_equivalents.accounts[accountName] = {
                     account_code: account.accountCode,
                     description: this.getCashAccountDescription(accountName),
