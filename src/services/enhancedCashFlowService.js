@@ -99,7 +99,10 @@ class EnhancedCashFlowService {
                 status: { $nin: ['reversed', 'draft'] }
             };
             
-            // Don't filter transactions by residence - we'll filter by expense residence instead
+            // Filter transactions by residence if specified
+            if (residenceId) {
+                transactionQuery.residence = new mongoose.Types.ObjectId(residenceId);
+            }
             
             if (basis === 'cash') {
                 transactionQuery.source = {
@@ -158,8 +161,8 @@ class EnhancedCashFlowService {
             
             // Calculate cash flow by activity
             const operatingActivities = this.calculateOperatingActivities(incomeBreakdown, individualExpenses);
-            const investingActivities = this.calculateInvestingActivities(transactionEntries);
-            const financingActivities = this.calculateFinancingActivities(transactionEntries);
+            const investingActivities = this.calculateInvestingActivities(transactionEntries, residenceId);
+            const financingActivities = this.calculateFinancingActivities(transactionEntries, residenceId);
             
             // Calculate net cash flow
             const netOperatingCashFlow = operatingActivities.cash_received_from_customers - 
@@ -1392,6 +1395,30 @@ class EnhancedCashFlowService {
         const processedTransactions = new Set();
         const processedExpenses = new Set(); // Track processed expense IDs
         
+        // Filter transactions by residence if specified
+        let filteredTransactionEntries = transactionEntries;
+        if (residenceId) {
+            filteredTransactionEntries = transactionEntries.filter(entry => {
+                // Check if transaction has direct residence match
+                if (entry.residence && entry.residence._id && 
+                    entry.residence._id.toString() === residenceId.toString()) {
+                    return true;
+                }
+                
+                // Check if transaction is linked to an expense for this residence
+                if (transactionExpenseMapping) {
+                    const linkedExpense = transactionExpenseMapping.transactionToExpense.get(entry._id.toString());
+                    if (linkedExpense && linkedExpense.residence && 
+                        linkedExpense.residence._id.toString() === residenceId.toString()) {
+                        return true;
+                    }
+                }
+                
+                return false;
+            });
+            console.log(`🏠 Filtered ${filteredTransactionEntries.length} transactions for residence ${residenceId} out of ${transactionEntries.length} total`);
+        }
+        
         // Helper function to get residence name from transaction entry or related expense
         const getResidenceName = (entry, expenses) => {
             let residenceName = entry.residence?.name || 'Unknown';
@@ -1426,14 +1453,8 @@ class EnhancedCashFlowService {
             return residenceName;
         };
         
-        transactionEntries.forEach(entry => {
-            // Use the comprehensive mapping to filter transactions by residence
-            if (transactionExpenseMapping && residenceId) {
-                // Check if this transaction should be included based on the mapping
-                if (!transactionExpenseMapping.residenceFilteredTransactions.has(entry._id.toString())) {
-                    return; // Skip this transaction
-                }
-            }
+        filteredTransactionEntries.forEach(entry => {
+            // Transactions are already filtered by residence above
             
             if (entry.entries && entry.entries.length > 0) {
                 // Look for Cash/Bank credits (expenses paid)
@@ -1845,6 +1866,30 @@ class EnhancedCashFlowService {
         const processedTransactions = new Set();
         const processedExpenses = new Set();
         
+        // Filter transactions by residence if specified
+        let filteredTransactionEntries = transactionEntries;
+        if (residenceId) {
+            filteredTransactionEntries = transactionEntries.filter(entry => {
+                // Check if transaction has direct residence match
+                if (entry.residence && entry.residence._id && 
+                    entry.residence._id.toString() === residenceId.toString()) {
+                    return true;
+                }
+                
+                // Check if transaction is linked to an expense for this residence
+                if (transactionExpenseMapping) {
+                    const linkedExpense = transactionExpenseMapping.transactionToExpense.get(entry._id.toString());
+                    if (linkedExpense && linkedExpense.residence && 
+                        linkedExpense.residence._id.toString() === residenceId.toString()) {
+                        return true;
+                    }
+                }
+                
+                return false;
+            });
+            console.log(`🏠 Individual expenses - Filtered ${filteredTransactionEntries.length} transactions for residence ${residenceId} out of ${transactionEntries.length} total`);
+        }
+        
         // Helper function to get residence name
         const getResidenceName = (entry, expenses) => {
             let residenceName = entry.residence?.name || 'Unknown';
@@ -1877,13 +1922,8 @@ class EnhancedCashFlowService {
             return description || 'Unnamed Expense';
         };
         
-        transactionEntries.forEach(entry => {
-            // Use mapping to filter transactions by residence if needed
-            if (transactionExpenseMapping && residenceId) {
-                if (!transactionExpenseMapping.residenceFilteredTransactions.has(entry._id.toString())) {
-                    return;
-                }
-            }
+        filteredTransactionEntries.forEach(entry => {
+            // Transactions are already filtered by residence above
             
             if (entry.entries && entry.entries.length > 0) {
                 // Look for ALL Cash/Bank credits (expenses paid) - not just the first one
@@ -2004,11 +2044,20 @@ class EnhancedCashFlowService {
     /**
      * Calculate investing activities
      */
-    static calculateInvestingActivities(transactionEntries) {
+    static calculateInvestingActivities(transactionEntries, residenceId = null) {
         let purchase_of_equipment = 0;
         let purchase_of_buildings = 0;
         
-        transactionEntries.forEach(entry => {
+        // Filter transactions by residence if specified
+        let filteredEntries = transactionEntries;
+        if (residenceId) {
+            filteredEntries = transactionEntries.filter(entry => {
+                return entry.residence && entry.residence._id && 
+                       entry.residence._id.toString() === residenceId.toString();
+            });
+        }
+        
+        filteredEntries.forEach(entry => {
             if (entry.entries && entry.entries.length > 0) {
                 entry.entries.forEach(line => {
                     const accountName = line.accountName;
@@ -2036,11 +2085,20 @@ class EnhancedCashFlowService {
     /**
      * Calculate financing activities
      */
-    static calculateFinancingActivities(transactionEntries) {
+    static calculateFinancingActivities(transactionEntries, residenceId = null) {
         let owners_contribution = 0;
         let loan_proceeds = 0;
         
-        transactionEntries.forEach(entry => {
+        // Filter transactions by residence if specified
+        let filteredEntries = transactionEntries;
+        if (residenceId) {
+            filteredEntries = transactionEntries.filter(entry => {
+                return entry.residence && entry.residence._id && 
+                       entry.residence._id.toString() === residenceId.toString();
+            });
+        }
+        
+        filteredEntries.forEach(entry => {
             if (entry.entries && entry.entries.length > 0) {
                 entry.entries.forEach(line => {
                     const accountName = line.accountName;

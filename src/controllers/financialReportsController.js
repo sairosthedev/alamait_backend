@@ -1488,11 +1488,13 @@ class FinancialReportsController {
             
             let cashFlowStatement;
             if (residence) {
-                // Use residence-filtered method
-                cashFlowStatement = await FinancialReportingService.generateResidenceFilteredCashFlowStatement(period, residence, basis);
+                // Use enhanced cash flow service with residence filtering
+                const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
+                cashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             } else {
-                // Use regular method
-                cashFlowStatement = await FinancialReportingService.generateMonthlyCashFlow(period, basis);
+                // Use enhanced cash flow service without residence filter
+                const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
+                cashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, null);
             }
             
             res.json({
@@ -1582,6 +1584,7 @@ class FinancialReportsController {
             }
             
             // Use EnhancedCashFlowService for better residence filtering
+            const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
             const cashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             
             res.json({
