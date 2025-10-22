@@ -18,6 +18,55 @@ const mongoose = require('mongoose');
 class EnhancedCashFlowService {
     
     /**
+     * Check if a transaction is a balance sheet adjustment (not actual cash flow)
+     * @param {Object} entry - Transaction entry
+     * @returns {boolean} True if it's a balance sheet adjustment
+     */
+    static isBalanceSheetAdjustment(entry) {
+        if (!entry.description) return false;
+        
+        const desc = entry.description.toLowerCase();
+        const reference = entry.reference || '';
+        const transactionId = entry.transactionId || '';
+        
+        // Check for balance sheet adjustment patterns
+        const balanceSheetPatterns = [
+            'opening balance',
+            'opening balances', 
+            'opening bank',
+            'balance adjustment',
+            'take on balances',
+            'take on balances from excel',
+            'funds to petty cash',
+            'funds from vault',
+            'funds to vault',
+            'internal transfer',
+            'clearing account',
+            'journal entry',
+            'balance sheet',
+            'account reclassification',
+            'account transfer'
+        ];
+        
+        // Check description patterns
+        const hasBalanceSheetPattern = balanceSheetPatterns.some(pattern => 
+            desc.includes(pattern)
+        );
+        
+        // Check transaction ID patterns
+        const hasAdjustmentId = transactionId.startsWith('ADJ-') || 
+                               transactionId.startsWith('JE-') ||
+                               transactionId.startsWith('BS-');
+        
+        // Check reference patterns  
+        const hasAdjustmentRef = reference.startsWith('ADJ-') ||
+                                reference.startsWith('JE-') ||
+                                reference.startsWith('BS-');
+        
+        return hasBalanceSheetPattern || hasAdjustmentId || hasAdjustmentRef;
+    }
+    
+    /**
      * Generate comprehensive detailed cash flow statement
      * @param {string} period - Year (e.g., "2024") or Month (e.g., "2025-09")
      * @param {string} basis - "cash" or "accrual"
@@ -639,20 +688,8 @@ class EnhancedCashFlowService {
                         });
                     }
                     
-                    // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
-                    if (entry.description && (
-                        entry.description.toLowerCase().includes('opening balance') || 
-                        entry.description.toLowerCase().includes('opening balances') ||
-                        entry.description.toLowerCase().includes('opening bank') ||
-                        entry.description.toLowerCase().includes('balance adjustment') ||
-                        entry.description.toLowerCase().includes('funds to petty cash') ||
-                        entry.description.toLowerCase().includes('funds from vault') ||
-                        entry.description.toLowerCase().includes('funds to vault') ||
-                        entry.description.toLowerCase().includes('internal transfer') ||
-                        entry.description.toLowerCase().includes('clearing account') ||
-                        entry.transactionId.startsWith('ADJ-') || 
-                        entry.reference?.startsWith('ADJ-')
-                    )) {
+                        // Check for balance sheet adjustments (exclude from income)
+                        if (this.isBalanceSheetAdjustment(entry)) {
                         // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                         console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from income: ${incomeAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                         return; // Skip this transaction entry
@@ -1193,20 +1230,8 @@ class EnhancedCashFlowService {
                                 description: entry.description || 'Utilities Income'
                             });
                         } else {
-                            // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
-                            if (entry.description && (
-                                entry.description.toLowerCase().includes('opening balance') || 
-                                entry.description.toLowerCase().includes('opening balances') ||
-                                entry.description.toLowerCase().includes('opening bank') ||
-                                entry.description.toLowerCase().includes('balance adjustment') ||
-                                entry.description.toLowerCase().includes('funds to petty cash') ||
-                                entry.description.toLowerCase().includes('funds from vault') ||
-                                entry.description.toLowerCase().includes('funds to vault') ||
-                                entry.description.toLowerCase().includes('internal transfer') ||
-                                entry.description.toLowerCase().includes('clearing account') ||
-                                entry.transactionId.startsWith('ADJ-') || 
-                                entry.reference?.startsWith('ADJ-')
-                            )) {
+                        // Check for balance sheet adjustments (exclude from income)
+                        if (this.isBalanceSheetAdjustment(entry)) {
                                 // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                                 console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${credit} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                                 return; // Skip this transaction entry
@@ -2613,20 +2638,8 @@ class EnhancedCashFlowService {
                         } else if (monthlyCategory === 'utilities') {
                             months[monthKey].income.utilities += incomeAmount;
                         } else {
-                            // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
-                            if (entry.description && (
-                                entry.description.toLowerCase().includes('opening balance') || 
-                                entry.description.toLowerCase().includes('opening balances') ||
-                                entry.description.toLowerCase().includes('opening bank') ||
-                                entry.description.toLowerCase().includes('balance adjustment') ||
-                                entry.description.toLowerCase().includes('funds to petty cash') ||
-                                entry.description.toLowerCase().includes('funds from vault') ||
-                                entry.description.toLowerCase().includes('funds to vault') ||
-                                entry.description.toLowerCase().includes('internal transfer') ||
-                                entry.description.toLowerCase().includes('clearing account') ||
-                                entry.transactionId.startsWith('ADJ-') || 
-                                entry.reference?.startsWith('ADJ-')
-                            )) {
+                        // Check for balance sheet adjustments (exclude from income)
+                        if (this.isBalanceSheetAdjustment(entry)) {
                                 // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                                 console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${incomeAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                                 return; // Skip this transaction entry
@@ -3278,9 +3291,19 @@ class EnhancedCashFlowService {
                 const accountType = line.accountType;
 
                 // INCOME: Debit to Cash accounts (1000 series) - money received
+                // BUT EXCLUDE balance sheet adjustments and internal transfers
                 if (isDebit && accountCode && accountCode.startsWith('1') && 
                     (accountName?.toLowerCase().includes('cash') || accountName?.toLowerCase().includes('bank')) &&
                     !processedTransactions.has(entry.transactionId + '_income')) {
+                    
+                    // Check if this is a balance sheet adjustment (NOT actual cash inflow)
+                    if (this.isBalanceSheetAdjustment(entry)) {
+                        // This is a balance sheet adjustment, not actual cash inflow - skip it
+                        console.log(`💰 Balance sheet adjustment excluded from cash inflow: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                        return; // Skip this transaction entry
+                    }
+                    
+                    // This is actual cash inflow
                     monthlyData[monthName].operating_activities.inflows += amount;
                     monthlyData[monthName].income.total += amount;
                     processedTransactions.add(entry.transactionId + '_income');
@@ -3329,21 +3352,8 @@ class EnhancedCashFlowService {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
                     } else {
-                        // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
-                        if (entry.description && (
-                            entry.description.toLowerCase().includes('opening balance') || 
-                            entry.description.toLowerCase().includes('opening balances') ||
-                            entry.description.toLowerCase().includes('opening bank') ||
-                            entry.description.toLowerCase().includes('balance adjustment') ||
-                            entry.description.toLowerCase().includes('clearing account') ||
-                            entry.description.toLowerCase().includes('funds to petty cash') ||
-                            entry.description.toLowerCase().includes('funds from vault') ||
-                            entry.description.toLowerCase().includes('funds to vault') ||
-                            entry.description.toLowerCase().includes('internal transfer') ||
-                            entry.description.toLowerCase().includes('clearing account') ||
-                            entry.transactionId.startsWith('ADJ-') || 
-                            entry.reference?.startsWith('ADJ-')
-                        )) {
+                        // Check for balance sheet adjustments (exclude from income)
+                        if (this.isBalanceSheetAdjustment(entry)) {
                             // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                             console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                             return; // Skip this transaction entry
@@ -3380,21 +3390,8 @@ class EnhancedCashFlowService {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
                     } else {
-                        // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
-                        if (entry.description && (
-                            entry.description.toLowerCase().includes('opening balance') || 
-                            entry.description.toLowerCase().includes('opening balances') ||
-                            entry.description.toLowerCase().includes('opening bank') ||
-                            entry.description.toLowerCase().includes('balance adjustment') ||
-                            entry.description.toLowerCase().includes('clearing account') ||
-                            entry.description.toLowerCase().includes('funds to petty cash') ||
-                            entry.description.toLowerCase().includes('funds from vault') ||
-                            entry.description.toLowerCase().includes('funds to vault') ||
-                            entry.description.toLowerCase().includes('internal transfer') ||
-                            entry.description.toLowerCase().includes('clearing account') ||
-                            entry.transactionId.startsWith('ADJ-') || 
-                            entry.reference?.startsWith('ADJ-')
-                        )) {
+                        // Check for balance sheet adjustments (exclude from income)
+                        if (this.isBalanceSheetAdjustment(entry)) {
                             // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                             console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                             return; // Skip this transaction entry
@@ -3406,8 +3403,16 @@ class EnhancedCashFlowService {
                 }
 
                 // EXPENSES: Credit to Cash accounts (1000 series) - money paid out
+                // BUT EXCLUDE balance sheet adjustments and internal transfers
                 if (isCredit && accountCode && accountCode.startsWith('1') && 
                     (accountName?.toLowerCase().includes('cash') || accountName?.toLowerCase().includes('bank'))) {
+                    
+                    // Check if this is a balance sheet adjustment (NOT actual cash outflow)
+                    if (this.isBalanceSheetAdjustment(entry)) {
+                        // This is a balance sheet adjustment, not actual cash outflow - skip it
+                        console.log(`💰 Balance sheet adjustment excluded from cash outflow: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                        return; // Skip this transaction entry
+                    }
                     
                     // Skip internal cash transfers and movements between cash accounts
                     const desc = entry.description?.toLowerCase() || '';
@@ -4308,21 +4313,8 @@ class EnhancedCashFlowService {
                         months[monthKey].operating_activities.breakdown.advance_payments.amount += amount;
                         months[monthKey].operating_activities.breakdown.advance_payments.transactions.push(entry);
                     } else {
-                        // Check for opening balance, balance adjustments, and internal transfers first (exclude from income)
-                        if (entry.description && (
-                            entry.description.toLowerCase().includes('opening balance') || 
-                            entry.description.toLowerCase().includes('opening balances') ||
-                            entry.description.toLowerCase().includes('opening bank') ||
-                            entry.description.toLowerCase().includes('balance adjustment') ||
-                            entry.description.toLowerCase().includes('clearing account') ||
-                            entry.description.toLowerCase().includes('funds to petty cash') ||
-                            entry.description.toLowerCase().includes('funds from vault') ||
-                            entry.description.toLowerCase().includes('funds to vault') ||
-                            entry.description.toLowerCase().includes('internal transfer') ||
-                            entry.description.toLowerCase().includes('clearing account') ||
-                            entry.transactionId.startsWith('ADJ-') || 
-                            entry.reference?.startsWith('ADJ-')
-                        )) {
+                        // Check for balance sheet adjustments (exclude from income)
+                        if (this.isBalanceSheetAdjustment(entry)) {
                             // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                             console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                             return; // Skip this transaction entry
@@ -5320,14 +5312,22 @@ class EnhancedCashFlowService {
             'opening balance',
             'balance adjustment',
             'adjustment',
-            'clearing account'
+            'clearing account',
+            'balance sheet',
+            'journal entry',
+            'account transfer',
+            'reclassification'
         ];
         
         const excludedAccountNames = [
             'Opening balance clearing account',
             'Balance Adjustment Account',
             'Clearing Account',
-            'Adjustment Account'
+            'Adjustment Account',
+            'Journal Entry Account',
+            'Balance Sheet Account',
+            'Account Transfer Account',
+            'Reclassification Account'
         ];
         
         // Check account name for excluded patterns
@@ -5352,6 +5352,20 @@ class EnhancedCashFlowService {
             if (!code.startsWith('1')) {
                 return false;
             }
+            
+            // Exclude specific non-cash accounts that have 10xx codes but aren't cash
+            const excludedAccountCodes = [
+                '10005', // Opening balance clearing account
+                '10006', // Any other clearing accounts
+                '10007', // Any other adjustment accounts
+                '10008', // Any other balance sheet accounts
+                '10009'  // Any other non-cash accounts
+            ];
+            
+            if (excludedAccountCodes.includes(code)) {
+                return false;
+            }
+            
             // Exclude 1100+ series (other assets, not cash)
             if (code.startsWith('11') || code.startsWith('12') || code.startsWith('13') || 
                 code.startsWith('14') || code.startsWith('15') || code.startsWith('16') || 
