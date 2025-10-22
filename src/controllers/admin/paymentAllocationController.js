@@ -26,14 +26,21 @@ const getStudentARBalances = async (req, res) => {
         if (!studentId) {
             return res.status(400).json({
                 success: false,
-                message: 'Student ID is required'
+                message: 'User ID is required'
             });
         }
 
-        console.log(`🔍 Getting AR balances for student: ${studentId}`);
+        console.log(`🔍 Getting AR balances for user: ${studentId}`);
 
-        // Get student's AR balances using the enhanced service
+        // Get user's AR balances using the enhanced service
+        // Force fresh data fetch - no caching
         const arBalances = await EnhancedPaymentAllocationService.getDetailedOutstandingBalances(studentId);
+        
+        console.log(`📊 AR Balances result:`, {
+            found: arBalances ? arBalances.length : 0,
+            isEmpty: !arBalances || arBalances.length === 0,
+            studentId
+        });
 
         if (!arBalances || arBalances.length === 0) {
             return res.status(200).json({

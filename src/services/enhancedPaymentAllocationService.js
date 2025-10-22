@@ -22,22 +22,22 @@ class EnhancedPaymentAllocationService {
       console.log('🚀 ENHANCED SMART FIFO PAYMENT ALLOCATION:', paymentData.paymentId);
       console.log('📋 Payment Data:', JSON.stringify(paymentData, null, 2));
       
-      const { studentId, totalAmount, payments } = paymentData;
+      const { studentId: userId, totalAmount, payments } = paymentData;
       
       // 🆕 FIX: Clear any potential caching issues by adding a small delay
       // This ensures we get the latest data from the database
       await new Promise(resolve => setTimeout(resolve, 100));
       
-      if (!studentId || !totalAmount || !payments || !payments.length) {
-        throw new Error('Missing required payment data: studentId, totalAmount, or payments array');
+      if (!userId || !totalAmount || !payments || !payments.length) {
+        throw new Error('Missing required payment data: userId, totalAmount, or payments array');
       }
       
-      console.log(`🎯 Processing payment for student: ${studentId}, total amount: $${totalAmount}`);
+      console.log(`🎯 Processing payment for user: ${userId}, total amount: $${totalAmount}`);
       
       // 1. Get current debtor status and once-off charge flags
-      const debtor = await this.getDebtorStatus(studentId);
+      const debtor = await this.getDebtorStatus(userId);
       if (!debtor) {
-        throw new Error(`Debtor not found for student: ${studentId}`);
+        throw new Error(`Debtor not found for user: ${userId}`);
       }
       
       console.log(`📊 Current debtor status:`);
@@ -46,7 +46,7 @@ class EnhancedPaymentAllocationService {
       console.log(`   Deferred Income: $${debtor.deferredIncome?.totalAmount || 0}`);
       
       // 2. Get detailed outstanding balances by month (FIFO order)
-      const outstandingBalances = await this.getDetailedOutstandingBalances(studentId);
+      const outstandingBalances = await this.getDetailedOutstandingBalances(userId);
       
       if (!outstandingBalances || outstandingBalances.length === 0) {
         console.log('ℹ️ No outstanding balances found for student - treating all payments as advance payments');
@@ -71,7 +71,7 @@ class EnhancedPaymentAllocationService {
           console.log(`💳 Processing ${paymentType} payment as advance: $${totalAmount}`);
           
           const advanceResult = await this.handleAdvancePayment(
-            paymentData.paymentId, studentId, totalAmount, paymentData, paymentType
+            paymentData.paymentId, userId, totalAmount, paymentData, paymentType
           );
           allocationResults.push(advanceResult);
           totalAllocated += totalAmount;
@@ -80,7 +80,7 @@ class EnhancedPaymentAllocationService {
         // Create allocation record
         const allocationRecord = await this.createAllocationRecord(
           paymentData.paymentId,
-          studentId,
+          userId,
           allocationResults,
           paymentData
         );
@@ -184,7 +184,7 @@ class EnhancedPaymentAllocationService {
             // If deposit already paid and extra received, post directly to 2020 (increase liability), no deferred income
             if (paymentType === 'deposit' && remainingAmount > 0) {
               const advanceResult = await this.handleAdvancePayment(
-                paymentData.paymentId, studentId, remainingAmount, paymentData, paymentType
+                paymentData.paymentId, userId, remainingAmount, paymentData, paymentType
               );
               allocationResults.push(advanceResult);
               totalAllocated += remainingAmount;
@@ -200,7 +200,7 @@ class EnhancedPaymentAllocationService {
             // If deposit already paid and extra received, post directly to 2020 (increase liability), no deferred income
             if (paymentType === 'deposit' && remainingAmount > 0) {
               const advanceResult = await this.handleAdvancePayment(
-                paymentData.paymentId, studentId, remainingAmount, paymentData, paymentType
+                paymentData.paymentId, userId, remainingAmount, paymentData, paymentType
               );
               allocationResults.push(advanceResult);
               totalAllocated += remainingAmount;
@@ -225,7 +225,7 @@ class EnhancedPaymentAllocationService {
               // If no actual month exists for admin fee settlement, treat as advance admin payment
               console.log(`🎯 No actual month found for admin fee settlement in ${paymentMonthKey}. Treating as advance admin payment.`);
               const advanceResult = await this.handleAdvancePayment(
-                paymentData.paymentId, studentId, remainingAmount, paymentData, 'advance_admin'
+                paymentData.paymentId, userId, remainingAmount, paymentData, 'advance_admin'
               );
               allocationResults.push(advanceResult);
               totalAllocated += remainingAmount;
@@ -246,7 +246,7 @@ class EnhancedPaymentAllocationService {
               // If no actual month exists for deposit settlement, treat as advance payment
               console.log(`🎯 No actual month found for deposit settlement in ${paymentMonthKey}. Treating as advance payment.`);
               const advanceResult = await this.handleAdvancePayment(
-                paymentData.paymentId, studentId, remainingAmount, paymentData, paymentType
+                paymentData.paymentId, userId, remainingAmount, paymentData, paymentType
               );
               allocationResults.push(advanceResult);
               totalAllocated += remainingAmount;
@@ -284,7 +284,7 @@ class EnhancedPaymentAllocationService {
               // Create payment allocation transaction with proper double-entry accounting
               const paymentTransaction = await this.createPaymentAllocationTransaction(
                 paymentData.paymentId,
-                studentId,
+                userId,
                 amountToAllocate,
                 { ...paymentData, paymentType, studentName: paymentData.studentName || 'Student' },
                 paymentType,
@@ -341,7 +341,7 @@ class EnhancedPaymentAllocationService {
                 // Create payment allocation transaction with proper double-entry accounting
                 const paymentTransaction = await this.createPaymentAllocationTransaction(
                   paymentData.paymentId,
-                  studentId,
+                  userId,
                   remainingAmount,
                   { ...paymentData, paymentType, studentName: paymentData.studentName || 'Student' },
                   paymentType,
@@ -383,8 +383,8 @@ class EnhancedPaymentAllocationService {
                 const leaseStartAccrual = await TransactionEntry.findOne({
                   source: 'rental_accrual',
                   'metadata.type': 'lease_start',
-                  'metadata.studentId': studentId,
-                  'entries.accountCode': { $regex: `^1100-${studentId}` }
+                  'metadata.studentId': userId,
+                  'entries.accountCode': { $regex: `^1100-${userId}` }
                 }).sort({ date: 1 });
                 if (leaseStartAccrual && remainingAmount > 0) {
                   const lsDate = new Date(leaseStartAccrual.date);
@@ -393,7 +393,7 @@ class EnhancedPaymentAllocationService {
                   // Create payment allocation transaction with proper double-entry accounting
                   const paymentTransaction = await this.createPaymentAllocationTransaction(
                     paymentData.paymentId,
-                    studentId,
+                    userId,
                     remainingAmount,
                     { ...paymentData, paymentType, studentName: paymentData.studentName || 'Student' },
                     paymentType,
@@ -465,7 +465,7 @@ class EnhancedPaymentAllocationService {
               // Create payment allocation transaction with proper double-entry accounting
               const paymentTransaction = await this.createPaymentAllocationTransaction(
                 paymentData.paymentId,
-                studentId,
+                userId,
                 amountToAllocate,
                 { ...paymentData, paymentType: 'rent', studentName: paymentData.studentName || 'Student' },
                 'rent',
@@ -514,7 +514,7 @@ class EnhancedPaymentAllocationService {
           if (remainingAmount > 0) {
             console.log(`💳 Remaining $${remainingAmount} rent will be treated as advance payment to Deferred Income`);
             const advanceResult = await this.handleAdvancePayment(
-              paymentData.paymentId, studentId, remainingAmount, paymentData, 'rent'
+              paymentData.paymentId, userId, remainingAmount, paymentData, 'rent'
             );
             allocationResults.push(advanceResult);
             totalAllocated += remainingAmount;
@@ -566,44 +566,92 @@ class EnhancedPaymentAllocationService {
   /**
    * 🔍 Get detailed outstanding balances by month and payment type
    * Tracks rent, admin fees, and deposits separately for proper FIFO allocation
-   * @param {string} studentId - Student ID
+   * @param {string} userId - User ID (should be the actual User._id)
    * @returns {Array} Array of outstanding balance objects sorted by date (oldest first)
    */
-  static async getDetailedOutstandingBalances(studentId) {
+  static async getDetailedOutstandingBalances(userId) {
     try {
-      console.log(`🔍 Getting detailed outstanding balances for student: ${studentId}`);
+      console.log(`🔍 Getting detailed outstanding balances for user: ${userId}`);
       
-      // Get all transactions for this specific student
-      const studentIdString = String(studentId);
-      // Resolve debtor to get exact AR account code
+      // Get all transactions for this specific user
+      const userIdString = String(userId);
+      console.log(`🔍 Processing user ID: ${userIdString} (type: ${typeof userId})`);
+      
+      // Resolve debtor to get exact AR account code - use User ID consistently
       const Debtor = require('../models/Debtor');
-      const debtorDoc = await Debtor.findOne({ user: studentIdString }).select('accountCode');
-      const arAccountCode = debtorDoc?.accountCode || `1100-${studentIdString}`;
+      const debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode');
+      const arAccountCode = debtorDoc?.accountCode || `1100-${userIdString}`;
+      
+      console.log(`🔍 Debtor found: ${!!debtorDoc}, AR Account Code: ${arAccountCode}`);
       
       // 🆕 FIX: Force fresh data by using lean() and ensuring we get the latest transactions
-      const allStudentTransactions = await TransactionEntry.find({
+      // Try multiple approaches to find user transactions - use User ID consistently
+      const allUserTransactions = await TransactionEntry.find({
         $or: [
           { 'entries.accountCode': arAccountCode },
-          { 'metadata.studentId': studentIdString },
-          { 'sourceId': studentIdString }
+          { 'entries.accountCode': { $regex: `^1100-${userIdString}` }},
+          { 'metadata.userId': userIdString },
+          { 'metadata.studentId': userIdString }, // Keep for backward compatibility
+          { 'sourceId': userIdString },
+          { 'reference': { $regex: userIdString }},
+          { 'description': { $regex: userIdString, $options: 'i' }}
         ]
       }).lean().sort({ date: 1 });
 
-      console.log(`📊 Found ${allStudentTransactions.length} total transactions for student ${studentId}`);
+      console.log(`📊 Found ${allUserTransactions.length} total transactions for user ${userId}`);
+      console.log(`🔍 AR Account Code: ${arAccountCode}`);
+      console.log(`🔍 User ID String: ${userIdString}`);
       
-      // If no transactions found, return empty array
-      if (allStudentTransactions.length === 0) {
-        console.log(`ℹ️ No transactions found for student ${studentId}, returning empty array`);
-        return [];
+      // Debug: Show first few transactions if any found
+      if (allUserTransactions.length > 0) {
+        console.log(`🔍 Sample transactions:`);
+        allUserTransactions.slice(0, 3).forEach((tx, index) => {
+          console.log(`  ${index + 1}. ${tx.transactionId} - ${tx.description}`);
+          if (tx.entries && tx.entries.length > 0) {
+            tx.entries.forEach(entry => {
+              if (entry.accountCode && entry.accountCode.includes(userIdString)) {
+                console.log(`     Entry: ${entry.accountCode} ${entry.accountType} ${entry.debit}/${entry.credit}`);
+              }
+            });
+          }
+        });
+      }
+      
+      // If no transactions found, try alternative approaches
+      if (allUserTransactions.length === 0) {
+        console.log(`ℹ️ No transactions found with primary query, trying alternative approaches...`);
+        
+        // Try finding transactions by student ID in different fields
+        const alternativeQuery = await TransactionEntry.find({
+          $or: [
+            { 'metadata.studentId': userIdString },
+            { 'metadata.userId': userIdString },
+            { 'sourceId': userIdString },
+            { 'reference': userIdString },
+            { 'description': { $regex: userIdString, $options: 'i' }},
+            { 'entries.description': { $regex: userIdString, $options: 'i' }}
+          ]
+        }).lean().sort({ date: 1 });
+        
+        console.log(`🔍 Alternative query found ${alternativeQuery.length} transactions`);
+        
+        if (alternativeQuery.length === 0) {
+          console.log(`ℹ️ No transactions found for user ${userId} with any approach, returning empty array`);
+          return [];
+        } else {
+          console.log(`✅ Found ${alternativeQuery.length} transactions with alternative query`);
+          // Use the alternative results
+          allUserTransactions.push(...alternativeQuery);
+        }
       }
       
       // Separate different types of transactions
-      const accruals = allStudentTransactions.filter(tx => {
+      const accruals = allUserTransactions.filter(tx => {
         // For lease start transactions, also check if they have the correct account code
         if (tx.metadata?.type === 'lease_start' || tx.source === 'lease_start') {
           // Check if any entry has the correct student account code
           const hasStudentAccount = tx.entries.some(entry => 
-            entry.accountCode === `1100-${studentIdString}`
+            entry.accountCode === `1100-${userIdString}`
           );
           if (hasStudentAccount) {
             return true;
@@ -631,19 +679,19 @@ class EnhancedPaymentAllocationService {
       });
       
       // 🆕 Include payment and allocation transactions linked by studentId, sourceId, or AR account credit
-      const payments = allStudentTransactions.filter(tx => {
+      const payments = allUserTransactions.filter(tx => {
         const isAllocation = tx.metadata?.allocationType === 'payment_allocation';
         const isPayment = tx.source === 'payment';
-        const matchesStudent = tx.metadata?.studentId?.toString() === studentIdString || (tx.sourceId && tx.sourceId.toString() === studentIdString);
+        const matchesStudent = tx.metadata?.studentId?.toString() === userIdString || tx.metadata?.userId?.toString() === userIdString || (tx.sourceId && tx.sourceId.toString() === userIdString);
         const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
         return isAllocation || (isPayment && (matchesStudent || touchesAR));
       });
       
       // 🆕 Include manual transactions (negotiations, reversals, etc.) that affect AR
-      const manualAdjustments = allStudentTransactions.filter(tx => {
+      const manualAdjustments = allUserTransactions.filter(tx => {
         const isManual = tx.source === 'manual';
         const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => e.accountCode === arAccountCode && e.accountType === 'Asset');
-        const matchesStudent = tx.metadata?.studentId?.toString() === studentIdString;
+        const matchesStudent = tx.metadata?.studentId?.toString() === userIdString || tx.metadata?.userId?.toString() === userIdString;
         return isManual && (touchesAR || matchesStudent);
       });
       
@@ -769,7 +817,7 @@ class EnhancedPaymentAllocationService {
       
              // 🆕 FIXED: Only work with actual accruals that exist for this specific student
        // Do NOT create virtual months as they don't have real AR transactions to allocate to
-       console.log(`📊 Working with ${Object.keys(monthlyOutstanding).length} actual accrual months for student ${studentId}`);
+       console.log(`📊 Working with ${Object.keys(monthlyOutstanding).length} actual accrual months for user ${userId}`);
       
       // 🆕 Process payments: subtract by monthSettled; fallback to FIFO if missing
       payments.forEach(payment => {
@@ -835,7 +883,7 @@ class EnhancedPaymentAllocationService {
         } else {
           // For security deposit reversals, try to find the original transaction
           if (adjustment.metadata?.type === 'security_deposit_reversal' && adjustment.metadata?.originalTransactionId) {
-            const originalTransaction = allStudentTransactions.find(t => t.transactionId === adjustment.metadata.originalTransactionId);
+            const originalTransaction = allUserTransactions.find(t => t.transactionId === adjustment.metadata.originalTransactionId);
             if (originalTransaction && originalTransaction.metadata?.accrualMonth && originalTransaction.metadata?.accrualYear) {
               monthKey = `${originalTransaction.metadata.accrualYear}-${String(originalTransaction.metadata.accrualMonth).padStart(2, '0')}`;
             }
@@ -902,7 +950,7 @@ class EnhancedPaymentAllocationService {
       }).filter(month => month.totalOutstanding > 0) // Only show months with outstanding balances
         .sort((a, b) => new Date(a.date) - new Date(b.date)); // Sort by date (oldest first)
       
-      console.log(`📅 Detailed outstanding balances for student ${studentId} (FIFO order):`);
+      console.log(`📅 Detailed outstanding balances for user ${userId} (FIFO order):`);
       outstandingArray.forEach(month => {
         console.log(`  ${month.monthKey} (${month.monthName}):`);
         console.log(`    Rent: $${month.rent.outstanding.toFixed(2)}`);
@@ -941,16 +989,16 @@ class EnhancedPaymentAllocationService {
       
       // 🆕 VERIFICATION: Ensure the AR transaction belongs to the correct student
       const hasStudentAccount = arTransaction.entries.some(entry => 
-        entry.accountCode === `1100-${paymentData.studentId}`
+        entry.accountCode === `1100-${userId}`
       );
       
       if (!hasStudentAccount) {
-        throw new Error(`AR transaction ${transactionId} does not belong to student ${paymentData.studentId}`);
+        throw new Error(`AR transaction ${transactionId} does not belong to user ${userId}`);
       }
       
       console.log(`✅ Found AR transaction: ${arTransaction._id}`);
       console.log(`📝 AR transaction description: ${arTransaction.description}`);
-      console.log(`✅ Verified AR transaction belongs to student: ${paymentData.studentId}`);
+      console.log(`✅ Verified AR transaction belongs to user: ${userId}`);
       
       // Determine the correct target month for allocation (prefer explicit monthKey from caller)
       let monthKey = paymentData.monthKey;
@@ -1040,7 +1088,7 @@ class EnhancedPaymentAllocationService {
    * @param {string} paymentType - Type of advance payment
    * @returns {Object} Advance payment transaction
    */
-  static async createAdvancePaymentTransaction(paymentId, studentId, amount, paymentData, paymentType) {
+  static async createAdvancePaymentTransaction(paymentId, userId, amount, paymentData, paymentType) {
     try {
       console.log(`💳 Creating advance payment transaction for $${amount} ${paymentType}`);
       
@@ -1133,7 +1181,7 @@ class EnhancedPaymentAllocationService {
    * @param {string} arTransactionId - AR transaction being settled
    * @returns {Object} Payment allocation transaction
    */
-  static async createPaymentAllocationTransaction(paymentId, studentId, amount, paymentData, paymentType, monthSettled, arTransactionId) {
+  static async createPaymentAllocationTransaction(paymentId, userId, amount, paymentData, paymentType, monthSettled, arTransactionId) {
     try {
       console.log(`💳 Creating payment allocation transaction for $${amount} ${paymentType} to ${monthSettled}`);
       
@@ -1218,7 +1266,7 @@ class EnhancedPaymentAllocationService {
         
         await DebtorTransactionSyncService.updateDebtorFromPayment(
           paymentTransaction,
-          studentId,
+          userId,
           amount,
           monthKey,
           {
@@ -1254,10 +1302,10 @@ class EnhancedPaymentAllocationService {
    * @param {string} studentId - Student ID
    * @returns {Object} Debtor document with once-off charge flags
    */
-  static async getDebtorStatus(studentId) {
+  static async getDebtorStatus(userId) {
     try {
       const Debtor = require('../models/Debtor');
-      const debtor = await Debtor.findOne({ user: studentId });
+      const debtor = await Debtor.findOne({ user: userId });
       return debtor;
     } catch (error) {
       console.error(`❌ Error getting debtor status: ${error.message}`);
@@ -1306,18 +1354,18 @@ class EnhancedPaymentAllocationService {
    * @param {string} paymentType - Type of advance payment
    * @returns {Object} Advance payment result
    */
-  static async handleAdvancePayment(paymentId, studentId, amount, paymentData, paymentType) {
+  static async handleAdvancePayment(paymentId, userId, amount, paymentData, paymentType) {
     try {
       console.log(`💳 Creating advance payment transaction for $${amount} ${paymentType}`);
       
       // Create advance payment transaction
       const advanceTransaction = await this.createAdvancePaymentTransaction(
-        paymentId, studentId, amount, paymentData, paymentType
+        paymentId, userId, amount, paymentData, paymentType
       );
       
       // Update debtor deferred income only for rent advances
       if (paymentType !== 'deposit' && paymentType !== 'admin') {
-        await this.updateDebtorDeferredIncome(studentId, paymentId, amount, paymentType);
+        await this.updateDebtorDeferredIncome(userId, paymentId, amount, paymentType);
       }
       
       return {
@@ -1350,7 +1398,7 @@ class EnhancedPaymentAllocationService {
    * @param {number} amount - Amount to defer
    * @param {string} paymentType - Type of payment
    */
-  static async updateDebtorDeferredIncome(studentId, paymentId, amount, paymentType) {
+  static async updateDebtorDeferredIncome(userId, paymentId, amount, paymentType) {
     try {
       const Debtor = require('../models/Debtor');
       
@@ -1364,14 +1412,14 @@ class EnhancedPaymentAllocationService {
       };
       
       await Debtor.findOneAndUpdate(
-        { user: studentId },
+        { user: userId },
         { 
           $inc: { 'deferredIncome.totalAmount': amount },
           $push: { 'deferredIncome.prepayments': prepayment }
         }
       );
       
-      console.log(`✅ Updated deferred income for student ${studentId}: +$${amount} ${paymentType}`);
+      console.log(`✅ Updated deferred income for user ${userId}: +$${amount} ${paymentType}`);
       
     } catch (error) {
       console.error(`❌ Error updating deferred income: ${error.message}`);
@@ -1473,7 +1521,7 @@ class EnhancedPaymentAllocationService {
    * @param {Object} paymentData - Payment data
    * @returns {Object} Allocation record
    */
-  static async createAllocationRecord(paymentId, studentId, allocationResults, paymentData) {
+  static async createAllocationRecord(paymentId, userId, allocationResults, paymentData) {
     try {
       console.log(`📝 Creating allocation record for payment ${paymentId}`);
       
@@ -1503,16 +1551,16 @@ class EnhancedPaymentAllocationService {
    * @param {string} studentId - Student ID
    * @returns {Object} Summary of outstanding balances
    */
-  static async getOutstandingBalanceSummary(studentId) {
+  static async getOutstandingBalanceSummary(userId) {
     try {
-      console.log(`📊 Getting outstanding balance summary for student: ${studentId}`);
+      console.log(`📊 Getting outstanding balance summary for user: ${userId}`);
       
-      const outstandingBalances = await this.getDetailedOutstandingBalances(studentId);
+      const outstandingBalances = await this.getDetailedOutstandingBalances(userId);
       
       const totalOutstanding = outstandingBalances.reduce((sum, month) => sum + month.totalOutstanding, 0);
       
       return {
-        studentId,
+        userId,
         totalOutstanding,
         monthsWithOutstanding: outstandingBalances.length,
         monthlyBreakdown: outstandingBalances.map(month => ({

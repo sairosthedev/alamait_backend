@@ -164,7 +164,8 @@ class AccountingService {
                     ],
                     metadata: {
                         type: 'monthly_rent_accrual',
-                        studentId: student.student,
+                        userId: student.student, // Use userId consistently
+                        studentId: student.student, // Keep for backward compatibility
                         studentName: `${student.firstName} ${student.lastName}`,
                         accrualMonth: month,
                         accrualYear: year,

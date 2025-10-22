@@ -2351,8 +2351,8 @@ class EnhancedCashFlowService {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
                         
-                        // Include all cash accounts (1000-1999)
-                        if (accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101'))) {
+                        // Include all cash accounts (1000-1099)
+                        if (accountCode && accountCode.match(/^10[0-9]{2}$/)) {
                             if (!months[monthKey].cash_accounts.breakdown[accountCode]) {
                                 months[monthKey].cash_accounts.breakdown[accountCode] = {
                                     account_code: accountCode,
@@ -2368,11 +2368,11 @@ class EnhancedCashFlowService {
                 }
                 
                 if (entry.entries && entry.entries.length > 0) {
-                    // Process Cash/Bank debits (income) - include ALL cash accounts (1000-1999)
+                    // Process Cash/Bank debits (income) - include ALL cash accounts (1000-1099)
                     const cashDebit = entry.entries.find(line => {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
-                        return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.debit > 0;
+                        return accountCode && accountCode.match(/^10[0-9]{2}$/) && line.debit > 0;
                     });
                     
                     if (cashDebit) {
@@ -2707,11 +2707,11 @@ class EnhancedCashFlowService {
                         }
                     }
                     
-                    // Process Cash/Bank credits (expenses) - include ALL cash accounts (1000-1999)
+                    // Process Cash/Bank credits (expenses) - include ALL cash accounts (1000-1099)
                     const cashCredit = entry.entries.find(line => {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
-                        return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.credit > 0;
+                        return accountCode && accountCode.match(/^10[0-9]{2}$/) && line.credit > 0;
                     });
                     
                     if (cashCredit) {
@@ -5374,7 +5374,10 @@ class EnhancedCashFlowService {
             'balance sheet',
             'journal entry',
             'account transfer',
-            'reclassification'
+            'reclassification',
+            'suspense',
+            'temporary',
+            'interim'
         ];
         
         const excludedAccountNames = [
@@ -5385,7 +5388,10 @@ class EnhancedCashFlowService {
             'Journal Entry Account',
             'Balance Sheet Account',
             'Account Transfer Account',
-            'Reclassification Account'
+            'Reclassification Account',
+            'Suspense Account',
+            'Temporary Account',
+            'Interim Account'
         ];
         
         // Check account name for excluded patterns
@@ -5403,11 +5409,15 @@ class EnhancedCashFlowService {
             }
         }
         
-        // Check account code - only include 1000-1099 series (cash accounts)
-        // Exclude 1100+ series which are other assets (like Accounts Receivable)
+        // Check account code - include only actual cash and cash equivalent accounts
+        // Cash accounts: 1000-1099 (cash, bank, petty cash, etc.)
+        // Cash equivalents: 1100-1199 (short-term investments, money market, etc.)
         if (accountCode) {
             const code = accountCode.toString();
-            if (!code.startsWith('1')) {
+            
+            // Only include 1000-1099 series (cash accounts)
+            // Exclude 1100+ which are other current assets (like Accounts Receivable)
+            if (!code.match(/^10[0-9]{2}$/)) {
                 return false;
             }
             
@@ -5417,19 +5427,20 @@ class EnhancedCashFlowService {
                 '10006', // Any other clearing accounts
                 '10007', // Any other adjustment accounts
                 '10008', // Any other balance sheet accounts
-                '10009'  // Any other non-cash accounts
+                '10009', // Any other non-cash accounts
+                '10010', // Any other temporary accounts
+                '10011', // Any other suspense accounts
+                '10012', // Any other interim accounts
+                '10013', // Any other adjustment accounts
+                '10014', // Any other reclassification accounts
+                '10015'  // Any other non-cash accounts
             ];
             
             if (excludedAccountCodes.includes(code)) {
                 return false;
             }
             
-            // Exclude 1100+ series (other assets, not cash)
-            if (code.startsWith('11') || code.startsWith('12') || code.startsWith('13') || 
-                code.startsWith('14') || code.startsWith('15') || code.startsWith('16') || 
-                code.startsWith('17') || code.startsWith('18') || code.startsWith('19')) {
-                return false;
-            }
+            // 1100+ series are already excluded by the regex pattern above
         }
         
         return true;
