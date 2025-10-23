@@ -525,7 +525,7 @@ class EnhancedPaymentAllocationService {
       // 4. Create allocation record
       const allocationRecord = await this.createAllocationRecord(
         paymentData.paymentId,
-        studentId,
+        userId,
         allocationResults,
         paymentData
       );
@@ -988,6 +988,7 @@ class EnhancedPaymentAllocationService {
       }
       
       // 🆕 VERIFICATION: Ensure the AR transaction belongs to the correct student
+      const userId = paymentData.studentId || paymentData.userId;
       const hasStudentAccount = arTransaction.entries.some(entry => 
         entry.accountCode === `1100-${userId}`
       );
@@ -1104,7 +1105,7 @@ class EnhancedPaymentAllocationService {
           const leaseStartAccrual = await TransactionEntry.findOne({
             source: 'rental_accrual',
             'metadata.type': 'lease_start',
-            'metadata.studentId': studentId
+            'metadata.studentId': userId
           }).sort({ date: 1 }).lean();
           if (leaseStartAccrual) {
             const d = new Date(leaseStartAccrual.date);
@@ -1150,7 +1151,7 @@ class EnhancedPaymentAllocationService {
         status: 'posted',
         metadata: {
           paymentId: paymentId,
-          studentId: studentId,
+          studentId: userId,
           amount: amount,
           paymentType: paymentType,
           advanceType: 'future_payment',
@@ -1216,8 +1217,8 @@ class EnhancedPaymentAllocationService {
           },
           // Credit: Accounts Receivable (reduce student's debt)
           {
-            accountCode: `1100-${studentId}`,
-            accountName: `Accounts Receivable - ${paymentData.studentName || studentId}`,
+            accountCode: `1100-${userId}`,
+            accountName: `Accounts Receivable - ${paymentData.studentName || userId}`,
             accountType: 'Asset',
             debit: 0,
             credit: amount,
@@ -1234,7 +1235,7 @@ class EnhancedPaymentAllocationService {
         status: 'posted',
         metadata: {
           paymentId: paymentId,
-          studentId: studentId,
+          studentId: userId,
           amount: amount,
           paymentType: paymentType,
           monthSettled: monthSettled,
@@ -1251,7 +1252,7 @@ class EnhancedPaymentAllocationService {
         source: 'Enhanced Payment Allocation Service',
         type: 'payment_allocation',
         paymentId: paymentId,
-        studentId: studentId,
+        studentId: userId,
         amount: amount,
         paymentType: paymentType,
         monthSettled: monthSettled
@@ -1271,7 +1272,7 @@ class EnhancedPaymentAllocationService {
           monthKey,
           {
             paymentId: paymentId,
-            studentId: studentId,
+            studentId: userId,
             amount: amount,
             paymentType: paymentType,
             monthSettled: monthSettled,
@@ -1282,7 +1283,7 @@ class EnhancedPaymentAllocationService {
           }
         );
         
-        console.log(`✅ Debtor automatically synced for payment allocation: ${studentId} - $${amount} for ${monthSettled}`);
+        console.log(`✅ Debtor automatically synced for payment allocation: ${userId} - $${amount} for ${monthSettled}`);
         
       } catch (debtorError) {
         console.error(`❌ Error syncing to debtor: ${debtorError.message}`);
@@ -1529,7 +1530,7 @@ class EnhancedPaymentAllocationService {
       // In a full implementation, this could be saved to a separate collection
       const allocationRecord = {
         paymentId: paymentId,
-        studentId: studentId,
+        studentId: userId,
         allocationDate: new Date(),
         totalAmount: paymentData.totalAmount,
         allocationResults: allocationResults,
