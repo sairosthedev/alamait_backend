@@ -4527,7 +4527,7 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
                                 // For monthly requests with large amounts, set up for installment payments
                                 console.log(`📅 Setting up monthly request ${monthlyRequest._id} for installment payments`);
                                 
-                                monthlyRequest.status = 'approved_for_installments';
+                                monthlyRequest.status = 'approved';
                                 monthlyRequest.requestHistory.push({
                                     date: dateApproved ? new Date(dateApproved) : new Date(),
                                     action: 'Approved for installment payments',
