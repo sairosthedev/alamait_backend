@@ -129,6 +129,7 @@ class EmailNotificationService {
 		try {
 			// Get finance users
 			const User = require('../models/User');
+			const Residence = require('../models/Residence');
 			const financeUsers = await User.find({
 				role: { $in: ['finance', 'finance_admin', 'finance_user'] }
 			});
@@ -145,49 +146,129 @@ class EmailNotificationService {
 						? new mongoose.Types.ObjectId(monthlyRequest.residence)
 						: monthlyRequest.residence;
 					
-					// Ensure Residence model is properly loaded
-					if (typeof Residence.findById === 'function') {
-						const residence = await Residence.findById(residenceId);
-						residenceName = residence?.name || 'Unknown Residence';
-					} else {
-						console.error('Residence model not properly loaded - findById is not a function');
-						residenceName = 'Unknown Residence';
-					}
+					const residence = await Residence.findById(residenceId);
+					residenceName = residence?.name || 'Unknown Residence';
+					console.log(`🏠 Residence lookup: ${residenceName}`);
 				} catch (err) {
 					console.error('Error fetching residence:', err);
 					residenceName = 'Unknown Residence';
 				}
 			}
 
+			// Create items table HTML
+			let itemsTableHtml = '';
+			if (monthlyRequest.items && monthlyRequest.items.length > 0) {
+				itemsTableHtml = `
+					<div style="margin: 20px 0;">
+						<h3 style="color: #333; margin-bottom: 15px;">Request Items</h3>
+						<table style="width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+							<thead>
+								<tr style="background-color: #f8f9fa;">
+									<th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Item</th>
+									<th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Category</th>
+									<th style="padding: 12px; text-align: center; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Qty</th>
+									<th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Unit Cost</th>
+									<th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Total</th>
+								</tr>
+							</thead>
+							<tbody>
+								${monthlyRequest.items.map((item, index) => `
+									<tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
+										<td style="padding: 12px; color: #333;">
+											<div style="font-weight: 600; color: #495057;">${item.title || 'Untitled Item'}</div>
+											${item.description ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${item.description}</div>` : ''}
+										</td>
+										<td style="padding: 12px; color: #495057;">
+											<span style="background-color: #e9ecef; padding: 4px 8px; border-radius: 4px; font-size: 12px; color: #495057;">
+												${item.category || 'General'}
+											</span>
+										</td>
+										<td style="padding: 12px; text-align: center; color: #495057;">${item.quantity || 1}</td>
+										<td style="padding: 12px; text-align: right; color: #495057;">$${(item.estimatedCost || 0).toFixed(2)}</td>
+										<td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${((item.estimatedCost || 0) * (item.quantity || 1)).toFixed(2)}</td>
+									</tr>
+								`).join('')}
+							</tbody>
+							<tfoot>
+								<tr style="background-color: #e9ecef; border-top: 2px solid #dee2e6;">
+									<td colspan="4" style="padding: 12px; text-align: right; font-weight: 600; color: #495057;">Total Amount:</td>
+									<td style="padding: 12px; text-align: right; font-weight: 700; color: #28a745; font-size: 16px;">$${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</td>
+								</tr>
+							</tfoot>
+						</table>
+					</div>
+				`;
+			}
+
 			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Monthly Request Pending Approval</h2>
-						<p>Dear Finance Team,</p>
-						<p>A new monthly request has been submitted for your approval:</p>
-						<ul>
-							<li><strong>Residence:</strong> ${residenceName}</li>
-							<li><strong>Month/Year:</strong> ${month}/${year}</li>
-							<li><strong>Total Amount:</strong> $${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</li>
-							<li><strong>Submitted By:</strong> ${user.firstName} ${user.lastName}</li>
-							<li><strong>Items Count:</strong> ${monthlyRequest.items?.length || 0}</li>
-						</ul>
-						<p>Please review and approve/reject this request.</p>
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
+				<div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; background-color: #ffffff;">
+					<!-- Header -->
+					<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+						<h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">📋 Monthly Request Pending Approval</h1>
+						<p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">New monthly request requires your review</p>
+					</div>
+					
+					<!-- Main Content -->
+					<div style="padding: 30px; background-color: #ffffff;">
+						<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear Finance Team,</p>
+						<p style="color: #666; font-size: 14px; margin-bottom: 25px;">A new monthly request has been submitted for your approval with the following details:</p>
+						
+						<!-- Request Summary -->
+						<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 25px;">
+							<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📊 Request Summary</h3>
+							<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+								<div>
+									<strong style="color: #495057;">🏠 Residence:</strong><br>
+									<span style="color: #333; font-size: 14px;">${residenceName}</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">📅 Period:</strong><br>
+									<span style="color: #333; font-size: 14px;">${month}/${year}</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">💰 Total Amount:</strong><br>
+									<span style="color: #28a745; font-size: 16px; font-weight: 600;">$${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">👤 Submitted By:</strong><br>
+									<span style="color: #333; font-size: 14px;">${user.firstName} ${user.lastName}</span>
+								</div>
+							</div>
+						</div>
+						
+						${itemsTableHtml}
+						
+						<!-- Action Required -->
+						<div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 20px; border-radius: 8px; margin: 25px 0;">
+							<h3 style="color: #856404; margin: 0 0 10px 0; font-size: 16px;">⚠️ Action Required</h3>
+							<p style="color: #856404; margin: 0; font-size: 14px;">Please review the request details above and approve or reject this monthly request in the admin panel.</p>
+						</div>
+					</div>
+					
+					<!-- Footer -->
+					<div style="background-color: #f8f9fa; padding: 20px; text-align: center; border-radius: 0 0 10px 10px; border-top: 1px solid #dee2e6;">
+						<p style="color: #6c757d; font-size: 12px; margin: 0;">
+							This is an automated message from <strong>Alamait Student Accommodation</strong><br>
 							Please do not reply to this email.
 						</p>
 					</div>
 				</div>
 			`;
 
-			// Send to all finance users with valid email addresses
+			// Send to all finance users with valid email addresses (avoid duplicates)
 			let sentCount = 0;
+			const sentEmails = new Set(); // Track sent emails to prevent duplicates
+			
 			for (const financeUser of financeUsers) {
 				// Skip invalid email addresses (like alamait.com domain)
 				if (!financeUser.email || !financeUser.email.includes('@')) {
 					console.log(`⚠️ Skipping invalid email: ${financeUser.email}`);
+					continue;
+				}
+				
+				// Skip if already sent to this email
+				if (sentEmails.has(financeUser.email.toLowerCase())) {
+					console.log(`⚠️ Skipping duplicate email: ${financeUser.email}`);
 					continue;
 				}
 				
@@ -198,6 +279,7 @@ class EmailNotificationService {
 						subject: 'Monthly Request Pending Approval',
 						html: emailContent
 					});
+					sentEmails.add(financeUser.email.toLowerCase());
 					sentCount++;
 					console.log(`✅ Email sent to: ${financeUser.email}`);
 				} catch (emailError) {
