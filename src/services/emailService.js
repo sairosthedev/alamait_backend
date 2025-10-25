@@ -9,14 +9,18 @@ class EmailService {
     }
 
     initialize() {
-        // Initialize Gmail transporter
+        // Initialize Gmail transporter with optimized settings
         if (process.env.EMAIL_USER && process.env.EMAIL_APP_PASSWORD) {
             this.gmailTransporter = nodemailer.createTransport({
                 service: 'gmail',
-                pool: false, // Disable pooling to avoid connection issues
-                connectionTimeout: 30000, // 30 seconds
-                greetingTimeout: 15000,   // 15 seconds
-                socketTimeout: 45000,     // 45 seconds
+                pool: true, // Enable pooling for better performance
+                maxConnections: 3, // Limit concurrent connections
+                maxMessages: 50,   // Limit messages per connection
+                rateDelta: 30000, // Rate limiting: 30 seconds
+                rateLimit: 3,      // Max 3 emails per 30 seconds
+                connectionTimeout: 15000, // 15 seconds (reduced)
+                greetingTimeout: 10000,   // 10 seconds (reduced)
+                socketTimeout: 20000,     // 20 seconds (reduced)
                 secure: true,
                 tls: {
                     rejectUnauthorized: false,
@@ -27,7 +31,7 @@ class EmailService {
                     pass: process.env.EMAIL_APP_PASSWORD
                 }
             });
-            console.log('✅ Gmail transporter initialized');
+            console.log('✅ Gmail transporter initialized with optimized settings');
         } else {
             console.warn('⚠️ Gmail configuration missing - EMAIL_USER or EMAIL_APP_PASSWORD not set');
         }
@@ -46,8 +50,84 @@ class EmailService {
         const { to, subject, text, html, attachments } = options;
         
         console.log(`📧 Attempting to send email to ${to}`);
+        console.log(`📧 Environment: ${process.env.NODE_ENV}`);
 
-        // Try Gmail first
+        // For production, try SendGrid first
+        if (process.env.NODE_ENV === 'production' && this.sendGridConfigured) {
+            try {
+                console.log(`📧 Trying SendGrid first (production)...`);
+                
+                // Validate SendGrid configuration
+                if (!process.env.SENDGRID_API_KEY) {
+                    throw new Error('SendGrid API key not configured');
+                }
+                
+                const msg = {
+                    to: to,
+                    from: {
+                        email: process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER || 'noreply@alamait.com',
+                        name: 'Alamait Student Accommodation'
+                    },
+                    replyTo: {
+                        email: process.env.SENDGRID_REPLY_TO || 'support@alamait.com',
+                        name: 'Alamait Support Team'
+                    },
+                    subject: subject,
+                    text: text,
+                    html: html
+                };
+
+                // Add attachments if provided (FIXED VERSION)
+                if (attachments && attachments.length > 0) {
+                    console.log(`📎 Processing ${attachments.length} attachments...`);
+                    msg.attachments = attachments.map((att, index) => {
+                        try {
+                            // Safely handle attachment content
+                            let content = '';
+                            if (att.content) {
+                                if (typeof att.content === 'string') {
+                                    content = Buffer.from(att.content).toString('base64');
+                                } else if (Buffer.isBuffer(att.content)) {
+                                    content = att.content.toString('base64');
+                                } else {
+                                    content = Buffer.from(att.content).toString('base64');
+                                }
+                            } else {
+                                console.log(`⚠️ Attachment ${index} has no content, skipping`);
+                                return null;
+                            }
+                            
+                            return {
+                                content: content,
+                                filename: att.filename || `attachment_${index}`,
+                                type: att.contentType || 'application/octet-stream',
+                                disposition: 'attachment'
+                            };
+                        } catch (attError) {
+                            console.error(`❌ Error processing attachment ${index}:`, attError.message);
+                            return null;
+                        }
+                    }).filter(att => att !== null); // Remove null attachments
+                    
+                    console.log(`📎 Processed ${msg.attachments.length} valid attachments`);
+                }
+
+                await sgMail.send(msg);
+                console.log(`✅ Email sent via SendGrid to ${to}`);
+                return true;
+                
+            } catch (error) {
+                console.error(`❌ SendGrid failed for ${to}:`, {
+                    message: error.message,
+                    code: error.code,
+                    response: error.response?.body || error.response,
+                    stack: error.stack
+                });
+                console.log(`📧 Falling back to Gmail...`);
+            }
+        }
+
+        // Try Gmail (for local development or as fallback)
         if (this.gmailTransporter) {
             try {
                 console.log(`📧 Trying Gmail SMTP first...`);
@@ -105,10 +185,15 @@ class EmailService {
             try {
                 console.log(`📧 Trying SendGrid...`);
                 
+                // Validate SendGrid configuration
+                if (!process.env.SENDGRID_API_KEY) {
+                    throw new Error('SendGrid API key not configured');
+                }
+                
                 const msg = {
                     to: to,
                     from: {
-                        email: process.env.SENDGRID_FROM_EMAIL || 'noreply@alamait.com',
+                        email: process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER || 'noreply@alamait.com',
                         name: 'Alamait Student Accommodation'
                     },
                     replyTo: {
@@ -120,14 +205,39 @@ class EmailService {
                     html: html
                 };
 
-                // Add attachments if provided
+                // Add attachments if provided (FIXED VERSION)
                 if (attachments && attachments.length > 0) {
-                    msg.attachments = attachments.map(att => ({
-                        content: att.content.toString('base64'),
-                        filename: att.filename,
-                        type: att.contentType,
-                        disposition: 'attachment'
-                    }));
+                    console.log(`📎 Processing ${attachments.length} attachments...`);
+                    msg.attachments = attachments.map((att, index) => {
+                        try {
+                            // Safely handle attachment content
+                            let content = '';
+                            if (att.content) {
+                                if (typeof att.content === 'string') {
+                                    content = Buffer.from(att.content).toString('base64');
+                                } else if (Buffer.isBuffer(att.content)) {
+                                    content = att.content.toString('base64');
+                                } else {
+                                    content = Buffer.from(att.content).toString('base64');
+                                }
+                            } else {
+                                console.log(`⚠️ Attachment ${index} has no content, skipping`);
+                                return null;
+                            }
+                            
+                            return {
+                                content: content,
+                                filename: att.filename || `attachment_${index}`,
+                                type: att.contentType || 'application/octet-stream',
+                                disposition: 'attachment'
+                            };
+                        } catch (attError) {
+                            console.error(`❌ Error processing attachment ${index}:`, attError.message);
+                            return null;
+                        }
+                    }).filter(att => att !== null); // Remove null attachments
+                    
+                    console.log(`📎 Processed ${msg.attachments.length} valid attachments`);
                 }
 
                 await sgMail.send(msg);
@@ -135,7 +245,12 @@ class EmailService {
                 return true;
                 
             } catch (error) {
-                console.error(`❌ SendGrid failed for ${to}:`, error.message);
+                console.error(`❌ SendGrid failed for ${to}:`, {
+                    message: error.message,
+                    code: error.code,
+                    response: error.response?.body || error.response,
+                    stack: error.stack
+                });
             }
         } else {
             console.log(`📧 SendGrid not configured`);
