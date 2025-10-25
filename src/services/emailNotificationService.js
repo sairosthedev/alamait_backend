@@ -26,6 +26,70 @@ const transporter = nodemailer.createTransport({
  * Handles all email notifications for the Alamait system
  */
 class EmailNotificationService {
+	/**
+	 * Base email template with beautiful styling
+	 */
+	static getBaseEmailTemplate(title, subtitle, content, actionText = null, actionUrl = null) {
+		return `
+			<div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; background-color: #ffffff;">
+				<!-- Header -->
+				<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+					<h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">${title}</h1>
+					<p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">${subtitle}</p>
+				</div>
+				
+				<!-- Main Content -->
+				<div style="padding: 30px; background-color: #ffffff;">
+					${content}
+					
+					${actionText && actionUrl ? `
+						<!-- Action Button -->
+						<div style="text-align: center; margin: 25px 0;">
+							<a href="${actionUrl}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">
+								${actionText}
+							</a>
+						</div>
+					` : ''}
+				</div>
+				
+				<!-- Footer -->
+				<div style="background-color: #f8f9fa; padding: 20px; text-align: center; border-radius: 0 0 10px 10px; border-top: 1px solid #dee2e6;">
+					<p style="color: #6c757d; font-size: 12px; margin: 0;">
+						This is an automated message from <strong>Alamait Student Accommodation</strong><br>
+						Please do not reply to this email.
+					</p>
+				</div>
+			</div>
+		`;
+	}
+
+	/**
+	 * Get residence name safely
+	 */
+	static async getResidenceName(residence) {
+		if (residence?.name) {
+			return residence.name;
+		}
+		
+		if (residence) {
+			try {
+				const mongoose = require('mongoose');
+				const residenceId = typeof residence === 'string' 
+					? new mongoose.Types.ObjectId(residence)
+					: residence;
+				
+				const Residence = require('../models/Residence');
+				const residenceDoc = await Residence.findById(residenceId);
+				return residenceDoc?.name || 'Unknown Residence';
+			} catch (err) {
+				console.error('Error fetching residence:', err);
+				return 'Unknown Residence';
+			}
+		}
+		
+		return 'N/A';
+	}
+
 
     /**
      * Send notification to CEO users when a financial request for salaries is created
@@ -1274,28 +1338,51 @@ class EmailNotificationService {
 			const User = require('../models/User');
 			const students = await User.find({ role: 'student' });
 
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">New Event Announcement</h2>
-						<p>Dear Students,</p>
-						<p>A new event has been scheduled:</p>
-						<ul>
-							<li><strong>Event:</strong> ${event.title}</li>
-							<li><strong>Date:</strong> ${new Date(event.date).toLocaleDateString()}</li>
-							<li><strong>Time:</strong> ${event.startTime}</li>
-							<li><strong>Location:</strong> ${event.location}</li>
-							${event.description ? `<li><strong>Description:</strong> ${event.description}</li>` : ''}
-						</ul>
-						<p>We look forward to seeing you there!</p>
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear Students,</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">A new event has been scheduled for your participation:</p>
+				
+				<!-- Event Details -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">🎉 Event Details</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">📅 Event:</strong><br>
+							<span style="color: #333; font-size: 14px;">${event.title}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📅 Date:</strong><br>
+							<span style="color: #333; font-size: 14px;">${new Date(event.date).toLocaleDateString()}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">🕐 Time:</strong><br>
+							<span style="color: #333; font-size: 14px;">${event.startTime}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📍 Location:</strong><br>
+							<span style="color: #333; font-size: 14px;">${event.location}</span>
+						</div>
 					</div>
+					${event.description ? `
+						<div style="margin-top: 15px;">
+							<strong style="color: #495057;">📝 Description:</strong><br>
+							<span style="color: #333; font-size: 14px;">${event.description}</span>
+						</div>
+					` : ''}
+				</div>
+				
+				<!-- Call to Action -->
+				<div style="background-color: #d4edda; border: 1px solid #c3e6cb; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: #155724; margin: 0 0 10px 0; font-size: 16px;">🎯 Don't Miss Out!</h3>
+					<p style="color: #155724; margin: 0; font-size: 14px;">We look forward to seeing you at this exciting event!</p>
 				</div>
 			`;
+
+			const emailContent = this.getBaseEmailTemplate(
+				'🎉 New Event Announcement',
+				'Join us for an exciting event',
+				content
+			);
 
 			// Send to all students
 			for (const student of students) {
@@ -1481,29 +1568,62 @@ class EmailNotificationService {
 	 */
 	static async sendRoomChangeRequestNotification(application, requestedRoom, currentRoom, student) {
 		try {
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Room Change Request Received</h2>
-						<p>Dear ${student.firstName},</p>
-						<p>We have received your request to ${application.requestType} your room:</p>
-						<ul>
-							<li><strong>Current Room:</strong> ${currentRoom}</li>
-							<li><strong>Requested Room:</strong> ${requestedRoom.roomNumber}</li>
-							<li><strong>Room Type:</strong> ${requestedRoom.type}</li>
-							<li><strong>Request Type:</strong> ${application.requestType}</li>
-							<li><strong>Request Date:</strong> ${new Date(application.applicationDate).toLocaleDateString()}</li>
-							<li><strong>Reason:</strong> ${application.reason}</li>
-						</ul>
-						<p>We will review your request and notify you of the decision within 3-5 business days.</p>
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
+			// Get residence name safely
+			const residenceName = await this.getResidenceName(application.residence);
+
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${student.firstName},</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">We have received your request to ${application.requestType} your room:</p>
+				
+				<!-- Request Details -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #17a2b8; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">🏠 Room Change Request</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">🏠 Current Room:</strong><br>
+							<span style="color: #333; font-size: 14px;">${currentRoom}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">🎯 Requested Room:</strong><br>
+							<span style="color: #333; font-size: 14px;">${requestedRoom.roomNumber}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">🏢 Residence:</strong><br>
+							<span style="color: #333; font-size: 14px;">${residenceName}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📅 Request Date:</strong><br>
+							<span style="color: #333; font-size: 14px;">${new Date(application.applicationDate).toLocaleDateString()}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">🏷️ Room Type:</strong><br>
+							<span style="color: #333; font-size: 14px;">${requestedRoom.type}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📝 Request Type:</strong><br>
+							<span style="color: #333; font-size: 14px;">${application.requestType}</span>
+						</div>
 					</div>
+					${application.reason ? `
+						<div style="margin-top: 15px;">
+							<strong style="color: #495057;">💭 Reason:</strong><br>
+							<span style="color: #333; font-size: 14px;">${application.reason}</span>
+						</div>
+					` : ''}
+				</div>
+				
+				<!-- Status Update -->
+				<div style="background-color: #d1ecf1; border: 1px solid #bee5eb; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: #0c5460; margin: 0 0 10px 0; font-size: 16px;">⏳ Under Review</h3>
+					<p style="color: #0c5460; margin: 0; font-size: 14px;">We will review your request and notify you of the decision within 3-5 business days.</p>
 				</div>
 			`;
+
+			const emailContent = this.getBaseEmailTemplate(
+				'🏠 Room Change Request Received',
+				'Your request is under review',
+				content
+			);
 
 			await sendEmail({
 				to: student.email,
