@@ -438,6 +438,10 @@ app.use('/api/monthly-request-deductions', monthlyRequestDeductionRoutes);
 const vendorRoutes = require('./routes/vendorRoutes');
 app.use('/api/vendors', vendorRoutes);
 
+// Test email routes (for debugging)
+const testEmailRoutes = require('./routes/testEmailRoutes');
+app.use('/api/test', testEmailRoutes);
+
 // 404 handler
 app.use(notFoundHandler);
 
