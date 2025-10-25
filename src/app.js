@@ -426,6 +426,14 @@ app.use('/api/requests', requestRoutes);
 app.use('/api/maintenance-requests', requestRoutes); // Alias for frontend compatibility
 app.use('/api/monthly-requests', monthlyRequestRoutes);
 
+// Installment Payment routes (for installment-based monthly request payments)
+const installmentPaymentRoutes = require('./routes/installmentPaymentRoutes');
+app.use('/api/installment-payments', installmentPaymentRoutes);
+
+// Monthly Request Deduction routes (for admin to create maintenance requests from approved monthly requests)
+const monthlyRequestDeductionRoutes = require('./routes/monthlyRequestDeductionRoutes');
+app.use('/api/monthly-request-deductions', monthlyRequestDeductionRoutes);
+
 // Vendor routes
 const vendorRoutes = require('./routes/vendorRoutes');
 app.use('/api/vendors', vendorRoutes);

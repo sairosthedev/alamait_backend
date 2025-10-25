@@ -133,6 +133,32 @@ class EmailNotificationService {
 				role: { $in: ['finance', 'finance_admin', 'finance_user'] }
 			});
 
+			// Get residence name if not populated
+			let residenceName = 'N/A';
+			if (monthlyRequest.residence?.name) {
+				residenceName = monthlyRequest.residence.name;
+			} else if (monthlyRequest.residence) {
+				try {
+					// Use mongoose.Types.ObjectId to ensure proper ObjectId handling
+					const mongoose = require('mongoose');
+					const residenceId = typeof monthlyRequest.residence === 'string' 
+						? new mongoose.Types.ObjectId(monthlyRequest.residence)
+						: monthlyRequest.residence;
+					
+					// Ensure Residence model is properly loaded
+					if (typeof Residence.findById === 'function') {
+						const residence = await Residence.findById(residenceId);
+						residenceName = residence?.name || 'Unknown Residence';
+					} else {
+						console.error('Residence model not properly loaded - findById is not a function');
+						residenceName = 'Unknown Residence';
+					}
+				} catch (err) {
+					console.error('Error fetching residence:', err);
+					residenceName = 'Unknown Residence';
+				}
+			}
+
 			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
@@ -140,7 +166,7 @@ class EmailNotificationService {
 						<p>Dear Finance Team,</p>
 						<p>A new monthly request has been submitted for your approval:</p>
 						<ul>
-							<li><strong>Residence:</strong> ${monthlyRequest.residence?.name || 'N/A'}</li>
+							<li><strong>Residence:</strong> ${residenceName}</li>
 							<li><strong>Month/Year:</strong> ${month}/${year}</li>
 							<li><strong>Total Amount:</strong> $${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</li>
 							<li><strong>Submitted By:</strong> ${user.firstName} ${user.lastName}</li>
@@ -192,6 +218,32 @@ class EmailNotificationService {
 	 */
 	static async sendMonthlyRequestApprovalNotification(monthlyRequest, approved, notes, month, year, approvedBy) {
 		try {
+			// Get residence name if not populated
+			let residenceName = 'N/A';
+			if (monthlyRequest.residence?.name) {
+				residenceName = monthlyRequest.residence.name;
+			} else if (monthlyRequest.residence) {
+				try {
+					// Use mongoose.Types.ObjectId to ensure proper ObjectId handling
+					const mongoose = require('mongoose');
+					const residenceId = typeof monthlyRequest.residence === 'string' 
+						? new mongoose.Types.ObjectId(monthlyRequest.residence)
+						: monthlyRequest.residence;
+					
+					// Ensure Residence model is properly loaded
+					if (typeof Residence.findById === 'function') {
+						const residence = await Residence.findById(residenceId);
+						residenceName = residence?.name || 'Unknown Residence';
+					} else {
+						console.error('Residence model not properly loaded - findById is not a function');
+						residenceName = 'Unknown Residence';
+					}
+				} catch (err) {
+					console.error('Error fetching residence:', err);
+					residenceName = 'Unknown Residence';
+				}
+			}
+
 			const emailContent = `
 				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
 					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
@@ -199,7 +251,7 @@ class EmailNotificationService {
 						<p>Dear ${monthlyRequest.submittedBy?.firstName || 'User'},</p>
 						<p>Your monthly request has been <strong>${approved ? 'approved' : 'rejected'}</strong>:</p>
 						<ul>
-							<li><strong>Residence:</strong> ${monthlyRequest.residence?.name || 'N/A'}</li>
+							<li><strong>Residence:</strong> ${residenceName}</li>
 							<li><strong>Month/Year:</strong> ${month}/${year}</li>
 							<li><strong>Status:</strong> ${approved ? 'Approved' : 'Rejected'}</li>
 							<li><strong>Approved By:</strong> ${approvedBy.firstName} ${approvedBy.lastName}</li>

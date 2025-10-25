@@ -4512,10 +4512,33 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
                         }
                     }
 
-                    // Auto-create expenses if approved and requested
+                    // Handle expense creation based on payment method
                     if (createExpenses) {
                         try {
                             console.log(`💰 Starting background expense conversion for request ${monthlyRequest._id}...`);
+                            
+                            // Check if this is a monthly request that should use installment payments
+                            const isMonthlyRequest = monthlyRequest.isTemplate === false; // Regular monthly requests
+                            const hasInstallmentItems = monthlyRequest.items && monthlyRequest.items.some(item => 
+                                item.estimatedCost > 0 && item.estimatedCost > 100 // Items over $100 might need installments
+                            );
+                            
+                            if (isMonthlyRequest && hasInstallmentItems) {
+                                // For monthly requests with large amounts, set up for installment payments
+                                console.log(`📅 Setting up monthly request ${monthlyRequest._id} for installment payments`);
+                                
+                                monthlyRequest.status = 'approved_for_installments';
+                                monthlyRequest.requestHistory.push({
+                                    date: dateApproved ? new Date(dateApproved) : new Date(),
+                                    action: 'Approved for installment payments',
+                                    user: user._id,
+                                    changes: ['Request approved but expenses will be created as payments are made']
+                                });
+                                
+                                console.log(`✅ Monthly request ${monthlyRequest._id} set up for installment payments`);
+                            } else {
+                                // For smaller amounts or templates, create expenses immediately
+                                console.log(`💰 Creating expenses immediately for request ${monthlyRequest._id}...`);
                             const expenseConversionResult = await convertRequestToExpenses(monthlyRequest, user);
                             
                             // Update request status to completed after expense creation
@@ -4528,8 +4551,11 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
                                 changes: [`${expenseConversionResult.expenses.length} expenses created`]
                             });
                             
-                            await monthlyRequest.save();
                             console.log(`✅ Background expense conversion completed for request ${monthlyRequest._id}: ${expenseConversionResult.expenses.length} expenses created`);
+                            }
+                            
+                            await monthlyRequest.save();
+                            
                         } catch (conversionError) {
                             console.error(`❌ Error in background expense conversion for request ${monthlyRequest._id}:`, conversionError);
                             // Update request with error status

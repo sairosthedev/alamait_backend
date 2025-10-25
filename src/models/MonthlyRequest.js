@@ -157,7 +157,20 @@ const monthlyRequestItemSchema = new mongoose.Schema({
         isApproved: { type: Boolean, default: false },
         approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         approvedAt: { type: Date }
-    }]
+    }],
+    // Deduction tracking fields for individual items
+    deductedAmount: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    fullyDeducted: {
+        type: Boolean,
+        default: false
+    },
+    fullyDeductedAt: {
+        type: Date
+    }
 });
 
 const monthlyRequestSchema = new mongoose.Schema({
@@ -193,7 +206,7 @@ const monthlyRequestSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['draft', 'pending', 'approved', 'rejected', 'completed'],
+        enum: ['draft', 'pending', 'approved', 'rejected', 'completed', 'approved_for_installments'],
         default: 'draft'
     },
     // Monthly approval status for templates
@@ -305,6 +318,40 @@ const monthlyRequestSchema = new mongoose.Schema({
         approvedAt: { type: Date },
         status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
         description: { type: String, required: true } // Human-readable description of change
+    }],
+    // Deduction tracking fields
+    deductions: [{
+        maintenanceRequestId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Request',
+            required: true
+        },
+        itemIndex: {
+            type: Number,
+            required: true
+        },
+        amount: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        week: {
+            type: String,
+            required: true
+        },
+        description: {
+            type: String,
+            trim: true
+        },
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        createdAt: {
+            type: Date,
+            default: Date.now
+        }
     }],
     requestHistory: [{
         date: { type: Date, default: Date.now },

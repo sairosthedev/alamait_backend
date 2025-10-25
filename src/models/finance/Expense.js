@@ -208,6 +208,21 @@ const expenseSchema = new mongoose.Schema({
     paymentReference: {
         type: String,
         trim: true
+    },
+    
+    // Monthly Request Deduction Fields
+    linkedMonthlyRequestId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'MonthlyRequest',
+        required: false
+    },
+    linkedMonthlyRequestItemIndex: {
+        type: Number,
+        required: false
+    },
+    linkedMonthlyRequestWeek: {
+        type: String,
+        required: false
     }
 }, {
     timestamps: true

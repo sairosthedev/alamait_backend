@@ -1490,13 +1490,19 @@ exports.updateRequest = async (req, res) => { //n
                 const approvalDate = request.dateApproved ? new Date(request.dateApproved) : 
                                    (request.approval?.finance?.approvedAt ? new Date(request.approval.finance.approvedAt) : new Date());
                 
-                // Check if request has items to process
-                if (request.items && request.items.length > 0) {
-                    // Handle complex requests with items and quotations
-                    await createItemizedExpensesForRequest(request, user, approvalDate);
+                // 🆕 NEW: Handle maintenance requests created from monthly requests
+                if (request.linkedMonthlyRequestId && request.type === 'maintenance') {
+                    console.log('🔧 Creating expense for maintenance request from monthly request:', request._id);
+                    await createExpenseForMonthlyRequestDeduction(request, user, approvalDate);
                 } else {
-                    // Handle simple requests without items (legacy maintenance requests)
-                    await createSimpleExpenseForRequest(request, user, approvalDate);
+                    // Check if request has items to process
+                    if (request.items && request.items.length > 0) {
+                        // Handle complex requests with items and quotations
+                        await createItemizedExpensesForRequest(request, user, approvalDate);
+                    } else {
+                        // Handle simple requests without items (legacy maintenance requests)
+                        await createSimpleExpenseForRequest(request, user, approvalDate);
+                    }
                 }
                 
                 // Mark request as converted to expense
@@ -1837,6 +1843,30 @@ exports.financeApproval = async (req, res) => {
                 }
                 
                 console.log('✅ Request convertedToExpense set to true');
+                
+                // 🆕 NEW: Handle monthly request deduction if this is a maintenance request from a monthly request
+                if (request.linkedMonthlyRequestId && request.linkedMonthlyRequestItemIndex !== undefined) {
+                    try {
+                        console.log('🔧 Processing monthly request deduction...');
+                        console.log(`   - Monthly Request ID: ${request.linkedMonthlyRequestId}`);
+                        console.log(`   - Item Index: ${request.linkedMonthlyRequestItemIndex}`);
+                        console.log(`   - Deduction Amount: $${request.amount}`);
+                        
+                        const MonthlyRequestDeductionService = require('../services/monthlyRequestDeductionService');
+                        await MonthlyRequestDeductionService.processDeductionOnApproval(
+                            request.linkedMonthlyRequestId,
+                            request.linkedMonthlyRequestItemIndex,
+                            request.amount,
+                            request._id,
+                            user._id
+                        );
+                        
+                        console.log('✅ Monthly request deduction processed successfully');
+                    } catch (deductionError) {
+                        console.error('❌ Error processing monthly request deduction:', deductionError);
+                        // Don't fail the entire approval process if deduction fails
+                    }
+                }
                 
             } catch (financialError) {
                 console.error('❌ Error creating financial transaction:', financialError);
@@ -2488,26 +2518,39 @@ exports.ceoApproval = async (req, res) => {
         
         // Update status based on approval
         if (approved) {
-            request.status = 'completed';
-
-            // For financial requests: convert to expense and create entries ONLY here (CEO approved)
-            if (request.type === 'financial' && !request.convertedToExpense) {
-                try {
-                    const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
-                    // Ensure amount is set from best available total before conversion
-                    if (!request.amount || request.amount <= 0) {
-                        if (request.totalEstimatedCost && request.totalEstimatedCost > 0) {
-                            request.amount = request.totalEstimatedCost;
-                        } else if (Array.isArray(request.items) && request.items.length > 0) {
-                            request.amount = request.items.reduce((sum, it) => sum + (Number(it.totalCost) || 0), 0);
+            // Check if this is a salary request
+            const isSalaryRequest = request.category === 'salary' || 
+                                  request.category === 'salaries' ||
+                                  (request.title && request.title.toLowerCase().includes('salary')) ||
+                                  (request.description && request.description.toLowerCase().includes('salary'));
+            
+            if (isSalaryRequest) {
+                // For salary requests: set status to 'CEO approved' and do NOT create expenses
+                request.status = 'CEO approved';
+                console.log('✅ Salary request approved by CEO - no expense created');
+            } else {
+                // For non-salary financial requests: convert to expense and create entries
+                request.status = 'completed';
+                
+                if (request.type === 'financial' && !request.convertedToExpense) {
+                    try {
+                        const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
+                        // Ensure amount is set from best available total before conversion
+                        if (!request.amount || request.amount <= 0) {
+                            if (request.totalEstimatedCost && request.totalEstimatedCost > 0) {
+                                request.amount = request.totalEstimatedCost;
+                            } else if (Array.isArray(request.items) && request.items.length > 0) {
+                                request.amount = request.items.reduce((sum, it) => sum + (Number(it.totalCost) || 0), 0);
+                            }
                         }
+                        // For financial requests, always create a single expense using total amount
+                        await createSimpleExpenseForRequest(request, user, approvalDate);
+                        request.convertedToExpense = true;
+                        await request.save();
+                        console.log('✅ Non-salary financial request converted to expense');
+                    } catch (err) {
+                        console.error('Error converting financial request at CEO approval:', err);
                     }
-                    // For financial requests, always create a single expense using total amount
-                    await createSimpleExpenseForRequest(request, user, approvalDate);
-                    request.convertedToExpense = true;
-                    await request.save();
-                } catch (err) {
-                    console.error('Error converting financial request at CEO approval:', err);
                 }
             }
         } else {
@@ -4575,3 +4618,129 @@ exports.getPendingCount = async (req, res) => {
         });
     }
 };
+
+// 🆕 NEW: Create expense for maintenance request created from monthly request deduction
+async function createExpenseForMonthlyRequestDeduction(request, user, approvalDate) {
+    try {
+        console.log('🔧 Creating expense for monthly request deduction:', request._id);
+        
+        const MonthlyRequest = require('../models/MonthlyRequest');
+        const TransactionEntry = require('../models/TransactionEntry');
+        const Account = require('../models/Account');
+        
+        // Get the linked monthly request
+        const monthlyRequest = await MonthlyRequest.findById(request.linkedMonthlyRequestId);
+        if (!monthlyRequest) {
+            throw new Error('Linked monthly request not found');
+        }
+        
+        // Get the specific item from the monthly request
+        const item = monthlyRequest.items[request.linkedMonthlyRequestItemIndex];
+        if (!item) {
+            throw new Error('Linked monthly request item not found');
+        }
+        
+        // Create expense for the maintenance request
+        const expense = new Expense({
+            title: request.title,
+            description: request.description,
+            amount: request.amount,
+            category: item.category || 'maintenance',
+            vendor: request.proposedVendor || request.vendorName || 'TBD',
+            date: approvalDate,
+            residence: request.residence,
+            createdBy: user._id,
+            source: 'monthly_request_deduction',
+            sourceId: request._id,
+            linkedMonthlyRequestId: request.linkedMonthlyRequestId,
+            linkedMonthlyRequestItemIndex: request.linkedMonthlyRequestItemIndex,
+            linkedMonthlyRequestWeek: request.linkedMonthlyRequestWeek,
+            status: 'approved',
+            approvedBy: user._id,
+            approvedAt: approvalDate
+        });
+        
+        await expense.save();
+        
+        // Create double-entry transaction
+        const transaction = new TransactionEntry({
+            transactionId: `TXN-${Date.now()}`,
+            description: `Expense for ${request.title} (${request.linkedMonthlyRequestWeek})`,
+            date: approvalDate,
+            totalDebit: request.amount,
+            totalCredit: request.amount,
+            source: 'monthly_request_deduction',
+            sourceModel: 'Request',
+            sourceId: request._id,
+            createdBy: user._id,
+            residence: request.residence,
+            entries: [
+                {
+                    accountCode: '5000', // Maintenance Expense
+                    accountName: 'Maintenance Expense',
+                    accountType: 'Expense',
+                    debit: request.amount,
+                    credit: 0,
+                    description: `Maintenance expense: ${request.title}`
+                },
+                {
+                    accountCode: '1000', // Cash Account
+                    accountName: 'Cash',
+                    accountType: 'Asset',
+                    debit: 0,
+                    credit: request.amount,
+                    description: `Cash payment for ${request.title}`
+                }
+            ],
+            metadata: {
+                type: 'monthly_request_deduction',
+                requestId: request._id,
+                monthlyRequestId: request.linkedMonthlyRequestId,
+                itemIndex: request.linkedMonthlyRequestItemIndex,
+                week: request.linkedMonthlyRequestWeek,
+                expenseId: expense._id,
+                residenceId: request.residence,
+                residenceName: request.residence?.name
+            }
+        });
+        
+        await transaction.save();
+        
+        // Update the monthly request item's deducted amount
+        item.deductedAmount = (item.deductedAmount || 0) + request.amount;
+        
+        // Check if item is fully deducted
+        const remainingAmount = (item.estimatedCost || item.totalCost || 0) - item.deductedAmount;
+        if (remainingAmount <= 0) {
+            item.fullyDeducted = true;
+            item.fullyDeductedAt = new Date();
+        }
+        
+        await monthlyRequest.save();
+        
+        // Link the expense to the request
+        request.expenseId = expense._id;
+        request.transactionId = transaction._id;
+        await request.save();
+        
+        console.log('✅ Expense and transaction created for monthly request deduction:', {
+            expenseId: expense._id,
+            transactionId: transaction._id,
+            deductedAmount: item.deductedAmount,
+            remainingAmount: Math.max(0, remainingAmount),
+            isFullyDeducted: remainingAmount <= 0
+        });
+        
+        return {
+            expense,
+            transaction,
+            deductedAmount: item.deductedAmount,
+            remainingAmount: Math.max(0, remainingAmount),
+            isFullyDeducted: remainingAmount <= 0
+        };
+        
+    } catch (error) {
+        console.error('❌ Error creating expense for monthly request deduction:', error);
+        throw error;
+    }
+}

@@ -116,11 +116,23 @@ exports.approveRequest = async (req, res) => {
             notes: notes || ''
         };
 
-        // Update request status to approved if all approvals are complete
+        // Update request status based on approval type
         if (request.approval.admin.approved && 
             request.approval.finance.approved && 
             request.approval.ceo.approved) {
-            request.status = 'approved';
+            
+            // Check if this is a salary request
+            const isSalaryRequest = request.category === 'salary' || 
+                                  request.category === 'salaries' ||
+                                  (request.title && request.title.toLowerCase().includes('salary')) ||
+                                  (request.description && request.description.toLowerCase().includes('salary'));
+            
+            if (isSalaryRequest) {
+                request.status = 'CEO approved';
+                console.log('✅ Salary request approved by CEO - no expense created');
+            } else {
+                request.status = 'approved';
+            }
         }
 
         // Add to request history

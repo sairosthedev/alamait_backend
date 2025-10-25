@@ -492,7 +492,7 @@ const requestSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'assigned', 'in-progress', 'completed', 'rejected', 'waitlisted', 'pending_ceo_approval', 'pending_finance_approval', 'pending_admin_approval', 'pending-ceo-approval', 'pending-finance-approval', 'pending-admin-approval'],
+        enum: ['pending', 'assigned', 'in-progress', 'completed', 'rejected', 'waitlisted', 'pending_ceo_approval', 'pending_finance_approval', 'pending_admin_approval', 'pending-ceo-approval', 'pending-finance-approval', 'pending-admin-approval', 'CEO approved'],
         default: 'pending'
     },
     financeStatus: {
@@ -644,6 +644,20 @@ const requestSchema = new mongoose.Schema({
         }
     }],
     // Metadata for additional request information
+    // Monthly Request Deduction Fields
+    linkedMonthlyRequestId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'MonthlyRequest',
+        required: false
+    },
+    linkedMonthlyRequestItemIndex: {
+        type: Number,
+        required: false
+    },
+    linkedMonthlyRequestWeek: {
+        type: String,
+        required: false
+    },
     metadata: {
         type: mongoose.Schema.Types.Mixed,
         default: {}
