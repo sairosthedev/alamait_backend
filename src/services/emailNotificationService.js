@@ -67,27 +67,40 @@ class EmailNotificationService {
 	 * Get residence name safely
 	 */
 	static async getResidenceName(residence) {
+		// If residence already has a name, return it
 		if (residence?.name) {
 			return residence.name;
 		}
 		
-		if (residence) {
-			try {
-				const mongoose = require('mongoose');
-				const residenceId = typeof residence === 'string' 
-					? new mongoose.Types.ObjectId(residence)
-					: residence;
-				
-				const Residence = require('../models/Residence');
-				const residenceDoc = await Residence.findById(residenceId);
-				return residenceDoc?.name || 'Unknown Residence';
-			} catch (err) {
-				console.error('Error fetching residence:', err);
-				return 'Unknown Residence';
-			}
+		// If no residence provided, return N/A
+		if (!residence) {
+			return 'N/A';
 		}
 		
-		return 'N/A';
+		try {
+			const mongoose = require('mongoose');
+			const residenceId = typeof residence === 'string' 
+				? new mongoose.Types.ObjectId(residence)
+				: residence;
+			
+			// Check if Residence model is available
+			if (typeof Residence?.findById !== 'function') {
+				console.error('Residence model not properly loaded');
+				return 'Unknown Residence';
+			}
+			
+			const residenceDoc = await Residence.findById(residenceId);
+			if (residenceDoc?.name) {
+				console.log(`🏠 Residence found: ${residenceDoc.name}`);
+				return residenceDoc.name;
+			} else {
+				console.log(`🏠 Residence not found for ID: ${residenceId}`);
+				return 'Unknown Residence';
+			}
+		} catch (err) {
+			console.error('Error fetching residence:', err.message);
+			return 'Unknown Residence';
+		}
 	}
 
 
@@ -198,26 +211,9 @@ class EmailNotificationService {
 				role: { $in: ['finance', 'finance_admin', 'finance_user'] }
 			});
 
-			// Get residence name if not populated
-			let residenceName = 'N/A';
-			if (monthlyRequest.residence?.name) {
-				residenceName = monthlyRequest.residence.name;
-			} else if (monthlyRequest.residence) {
-				try {
-					// Use mongoose.Types.ObjectId to ensure proper ObjectId handling
-					const mongoose = require('mongoose');
-					const residenceId = typeof monthlyRequest.residence === 'string' 
-						? new mongoose.Types.ObjectId(monthlyRequest.residence)
-						: monthlyRequest.residence;
-					
-					const residence = await Residence.findById(residenceId);
-					residenceName = residence?.name || 'Unknown Residence';
-					console.log(`🏠 Residence lookup: ${residenceName}`);
-				} catch (err) {
-					console.error('Error fetching residence:', err);
-					residenceName = 'Unknown Residence';
-				}
-			}
+			// Get residence name safely
+			const residenceName = await this.getResidenceName(monthlyRequest.residence);
+			console.log(`🏠 Residence lookup: ${residenceName}`);
 
 			// Create items table HTML
 			let itemsTableHtml = '';
@@ -264,60 +260,47 @@ class EmailNotificationService {
 				`;
 			}
 
-			const emailContent = `
-				<div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; background-color: #ffffff;">
-					<!-- Header -->
-					<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-						<h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">📋 Monthly Request Pending Approval</h1>
-						<p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">New monthly request requires your review</p>
-					</div>
-					
-					<!-- Main Content -->
-					<div style="padding: 30px; background-color: #ffffff;">
-						<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear Finance Team,</p>
-						<p style="color: #666; font-size: 14px; margin-bottom: 25px;">A new monthly request has been submitted for your approval with the following details:</p>
-						
-						<!-- Request Summary -->
-						<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 25px;">
-							<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📊 Request Summary</h3>
-							<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-								<div>
-									<strong style="color: #495057;">🏠 Residence:</strong><br>
-									<span style="color: #333; font-size: 14px;">${residenceName}</span>
-								</div>
-								<div>
-									<strong style="color: #495057;">📅 Period:</strong><br>
-									<span style="color: #333; font-size: 14px;">${month}/${year}</span>
-								</div>
-								<div>
-									<strong style="color: #495057;">💰 Total Amount:</strong><br>
-									<span style="color: #28a745; font-size: 16px; font-weight: 600;">$${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</span>
-								</div>
-								<div>
-									<strong style="color: #495057;">👤 Submitted By:</strong><br>
-									<span style="color: #333; font-size: 14px;">${user.firstName} ${user.lastName}</span>
-								</div>
-							</div>
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear Finance Team,</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">A new monthly request has been submitted for your approval with the following details:</p>
+				
+				<!-- Request Summary -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📊 Request Summary</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">🏠 Residence:</strong><br>
+							<span style="color: #333; font-size: 14px;">${residenceName}</span>
 						</div>
-						
-						${itemsTableHtml}
-						
-						<!-- Action Required -->
-						<div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 20px; border-radius: 8px; margin: 25px 0;">
-							<h3 style="color: #856404; margin: 0 0 10px 0; font-size: 16px;">⚠️ Action Required</h3>
-							<p style="color: #856404; margin: 0; font-size: 14px;">Please review the request details above and approve or reject this monthly request in the admin panel.</p>
+						<div>
+							<strong style="color: #495057;">📅 Period:</strong><br>
+							<span style="color: #333; font-size: 14px;">${month}/${year}</span>
 						</div>
-					</div>
-					
-					<!-- Footer -->
-					<div style="background-color: #f8f9fa; padding: 20px; text-align: center; border-radius: 0 0 10px 10px; border-top: 1px solid #dee2e6;">
-						<p style="color: #6c757d; font-size: 12px; margin: 0;">
-							This is an automated message from <strong>Alamait Student Accommodation</strong><br>
-							Please do not reply to this email.
-						</p>
+						<div>
+							<strong style="color: #495057;">💰 Total Amount:</strong><br>
+							<span style="color: #28a745; font-size: 16px; font-weight: 600;">$${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">👤 Submitted By:</strong><br>
+							<span style="color: #333; font-size: 14px;">${user.firstName} ${user.lastName}</span>
+						</div>
 					</div>
 				</div>
+				
+				${itemsTableHtml}
+				
+				<!-- Action Required -->
+				<div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: #856404; margin: 0 0 10px 0; font-size: 16px;">⚠️ Action Required</h3>
+					<p style="color: #856404; margin: 0; font-size: 14px;">Please review the request details above and approve or reject this monthly request in the admin panel.</p>
+				</div>
 			`;
+
+			const emailContent = this.getBaseEmailTemplate(
+				'📋 Monthly Request Pending Approval',
+				'New monthly request requires your review',
+				content
+			);
 
 			// Send to all finance users with valid email addresses (avoid duplicates)
 			let sentCount = 0;
