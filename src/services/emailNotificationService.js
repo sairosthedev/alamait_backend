@@ -175,8 +175,8 @@ class EmailNotificationService {
                                     return `
                                     <tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
                                         <td style="padding: 12px; color: #333;">
-                                            <div style="font-weight: 600; color: #495057;">${itemTitle}</div>
-                                            ${itemDescription && itemDescription !== itemTitle ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${itemDescription}</div>` : ''}
+                                            <div style="font-weight: 700; color: #2c3e50; font-size: 16px; margin-bottom: 4px;">👤 ${itemTitle}</div>
+                                            ${itemDescription && itemDescription !== itemTitle ? `<div style="font-size: 13px; color: #7f8c8d; font-style: italic;">${itemDescription}</div>` : ''}
                                         </td>
                                         <td style="padding: 12px; text-align: center; color: #495057;">${quantity}</td>
                                         <td style="padding: 12px; text-align: right; color: #495057;">$${unitCost.toFixed(2)}</td>
@@ -1483,8 +1483,8 @@ class EmailNotificationService {
 									return `
 									<tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
 										<td style="padding: 12px; color: #333;">
-											<div style="font-weight: 600; color: #495057;">${itemTitle}</div>
-											${itemDescription && itemDescription !== itemTitle ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${itemDescription}</div>` : ''}
+											<div style="font-weight: 700; color: #2c3e50; font-size: 16px; margin-bottom: 4px;">👤 ${itemTitle}</div>
+											${itemDescription && itemDescription !== itemTitle ? `<div style="font-size: 13px; color: #7f8c8d; font-style: italic;">${itemDescription}</div>` : ''}
 										</td>
 										<td style="padding: 12px; text-align: center; color: #495057;">${quantity}</td>
 										<td style="padding: 12px; text-align: right; color: #495057;">$${unitCost.toFixed(2)}</td>
