@@ -140,10 +140,16 @@ class EmailNotificationService {
 
             // Create items table HTML if items exist
             let itemsTableHtml = '';
+            console.log('🔍 Salary request debugging:');
+            console.log('   Request items:', request.items);
+            console.log('   Items length:', request.items ? request.items.length : 'undefined');
+            console.log('   Items type:', typeof request.items);
+            
             if (request.items && request.items.length > 0) {
+                console.log('✅ Items found, creating table...');
                 itemsTableHtml = `
                     <div style="margin: 20px 0;">
-                        <h3 style="color: #333; margin-bottom: 15px;">Salary Request Items</h3>
+                        <h3 style="color: #333; margin-bottom: 15px;">💰 Salary Request Items</h3>
                         <table style="width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                             <thead>
                                 <tr style="background-color: #f8f9fa;">
@@ -173,6 +179,21 @@ class EmailNotificationService {
                                 </tr>
                             </tfoot>
                         </table>
+                    </div>
+                `;
+            } else {
+                console.log('❌ No items found or items array is empty');
+                // Show a simple summary even when no items are present
+                itemsTableHtml = `
+                    <div style="margin: 20px 0;">
+                        <h3 style="color: #333; margin-bottom: 15px;">💰 Salary Request Summary</h3>
+                        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545;">
+                            <p style="color: #495057; margin: 0; font-size: 14px;">
+                                <strong>Request Type:</strong> Salary Request<br>
+                                <strong>Total Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}<br>
+                                <strong>Description:</strong> ${request.description || 'No detailed breakdown available'}
+                            </p>
+                        </div>
                     </div>
                 `;
             }

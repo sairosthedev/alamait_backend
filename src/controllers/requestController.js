@@ -1191,8 +1191,10 @@ exports.createRequest = async (req, res) => {
         // For finance requests, skip population to improve performance
         let populatedRequest;
         if (request.type === 'financial') {
-            populatedRequest = request;
-            console.log('⚡ Skipping population for finance request to improve performance');
+            // Still populate residence for financial requests to avoid "Unknown Residence" in emails
+            populatedRequest = await Request.findById(request._id)
+                .populate('residence', 'name');
+            console.log('⚡ Populating residence for finance request to avoid "Unknown Residence" in emails');
         } else {
             populatedRequest = await Request.findById(request._id)
                 .populate('submittedBy', 'firstName lastName email role')
@@ -1258,7 +1260,7 @@ exports.createRequest = async (req, res) => {
                         console.log('📧 Sending financial request email to CEO and Finance Admin');
                         try {
                             // Use same method as invoice emails (reliable queue system)
-                            await EmailNotificationService.sendFinancialSalariesRequestToCEO(request, req.user);
+                            await EmailNotificationService.sendFinancialSalariesRequestToCEO(populatedRequest, req.user);
                             console.log('✅ Financial request email sent successfully');
                         } catch (emailError) {
                             console.error('❌ Error sending financial request email:', emailError.message);

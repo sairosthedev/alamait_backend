@@ -1458,52 +1458,88 @@ class RentalAccrualService {
     static async sendInvoiceEmail(invoice, student, residence) {
         try {
             const { sendEmail } = require('../utils/email');
+            const EmailNotificationService = require('./emailNotificationService');
             
-            const emailContent = `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-                        <h2 style="color: #333;">Invoice ${invoice.invoiceNumber}</h2>
-                        <p>Dear ${student.firstName} ${student.lastName},</p>
-                        <p>Please find your invoice details below:</p>
-                        
-                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
-                            <h3 style="color: #333; margin-top: 0;">Invoice Details</h3>
-                            <p><strong>Invoice Number:</strong> ${invoice.invoiceNumber}</p>
-                            <p><strong>Billing Period:</strong> ${invoice.billingPeriod}</p>
-                            <p><strong>Room:</strong> ${invoice.room}</p>
-                            <p><strong>Residence:</strong> ${residence.name}</p>
-                            <p><strong>Due Date:</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</p>
-                        </div>
-                        
-                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
-                            <h3 style="color: #333; margin-top: 0;">Charges</h3>
-                            ${invoice.charges.map(charge => `
-                                <div style="display: flex; justify-content: space-between; margin: 5px 0;">
-                                    <span>${charge.description}</span>
-                                    <span>$${(charge.total || charge.amount || 0).toFixed(2)}</span>
-                                </div>
+            // Generate charges table HTML
+            const chargesTableHtml = invoice.charges && invoice.charges.length > 0 ? `
+                <div style="margin: 20px 0;">
+                    <h3 style="color: #333; margin-bottom: 15px;">💰 Charges Breakdown</h3>
+                    <table style="width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <thead>
+                            <tr style="background-color: #f8f9fa;">
+                                <th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Description</th>
+                                <th style="padding: 12px; text-align: center; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Quantity</th>
+                                <th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Unit Price</th>
+                                <th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${invoice.charges.map((charge, index) => `
+                                <tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
+                                    <td style="padding: 12px; color: #333;">${charge.description}</td>
+                                    <td style="padding: 12px; text-align: center; color: #495057;">${charge.quantity || 1}</td>
+                                    <td style="padding: 12px; text-align: right; color: #495057;">$${(charge.unitPrice || charge.amount || 0).toFixed(2)}</td>
+                                    <td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${(charge.total || charge.amount || 0).toFixed(2)}</td>
+                                </tr>
                             `).join('')}
-                            <hr style="margin: 10px 0;">
-                            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 16px;">
-                                <span>Total Amount:</span>
-                                <span>$${invoice.totalAmount.toFixed(2)}</span>
-                            </div>
+                            <tr style="background-color: #e8f5e8; border-top: 2px solid #28a745;">
+                                <td colspan="3" style="padding: 12px; text-align: right; color: #155724; font-weight: 600;">Total Amount:</td>
+                                <td style="padding: 12px; text-align: right; color: #155724; font-weight: 600; font-size: 16px;">$${invoice.totalAmount.toFixed(2)}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            ` : '';
+
+            const content = `
+                <p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${student.firstName} ${student.lastName},</p>
+                <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Please find your invoice details below:</p>
+                
+                <!-- Invoice Details -->
+                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 25px;">
+                    <h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📋 Invoice Details</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div>
+                            <strong style="color: #495057;">📄 Invoice Number:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${invoice.invoiceNumber}</span>
                         </div>
-                        
-                        <div style="background-color: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0;">
-                            <h3 style="color: #1976d2; margin-top: 0;">Payment Information</h3>
-                            <p>Please make payment by the due date to avoid late fees.</p>
-                            <p>For payment inquiries, please contact our finance team.</p>
+                        <div>
+                            <strong style="color: #495057;">📅 Billing Period:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${invoice.billingPeriod}</span>
                         </div>
-                        
-                        <hr style="margin: 20px 0;">
-                        <p style="font-size: 12px; color: #666;">
-                            This is an automated message from Alamait Student Accommodation.<br>
-                            Please do not reply to this email.
-                        </p>
+                        <div>
+                            <strong style="color: #495057;">🚪 Room:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${invoice.room}</span>
+                        </div>
+                        <div>
+                            <strong style="color: #495057;">🏠 Residence:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${residence.name}</span>
+                        </div>
+                        <div>
+                            <strong style="color: #495057;">⏰ Due Date:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${new Date(invoice.dueDate).toLocaleDateString()}</span>
+                        </div>
+                        <div>
+                            <strong style="color: #495057;">💵 Total Amount:</strong><br>
+                            <span style="color: #28a745; font-size: 16px; font-weight: 600;">$${invoice.totalAmount.toFixed(2)}</span>
+                        </div>
                     </div>
                 </div>
+                
+                ${chargesTableHtml}
+                
+                <!-- Payment Information -->
+                <div style="background-color: #e3f2fd; border: 1px solid #bbdefb; padding: 20px; border-radius: 8px; margin: 25px 0;">
+                    <h3 style="color: #1976d2; margin: 0 0 10px 0; font-size: 16px;">💳 Payment Information</h3>
+                    <p style="color: #1976d2; margin: 0; font-size: 14px;">Please make payment by the due date to avoid late fees. For payment inquiries, please contact our finance team.</p>
+                </div>
             `;
+
+            const emailContent = EmailNotificationService.getBaseEmailTemplate(
+                '📄 Invoice',
+                `Invoice ${invoice.invoiceNumber} - Please find your invoice details below`,
+                content
+            );
             
             // Send email in background (non-blocking)
             setTimeout(async () => {
