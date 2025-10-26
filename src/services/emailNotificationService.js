@@ -144,6 +144,10 @@ class EmailNotificationService {
             console.log('   Request items:', request.items);
             console.log('   Items length:', request.items ? request.items.length : 'undefined');
             console.log('   Items type:', typeof request.items);
+            if (request.items && request.items.length > 0) {
+                console.log('   First item structure:', request.items[0]);
+                console.log('   First item keys:', Object.keys(request.items[0]));
+            }
             
             if (request.items && request.items.length > 0) {
                 console.log('✅ Items found, creating table...');
@@ -160,17 +164,26 @@ class EmailNotificationService {
                                 </tr>
                             </thead>
                             <tbody>
-                                ${request.items.map((item, index) => `
+                                ${request.items.map((item, index) => {
+                                    // Handle different item structures (salary requests vs regular requests)
+                                    const itemTitle = item.title || item.description || 'Untitled Item';
+                                    const itemDescription = item.description || item.purpose || '';
+                                    const quantity = item.quantity || 1;
+                                    const unitCost = item.unitCost || item.estimatedCost || 0;
+                                    const totalCost = item.totalCost || (unitCost * quantity);
+                                    
+                                    return `
                                     <tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
                                         <td style="padding: 12px; color: #333;">
-                                            <div style="font-weight: 600; color: #495057;">${item.description || 'Untitled Item'}</div>
-                                            ${item.purpose ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${item.purpose}</div>` : ''}
+                                            <div style="font-weight: 600; color: #495057;">${itemTitle}</div>
+                                            ${itemDescription && itemDescription !== itemTitle ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${itemDescription}</div>` : ''}
                                         </td>
-                                        <td style="padding: 12px; text-align: center; color: #495057;">${item.quantity || 1}</td>
-                                        <td style="padding: 12px; text-align: right; color: #495057;">$${(item.unitCost || 0).toFixed(2)}</td>
-                                        <td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${(item.totalCost || 0).toFixed(2)}</td>
+                                        <td style="padding: 12px; text-align: center; color: #495057;">${quantity}</td>
+                                        <td style="padding: 12px; text-align: right; color: #495057;">$${unitCost.toFixed(2)}</td>
+                                        <td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${totalCost.toFixed(2)}</td>
                                     </tr>
-                                `).join('')}
+                                    `;
+                                }).join('')}
                             </tbody>
                             <tfoot>
                                 <tr style="background-color: #e9ecef; border-top: 2px solid #dee2e6;">
@@ -192,10 +205,10 @@ class EmailNotificationService {
                                 <strong>Request Type:</strong> Salary Request<br>
                                 <strong>Total Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}<br>
                                 <strong>Description:</strong> ${request.description || 'No detailed breakdown available'}
-                            </p>
-                        </div>
+                        </p>
                     </div>
-                `;
+                </div>
+            `;
             }
 
             const content = `
@@ -459,7 +472,7 @@ class EmailNotificationService {
 						<div>
 							<strong style="color: #495057;">🏠 Residence:</strong><br>
 							<span style="color: #333; font-size: 14px;">${residenceName}</span>
-						</div>
+					</div>
 						<div>
 							<strong style="color: #495057;">📅 Period:</strong><br>
 							<span style="color: #333; font-size: 14px;">${month}/${year}</span>
@@ -1027,7 +1040,7 @@ class EmailNotificationService {
 								</tr>
 							</tfoot>
 						</table>
-					</div>
+						</div>
 				`;
 			}
 
@@ -1042,7 +1055,7 @@ class EmailNotificationService {
 						<div>
 							<strong style="color: #495057;">📋 Request ID:</strong><br>
 							<span style="color: #333; font-size: 14px;">${maintenance._id}</span>
-						</div>
+					</div>
 						<div>
 							<strong style="color: #495057;">🏠 Room:</strong><br>
 							<span style="color: #333; font-size: 14px;">${maintenance.room || 'N/A'}</span>
@@ -1459,17 +1472,26 @@ class EmailNotificationService {
 								</tr>
 							</thead>
 							<tbody>
-								${request.items.map((item, index) => `
+								${request.items.map((item, index) => {
+									// Handle different item structures (salary requests vs regular requests)
+									const itemTitle = item.title || item.description || 'Untitled Item';
+									const itemDescription = item.description || item.purpose || '';
+									const quantity = item.quantity || 1;
+									const unitCost = item.unitCost || item.estimatedCost || 0;
+									const totalCost = item.totalCost || (unitCost * quantity);
+									
+									return `
 									<tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
 										<td style="padding: 12px; color: #333;">
-											<div style="font-weight: 600; color: #495057;">${item.description || 'Untitled Item'}</div>
-											${item.purpose ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${item.purpose}</div>` : ''}
+											<div style="font-weight: 600; color: #495057;">${itemTitle}</div>
+											${itemDescription && itemDescription !== itemTitle ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${itemDescription}</div>` : ''}
 										</td>
-										<td style="padding: 12px; text-align: center; color: #495057;">${item.quantity || 1}</td>
-										<td style="padding: 12px; text-align: right; color: #495057;">$${(item.unitCost || 0).toFixed(2)}</td>
-										<td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${(item.totalCost || 0).toFixed(2)}</td>
+										<td style="padding: 12px; text-align: center; color: #495057;">${quantity}</td>
+										<td style="padding: 12px; text-align: right; color: #495057;">$${unitCost.toFixed(2)}</td>
+										<td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${totalCost.toFixed(2)}</td>
 									</tr>
-								`).join('')}
+									`;
+								}).join('')}
 							</tbody>
 							<tfoot>
 								<tr style="background-color: #e9ecef; border-top: 2px solid #dee2e6;">
@@ -1598,7 +1620,7 @@ class EmailNotificationService {
 						<div>
 							<strong style="color: #495057;">📝 Request Type:</strong><br>
 							<span style="color: #333; font-size: 14px;">${request.type || 'Maintenance'}</span>
-						</div>
+					</div>
 						<div>
 							<strong style="color: #495057;">📋 Title:</strong><br>
 							<span style="color: #333; font-size: 14px;">${request.title || request.issue}</span>
@@ -1762,7 +1784,7 @@ class EmailNotificationService {
 						<div>
 							<strong style="color: #495057;">📅 Event:</strong><br>
 							<span style="color: #333; font-size: 14px;">${event.title}</span>
-						</div>
+					</div>
 						<div>
 							<strong style="color: #495057;">📅 Date:</strong><br>
 							<span style="color: #333; font-size: 14px;">${new Date(event.date).toLocaleDateString()}</span>
@@ -1995,7 +2017,7 @@ class EmailNotificationService {
 						<div>
 							<strong style="color: #495057;">🏠 Current Room:</strong><br>
 							<span style="color: #333; font-size: 14px;">${currentRoom}</span>
-						</div>
+					</div>
 						<div>
 							<strong style="color: #495057;">🎯 Requested Room:</strong><br>
 							<span style="color: #333; font-size: 14px;">${requestedRoom.roomNumber}</span>
@@ -2259,7 +2281,7 @@ class EmailNotificationService {
 						<div>
 							<strong style="color: #495057;">💵 Amount Due:</strong><br>
 							<span style="color: #ffc107; font-size: 16px; font-weight: 600;">$${invoice.balanceDue?.toFixed(2) || '0.00'}</span>
-						</div>
+					</div>
 						<div>
 							<strong style="color: #495057;">📅 Due Date:</strong><br>
 							<span style="color: #333; font-size: 14px;">${new Date(invoice.dueDate).toLocaleDateString()}</span>
@@ -2320,7 +2342,7 @@ class EmailNotificationService {
 						<div>
 							<strong style="color: #495057;">💵 Overdue Amount:</strong><br>
 							<span style="color: #dc3545; font-size: 16px; font-weight: 600;">$${invoice.balanceDue?.toFixed(2) || '0.00'}</span>
-						</div>
+					</div>
 						<div>
 							<strong style="color: #495057;">📅 Due Date:</strong><br>
 							<span style="color: #333; font-size: 14px;">${new Date(invoice.dueDate).toLocaleDateString()}</span>
@@ -2583,7 +2605,7 @@ class EmailNotificationService {
 						<div>
 							<strong style="color: #495057;">💵 Amount:</strong><br>
 							<span style="color: #28a745; font-size: 16px; font-weight: 600;">$${amount.toFixed(2)}</span>
-						</div>
+					</div>
 						<div>
 							<strong style="color: #495057;">💳 Payment Method:</strong><br>
 							<span style="color: #333; font-size: 14px;">${method}</span>
