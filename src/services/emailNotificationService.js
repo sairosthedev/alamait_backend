@@ -395,7 +395,7 @@ class EmailNotificationService {
 						${approved ? '✅ Request Approved' : '❌ Request Rejected'}
 					</h3>
 					<p style="color: ${approved ? '#155724' : '#721c24'}; margin: 0; font-size: 14px;">
-						${approved ? 'Your request has been approved and expenses will be created automatically.' : 'Please review the notes and resubmit if necessary.'}
+						${approved ? 'Your request has been approved and will be processed accordingly.' : 'Please review the notes and resubmit if necessary.'}
 					</p>
 				</div>
 			`;
@@ -422,6 +422,51 @@ class EmailNotificationService {
 				}
 				
 				try {
+					// Create items table HTML for CEO
+					let ceoItemsTableHtml = '';
+					if (monthlyRequest.items && monthlyRequest.items.length > 0) {
+						ceoItemsTableHtml = `
+							<div style="margin: 20px 0;">
+								<h3 style="color: #333; margin-bottom: 15px;">Budget Items</h3>
+								<table style="width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+									<thead>
+										<tr style="background-color: #f8f9fa;">
+											<th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Item</th>
+											<th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Category</th>
+											<th style="padding: 12px; text-align: center; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Qty</th>
+											<th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Unit Cost</th>
+											<th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Total</th>
+										</tr>
+									</thead>
+									<tbody>
+										${monthlyRequest.items.map((item, index) => `
+											<tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
+												<td style="padding: 12px; color: #333;">
+													<div style="font-weight: 600; color: #495057;">${item.title || 'Untitled Item'}</div>
+													${item.description ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${item.description}</div>` : ''}
+												</td>
+												<td style="padding: 12px; color: #495057;">
+													<span style="background-color: #e9ecef; padding: 4px 8px; border-radius: 4px; font-size: 12px; color: #495057;">
+														${item.category || 'General'}
+													</span>
+												</td>
+												<td style="padding: 12px; text-align: center; color: #495057;">${item.quantity || 1}</td>
+												<td style="padding: 12px; text-align: right; color: #495057;">$${(item.estimatedCost || 0).toFixed(2)}</td>
+												<td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${((item.estimatedCost || 0) * (item.quantity || 1)).toFixed(2)}</td>
+											</tr>
+										`).join('')}
+									</tbody>
+									<tfoot>
+										<tr style="background-color: #e9ecef; border-top: 2px solid #dee2e6;">
+											<td colspan="4" style="padding: 12px; text-align: right; font-weight: 600; color: #495057;">Total Budget:</td>
+											<td style="padding: 12px; text-align: right; font-weight: 700; color: #28a745; font-size: 16px;">$${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</td>
+										</tr>
+									</tfoot>
+								</table>
+							</div>
+						`;
+					}
+
 					// Create CEO-specific content
 					const ceoContent = `
 						<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${ceoUser.firstName},</p>
@@ -464,13 +509,15 @@ class EmailNotificationService {
 							` : ''}
 						</div>
 						
+						${ceoItemsTableHtml}
+						
 						<!-- Status Update -->
 						<div style="background-color: ${approved ? '#d4edda' : '#f8d7da'}; border: 1px solid ${approved ? '#c3e6cb' : '#f5c6cb'}; padding: 20px; border-radius: 8px; margin: 25px 0;">
 							<h3 style="color: ${approved ? '#155724' : '#721c24'}; margin: 0 0 10px 0; font-size: 16px;">
 								${approved ? '✅ Budget Request Approved by Finance' : '❌ Budget Request Rejected by Finance'}
 							</h3>
 							<p style="color: ${approved ? '#155724' : '#721c24'}; margin: 0; font-size: 14px;">
-								${approved ? 'The monthly budget request has been approved by Finance and expenses will be created automatically.' : 'The monthly budget request has been rejected by Finance. Please review the notes for details.'}
+								${approved ? 'The monthly budget request has been approved by Finance and will be processed accordingly.' : 'The monthly budget request has been rejected by Finance. Please review the notes for details.'}
 							</p>
 						</div>
 					`;
@@ -853,41 +900,106 @@ class EmailNotificationService {
 	 */
 	static async sendMaintenanceRequestApproved(maintenance, approvedBy) {
 		try {
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #d4edda; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #155724;">Maintenance Request Approved</h2>
-						<p>Dear ${maintenance.student?.firstName || 'Student'},</p>
-						<p>Great news! Your maintenance request has been approved by finance:</p>
-						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
-							<h3 style="color: #333; margin-top: 0;">Approval Details:</h3>
-							<ul>
-								<li><strong>Issue:</strong> ${maintenance.issue}</li>
-								<li><strong>Description:</strong> ${maintenance.description || 'No description provided'}</li>
-								<li><strong>Category:</strong> ${maintenance.category}</li>
-								<li><strong>Priority:</strong> ${maintenance.priority}</li>
-								<li><strong>Residence:</strong> ${maintenance.residence?.name || 'N/A'}</li>
-								<li><strong>Approved Amount:</strong> $${maintenance.amount?.toFixed(2) || '0.00'}</li>
-								<li><strong>Approved By:</strong> ${approvedBy?.firstName} ${approvedBy?.lastName}</li>
-								<li><strong>Approval Date:</strong> ${new Date().toLocaleDateString()}</li>
-							</ul>
-						</div>
-						<p><strong>What happens next?</strong></p>
-						<ol>
-							<li>A technician will be assigned to your request</li>
-							<li>You will receive notification when work begins</li>
-							<li>You will be updated on the progress</li>
-							<li>You will be notified when the work is completed</li>
-						</ol>
-						<p>Thank you for your patience. We will address your maintenance request as soon as possible.</p>
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
+			// Create items table HTML if items exist
+			let itemsTableHtml = '';
+			if (maintenance.items && maintenance.items.length > 0) {
+				itemsTableHtml = `
+					<div style="margin: 20px 0;">
+						<h3 style="color: #333; margin-bottom: 15px;">Request Items</h3>
+						<table style="width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+							<thead>
+								<tr style="background-color: #f8f9fa;">
+									<th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Item</th>
+									<th style="padding: 12px; text-align: center; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Qty</th>
+									<th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Unit Cost</th>
+									<th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Total</th>
+								</tr>
+							</thead>
+							<tbody>
+								${maintenance.items.map((item, index) => `
+									<tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
+										<td style="padding: 12px; color: #333;">
+											<div style="font-weight: 600; color: #495057;">${item.description || 'Untitled Item'}</div>
+											${item.purpose ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${item.purpose}</div>` : ''}
+										</td>
+										<td style="padding: 12px; text-align: center; color: #495057;">${item.quantity || 1}</td>
+										<td style="padding: 12px; text-align: right; color: #495057;">$${(item.unitCost || 0).toFixed(2)}</td>
+										<td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${(item.totalCost || 0).toFixed(2)}</td>
+									</tr>
+								`).join('')}
+							</tbody>
+							<tfoot>
+								<tr style="background-color: #e9ecef; border-top: 2px solid #dee2e6;">
+									<td colspan="3" style="padding: 12px; text-align: right; font-weight: 600; color: #495057;">Total Amount:</td>
+									<td style="padding: 12px; text-align: right; font-weight: 700; color: #28a745; font-size: 16px;">$${maintenance.amount?.toFixed(2) || '0.00'}</td>
+								</tr>
+							</tfoot>
+						</table>
 					</div>
+				`;
+			}
+
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${maintenance.student?.firstName || 'Student'},</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">Your maintenance request has been approved by our finance team and will be processed accordingly.</p>
+				
+				<!-- Request Details -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">🔧 Request Details</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">📋 Request ID:</strong><br>
+							<span style="color: #333; font-size: 14px;">${maintenance._id}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">🏠 Room:</strong><br>
+							<span style="color: #333; font-size: 14px;">${maintenance.room || 'N/A'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">⚠️ Issue:</strong><br>
+							<span style="color: #333; font-size: 14px;">${maintenance.issue || 'N/A'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">💰 Amount:</strong><br>
+							<span style="color: #28a745; font-size: 16px; font-weight: 600;">$${maintenance.amount?.toFixed(2) || '0.00'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">👤 Approved By:</strong><br>
+							<span style="color: #333; font-size: 14px;">${approvedBy?.firstName} ${approvedBy?.lastName}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📅 Approval Date:</strong><br>
+							<span style="color: #333; font-size: 14px;">${new Date().toLocaleDateString()}</span>
+						</div>
+					</div>
+					${maintenance.description ? `
+						<div style="margin-top: 15px;">
+							<strong style="color: #495057;">📝 Description:</strong><br>
+							<span style="color: #333; font-size: 14px;">${maintenance.description}</span>
+						</div>
+					` : ''}
+				</div>
+				
+				${itemsTableHtml}
+				
+				<!-- Next Steps -->
+				<div style="background-color: #d4edda; border: 1px solid #c3e6cb; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: #155724; margin: 0 0 15px 0; font-size: 16px;">✅ What happens next?</h3>
+					<ol style="color: #155724; margin: 0; padding-left: 20px;">
+						<li style="margin-bottom: 8px;">A technician will be assigned to your request</li>
+						<li style="margin-bottom: 8px;">You will receive notification when work begins</li>
+						<li style="margin-bottom: 8px;">You will be updated on the progress</li>
+						<li style="margin-bottom: 0;">You will be notified when the work is completed</li>
+					</ol>
+					<p style="color: #155724; margin: 15px 0 0 0; font-size: 14px;">Thank you for your patience. We will address your maintenance request as soon as possible.</p>
 				</div>
 			`;
+
+			const emailContent = this.getBaseEmailTemplate(
+				'🔧 Maintenance Request Approved',
+				'Your maintenance request has been approved and will be processed accordingly',
+				content
+			);
 
 			await sendEmail({
 				to: maintenance.student?.email,
