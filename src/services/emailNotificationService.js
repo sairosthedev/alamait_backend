@@ -364,62 +364,94 @@ class EmailNotificationService {
 	 */
 	static async sendMonthlyRequestApprovalNotification(monthlyRequest, approved, notes, month, year, approvedBy) {
 		try {
-			// Get residence name if not populated
-			let residenceName = 'N/A';
-			if (monthlyRequest.residence?.name) {
-				residenceName = monthlyRequest.residence.name;
-			} else if (monthlyRequest.residence) {
-				try {
-					// Use mongoose.Types.ObjectId to ensure proper ObjectId handling
-					const mongoose = require('mongoose');
-					const residenceId = typeof monthlyRequest.residence === 'string' 
-						? new mongoose.Types.ObjectId(monthlyRequest.residence)
-						: monthlyRequest.residence;
-					
-					// Ensure Residence model is properly loaded
-					if (typeof Residence.findById === 'function') {
-						const residence = await Residence.findById(residenceId);
-						residenceName = residence?.name || 'Unknown Residence';
-					} else {
-						console.error('Residence model not properly loaded - findById is not a function');
-						residenceName = 'Unknown Residence';
-					}
-				} catch (err) {
-					console.error('Error fetching residence:', err);
-					residenceName = 'Unknown Residence';
-				}
-			}
+			// Get residence name safely
+			const residenceName = await this.getResidenceName(monthlyRequest.residence);
 
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Monthly Request ${approved ? 'Approved' : 'Rejected'}</h2>
-						<p>Dear ${monthlyRequest.submittedBy?.firstName || 'User'},</p>
-						<p>Your monthly request has been <strong>${approved ? 'approved' : 'rejected'}</strong>:</p>
-						<ul>
-							<li><strong>Residence:</strong> ${residenceName}</li>
-							<li><strong>Month/Year:</strong> ${month}/${year}</li>
-							<li><strong>Status:</strong> ${approved ? 'Approved' : 'Rejected'}</li>
-							<li><strong>Approved By:</strong> ${approvedBy.firstName} ${approvedBy.lastName}</li>
-							${notes ? `<li><strong>Notes:</strong> ${notes}</li>` : ''}
-						</ul>
-						${approved ? '<p>Your request has been approved and expenses will be created automatically.</p>' : '<p>Please review the notes and resubmit if necessary.</p>'}
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
+			// Get CEO users for notification
+			const User = require('../models/User');
+			const ceoUsers = await User.find({
+				role: { $in: ['ceo', 'ceo_admin'] }
+			});
+
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${monthlyRequest.submittedBy?.firstName || 'User'},</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">Your monthly request has been <strong>${approved ? 'approved' : 'rejected'}</strong>:</p>
+				
+				<!-- Request Details -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid ${approved ? '#28a745' : '#dc3545'}; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📊 Request Summary</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">🏠 Residence:</strong><br>
+							<span style="color: #333; font-size: 14px;">${residenceName}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📅 Period:</strong><br>
+							<span style="color: #333; font-size: 14px;">${month}/${year}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">💰 Total Amount:</strong><br>
+							<span style="color: #333; font-size: 14px;">$${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">👤 Approved By:</strong><br>
+							<span style="color: #333; font-size: 14px;">${approvedBy.firstName} ${approvedBy.lastName}</span>
+						</div>
 					</div>
+					${notes ? `
+						<div style="margin-top: 15px;">
+							<strong style="color: #495057;">📝 Notes:</strong><br>
+							<span style="color: #333; font-size: 14px;">${notes}</span>
+						</div>
+					` : ''}
+				</div>
+				
+				<!-- Status Update -->
+				<div style="background-color: ${approved ? '#d4edda' : '#f8d7da'}; border: 1px solid ${approved ? '#c3e6cb' : '#f5c6cb'}; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: ${approved ? '#155724' : '#721c24'}; margin: 0 0 10px 0; font-size: 16px;">
+						${approved ? '✅ Request Approved' : '❌ Request Rejected'}
+					</h3>
+					<p style="color: ${approved ? '#155724' : '#721c24'}; margin: 0; font-size: 14px;">
+						${approved ? 'Your request has been approved and expenses will be created automatically.' : 'Please review the notes and resubmit if necessary.'}
+					</p>
 				</div>
 			`;
 
+			const emailContent = this.getBaseEmailTemplate(
+				`📋 Monthly Request ${approved ? 'Approved' : 'Rejected'}`,
+				`Your request has been ${approved ? 'approved' : 'rejected'}`,
+				content
+			);
+
+			// Send to the submitter
 			await sendEmail({
 				to: monthlyRequest.submittedBy?.email,
 				subject: `Monthly Request ${approved ? 'Approved' : 'Rejected'}`,
 				html: emailContent
 			});
 
-			console.log(`✅ Monthly request ${approved ? 'approval' : 'rejection'} notification sent`);
+			// Send to CEO users
+			let ceoSentCount = 0;
+			for (const ceoUser of ceoUsers) {
+				if (!ceoUser.email || !ceoUser.email.includes('@')) {
+					console.log(`⚠️ Skipping invalid CEO email: ${ceoUser.email}`);
+					continue;
+				}
+				
+				try {
+					await sendEmail({
+						to: ceoUser.email,
+						subject: `CEO Notification: Monthly Request ${approved ? 'Approved' : 'Rejected'}`,
+						html: emailContent
+					});
+					ceoSentCount++;
+					console.log(`✅ CEO notification sent to: ${ceoUser.email}`);
+				} catch (emailError) {
+					console.error(`❌ Failed to send CEO notification to ${ceoUser.email}:`, emailError.message);
+				}
+			}
+
+			console.log(`✅ Monthly request ${approved ? 'approval' : 'rejection'} notification sent to submitter and ${ceoSentCount} CEO users`);
 			return true;
 		} catch (error) {
 			console.error('❌ Error sending monthly request approval notification:', error);
@@ -1229,31 +1261,74 @@ class EmailNotificationService {
 				return false;
 			}
 
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Request ${approved ? 'Approved' : 'Rejected'} by CEO</h2>
-						<p>Dear ${request.submittedBy?.firstName || 'User'},</p>
-						<p>Your request has been <strong>${approved ? 'approved' : 'rejected'}</strong> by the CEO:</p>
-						<ul>
-							<li><strong>Request Type:</strong> ${request.type || 'Maintenance'}</li>
-							<li><strong>Title:</strong> ${request.title || request.issue}</li>
-							<li><strong>Status:</strong> ${approved ? 'Approved' : 'Rejected'}</li>
-							<li><strong>Approved By:</strong> ${approvedBy.firstName} ${approvedBy.lastName}</li>
-							<li><strong>Approval Date:</strong> ${new Date().toLocaleDateString()}</li>
-							${approvalReason ? `<li><strong>Reason:</strong> ${approvalReason}</li>` : ''}
-						</ul>
-						${approved ? '<p>Your request has been approved and will be processed accordingly.</p>' : '<p>Please review the reason and resubmit if necessary.</p>'}
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
+			// Get finance users for notification
+			const User = require('../models/User');
+			const financeUsers = await User.find({
+				role: { $in: ['finance', 'finance_admin', 'finance_user'] }
+			});
+
+			// Get residence name safely
+			const residenceName = await this.getResidenceName(request.residence);
+
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${request.submittedBy?.firstName || 'User'},</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">Your request has been <strong>${approved ? 'approved' : 'rejected'}</strong> by the CEO:</p>
+				
+				<!-- Request Details -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid ${approved ? '#28a745' : '#dc3545'}; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📊 Request Summary</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">📝 Request Type:</strong><br>
+							<span style="color: #333; font-size: 14px;">${request.type || 'Maintenance'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📋 Title:</strong><br>
+							<span style="color: #333; font-size: 14px;">${request.title || request.issue}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">🏠 Residence:</strong><br>
+							<span style="color: #333; font-size: 14px;">${residenceName}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">👤 Approved By:</strong><br>
+							<span style="color: #333; font-size: 14px;">${approvedBy.firstName} ${approvedBy.lastName}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📅 Approval Date:</strong><br>
+							<span style="color: #333; font-size: 14px;">${new Date().toLocaleDateString()}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">💰 Amount:</strong><br>
+							<span style="color: #333; font-size: 14px;">$${request.amount?.toFixed(2) || '0.00'}</span>
+						</div>
 					</div>
+					${approvalReason ? `
+						<div style="margin-top: 15px;">
+							<strong style="color: #495057;">💭 Reason:</strong><br>
+							<span style="color: #333; font-size: 14px;">${approvalReason}</span>
+						</div>
+					` : ''}
+				</div>
+				
+				<!-- Status Update -->
+				<div style="background-color: ${approved ? '#d4edda' : '#f8d7da'}; border: 1px solid ${approved ? '#c3e6cb' : '#f5c6cb'}; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: ${approved ? '#155724' : '#721c24'}; margin: 0 0 10px 0; font-size: 16px;">
+						${approved ? '✅ Request Approved by CEO' : '❌ Request Rejected by CEO'}
+					</h3>
+					<p style="color: ${approved ? '#155724' : '#721c24'}; margin: 0; font-size: 14px;">
+						${approved ? 'Your request has been approved and will be processed accordingly.' : 'Please review the reason and resubmit if necessary.'}
+					</p>
 				</div>
 			`;
 
-			// Send email in background to avoid blocking request processing
+			const emailContent = this.getBaseEmailTemplate(
+				`📋 Request ${approved ? 'Approved' : 'Rejected'} by CEO`,
+				`Your request has been ${approved ? 'approved' : 'rejected'}`,
+				content
+			);
+
+			// Send to the submitter
 			setTimeout(async () => {
 				try {
 					await sendEmail({
@@ -1267,7 +1342,28 @@ class EmailNotificationService {
 				}
 			}, 100);
 
-			console.log(`✅ CEO approval notification sent to ${recipientEmail}`);
+			// Send to finance users
+			let financeSentCount = 0;
+			for (const financeUser of financeUsers) {
+				if (!financeUser.email || !financeUser.email.includes('@')) {
+					console.log(`⚠️ Skipping invalid finance email: ${financeUser.email}`);
+					continue;
+				}
+				
+				try {
+					await sendEmail({
+						to: financeUser.email,
+						subject: `Finance Notification: Request ${approved ? 'Approved' : 'Rejected'} by CEO`,
+						html: emailContent
+					});
+					financeSentCount++;
+					console.log(`✅ Finance notification sent to: ${financeUser.email}`);
+				} catch (emailError) {
+					console.error(`❌ Failed to send finance notification to ${financeUser.email}:`, emailError.message);
+				}
+			}
+
+			console.log(`✅ CEO approval notification sent to submitter and ${financeSentCount} finance users`);
 			return true;
 		} catch (error) {
 			console.error('❌ Error sending CEO approval notification:', error);
