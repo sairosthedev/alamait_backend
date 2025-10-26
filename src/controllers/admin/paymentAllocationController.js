@@ -648,12 +648,11 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
 
         // Use aggregation pipeline for much faster processing
         const pipeline = [
-            // Match AR transactions
+            // Match AR transactions (both debits and credits)
             {
                 $match: {
                     'entries.accountCode': { $regex: '^1100-' },
                     'entries.accountType': 'Asset',
-                    'entries.debit': { $gt: 0 },
                     ...(residence && { residence: new mongoose.Types.ObjectId(residence) })
                 }
             },
@@ -663,8 +662,7 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
             {
                 $match: {
                     'entries.accountCode': { $regex: '^1100-' },
-                    'entries.accountType': 'Asset',
-                    'entries.debit': { $gt: 0 }
+                    'entries.accountType': 'Asset'
                 }
             },
             // Extract student ID from account code
@@ -673,20 +671,33 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
                     studentId: { $arrayElemAt: [{ $split: ['$entries.accountCode', '-'] }, 1] }
                 }
             },
-            // Group by student ID to get totals
+            // Group by student ID to calculate NET outstanding balance
             {
                 $group: {
                     _id: '$studentId',
-                    totalBalance: { $sum: '$entries.debit' },
+                    totalDebits: { $sum: { $ifNull: ['$entries.debit', 0] } },      // AR accruals (what's owed)
+                    totalCredits: { $sum: { $ifNull: ['$entries.credit', 0] } },   // Payments (what's paid)
                     transactionCount: { $sum: 1 },
                     latestTransaction: { $max: '$date' },
                     residence: { $first: '$residence' }
                 }
             },
+            // Calculate net outstanding balance
+            {
+                $addFields: {
+                    totalBalance: { $subtract: ['$totalDebits', '$totalCredits'] }
+                }
+            },
+            // Only include students with positive outstanding balances
+            {
+                $match: {
+                    totalBalance: { $gt: 0 }
+                }
+            },
             // Sort by total balance
             { $sort: { totalBalance: -1 } },
             // Limit results
-            { $limit: parseInt(limit) }
+            { $limit: parseInt(limit) || 20 }
         ];
 
         console.log(`🔍 Running optimized aggregation pipeline...`);
@@ -724,7 +735,7 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
             return {
                 studentId: student._id,
                 residence: student.residence,
-                totalBalance: debtor?.currentBalance || student.totalBalance,
+                totalBalance: student.totalBalance, // Use calculated net balance from aggregation
                 transactionCount: student.transactionCount,
                 latestTransaction: student.latestTransaction,
                 hasDebtorAccount: !!debtor,
@@ -821,12 +832,11 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
 
         // Use aggregation pipeline to get monthly breakdown
         const pipeline = [
-            // Match AR transactions
+            // Match AR transactions (both debits and credits)
             {
                 $match: {
                     'entries.accountCode': { $regex: '^1100-' },
                     'entries.accountType': 'Asset',
-                    'entries.debit': { $gt: 0 },
                     ...(residence && { residence: new mongoose.Types.ObjectId(residence) })
                 }
             },
@@ -836,8 +846,7 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
             {
                 $match: {
                     'entries.accountCode': { $regex: '^1100-' },
-                    'entries.accountType': 'Asset',
-                    'entries.debit': { $gt: 0 }
+                    'entries.accountType': 'Asset'
                 }
             },
             // Extract student ID from account code and create month key
@@ -863,10 +872,23 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
                         year: '$year',
                         month: '$month'
                     },
-                    monthlyBalance: { $sum: '$entries.debit' },
+                    monthlyDebits: { $sum: { $ifNull: ['$entries.debit', 0] } },
+                    monthlyCredits: { $sum: { $ifNull: ['$entries.credit', 0] } },
                     transactionCount: { $sum: 1 },
                     latestTransaction: { $max: '$date' },
                     residence: { $first: '$residence' }
+                }
+            },
+            // Calculate net monthly balance
+            {
+                $addFields: {
+                    monthlyBalance: { $subtract: ['$monthlyDebits', '$monthlyCredits'] }
+                }
+            },
+            // Only include months with positive balances
+            {
+                $match: {
+                    monthlyBalance: { $gt: 0 }
                 }
             },
             // Group by student to get all their monthly balances
