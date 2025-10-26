@@ -138,29 +138,100 @@ class EmailNotificationService {
                 }
             }
 
-            const emailContent = `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-                        <h2 style="color: #333;">Financial Request: Salaries</h2>
-                        <p>Dear CEO,</p>
-                        <p>A financial request categorized as <strong>Salaries</strong> has been submitted:</p>
-                        <ul>
-                            <li><strong>Title:</strong> ${request.title || 'N/A'}</li>
-                            <li><strong>Description:</strong> ${request.description || 'N/A'}</li>
-                            <li><strong>Residence:</strong> ${residenceName}</li>
-                            <li><strong>Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</li>
-                            <li><strong>Submitted By:</strong> ${submittedBy?.firstName || ''} ${submittedBy?.lastName || ''}</li>
-                            <li><strong>Date:</strong> ${new Date(request.createdAt || Date.now()).toLocaleDateString()}</li>
-                        </ul>
-                        <p>Please review and take the necessary action.</p>
-                        <hr style="margin: 20px 0;">
-                        <p style="font-size: 12px; color: #666;">
-                            This is an automated message from Alamait Student Accommodation.<br>
-                            Please do not reply to this email.
-                        </p>
+            // Create items table HTML if items exist
+            let itemsTableHtml = '';
+            if (request.items && request.items.length > 0) {
+                itemsTableHtml = `
+                    <div style="margin: 20px 0;">
+                        <h3 style="color: #333; margin-bottom: 15px;">Salary Request Items</h3>
+                        <table style="width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            <thead>
+                                <tr style="background-color: #f8f9fa;">
+                                    <th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Item</th>
+                                    <th style="padding: 12px; text-align: center; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Qty</th>
+                                    <th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Unit Cost</th>
+                                    <th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${request.items.map((item, index) => `
+                                    <tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
+                                        <td style="padding: 12px; color: #333;">
+                                            <div style="font-weight: 600; color: #495057;">${item.description || 'Untitled Item'}</div>
+                                            ${item.purpose ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${item.purpose}</div>` : ''}
+                                        </td>
+                                        <td style="padding: 12px; text-align: center; color: #495057;">${item.quantity || 1}</td>
+                                        <td style="padding: 12px; text-align: right; color: #495057;">$${(item.unitCost || 0).toFixed(2)}</td>
+                                        <td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${(item.totalCost || 0).toFixed(2)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                            <tfoot>
+                                <tr style="background-color: #e9ecef; border-top: 2px solid #dee2e6;">
+                                    <td colspan="3" style="padding: 12px; text-align: right; font-weight: 600; color: #495057;">Total Amount:</td>
+                                    <td style="padding: 12px; text-align: right; font-weight: 700; color: #28a745; font-size: 16px;">$${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</td>
+                                </tr>
+                            </tfoot>
+                        </table>
                     </div>
+                `;
+            }
+
+            const content = `
+                <p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear CEO,</p>
+                <p style="color: #666; font-size: 14px; margin-bottom: 25px;">A financial request categorized as <strong>Salaries</strong> has been submitted for your review and approval.</p>
+                
+                <!-- Request Details -->
+                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545; margin-bottom: 25px;">
+                    <h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">💰 Salary Request Details</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div>
+                            <strong style="color: #495057;">📋 Request Title:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${request.title || 'N/A'}</span>
+                        </div>
+                        <div>
+                            <strong style="color: #495057;">🏠 Residence:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${residenceName}</span>
+                        </div>
+                        <div>
+                            <strong style="color: #495057;">💰 Total Amount:</strong><br>
+                            <span style="color: #dc3545; font-size: 16px; font-weight: 600;">$${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}</span>
+                        </div>
+                        <div>
+                            <strong style="color: #495057;">👤 Submitted By:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${submittedBy?.firstName || ''} ${submittedBy?.lastName || ''}</span>
+                        </div>
+                        <div>
+                            <strong style="color: #495057;">📅 Submission Date:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${new Date(request.createdAt || Date.now()).toLocaleDateString()}</span>
+                        </div>
+                        <div>
+                            <strong style="color: #495057;">🏷️ Category:</strong><br>
+                            <span style="color: #333; font-size: 14px;">Salaries</span>
+                        </div>
+                    </div>
+                    ${request.description ? `
+                        <div style="margin-top: 15px;">
+                            <strong style="color: #495057;">📝 Description:</strong><br>
+                            <span style="color: #333; font-size: 14px;">${request.description}</span>
+                        </div>
+                    ` : ''}
+                </div>
+                
+                ${itemsTableHtml}
+                
+                <!-- Action Required -->
+                <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 20px; border-radius: 8px; margin: 25px 0;">
+                    <h3 style="color: #856404; margin: 0 0 10px 0; font-size: 16px;">⚠️ Action Required</h3>
+                    <p style="color: #856404; margin: 0; font-size: 14px;">Please review this salary request and take the necessary action. You can approve or reject the request through the admin panel.</p>
                 </div>
             `;
+
+            const emailContent = this.getBaseEmailTemplate(
+                '💰 Salary Request - CEO Approval Required',
+                'A financial request categorized as Salaries has been submitted for your review',
+                content
+            );
 
             let sentCount = 0;
             for (const ceo of ceoUsers) {
