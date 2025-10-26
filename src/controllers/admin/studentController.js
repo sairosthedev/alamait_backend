@@ -349,23 +349,82 @@ exports.createStudent = async (req, res) => {
         setTimeout(async () => {
             try {
                 console.log(`📧 Sending welcome email to ${email}...`);
+                
+                // Get residence name for email
+                let residenceName = 'N/A';
+                if (residenceId) {
+                    try {
+                        const residence = await Residence.findById(residenceId);
+                        residenceName = residence?.name || 'N/A';
+                    } catch (err) {
+                        console.error('Error fetching residence name:', err);
+                    }
+                }
+
+                const EmailNotificationService = require('../../services/emailNotificationService');
+                
+                const content = `
+                    <p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${firstName} ${lastName},</p>
+                    <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Welcome to Alamait Student Accommodation! Your account has been successfully created.</p>
+                    
+                    <!-- Account Details -->
+                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 25px;">
+                        <h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">🎓 Account Details</h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div>
+                                <strong style="color: #495057;">📧 Email:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${email}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">🔑 Temporary Password:</strong><br>
+                                <span style="color: #dc3545; font-size: 16px; font-weight: 600;">${tempPassword}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">🏠 Residence:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${residenceName}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">📅 Account Created:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${new Date().toLocaleDateString()}</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Important Instructions -->
+                    <div style="background-color: #d4edda; border: 1px solid #c3e6cb; padding: 20px; border-radius: 8px; margin: 25px 0;">
+                        <h3 style="color: #155724; margin: 0 0 15px 0; font-size: 16px;">✅ Next Steps</h3>
+                        <ol style="color: #155724; margin: 0; padding-left: 20px;">
+                            <li style="margin-bottom: 8px;">Log in to your account using the temporary password above</li>
+                            <li style="margin-bottom: 8px;">Change your password immediately after first login</li>
+                            <li style="margin-bottom: 8px;">Review and sign your lease agreement (attached to this email)</li>
+                            <li style="margin-bottom: 0;">Upload your signed lease agreement through your student portal</li>
+                        </ol>
+                    </div>
+                    
+                    <!-- Login Information -->
+                    <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 20px; border-radius: 8px; margin: 25px 0;">
+                        <h3 style="color: #856404; margin: 0 0 10px 0; font-size: 16px;">🔗 Login Information</h3>
+                        <p style="color: #856404; margin: 0; font-size: 14px;">
+                            <strong>Login URL:</strong> <a href="https://alamait.vercel.app/login" style="color: #856404; text-decoration: underline;">https://alamait.vercel.app/login</a>
+                        </p>
+                        <p style="color: #856404; margin: 10px 0 0 0; font-size: 14px;">
+                            For assistance, please contact our support team at <strong>support@alamait.com</strong>
+                        </p>
+                    </div>
+                `;
+
+                const emailContent = EmailNotificationService.getBaseEmailTemplate(
+                    '🎓 Welcome to Alamait Student Accommodation',
+                    'Your account has been successfully created',
+                    content,
+                    'Login to Your Account',
+                    'https://alamait.vercel.app/login'
+                );
+
                 await sendEmail({
                     to: email,
                     subject: 'Welcome to Alamait Student Accommodation',
-                    text: `
-                        Dear ${firstName} ${lastName},
-
-                        Welcome to Alamait Student Accommodation! Your account has been created.
-
-                        Temporary Password: ${tempPassword}
-
-                        Please log in and change your password as soon as possible.
-
-                        Your lease agreement is attached to this email. Please review and sign it as required.
-
-                        Best regards,
-                        Alamait Student Accommodation Team
-                    `,
+                    html: emailContent,
                     attachments: attachments.length > 0 ? attachments : undefined
                 });
                 console.log(`✅ Welcome email sent successfully to ${email}`);
@@ -1578,53 +1637,122 @@ exports.manualAddStudent = async (req, res) => {
                 console.log(`   Room: ${roomNumber}`);
                 console.log(`   Residence: ${residence.name}`);
                 
-                const welcomeEmailContent = `
-                    Dear ${firstName} ${lastName},
-
-                    Welcome to Alamait Student Accommodation! Your account has been successfully created and your application has been approved.
-
-                    ACCOUNT DETAILS:
-                    Email: ${email}
-                    ${tempPassword ? `Temporary Password: ${tempPassword}` : 'Password: Use your existing password'}
-
-                    APPLICATION DETAILS:
-                    Application Code: ${application.applicationCode}
-                    Allocated Room: ${roomNumber}
-                    Approval Date: ${approvalDate.toLocaleDateString()}
-                    Valid Until: ${validUntil.toLocaleDateString()}
-
-                    ROOM ASSIGNMENT:
-                    Residence: ${residence.name}
-                    Room: ${roomNumber}
-                    Start Date: ${new Date(startDate).toLocaleDateString()}
-                    End Date: ${new Date(endDate).toLocaleDateString()}
-
-                    PAYMENT DETAILS:
-                    Monthly Rent: $${monthlyRent}
-                    Admin Fee: $${adminFee || 0}
-                    Security Deposit: $${securityDeposit || 0}
-                    Total Initial Payment: $${monthlyRent + (adminFee || 0) + (securityDeposit || 0)}
-
-                    IMPORTANT:
-                    1. Please log in to your account using the temporary password above
-                    2. Change your password immediately after first login
-                    3. Review and sign your lease agreement (attached)
-                    4. Upload your signed lease agreement through your student portal
-
-                    LOGIN URL: https://alamait.vercel.app/login
-
-                    For assistance, please contact our support team at support@alamait.com
-
-                    Best regards,
-                    The Alamait Team
+                const EmailNotificationService = require('../../services/emailNotificationService');
+                
+                const content = `
+                    <p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${firstName} ${lastName},</p>
+                    <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Welcome to Alamait Student Accommodation! Your account has been successfully created and your application has been approved.</p>
+                    
+                    <!-- Account Details -->
+                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 25px;">
+                        <h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">🎓 Account Details</h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div>
+                                <strong style="color: #495057;">📧 Email:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${email}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">🔑 Password:</strong><br>
+                                <span style="color: #dc3545; font-size: 14px; font-weight: 600;">${tempPassword ? tempPassword : 'Use your existing password'}</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Application Details -->
+                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 25px;">
+                        <h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📋 Application Details</h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div>
+                                <strong style="color: #495057;">📄 Application Code:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${application.applicationCode}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">🏠 Allocated Room:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${roomNumber}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">📅 Approval Date:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${approvalDate.toLocaleDateString()}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">⏰ Valid Until:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${validUntil.toLocaleDateString()}</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Room Assignment -->
+                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #17a2b8; margin-bottom: 25px;">
+                        <h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">🏠 Room Assignment</h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div>
+                                <strong style="color: #495057;">🏢 Residence:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${residence.name}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">🚪 Room:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${roomNumber}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">📅 Start Date:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${new Date(startDate).toLocaleDateString()}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">📅 End Date:</strong><br>
+                                <span style="color: #333; font-size: 14px;">${new Date(endDate).toLocaleDateString()}</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Payment Details -->
+                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #ffc107; margin-bottom: 25px;">
+                        <h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">💰 Payment Details</h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div>
+                                <strong style="color: #495057;">🏠 Monthly Rent:</strong><br>
+                                <span style="color: #333; font-size: 14px;">$${monthlyRent}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">📋 Admin Fee:</strong><br>
+                                <span style="color: #333; font-size: 14px;">$${adminFee || 0}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">🔒 Security Deposit:</strong><br>
+                                <span style="color: #333; font-size: 14px;">$${securityDeposit || 0}</span>
+                            </div>
+                            <div>
+                                <strong style="color: #495057;">💵 Total Initial Payment:</strong><br>
+                                <span style="color: #28a745; font-size: 16px; font-weight: 600;">$${monthlyRent + (adminFee || 0) + (securityDeposit || 0)}</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Important Instructions -->
+                    <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 20px; border-radius: 8px; margin: 25px 0;">
+                        <h3 style="color: #856404; margin: 0 0 15px 0; font-size: 16px;">⚠️ Important Instructions</h3>
+                        <ol style="color: #856404; margin: 0; padding-left: 20px;">
+                            <li style="margin-bottom: 8px;">Please log in to your account using the temporary password above</li>
+                            <li style="margin-bottom: 8px;">Change your password immediately after first login</li>
+                            <li style="margin-bottom: 8px;">Review and sign your lease agreement (attached)</li>
+                            <li style="margin-bottom: 8px;">Upload your signed lease agreement through your student portal</li>
+                        </ol>
+                    </div>
                 `;
+
+                const welcomeEmailContent = EmailNotificationService.getBaseEmailTemplate(
+                    '🎓 Welcome to Alamait Student Accommodation',
+                    'Your account has been successfully created and your application has been approved',
+                    content,
+                    'Login to Your Account',
+                    'https://alamait.vercel.app/login'
+                );
                 
                 try {
                     // Use same method as invoice emails (reliable queue system)
                     await sendEmail({
                         to: email,
                         subject: 'Welcome to Alamait Student Accommodation - Your Account Details',
-                        text: welcomeEmailContent,
+                        html: welcomeEmailContent,
                         attachments: attachments.length > 0 ? attachments : undefined
                     });
                     console.log(`✅ Welcome email sent successfully to ${email}`);

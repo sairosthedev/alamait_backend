@@ -1422,29 +1422,100 @@ class EmailNotificationService {
 				}
 			} catch (_) {}
 
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Request Pending CEO Approval</h2>
-						<p>Dear CEO,</p>
-						<p>A new request has been submitted for your approval:</p>
-						<ul>
-							<li><strong>Request Type:</strong> ${request.type || 'Maintenance'}</li>
-							<li><strong>Title:</strong> ${request.title || request.issue}</li>
-							<li><strong>Location:</strong> ${residenceName}</li>
-							<li><strong>Amount:</strong> $${request.amount?.toFixed(2) || '0.00'}</li>
-							<li><strong>Submitted By:</strong> ${submittedBy.firstName} ${submittedBy.lastName}</li>
-							<li><strong>Submitted Date:</strong> ${new Date().toLocaleDateString()}</li>
-						</ul>
-						<p>Please review and approve/reject this request.</p>
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
+			// Create items table HTML if items exist
+			let itemsTableHtml = '';
+			if (request.items && request.items.length > 0) {
+				itemsTableHtml = `
+					<div style="margin: 20px 0;">
+						<h3 style="color: #333; margin-bottom: 15px;">Request Items</h3>
+						<table style="width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+							<thead>
+								<tr style="background-color: #f8f9fa;">
+									<th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Item</th>
+									<th style="padding: 12px; text-align: center; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Qty</th>
+									<th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Unit Cost</th>
+									<th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Total</th>
+								</tr>
+							</thead>
+							<tbody>
+								${request.items.map((item, index) => `
+									<tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
+										<td style="padding: 12px; color: #333;">
+											<div style="font-weight: 600; color: #495057;">${item.description || 'Untitled Item'}</div>
+											${item.purpose ? `<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">${item.purpose}</div>` : ''}
+										</td>
+										<td style="padding: 12px; text-align: center; color: #495057;">${item.quantity || 1}</td>
+										<td style="padding: 12px; text-align: right; color: #495057;">$${(item.unitCost || 0).toFixed(2)}</td>
+										<td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${(item.totalCost || 0).toFixed(2)}</td>
+									</tr>
+								`).join('')}
+							</tbody>
+							<tfoot>
+								<tr style="background-color: #e9ecef; border-top: 2px solid #dee2e6;">
+									<td colspan="3" style="padding: 12px; text-align: right; font-weight: 600; color: #495057;">Total Amount:</td>
+									<td style="padding: 12px; text-align: right; font-weight: 700; color: #28a745; font-size: 16px;">$${request.amount?.toFixed(2) || '0.00'}</td>
+								</tr>
+							</tfoot>
+						</table>
 					</div>
+				`;
+			}
+
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear CEO,</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">A new request has been submitted for your approval and review.</p>
+				
+				<!-- Request Details -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #ffc107; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📋 Request Details</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">📝 Request Type:</strong><br>
+							<span style="color: #333; font-size: 14px;">${request.type || 'Maintenance'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📋 Title:</strong><br>
+							<span style="color: #333; font-size: 14px;">${request.title || request.issue || 'N/A'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">🏠 Location:</strong><br>
+							<span style="color: #333; font-size: 14px;">${residenceName}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">💰 Amount:</strong><br>
+							<span style="color: #ffc107; font-size: 16px; font-weight: 600;">$${request.amount?.toFixed(2) || '0.00'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">👤 Submitted By:</strong><br>
+							<span style="color: #333; font-size: 14px;">${submittedBy.firstName} ${submittedBy.lastName}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📅 Submitted Date:</strong><br>
+							<span style="color: #333; font-size: 14px;">${new Date().toLocaleDateString()}</span>
+						</div>
+					</div>
+					${request.description ? `
+						<div style="margin-top: 15px;">
+							<strong style="color: #495057;">📝 Description:</strong><br>
+							<span style="color: #333; font-size: 14px;">${request.description}</span>
+						</div>
+					` : ''}
+				</div>
+				
+				${itemsTableHtml}
+				
+				<!-- Action Required -->
+				<div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: #856404; margin: 0 0 10px 0; font-size: 16px;">⚠️ Action Required</h3>
+					<p style="color: #856404; margin: 0; font-size: 14px;">Please review this request and take the necessary action. You can approve or reject the request through the admin panel.</p>
 				</div>
 			`;
+
+			const emailContent = this.getBaseEmailTemplate(
+				'📋 Request Pending CEO Approval',
+				'A new request has been submitted for your approval and review',
+				content
+			);
 
 			for (const ceo of ceoUsers) {
 				// Skip invalid emails as elsewhere
@@ -2156,27 +2227,45 @@ class EmailNotificationService {
 	 */
 	static async sendPaymentDueReminder(invoice, student) {
 		try {
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Payment Reminder</h2>
-						<p>Dear ${student.firstName},</p>
-						<p>This is a friendly reminder that your payment is due soon:</p>
-						<ul>
-							<li><strong>Amount Due:</strong> $${invoice.balanceDue?.toFixed(2) || '0.00'}</li>
-							<li><strong>Due Date:</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</li>
-							<li><strong>Invoice Number:</strong> ${invoice.invoiceNumber}</li>
-							<li><strong>Residence:</strong> ${invoice.residence?.name || 'N/A'}</li>
-						</ul>
-						<p>Please ensure timely payment to avoid late fees.</p>
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${student.firstName},</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">This is a friendly reminder that your payment is due soon.</p>
+				
+				<!-- Payment Details -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #ffc107; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">💰 Payment Details</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">💵 Amount Due:</strong><br>
+							<span style="color: #ffc107; font-size: 16px; font-weight: 600;">$${invoice.balanceDue?.toFixed(2) || '0.00'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📅 Due Date:</strong><br>
+							<span style="color: #333; font-size: 14px;">${new Date(invoice.dueDate).toLocaleDateString()}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📋 Invoice Number:</strong><br>
+							<span style="color: #333; font-size: 14px;">${invoice.invoiceNumber}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">🏠 Residence:</strong><br>
+							<span style="color: #333; font-size: 14px;">${invoice.residence?.name || 'N/A'}</span>
+						</div>
 					</div>
 				</div>
+				
+				<!-- Important Notice -->
+				<div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: #856404; margin: 0 0 10px 0; font-size: 16px;">⚠️ Important Notice</h3>
+					<p style="color: #856404; margin: 0; font-size: 14px;">Please ensure timely payment to avoid late fees. Contact our finance team if you have any questions about your payment.</p>
+				</div>
 			`;
+
+			const emailContent = this.getBaseEmailTemplate(
+				'💰 Payment Due Reminder',
+				'This is a friendly reminder that your payment is due soon',
+				content
+			);
 
 			await sendEmail({
 				to: student.email,
@@ -2197,27 +2286,47 @@ class EmailNotificationService {
 	 */
 	static async sendOverduePaymentNotification(invoice, student) {
 		try {
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #333;">Payment Overdue Alert</h2>
-						<p>Dear ${student.firstName},</p>
-						<p>Your payment is now overdue:</p>
-						<ul>
-							<li><strong>Overdue Amount:</strong> $${invoice.balanceDue?.toFixed(2) || '0.00'}</li>
-							<li><strong>Due Date:</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</li>
-							<li><strong>Days Overdue:</strong> ${Math.floor((new Date() - new Date(invoice.dueDate)) / (1000 * 60 * 60 * 24))}</li>
-							<li><strong>Invoice Number:</strong> ${invoice.invoiceNumber}</li>
-						</ul>
-						<p><strong>Please settle the payment immediately to avoid further penalties.</strong></p>
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
+			const daysOverdue = Math.floor((new Date() - new Date(invoice.dueDate)) / (1000 * 60 * 60 * 24));
+			
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${student.firstName},</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">Your payment is now overdue and requires immediate attention.</p>
+				
+				<!-- Overdue Payment Details -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">🚨 Overdue Payment Details</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">💵 Overdue Amount:</strong><br>
+							<span style="color: #dc3545; font-size: 16px; font-weight: 600;">$${invoice.balanceDue?.toFixed(2) || '0.00'}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📅 Due Date:</strong><br>
+							<span style="color: #333; font-size: 14px;">${new Date(invoice.dueDate).toLocaleDateString()}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">⏰ Days Overdue:</strong><br>
+							<span style="color: #dc3545; font-size: 16px; font-weight: 600;">${daysOverdue} days</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📋 Invoice Number:</strong><br>
+							<span style="color: #333; font-size: 14px;">${invoice.invoiceNumber}</span>
+						</div>
 					</div>
 				</div>
+				
+				<!-- Urgent Notice -->
+				<div style="background-color: #f8d7da; border: 1px solid #f5c6cb; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: #721c24; margin: 0 0 10px 0; font-size: 16px;">🚨 Urgent Notice</h3>
+					<p style="color: #721c24; margin: 0; font-size: 14px;"><strong>Please settle the payment immediately to avoid further penalties.</strong> Contact our finance team urgently if you have any questions.</p>
+				</div>
 			`;
+
+			const emailContent = this.getBaseEmailTemplate(
+				'🚨 Payment Overdue Alert',
+				'Your payment is now overdue and requires immediate attention',
+				content
+			);
 
 			await sendEmail({
 				to: student.email,
@@ -2384,30 +2493,48 @@ class EmailNotificationService {
 			let allocationHtml = '';
 			if (allocation && allocation.monthlyBreakdown && allocation.monthlyBreakdown.length > 0) {
 				allocationHtml = `
-					<div style="background-color: #e8f5e8; padding: 15px; border-radius: 5px; margin: 15px 0;">
-						<h3 style="color: #28a745; margin-top: 0;">Payment Allocation</h3>
-						<p><strong>Total Allocated:</strong> $${allocation.summary?.totalAllocated?.toFixed(2) || '0.00'}</p>
-						<p><strong>Remaining Balance:</strong> $${allocation.summary?.remainingBalance?.toFixed(2) || '0.00'}</p>
-						<p><strong>Months Covered:</strong> ${allocation.summary?.monthsCovered || 0}</p>
-						${allocation.summary?.advancePaymentAmount > 0 ? `<p><strong>Advance Payment:</strong> $${allocation.summary.advancePaymentAmount.toFixed(2)}</p>` : ''}
+					<div style="margin: 20px 0;">
+						<h3 style="color: #333; margin-bottom: 15px;">💰 Payment Allocation</h3>
+						<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 25px;">
+							<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+								<div>
+									<strong style="color: #495057;">💵 Total Allocated:</strong><br>
+									<span style="color: #28a745; font-size: 16px; font-weight: 600;">$${allocation.summary?.totalAllocated?.toFixed(2) || '0.00'}</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">📊 Remaining Balance:</strong><br>
+									<span style="color: #333; font-size: 14px;">$${allocation.summary?.remainingBalance?.toFixed(2) || '0.00'}</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">📅 Months Covered:</strong><br>
+									<span style="color: #333; font-size: 14px;">${allocation.summary?.monthsCovered || 0}</span>
+								</div>
+								${allocation.summary?.advancePaymentAmount > 0 ? `
+								<div>
+									<strong style="color: #495057;">🚀 Advance Payment:</strong><br>
+									<span style="color: #007bff; font-size: 14px;">$${allocation.summary.advancePaymentAmount.toFixed(2)}</span>
+								</div>
+								` : ''}
+							</div>
+						</div>
 						
-						<h4 style="color: #28a745; margin-bottom: 10px;">Monthly Breakdown:</h4>
-						<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+						<h4 style="color: #333; margin-bottom: 15px;">📋 Monthly Breakdown</h4>
+						<table style="width: 100%; border-collapse: collapse; background-color: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
 							<thead>
 								<tr style="background-color: #f8f9fa;">
-									<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Month</th>
-									<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Type</th>
-									<th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Amount</th>
-									<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Status</th>
+									<th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Month</th>
+									<th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Type</th>
+									<th style="padding: 12px; text-align: right; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Amount</th>
+									<th style="padding: 12px; text-align: left; border-bottom: 2px solid #dee2e6; color: #495057; font-weight: 600;">Status</th>
 								</tr>
 							</thead>
 							<tbody>
-								${allocation.monthlyBreakdown.map(item => `
-									<tr>
-										<td style="border: 1px solid #ddd; padding: 8px;">${item.monthName || item.month}</td>
-										<td style="border: 1px solid #ddd; padding: 8px;">${item.paymentType || 'N/A'}</td>
-										<td style="border: 1px solid #ddd; padding: 8px; text-align: right;">$${item.amountAllocated?.toFixed(2) || '0.00'}</td>
-										<td style="border: 1px solid #ddd; padding: 8px;">
+								${allocation.monthlyBreakdown.map((item, index) => `
+									<tr style="border-bottom: 1px solid #dee2e6; ${index % 2 === 0 ? 'background-color: #f8f9fa;' : 'background-color: white;'}">
+										<td style="padding: 12px; color: #333;">${item.monthName || item.month}</td>
+										<td style="padding: 12px; color: #495057;">${item.paymentType || 'N/A'}</td>
+										<td style="padding: 12px; text-align: right; color: #495057; font-weight: 600;">$${item.amountAllocated?.toFixed(2) || '0.00'}</td>
+										<td style="padding: 12px;">
 											<span style="color: ${item.allocationType === 'rent_settlement' ? '#28a745' : '#007bff'}; font-weight: bold;">
 												${item.allocationType === 'rent_settlement' ? 'Settled' : 'Advance'}
 											</span>
@@ -2420,31 +2547,51 @@ class EmailNotificationService {
 				`;
 			}
 
-			const emailContent = `
-				<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-					<div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-						<h2 style="color: #28a745;">Payment Confirmation</h2>
-						<p>Dear ${studentName},</p>
-						<p>We have successfully received your payment. Here are the details:</p>
-						<div style="background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
-							<ul style="list-style: none; padding: 0;">
-								<li><strong>Payment ID:</strong> ${paymentId}</li>
-								<li><strong>Amount:</strong> $${amount.toFixed(2)}</li>
-								<li><strong>Payment Method:</strong> ${method}</li>
-								<li><strong>Date:</strong> ${new Date(date).toLocaleDateString()}</li>
-								<li><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Confirmed</span></li>
-							</ul>
+			const content = `
+				<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${studentName},</p>
+				<p style="color: #666; font-size: 14px; margin-bottom: 25px;">We have successfully received your payment. Here are the details:</p>
+				
+				<!-- Payment Details -->
+				<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 25px;">
+					<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">✅ Payment Details</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+						<div>
+							<strong style="color: #495057;">📋 Payment ID:</strong><br>
+							<span style="color: #333; font-size: 14px;">${paymentId}</span>
 						</div>
-						${allocationHtml}
-						<p>Thank you for your payment. If you have any questions, please contact our finance team.</p>
-						<hr style="margin: 20px 0;">
-						<p style="font-size: 12px; color: #666;">
-							This is an automated message from Alamait Student Accommodation.<br>
-							Please do not reply to this email.
-						</p>
+						<div>
+							<strong style="color: #495057;">💵 Amount:</strong><br>
+							<span style="color: #28a745; font-size: 16px; font-weight: 600;">$${amount.toFixed(2)}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">💳 Payment Method:</strong><br>
+							<span style="color: #333; font-size: 14px;">${method}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">📅 Date:</strong><br>
+							<span style="color: #333; font-size: 14px;">${new Date(date).toLocaleDateString()}</span>
+						</div>
+						<div>
+							<strong style="color: #495057;">✅ Status:</strong><br>
+							<span style="color: #28a745; font-size: 16px; font-weight: 600;">Confirmed</span>
+						</div>
 					</div>
 				</div>
+				
+				${allocationHtml}
+				
+				<!-- Thank You Message -->
+				<div style="background-color: #d4edda; border: 1px solid #c3e6cb; padding: 20px; border-radius: 8px; margin: 25px 0;">
+					<h3 style="color: #155724; margin: 0 0 10px 0; font-size: 16px;">🙏 Thank You</h3>
+					<p style="color: #155724; margin: 0; font-size: 14px;">Thank you for your payment. If you have any questions, please contact our finance team.</p>
+				</div>
 			`;
+
+			const emailContent = this.getBaseEmailTemplate(
+				'✅ Payment Confirmation',
+				'We have successfully received your payment',
+				content
+			);
 
 			await sendEmail({
 				to: studentEmail,
