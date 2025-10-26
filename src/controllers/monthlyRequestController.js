@@ -1257,11 +1257,16 @@ exports.sendToFinance = async (req, res) => {
                 console.log(`   Month/Year: ${month || monthlyRequest.month}/${year || monthlyRequest.year}`);
                 console.log(`   Submitted by: ${user.firstName} ${user.lastName}`);
                 
+                // Populate residence before sending email
+                const populatedMonthlyRequest = await MonthlyRequest.findById(monthlyRequest._id)
+                    .populate('residence', 'name')
+                    .populate('submittedBy', 'firstName lastName email');
+                
                 if (monthlyRequest.isTemplate && month && year) {
                     try {
                         // Use same method as invoice emails (reliable queue system)
                         await EmailNotificationService.sendMonthlyRequestToFinance(
-                            monthlyRequest,
+                            populatedMonthlyRequest,
                             user,
                             month,
                             year
@@ -1275,7 +1280,7 @@ exports.sendToFinance = async (req, res) => {
                     try {
                         // Use same method as invoice emails (reliable queue system)
                         await EmailNotificationService.sendMonthlyRequestToFinance(
-                            { ...monthlyRequest.toObject(), month, year },
+                            { ...populatedMonthlyRequest.toObject(), month, year },
                             user,
                             month || monthlyRequest.month,
                             year || monthlyRequest.year
@@ -4350,8 +4355,13 @@ exports.sendToFinance = async (req, res) => {
 
         // Notify finance via email
         try {
+            // Populate residence before sending email
+            const populatedMonthlyRequest = await MonthlyRequest.findById(monthlyRequest._id)
+                .populate('residence', 'name')
+                .populate('submittedBy', 'firstName lastName email');
+            
             await EmailNotificationService.sendMonthlyRequestToFinance(
-                monthlyRequest,
+                populatedMonthlyRequest,
                 user,
                 month,
                 year

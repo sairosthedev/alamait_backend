@@ -413,7 +413,7 @@ class EmailNotificationService {
 				html: emailContent
 			});
 
-			// Send to CEO users
+			// Send to CEO users with different content
 			let ceoSentCount = 0;
 			for (const ceoUser of ceoUsers) {
 				if (!ceoUser.email || !ceoUser.email.includes('@')) {
@@ -422,13 +422,72 @@ class EmailNotificationService {
 				}
 				
 				try {
+					// Create CEO-specific content
+					const ceoContent = `
+						<p style="color: #333; font-size: 16px; margin-bottom: 20px;">Dear ${ceoUser.firstName},</p>
+						<p style="color: #666; font-size: 14px; margin-bottom: 25px;">Finance has ${approved ? 'approved' : 'rejected'} the admin monthly request for the budget:</p>
+						
+						<!-- Request Details -->
+						<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid ${approved ? '#28a745' : '#dc3545'}; margin-bottom: 25px;">
+							<h3 style="color: #333; margin: 0 0 15px 0; font-size: 18px;">📊 Monthly Budget Request</h3>
+							<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+								<div>
+									<strong style="color: #495057;">🏠 Residence:</strong><br>
+									<span style="color: #333; font-size: 14px;">${residenceName}</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">📅 Period:</strong><br>
+									<span style="color: #333; font-size: 14px;">${month}/${year}</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">💰 Budget Amount:</strong><br>
+									<span style="color: #28a745; font-size: 16px; font-weight: 600;">$${monthlyRequest.totalEstimatedCost?.toFixed(2) || '0.00'}</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">👤 Approved By:</strong><br>
+									<span style="color: #333; font-size: 14px;">${approvedBy.firstName} ${approvedBy.lastName} (Finance)</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">📋 Request Title:</strong><br>
+									<span style="color: #333; font-size: 14px;">${monthlyRequest.title}</span>
+								</div>
+								<div>
+									<strong style="color: #495057;">📅 Approval Date:</strong><br>
+									<span style="color: #333; font-size: 14px;">${new Date().toLocaleDateString()}</span>
+								</div>
+							</div>
+							${notes ? `
+								<div style="margin-top: 15px;">
+									<strong style="color: #495057;">📝 Finance Notes:</strong><br>
+									<span style="color: #333; font-size: 14px;">${notes}</span>
+								</div>
+							` : ''}
+						</div>
+						
+						<!-- Status Update -->
+						<div style="background-color: ${approved ? '#d4edda' : '#f8d7da'}; border: 1px solid ${approved ? '#c3e6cb' : '#f5c6cb'}; padding: 20px; border-radius: 8px; margin: 25px 0;">
+							<h3 style="color: ${approved ? '#155724' : '#721c24'}; margin: 0 0 10px 0; font-size: 16px;">
+								${approved ? '✅ Budget Request Approved by Finance' : '❌ Budget Request Rejected by Finance'}
+							</h3>
+							<p style="color: ${approved ? '#155724' : '#721c24'}; margin: 0; font-size: 14px;">
+								${approved ? 'The monthly budget request has been approved by Finance and expenses will be created automatically.' : 'The monthly budget request has been rejected by Finance. Please review the notes for details.'}
+							</p>
+						</div>
+					`;
+
+					const ceoEmailContent = this.getBaseEmailTemplate(
+						`💰 Finance ${approved ? 'Approved' : 'Rejected'} Monthly Budget Request`,
+						`Finance has ${approved ? 'approved' : 'rejected'} the admin monthly request for the budget`,
+						ceoContent
+					);
+
 					await sendEmail({
 						to: ceoUser.email,
-						subject: `CEO Notification: Monthly Request ${approved ? 'Approved' : 'Rejected'}`,
-						html: emailContent
+						subject: `Finance ${approved ? 'Approved' : 'Rejected'} Monthly Budget Request - ${residenceName}`,
+						html: ceoEmailContent
 					});
 					ceoSentCount++;
-					console.log(`✅ CEO notification sent to: ${ceoUser.email}`);
+					console.log(`✅ CEO budget notification sent to: ${ceoUser.email}`);
 				} catch (emailError) {
 					console.error(`❌ Failed to send CEO notification to ${ceoUser.email}:`, emailError.message);
 				}
