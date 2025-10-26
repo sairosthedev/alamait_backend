@@ -338,7 +338,9 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                 setTimeout(async () => {
                     try {
                         const EmailNotificationService = require('../../services/emailNotificationService');
-                        await EmailNotificationService.sendFinancialSalariesRequestToCEO(reqDoc, req.user);
+                        // Populate residence before sending email
+                        const populatedReqDoc = await Request.findById(reqDoc._id).populate('residence', 'name');
+                        await EmailNotificationService.sendFinancialSalariesRequestToCEO(populatedReqDoc, req.user);
                         console.log(`✅ CEO notification sent for salary request: ${reqDoc._id}`);
                     } catch (emailError) {
                         console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
@@ -548,7 +550,9 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                 setTimeout(async () => {
                     try {
                         const EmailNotificationService = require('../../services/emailNotificationService');
-                        await EmailNotificationService.sendFinancialSalariesRequestToCEO(reqDoc, req.user);
+                        // Populate residence before sending email
+                        const populatedReqDoc = await Request.findById(reqDoc._id).populate('residence', 'name');
+                        await EmailNotificationService.sendFinancialSalariesRequestToCEO(populatedReqDoc, req.user);
                         console.log(`✅ CEO notification sent for salary request: ${reqDoc._id}`);
                     } catch (emailError) {
                         console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
@@ -764,7 +768,9 @@ exports.createSalaryRequest = async (req, res) => {
         setTimeout(async () => {
             try {
                 const EmailNotificationService = require('../../services/emailNotificationService');
-                await EmailNotificationService.sendFinancialSalariesRequestToCEO(request, req.user);
+                // Populate residence before sending email
+                const populatedRequest = await Request.findById(request._id).populate('residence', 'name');
+                await EmailNotificationService.sendFinancialSalariesRequestToCEO(populatedRequest, req.user);
                 console.log(`✅ CEO notification sent for salary request: ${request._id}`);
             } catch (emailError) {
                 console.error('❌ Failed to send CEO notification for salary request:', emailError.message);
