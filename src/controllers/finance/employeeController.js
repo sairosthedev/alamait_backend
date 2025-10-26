@@ -282,7 +282,8 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                     title: e.fullName || `${e.firstName} ${e.lastName}`,
                     description: `${e.jobTitle || 'Employee'} salary for ${residenceName} (${e.allocationPercentage || 100}%)`,
                     quantity: 1,
-                    estimatedCost: e.allocatedSalary || 0,
+                    unitCost: e.allocatedSalary || 0,
+                    totalCost: e.allocatedSalary || 0,
                     category: 'services',
                     priority: 'high',
                     notes: notes || undefined,
@@ -311,7 +312,8 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                         title: item.title,
                         description: item.description,
                         quantity: item.quantity,
-                        estimatedCost: item.estimatedCost,
+                        unitCost: item.unitCost,
+                        totalCost: item.totalCost,
                         category: item.category,
                         priority: item.priority,
                         notes: item.notes,
@@ -510,6 +512,19 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                 const title = `Salary Request - ${residenceName} - ${month}/${year}`;
                 const descriptionText = description || `Monthly salary payments for ${residenceName} - ${month}/${year}`;
                 
+                // Create items for the request
+                const items = allocatedEmployees.map(emp => ({
+                    title: emp.employeeName,
+                    description: `${emp.jobTitle || 'Employee'} salary for ${residenceName} (${emp.allocationPercentage || 100}%)`,
+                    quantity: 1,
+                    unitCost: emp.allocatedSalary || 0,
+                    totalCost: emp.allocatedSalary || 0,
+                    category: 'services',
+                    priority: 'high',
+                    notes: notes || undefined,
+                    provider: undefined
+                }));
+                
                 // Create the request with allocated employees list
                 const reqDoc = new Request({
                     title,
@@ -522,6 +537,8 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                     financeStatus: 'approved', // Set finance status to approved since finance created this
                     // Store allocated employees in the request
                     allocatedEmployees: allocatedEmployees,
+                    // Add items for email display
+                    items: items,
                     totalEstimatedCost: totalForResidence,
                     submittedBy: req.user?._id,
                     // Provide default values for finance requests to satisfy validation
@@ -706,7 +723,8 @@ exports.createSalaryRequest = async (req, res) => {
                 title: e.fullName || `${e.firstName} ${e.lastName}`,
                 description: `${e.jobTitle || 'Employee'} salary`,
                 quantity: 1,
-                estimatedCost: e.salary || 0,
+                unitCost: e.salary || 0,
+                totalCost: e.salary || 0,
                 category: 'services',
                 priority: 'high',
                 notes: notes || undefined,

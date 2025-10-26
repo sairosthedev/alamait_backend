@@ -205,7 +205,7 @@ class EmailNotificationService {
                                 <strong>Request Type:</strong> Salary Request<br>
                                 <strong>Total Amount:</strong> $${(request.amount || request.totalEstimatedCost || 0).toFixed(2)}<br>
                                 <strong>Description:</strong> ${request.description || 'No detailed breakdown available'}
-                        </p>
+                            </p>
                     </div>
                 </div>
             `;
