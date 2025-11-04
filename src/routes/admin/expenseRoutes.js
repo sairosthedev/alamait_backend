@@ -10,7 +10,7 @@ const { auth, checkRole } = require('../../middleware/auth');
 
 // Apply authentication middleware to all routes
 router.use(auth);
-router.use(checkRole('admin', 'manager'));
+router.use(checkRole('admin', 'manager', 'ceo'));
 
 /**
  * @route   GET /api/admin/expenses

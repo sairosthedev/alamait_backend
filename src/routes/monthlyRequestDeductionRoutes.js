@@ -19,19 +19,19 @@ router.post('/create-maintenance', [
 
 // Get deduction summary for a specific monthly request item
 router.get('/summary/:monthlyRequestId/:itemIndex', 
-    checkRole('admin', 'finance_admin', 'finance_user'),
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
     monthlyRequestDeductionController.getDeductionSummary
 );
 
 // Get all deductions for a monthly request
 router.get('/request/:monthlyRequestId', 
-    checkRole('admin', 'finance_admin', 'finance_user'),
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
     monthlyRequestDeductionController.getAllDeductionsForRequest
 );
 
 // Get monthly request with deduction progress
 router.get('/progress/:monthlyRequestId', 
-    checkRole('admin', 'finance_admin', 'finance_user'),
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
     monthlyRequestDeductionController.getMonthlyRequestWithProgress
 );
 

@@ -50,13 +50,24 @@ class AccountingService {
                     }
                 }
                 
-                // Check if accrual already exists
+                // Check if accrual already exists - check BOTH studentId formats to catch duplicates from both services
                 const existingAccrual = await TransactionEntry.findOne({
+                    source: 'rental_accrual',
                     'metadata.type': 'monthly_rent_accrual',
-                    'metadata.studentId': student._id,
                     'metadata.accrualMonth': month,
                     'metadata.accrualYear': year,
-                    status: 'posted'
+                    status: { $ne: 'deleted' },
+                    $or: [
+                        // Check for application ID format (this service uses)
+                        { 'metadata.studentId': student._id },
+                        { 'metadata.userId': student._id },
+                        // Check for student ID format (RentalAccrualService uses)
+                        { 'metadata.studentId': student.student },
+                        { 'metadata.userId': student.student },
+                        // Also check sourceId
+                        { sourceId: student._id },
+                        { sourceId: student.student }
+                    ]
                 });
                 
                 if (existingAccrual) {

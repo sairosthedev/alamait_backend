@@ -8,95 +8,95 @@ router.use(auth);
 
 // Create new vendor (Admin and Finance only)
 router.post('/', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.createVendor
 );
 
 // Get all vendors (Admin and Finance only)
 router.get('/', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getAllVendors
 );
 
 // Get vendors for quotation system (Admin and Finance only)
 router.get('/for-quotations', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getVendorsForQuotations
 );
 
 // Search vendors (for quotation system - Admin and Finance only)
 router.get('/search', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.searchVendors
 );
 
 // Get vendors by category (Admin and Finance only)
 router.get('/category/:category', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getVendorsByCategory
 );
 
 // Get vendor transactions (ledger) - Admin and Finance only (must be before /:id route)
 router.get('/:id/transactions', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getVendorTransactions
 );
 
 // 🆕 NEW: Get vendors collection report with AP data linkage
 router.get('/collection/report', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getVendorsCollectionReport
 );
 
 // 🆕 NEW: Sync vendor with AP data
 router.post('/sync-ap/:id', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.syncVendorWithAP
 );
 router.post('/sync-ap', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.syncVendorWithAP
 );
 
 // 🆕 NEW: Get vendor collection summary
 router.get('/collection/summary', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getVendorCollectionSummary
 );
 
 // Update vendor performance (Admin and Finance only)
 router.patch('/:id/performance', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.updateVendorPerformance
 );
 
 // Get creditors (vendors) - Admin and Finance only
 router.get('/creditors', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getCreditors
 );
 
 // Get debtors (students/tenants) - Admin and Finance only
 router.get('/debtors', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getDebtors
 );
 
 // Get creditor summary - Admin and Finance only
 router.get('/creditors/:vendorId/summary', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getCreditorSummary
 );
 
 // Get vendor by ID (Admin and Finance only) - This must be last to avoid catching other routes
 router.get('/:id', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.getVendorById
 );
 
 // Update vendor (Admin and Finance only)
 router.put('/:id', 
-    checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
+    checkRole(['admin', 'finance', 'finance_admin', 'finance_user', 'ceo']), 
     vendorController.updateVendor
 );
 

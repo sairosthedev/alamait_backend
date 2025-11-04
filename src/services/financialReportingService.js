@@ -311,6 +311,9 @@ class FinancialReportingService {
                 
                 // Create monthly breakdown for expenses (cash outflows)
                 const monthlyExpenses = {};
+                // Initialize monthlyBreakdown array for expense details (12 months, 0-indexed)
+                const monthlyBreakdown = Array(12).fill(null).map(() => ({ expense_details: [] }));
+                
                 allCashOutflowEntries.forEach(entry => {
                     const entryDate = new Date(entry.date);
                     const monthKey = entryDate.getMonth() + 1; // 1-12
@@ -327,10 +330,14 @@ class FinancialReportingService {
                                 monthlyExpenses[monthKey][key] = (monthlyExpenses[monthKey][key] || 0) + amount;
 
                                 // Record individual expense detail using the actual paid date
-                                if (!monthlyBreakdown[monthKey - 1].expense_details) {
-                                    monthlyBreakdown[monthKey - 1].expense_details = [];
+                                const monthIndex = monthKey - 1; // Convert to 0-indexed
+                                if (!monthlyBreakdown[monthIndex]) {
+                                    monthlyBreakdown[monthIndex] = { expense_details: [] };
                                 }
-                                monthlyBreakdown[monthKey - 1].expense_details.push({
+                                if (!monthlyBreakdown[monthIndex].expense_details) {
+                                    monthlyBreakdown[monthIndex].expense_details = [];
+                                }
+                                monthlyBreakdown[monthIndex].expense_details.push({
                                     transactionId: entry.transactionId,
                                     date: entry.date,
                                     description: entry.description,

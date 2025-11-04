@@ -2,6 +2,8 @@ const Maintenance = require('../models/Maintenance');
 const Expense = require('../models/finance/Expense');
 const { generateUniqueId } = require('../utils/idGenerator');
 const EmailNotificationService = require('../services/emailNotificationService');
+const { s3, s3Configs } = require('../config/s3');
+const { Residence } = require('../models/Residence');
 
 // Get all maintenance requests
 exports.getAllMaintenance = async (req, res) => {
@@ -47,9 +49,20 @@ exports.createMaintenance = async (req, res) => {
             residence = residenceId;
         }
 
-        // Validate required fields
-        if (!issue || !description || !room || !residence) {
-            return res.status(400).json({ message: 'Missing required fields: issue, description, room, or residence' });
+        // Set defaults for optional fields if not provided
+        const maintenanceIssue = issue || title || 'Maintenance Request';
+        const maintenanceDescription = description || 'No description provided';
+        const maintenanceRoom = room || 'General';
+        
+        // Map category to valid enum value
+        let maintenanceCategory = category || 'general_maintenance';
+        if (maintenanceCategory === 'general') {
+            maintenanceCategory = 'general_maintenance';
+        }
+        
+        // Only residence is truly required
+        if (!residence) {
+            return res.status(400).json({ message: 'Residence is required' });
         }
 
         // Validate payment method if provided
@@ -82,12 +95,80 @@ exports.createMaintenance = async (req, res) => {
         // Always set requestedBy from the authenticated user
         const requestedBy = req.user ? req.user._id : undefined;
 
+        // Handle image uploads if present
+        let images = [];
+        
+        // Handle multipart file uploads
+        if (req.files && req.files.length > 0) {
+            console.log(`Processing ${req.files.length} images for maintenance request`);
+            
+            for (let i = 0; i < req.files.length; i++) {
+                const file = req.files[i];
+                try {
+                    // Generate S3 key for maintenance images
+                    const timestamp = Date.now();
+                    const s3Key = `maintenance-images/${residence}/${timestamp}_${i}_${file.originalname}`;
+
+                    // Upload to S3
+                    const s3UploadParams = {
+                        Bucket: s3Configs.general.bucket,
+                        Key: s3Key,
+                        Body: file.buffer,
+                        ContentType: file.mimetype,
+                        ACL: 'public-read',
+                        Metadata: {
+                            fieldName: file.fieldname,
+                            uploadedBy: requestedBy?.toString() || 'unknown',
+                            uploadDate: new Date().toISOString(),
+                            uploadType: 'maintenance',
+                            residenceId: residence
+                        }
+                    };
+
+                    const s3Result = await s3.upload(s3UploadParams).promise();
+                    console.log(`Image ${i + 1} uploaded successfully to S3:`, s3Result.Location);
+
+                    images.push({
+                        url: s3Result.Location,
+                        caption: `Maintenance image ${i + 1}`,
+                        uploadedAt: new Date()
+                    });
+                } catch (imageError) {
+                    console.error(`Error uploading image ${i + 1}:`, imageError);
+                    // Continue with other images even if one fails
+                }
+            }
+        }
+        
+        // Handle pre-uploaded images sent as JSON data
+        if (req.body.images && Array.isArray(req.body.images) && req.body.images.length > 0) {
+            console.log(`Processing ${req.body.images.length} pre-uploaded images for maintenance request`);
+            
+            for (let i = 0; i < req.body.images.length; i++) {
+                const imageData = req.body.images[i];
+                try {
+                    // If the image already has a URL, use it directly
+                    if (imageData.url) {
+                        images.push({
+                            url: imageData.url,
+                            caption: imageData.caption || `Maintenance image ${i + 1}`,
+                            uploadedAt: imageData.uploadedAt ? new Date(imageData.uploadedAt) : new Date()
+                        });
+                        console.log(`Added pre-uploaded image ${i + 1}:`, imageData.url);
+                    }
+                } catch (imageError) {
+                    console.error(`Error processing pre-uploaded image ${i + 1}:`, imageError);
+                    // Continue with other images even if one fails
+                }
+            }
+        }
+
         // Build the maintenance request data
         const maintenanceData = {
-            issue,
-            description,
-            room,
-            category,
+            issue: maintenanceIssue,
+            description: maintenanceDescription,
+            room: maintenanceRoom,
+            category: maintenanceCategory,
             priority,
             residence,
             status: 'pending',
@@ -96,7 +177,8 @@ exports.createMaintenance = async (req, res) => {
             amount: amount ? parseFloat(amount) : 0,
             laborCost: laborCost ? parseFloat(laborCost) : 0,
             paymentMethod,
-            paymentIcon
+            paymentIcon,
+            images: images
         };
 
         // If assignedTo is provided, set it
@@ -192,10 +274,58 @@ exports.updateMaintenance = async (req, res) => {
             }
         }
 
-        // Update the maintenance request
+        // Build safe update payload
+        const updatePayload = { ...req.body };
+
+        // Normalize and append images if provided in body
+        if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'images')) {
+            let incomingImages = [];
+
+            try {
+                let rawImages = req.body.images;
+
+                // If images is a stringified JSON, parse it
+                if (typeof rawImages === 'string') {
+                    try { rawImages = JSON.parse(rawImages); } catch (_) {}
+                }
+
+                if (Array.isArray(rawImages)) {
+                    incomingImages = rawImages;
+                } else if (rawImages && typeof rawImages === 'object') {
+                    // Single object sent instead of array
+                    incomingImages = [rawImages];
+                }
+
+                // Map to schema shape
+                incomingImages = incomingImages
+                    .filter(img => img && (img.url || img.Location))
+                    .map((img, index) => ({
+                        url: img.url || img.Location,
+                        caption: img.caption || `Maintenance image ${index + 1}`,
+                        uploadedAt: img.uploadedAt ? new Date(img.uploadedAt) : new Date()
+                    }));
+            } catch (e) {
+                console.error('Failed to normalize incoming images:', e);
+                incomingImages = [];
+            }
+
+            // Remove direct images set from update payload to avoid cast errors
+            delete updatePayload.images;
+
+            if (incomingImages.length > 0) {
+                // Use atomic push to append images
+                await Maintenance.findByIdAndUpdate(
+                    req.params.id,
+                    { $push: { images: { $each: incomingImages } } },
+                    { new: false }
+                );
+            }
+        }
+
+        // Proceed with remaining fields update
         const updatedMaintenance = await Maintenance.findByIdAndUpdate(
             req.params.id,
-            req.body,
+            updatePayload,
             { new: true, runValidators: true }
         );
 
@@ -276,5 +406,163 @@ exports.addRequestHistory = async (req, res) => {
         res.status(200).json(updatedMaintenance);
     } catch (error) {
         res.status(400).json({ message: error.message });
+    }
+};
+
+// Create property maintenance request with images (for properties page)
+exports.createPropertyMaintenance = async (req, res) => {
+    try {
+        const { residenceId } = req.params;
+        const { issue, title, description, room, category, priority, amount, laborCost, paymentMethod, paymentIcon } = req.body;
+
+        // Validate residence exists
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({ message: 'Residence not found' });
+        }
+
+        // Use issue or title, with defaults if not provided
+        const maintenanceIssue = issue || title || 'Property Maintenance Request';
+        
+        // Set defaults for optional fields
+        const maintenanceDescription = description || 'No description provided';
+        const maintenanceRoom = room || 'General';
+        
+        // Map category to valid enum value
+        let maintenanceCategory = category || 'general_maintenance';
+        if (maintenanceCategory === 'general') {
+            maintenanceCategory = 'general_maintenance';
+        }
+
+        // Always set requestedBy from the authenticated user
+        const requestedBy = req.user ? req.user._id : undefined;
+
+        // Handle image uploads
+        let images = [];
+        
+        // Handle multipart file uploads
+        if (req.files && req.files.length > 0) {
+            console.log(`Processing ${req.files.length} images for property maintenance request`);
+            
+            for (let i = 0; i < req.files.length; i++) {
+                const file = req.files[i];
+                try {
+                    // Generate S3 key for maintenance images
+                    const timestamp = Date.now();
+                    const s3Key = `maintenance-images/${residenceId}/${timestamp}_${i}_${file.originalname}`;
+
+                    // Upload to S3
+                    const s3UploadParams = {
+                        Bucket: s3Configs.general.bucket,
+                        Key: s3Key,
+                        Body: file.buffer,
+                        ContentType: file.mimetype,
+                        ACL: 'public-read',
+                        Metadata: {
+                            fieldName: file.fieldname,
+                            uploadedBy: requestedBy?.toString() || 'unknown',
+                            uploadDate: new Date().toISOString(),
+                            uploadType: 'property-maintenance',
+                            residenceId: residenceId,
+                            residenceName: residence.name
+                        }
+                    };
+
+                    const s3Result = await s3.upload(s3UploadParams).promise();
+                    console.log(`Property maintenance image ${i + 1} uploaded successfully to S3:`, s3Result.Location);
+
+                    images.push({
+                        url: s3Result.Location,
+                        caption: `Property maintenance image ${i + 1}`,
+                        uploadedAt: new Date()
+                    });
+                } catch (imageError) {
+                    console.error(`Error uploading property maintenance image ${i + 1}:`, imageError);
+                    // Continue with other images even if one fails
+                }
+            }
+        }
+        
+        // Handle pre-uploaded images sent as JSON data
+        if (req.body.images && Array.isArray(req.body.images) && req.body.images.length > 0) {
+            console.log(`Processing ${req.body.images.length} pre-uploaded images for property maintenance request`);
+            
+            for (let i = 0; i < req.body.images.length; i++) {
+                const imageData = req.body.images[i];
+                try {
+                    // If the image already has a URL, use it directly
+                    if (imageData.url) {
+                        images.push({
+                            url: imageData.url,
+                            caption: imageData.caption || `Property maintenance image ${i + 1}`,
+                            uploadedAt: imageData.uploadedAt ? new Date(imageData.uploadedAt) : new Date()
+                        });
+                        console.log(`Added pre-uploaded property maintenance image ${i + 1}:`, imageData.url);
+                    }
+                } catch (imageError) {
+                    console.error(`Error processing pre-uploaded property maintenance image ${i + 1}:`, imageError);
+                    // Continue with other images even if one fails
+                }
+            }
+        }
+
+        // Build the maintenance request data
+        const maintenanceData = {
+            issue: maintenanceIssue,
+            description: maintenanceDescription,
+            room: maintenanceRoom,
+            category: maintenanceCategory,
+            priority: priority || 'medium',
+            residence: residenceId,
+            status: 'pending',
+            requestDate: new Date(),
+            requestedBy,
+            amount: amount ? parseFloat(amount) : 0,
+            laborCost: laborCost ? parseFloat(laborCost) : 0,
+            paymentMethod,
+            paymentIcon,
+            images: images
+        };
+
+        const maintenance = new Maintenance(maintenanceData);
+        const savedMaintenance = await maintenance.save();
+
+        // Populate the response with residence and user details
+        const populatedMaintenance = await Maintenance.findById(savedMaintenance._id)
+            .populate('requestedBy', 'firstName lastName email role')
+            .populate('residence', 'name address');
+
+        // Send email notifications (non-blocking)
+        try {
+            if (req.user && (req.user.role === 'admin' || req.user.role === 'property_manager')) {
+                await EmailNotificationService.sendAdminMaintenanceRequestToCEOAndFinance(savedMaintenance, req.user);
+            } else {
+                await EmailNotificationService.sendMaintenanceRequestSubmitted(savedMaintenance, req.user);
+            }
+        } catch (emailError) {
+            console.error('Error sending maintenance request email:', emailError);
+            // Don't fail the request if email fails
+        }
+
+        res.status(201).json({
+            success: true,
+            message: 'Property maintenance request created successfully',
+            data: {
+                maintenance: populatedMaintenance,
+                imagesUploaded: images.length,
+                residence: {
+                    id: residence._id,
+                    name: residence.name
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error creating property maintenance request:', error);
+        res.status(500).json({ 
+            success: false,
+            message: 'Failed to create property maintenance request',
+            error: error.message 
+        });
     }
 }; 

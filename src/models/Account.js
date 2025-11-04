@@ -94,7 +94,7 @@ AccountSchema.virtual('fullPath').get(function() {
 });
 
 // Method to get next available code for a type
-AccountSchema.statics.getNextCode = async function(type, category = null) {
+AccountSchema.statics.getNextCode = async function(type, category = null, accountName = null) {
   try {
     const typePrefixes = {
       'Asset': '1',
@@ -124,7 +124,38 @@ AccountSchema.statics.getNextCode = async function(type, category = null) {
       throw new Error(`Invalid account type: ${type}`);
     }
     
-    const subPrefix = category && categorySubPrefixes[category] ? categorySubPrefixes[category] : '0';
+    // CRITICAL: Special handling for non-AP liability accounts
+    // Management fees and other non-vendor payables should use subprefix '1' instead of '0'
+    // This prevents them from getting codes like 20001, 20002 which could be confused with AP accounts (2000)
+    // Management fees will get codes like 20101, 20102, etc. (Liability type '2' + subprefix '1' + number)
+    let subPrefix = category && categorySubPrefixes[category] ? categorySubPrefixes[category] : '0';
+    
+    if (type === 'Liability' && category === 'Current Liabilities' && accountName) {
+      // Check if the account name contains non-AP terms (management fee, deposit, advance, etc.)
+      const accountNameLower = accountName.toLowerCase();
+      const nonAPTerms = [
+        'management fee',
+        'management fees',
+        'deposit',
+        'deposits',
+        'advance',
+        'advances',
+        'security deposit',
+        'tenant deposit',
+        'deferred income',
+        'accrued expense',
+        'accrued expenses'
+      ];
+      
+      const isNonAPAccount = nonAPTerms.some(term => accountNameLower.includes(term));
+      
+      if (isNonAPAccount) {
+        // Use subprefix '1' for non-AP current liabilities (codes like 20101, 20102, etc.)
+        subPrefix = '1';
+        console.log(`📝 Non-AP liability account detected: "${accountName}" - using subprefix '1' (will generate codes like 201xx)`);
+      }
+    }
+    
     const searchPrefix = `${basePrefix}${subPrefix}`;
 
     // Find all existing codes with this prefix

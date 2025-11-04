@@ -5,11 +5,12 @@ class AccountCodeService {
    * Generate the next available account code based on type and category
    * @param {string} type - Account type (Asset, Liability, Income, Expense, Equity)
    * @param {string} category - Account category
+   * @param {string} accountName - Optional account name to detect non-AP accounts
    * @returns {Promise<string>} Generated account code
    */
-  static async generateAccountCode(type, category = null) {
+  static async generateAccountCode(type, category = null, accountName = null) {
     try {
-      const code = await Account.getNextCode(type, category);
+      const code = await Account.getNextCode(type, category, accountName);
       return code;
     } catch (error) {
       console.error('Error generating account code:', error);

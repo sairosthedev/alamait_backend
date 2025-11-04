@@ -40,7 +40,11 @@ class SimpleBalanceSheetService {
       // Get all accounts for reference
       const accounts = await Account.find({ isActive: true }).sort({ code: 1 });
       const accountMap = new Map();
-      accounts.forEach(acc => accountMap.set(acc.code, acc));
+      // Convert account codes to strings to ensure consistent key format
+      accounts.forEach(acc => {
+        const accountCode = String(acc.code); // Normalize to string
+        accountMap.set(accountCode, { ...acc, code: accountCode });
+      });
       
       // Process each month (1-12)
       for (let month = 1; month <= 12; month++) {
@@ -114,11 +118,31 @@ class SimpleBalanceSheetService {
     try {
       const asOf = new Date(asOfDate);
       
-      // Get accounts if not provided
+      // Get accounts if not provided - include ALL active accounts
       if (!accountMap) {
         const accounts = await Account.find({ isActive: true }).sort({ code: 1 });
         accountMap = new Map();
-        accounts.forEach(acc => accountMap.set(acc.code, acc));
+        
+        // Convert account codes to strings to ensure consistent key format
+        accounts.forEach(acc => {
+          const accountCode = String(acc.code); // Ensure code is a string
+          accountMap.set(accountCode, { ...acc, code: accountCode });
+        });
+        
+        console.log(`📋 Loaded ${accountMap.size} accounts from Account collection`);
+        
+        // Debug: Check if deposit accounts are in the map
+        ['2020', '20002', '2002'].forEach(code => {
+          const stringCode = String(code);
+          if (accountMap.has(stringCode)) {
+            const account = accountMap.get(stringCode);
+            console.log(`✅ Account ${code} found in accountMap: ${account.name} (${account.type}), code type: ${typeof account.code}`);
+          } else {
+            console.log(`⚠️ Account ${code} NOT found in accountMap`);
+            // Try to find it by checking all keys
+            console.log(`   Available codes around 20002:`, Array.from(accountMap.keys()).filter(k => k.includes('200')).slice(0, 10));
+          }
+        });
       }
       
       // Get all transactions up to the as-of date
@@ -150,17 +174,53 @@ class SimpleBalanceSheetService {
       // Calculate account balances
       const accountBalances = new Map();
       
-      // Initialize all accounts with zero balance
+      // Initialize all accounts - include opening balances if they exist
+      // Convert code to string to ensure consistent key format
       accountMap.forEach((account, code) => {
-        accountBalances.set(code, {
-          code: account.code,
+        const accountCode = String(code); // Normalize code to string
+        
+        // Normalize type and category to handle different formats (Liability, LIABILITY, liability)
+        const accountType = (account.type || '').toLowerCase().charAt(0).toUpperCase() + (account.type || '').toLowerCase().slice(1);
+        const accountCategory = account.category || 'Other';
+        
+        const openingBalance = parseFloat(account.openingBalance) || 0;
+        // For liability accounts, opening balance is typically a credit (positive for liabilities)
+        // For asset accounts, opening balance is typically a debit (positive for assets)
+        let initialBalance = 0;
+        let initialDebit = 0;
+        let initialCredit = 0;
+        
+        if (openingBalance !== 0 && account.openingBalanceDate) {
+          const openingDate = new Date(account.openingBalanceDate);
+          // Only include opening balance if it's on or before the as-of date
+          if (openingDate <= asOf) {
+            // Use normalized type for comparison
+            const normalizedTypeLower = accountType.toLowerCase();
+            if (normalizedTypeLower === 'asset' || normalizedTypeLower === 'expense') {
+              initialBalance = openingBalance;
+              initialDebit = Math.abs(openingBalance);
+            } else {
+              // Liability or Equity
+              initialBalance = openingBalance;
+              initialCredit = Math.abs(openingBalance);
+            }
+          }
+        }
+        
+        accountBalances.set(accountCode, {
+          code: accountCode, // Use normalized string code
           name: account.name,
-          type: account.type,
-          category: account.category,
-          balance: 0,
-          debit: 0,
-          credit: 0
+          type: accountType, // Normalized: "Liability", "Asset", "Equity"
+          category: accountCategory, // e.g., "Current Liabilities"
+          balance: initialBalance,
+          debit: initialDebit,
+          credit: initialCredit
         });
+        
+        // Debug: Log account 20002 specifically
+        if (accountCode === '20002' || String(account.code) === '20002') {
+          console.log(`📋 Initialized account 20002: Type="${accountType}", Category="${accountCategory}", Original Type="${account.type}", Code="${accountCode}"`);
+        }
       });
       
       console.log(`📊 Initialized ${accountBalances.size} accounts for balance sheet`);
@@ -171,15 +231,36 @@ class SimpleBalanceSheetService {
         // Process transaction entries (the actual account data is in transaction.entries)
         if (transaction.entries && transaction.entries.length > 0) {
           transaction.entries.forEach(entry => {
-            const accountCode = entry.accountCode;
+            // Normalize account code to string for consistent lookup
+            const accountCode = String(entry.accountCode || '');
             const accountName = entry.accountName;
             const accountType = entry.accountType;
             const debit = parseFloat(entry.debit) || 0;
             const credit = parseFloat(entry.credit) || 0;
             
-            // Find the account by code
-            const account = accountBalances.get(accountCode);
-            if (account) {
+            // Find the account by code (normalize to string)
+            let account = accountBalances.get(accountCode);
+            
+            // If account doesn't exist in accountMap, create it dynamically from transaction entry
+            if (!account) {
+              console.log(`📝 Creating dynamic account entry for ${accountCode} (${accountName || 'Unknown'}) from transaction - Type: ${accountType}`);
+              // Normalize type to match Account collection format
+              const normalizedType = (accountType || 'Asset').toLowerCase().charAt(0).toUpperCase() + (accountType || 'Asset').toLowerCase().slice(1);
+              account = {
+                code: accountCode,
+                name: accountName || `Account ${accountCode}`,
+                type: normalizedType, // "Liability", "Asset", "Equity"
+                category: normalizedType === 'Asset' ? 'Current Assets' : 
+                          normalizedType === 'Liability' ? 'Current Liabilities' :
+                          normalizedType === 'Equity' ? 'Equity' : 'Other',
+                balance: 0,
+                debit: 0,
+                credit: 0
+              };
+              accountBalances.set(accountCode, account);
+              console.log(`✅ Created account: ${accountCode} - ${account.name} (${account.type})`);
+            }
+            
               account.debit += debit;
               account.credit += credit;
               
@@ -187,10 +268,13 @@ class SimpleBalanceSheetService {
               if (accountType === 'Asset' || accountType === 'Expense') {
                 account.balance += debit - credit;
               } else {
+              // Liability, Equity, Income: credit increases balance, debit decreases
                 account.balance += credit - debit;
               }
-            } else {
-              console.log(`⚠️ Account ${accountCode} not found in chart of accounts`);
+            
+            // Debug: Track account 20002 transactions
+            if (accountCode === '20002') {
+              console.log(`   💰 Account 20002 transaction: Debit $${debit}, Credit $${credit}, New balance: $${account.balance}`);
             }
           });
         }
@@ -199,10 +283,67 @@ class SimpleBalanceSheetService {
       console.log(`📊 Processed ${transactions.length} transactions for balance sheet as of ${asOfDate}`);
       console.log(`💰 Sample account balances:`, Array.from(accountBalances.entries()).slice(0, 5).map(([code, acc]) => `${code}: $${acc.balance}`));
       
+      // Debug: Check deposit accounts specifically - check both string and original format
+      const depositAccountCodes = ['2020', '20002', '2002'];
+      depositAccountCodes.forEach(code => {
+        // Try multiple formats
+        const account1 = accountBalances.get(code);
+        const account2 = accountBalances.get(String(code));
+        const account = account1 || account2;
+        
+        if (account) {
+          console.log(`✅ Deposit Account ${code} FOUND: Balance = $${account.balance}, Debits = $${account.debit}, Credits = $${account.credit}, Type = ${account.type}`);
+          
+          // CRITICAL FIX: If balance is 0 but there are credits for liability, recalculate
+          if (account.type === 'Liability' && account.balance === 0 && account.credit > 0) {
+            console.log(`⚠️ FIXING: Account ${code} has credits of $${account.credit} but balance is $${account.balance} - recalculating...`);
+            account.balance = account.credit - account.debit;
+            console.log(`   ✅ Recalculated balance: $${account.balance}`);
+          }
+        } else {
+          console.log(`❌ Deposit Account ${code} NOT FOUND in accountBalances`);
+          // List similar account codes
+          const similarCodes = Array.from(accountBalances.keys()).filter(k => 
+            String(k).includes('200') || String(k).includes('202')
+          );
+          console.log(`   Similar codes found: ${similarCodes.slice(0, 10).join(', ')}`);
+        }
+      });
+      
       // Aggregate parent-child accounts
       const aggregatedBalances = await this.aggregateParentChildAccounts(accountBalances, accountMap);
       
-      // Build balance sheet structure
+      // Debug: Check deposit accounts in aggregated balances - CRITICAL CHECK
+      console.log(`\n🔍 Checking aggregated balances for deposit accounts:`);
+      const depositCodes = ['2020', '20002', '2002'];
+      depositCodes.forEach(code => {
+        // Try multiple formats
+        const account1 = aggregatedBalances.get(code);
+        const account2 = aggregatedBalances.get(String(code));
+        const account = account1 || account2;
+        
+        if (account) {
+          console.log(`✅ Found ${code} (${account.name}): Balance = $${account.balance}, Debits = $${account.debit}, Credits = $${account.credit}, Type = ${account.type}`);
+          
+          // CRITICAL FIX: If balance is wrong for liability, recalculate it
+          if (account.type === 'Liability' && account.balance === 0 && account.credit > account.debit) {
+            console.log(`⚠️ FIXING: Account ${code} balance is 0 but should be $${account.credit - account.debit} - fixing...`);
+            account.balance = account.credit - account.debit;
+            console.log(`   ✅ Fixed balance to: $${account.balance}`);
+          }
+        } else {
+          console.log(`❌ Account ${code} NOT FOUND in aggregatedBalances - checking original accountBalances...`);
+          const originalAccount = accountBalances.get(code) || accountBalances.get(String(code));
+          if (originalAccount) {
+            console.log(`   Found in accountBalances: Balance = $${originalAccount.balance}`);
+            // Copy it to aggregatedBalances
+            aggregatedBalances.set(String(code), { ...originalAccount });
+            console.log(`   ✅ Copied to aggregatedBalances`);
+          }
+        }
+      });
+      
+      // Build balance sheet structure - use aggregatedBalances but ensure deposits are correct
       const balanceSheet = this.buildBalanceSheetStructure(aggregatedBalances, accountMap);
       
       // Calculate retained earnings using simple formula: Cumulative Net Income
@@ -249,6 +390,12 @@ class SimpleBalanceSheetService {
    * @param {Map} accountMap - Map of account objects
    * @returns {Map} Aggregated account balances
    */
+  /**
+   * Aggregate parent-child accounts (LESS AGGRESSIVE VERSION)
+   * @param {Map} accountBalances - Map of account balances
+   * @param {Map} accountMap - Map of account objects
+   * @returns {Map} Aggregated account balances
+   */
   static async aggregateParentChildAccounts(accountBalances, accountMap) {
     const aggregatedBalances = new Map();
     
@@ -262,126 +409,103 @@ class SimpleBalanceSheetService {
       const Account = require('../models/Account');
       
       // --- ACCOUNTS PAYABLE (2000) AGGREGATION ---
+      // ONLY aggregate accounts that explicitly have parentAccount = 2000's _id
       const apParentAccount = await Account.findOne({ code: '2000' });
       if (apParentAccount) {
-        console.log(`🔍 Found AP parent account 2000 with _id: ${apParentAccount._id} (type: ${typeof apParentAccount._id})`);
+        console.log(`🔍 Found AP parent account 2000 with _id: ${apParentAccount._id}`);
         
-        // Get all child accounts of 2000 (handle both string and ObjectId)
+        // CRITICAL: Only get accounts that explicitly have parentAccount = apParentAccount._id
         const apChildAccounts = await Account.find({
-          $or: [
-            { parentAccount: apParentAccount._id },
-            { parentAccount: apParentAccount._id.toString() },
-            { mainAPAccountCode: '2000' },
-            { parent: '2000' }
-          ],
+          parentAccount: apParentAccount._id,
           isActive: true
         });
 
-        // Also include accounts that start with 200 but aren't 2000
-        const apSeriesAccounts = await Account.find({
-          code: { $regex: /^200(?!0$)/ }, // starts with 200 but not exactly 2000
-          type: 'Liability',
-          isActive: true
+        console.log(`🔗 Found ${apChildAccounts.length} explicit child accounts for AP parent 2000`);
+        
+        // Log the found child accounts for debugging
+        apChildAccounts.forEach(child => {
+          console.log(`   ✅ AP Child: ${child.code} - ${child.name} (parentAccount: ${child.parentAccount})`);
         });
 
-        // Merge and remove duplicates by code
-        const allAPChildrenMap = new Map();
-        [...apChildAccounts, ...apSeriesAccounts].forEach(acc => {
-          allAPChildrenMap.set(acc.code, acc);
-        });
-        const allAPChildren = Array.from(allAPChildrenMap.values());
-
-        console.log(`🔗 Found ${allAPChildren.length} Accounts Payable child accounts for parent 2000:`);
-
-        // Aggregate child account balances into parent
+        // Aggregate ONLY these explicit child accounts into parent
         const parentAccount = aggregatedBalances.get('2000');
         if (parentAccount) {
           let totalChildBalance = 0;
-          allAPChildren.forEach(childAccount => {
-            const childBalance = aggregatedBalances.get(childAccount.code);
-            if (childBalance && childAccount.code !== '2000') {
+          apChildAccounts.forEach(childAccount => {
+            const childCode = String(childAccount.code);
+            const childBalance = aggregatedBalances.get(childCode);
+            
+            if (childBalance && childCode !== '2000') {
               totalChildBalance += childBalance.balance;
               console.log(
-                `   ↳ Aggregating ${childAccount.code} (${childAccount.name}): $${childBalance.balance.toFixed(2)}`
+                `   💰 Aggregating explicit AP child ${childCode} (${childAccount.name}): $${childBalance.balance.toFixed(2)}`
               );
             }
           });
 
           // Add the aggregated child balances to parent
-          parentAccount.balance += totalChildBalance;
+          const originalAPBalance = parentAccount.balance;
+          parentAccount.balance = originalAPBalance + totalChildBalance;
+          
           console.log(
-            `📊 Accounts Payable (2000) new total: $${parentAccount.balance.toFixed(2)} (added $${totalChildBalance.toFixed(2)} from ${allAPChildren.length} children)`
+            `📊 Accounts Payable (2000): Original = $${originalAPBalance.toFixed(2)}, Added from children = $${totalChildBalance.toFixed(2)}, Final = $${parentAccount.balance.toFixed(2)}`
           );
-        } else {
-          console.warn('⚠️ Parent AP account (2000) not found in balances map');
         }
       }
       
       // --- ACCOUNTS RECEIVABLE (1100) AGGREGATION ---
       const arParentAccount = await Account.findOne({ code: '1100' });
       if (arParentAccount) {
-        console.log(`🔍 Found AR parent account 1100 with _id: ${arParentAccount._id} (type: ${typeof arParentAccount._id})`);
+        console.log(`🔍 Found AR parent account 1100 with _id: ${arParentAccount._id}`);
         
-        // Get all child accounts of 1100 (handle both string and ObjectId)
+        // ONLY get accounts that explicitly have parentAccount = arParentAccount._id
         const arChildAccounts = await Account.find({
-          $or: [
-            { parentAccount: arParentAccount._id },
-            { parentAccount: arParentAccount._id.toString() },
-            { mainARAccountCode: '1100' },
-            { parent: '1100' }
-          ],
-          type: 'Asset',
+          parentAccount: arParentAccount._id,
           isActive: true
         });
 
-        // Also include accounts that start with 1100 but aren't 1100
-        const arSeriesAccounts = await Account.find({
-          code: { $regex: /^1100(?!0$)/ }, // starts with 1100 but not exactly 1100
-          type: 'Asset',
-          isActive: true
+        console.log(`🔗 Found ${arChildAccounts.length} explicit child accounts for AR parent 1100`);
+        
+        // Log the found child accounts for debugging
+        arChildAccounts.forEach(child => {
+          console.log(`   ✅ AR Child: ${child.code} - ${child.name} (parentAccount: ${child.parentAccount})`);
         });
 
-        // Merge and remove duplicates by code
-        const allARChildrenMap = new Map();
-        [...arChildAccounts, ...arSeriesAccounts].forEach(acc => {
-          allARChildrenMap.set(acc.code, acc);
-        });
-        const allARChildren = Array.from(allARChildrenMap.values());
-
-        console.log(`🔗 Found ${allARChildren.length} Accounts Receivable child accounts for parent 1100:`);
-
-        // Aggregate child account balances into parent
+        // Aggregate ONLY these explicit child accounts into parent
         const parentAccount = aggregatedBalances.get('1100');
         if (parentAccount) {
           let totalChildBalance = 0;
-          allARChildren.forEach(childAccount => {
-            const childBalance = aggregatedBalances.get(childAccount.code);
-            if (childBalance && childAccount.code !== '1100') {
+          arChildAccounts.forEach(childAccount => {
+            const childCode = String(childAccount.code);
+            const childBalance = aggregatedBalances.get(childCode);
+            
+            if (childBalance && childCode !== '1100') {
               totalChildBalance += childBalance.balance;
               console.log(
-                `   ↳ Aggregating ${childAccount.code} (${childAccount.name}): $${childBalance.balance.toFixed(2)}`
+                `   💰 Aggregating explicit AR child ${childCode} (${childAccount.name}): $${childBalance.balance.toFixed(2)}`
               );
             }
           });
 
           // Add the aggregated child balances to parent
-          parentAccount.balance += totalChildBalance;
+          const originalARBalance = parentAccount.balance;
+          parentAccount.balance = originalARBalance + totalChildBalance;
+          
           console.log(
-            `📊 Accounts Receivable (1100) new total: $${parentAccount.balance.toFixed(2)} (added $${totalChildBalance.toFixed(2)} from ${allARChildren.length} children)`
+            `📊 Accounts Receivable (1100): Original = $${originalARBalance.toFixed(2)}, Added from children = $${totalChildBalance.toFixed(2)}, Final = $${parentAccount.balance.toFixed(2)}`
           );
-        } else {
-          console.warn('⚠️ Parent AR account (1100) not found in balances map');
         }
       }
       
     } catch (error) {
       console.error('❌ Error aggregating parent-child accounts:', error);
-      // Fallback to hardcoded relationships if database query fails
-      console.log('🔄 Falling back to hardcoded parent-child relationships...');
+      // Fallback to hardcoded explicit relationships only
+      console.log('🔄 Falling back to hardcoded explicit parent-child relationships...');
       
+      // ONLY include accounts that we know have explicit parent-child relationships
       const fallbackRelationships = {
-        '2000': ['200001', '200002', '200003', '200004', '200005', '200006', '200008', '20041', '200999'],
-        '1100': ['1100-68ecee931a1a3e93496ceed4', '1101']
+        '2000': ['200004'], // ONLY 200004 has explicit parentAccount relationship
+        '1100': [] // No explicit AR children in the provided data
       };
       
       Object.entries(fallbackRelationships).forEach(([parentCode, childCodes]) => {
@@ -393,7 +517,7 @@ class SimpleBalanceSheetService {
             const childAccount = aggregatedBalances.get(childCode);
             if (childAccount) {
               totalChildBalance += childAccount.balance;
-              console.log(`🔗 Fallback: Aggregating child account ${childCode}: $${childAccount.balance} into parent ${parentCode}`);
+              console.log(`🔗 Fallback: Aggregating explicit child account ${childCode}: $${childAccount.balance} into parent ${parentCode}`);
             }
           });
           
@@ -413,26 +537,13 @@ class SimpleBalanceSheetService {
    * @returns {boolean} True if it's an AP child account
    */
   static isAccountsPayableChildAccount(accountCode, accountMap) {
-    // Check if it's the main AP account
-    if (accountCode === '2000') {
-      return false; // Main account, not a child
-    }
-    
-    // Check if the account has 2000 as its parent account
     const account = accountMap.get(accountCode);
-    if (account && account.parentAccount) {
-      // We need to check if the parent account is 2000
-      // For now, we'll use a simple approach and check if it's a known AP child account
-      const knownAPChildCodes = ['20041', '200001', '200002', '200003', '200004', '200006', '200008', '200999'];
-      return knownAPChildCodes.includes(accountCode);
-    }
     
-    // Also check if it's an account that starts with 200 but isn't the main account
-    // This matches the pattern used in the aggregation method
-    // Only include accounts that have "Accounts Payable" in the name to avoid false positives
-    if (accountCode.startsWith('200') && accountCode !== '2000') {
-      const account = accountMap.get(accountCode);
-      if (account && account.type === 'Liability' && account.name && account.name.toLowerCase().includes('accounts payable')) {
+    // Only return true if there's an explicit parentAccount relationship
+    if (account && account.parentAccount) {
+      // Check if the parent account is 2000
+      const parentAccount = accountMap.get('2000');
+      if (parentAccount && account.parentAccount.toString() === parentAccount._id.toString()) {
         return true;
       }
     }
@@ -481,9 +592,12 @@ class SimpleBalanceSheetService {
       }
     };
     
-    // Process assets - show all accounts individually except Accounts Receivable (1100) which aggregates children
+    // Process assets - show ALL accounts individually except Accounts Receivable (1100) which aggregates children
     accountBalances.forEach((account, code) => {
-      if (account.type === 'Asset' && Math.abs(account.balance) > 0.01) {
+      // Normalize type check
+      const normalizedType = (account.type || '').toLowerCase();
+      if (normalizedType === 'asset') {
+        // Include ALL asset accounts from Account collection, regardless of balance
         if (account.category === 'Current Assets') {
           // Cash and bank accounts (1000-1099) - show all individual accounts
           if (code.startsWith('100')) {
@@ -522,38 +636,226 @@ class SimpleBalanceSheetService {
     });
     
     // Process liabilities - show all accounts individually except Accounts Payable (2000) which aggregates children
+    // Aggregate tenant deposits from multiple account codes (2020, 20002, 2002)
+    let totalTenantDeposits = 0;
+    let tenantDepositsAccounts = [];
+    
+    console.log(`\n🔍 Processing liabilities from ${accountBalances.size} accounts...`);
+    console.log(`📋 Account codes in accountBalances:`, Array.from(accountBalances.keys()).slice(0, 10));
+    
+      // Process ALL liability accounts, not just those with balance > 0.01
+    // Normalize all account codes to strings for consistent comparison
+    console.log(`\n🔍 STARTING LIABILITIES PROCESSING: accountBalances.size = ${accountBalances.size}`);
+    console.log(`📋 All account codes in accountBalances:`, Array.from(accountBalances.keys()).slice(0, 20));
+    
+    // CRITICAL: Check if account 20002 exists BEFORE the loop
+    const check20002_1 = accountBalances.get('20002');
+    const check20002_2 = accountBalances.get(String('20002'));
+    const check20002_3 = Array.from(accountBalances.entries()).find(([code]) => String(code) === '20002' || code === '20002');
+    console.log(`🔍 CHECKING FOR ACCOUNT 20002 BEFORE LOOP:`);
+    console.log(`   accountBalances.get('20002'):`, check20002_1 ? `Found - Balance: $${check20002_1.balance}, Debits: $${check20002_1.debit}, Credits: $${check20002_1.credit}` : 'NOT FOUND');
+    console.log(`   accountBalances.get(String('20002')):`, check20002_2 ? `Found - Balance: $${check20002_2.balance}` : 'NOT FOUND');
+    console.log(`   Array.find(([code]) => String(code) === '20002'):`, check20002_3 ? `Found - Balance: $${check20002_3[1].balance}` : 'NOT FOUND');
+    
     accountBalances.forEach((account, code) => {
-      if (account.type === 'Liability' && Math.abs(account.balance) > 0.01) {
+      const accountCode = String(code); // Normalize to string
+      
+      // Debug: Log all deposit-related accounts (check both string and original code format)
+      if (accountCode === '2020' || accountCode === '20002' || accountCode === '2002' || accountCode === '20001' ||
+          String(code) === '2020' || String(code) === '20002' || String(code) === '2002' || String(code) === '20001') {
+        console.log(`🔍 Checking deposit account ${accountCode}: Type = "${account.type}", Category = "${account.category}", Balance = $${account.balance}, Debits = $${account.debit}, Credits = $${account.credit}`);
+      }
+      
+      // Normalize type check to handle case variations (Liability, LIABILITY, liability)
+      const normalizedType = (account.type || '').toLowerCase();
+      const isLiability = normalizedType === 'liability';
+      const isAsset = normalizedType === 'asset';
+      const isEquity = normalizedType === 'equity';
+      
+      if (isLiability) {
+        // Aggregate tenant deposits from multiple account codes (2020, 20002, 2002, and possibly 20001 if it's a deposit)
+        // NOTE: These accounts should NOT be aggregated into parent accounts - they go into tenant deposits
+        // Normalize code to string for comparison
+        if (accountCode === '2020' || accountCode === '20002' || accountCode === '2002') {
+          // Tenant Deposits - Aggregate from all deposit account codes
+          const depositBalance = account.balance || 0;
+          
+          // Debug: Detailed logging for deposit accounts
+          if (accountCode === '20002') {
+            console.log(`🔍 PROCESSING DEPOSIT ACCOUNT 20002:`);
+            console.log(`   Code: ${accountCode} (original: ${code})`);
+            console.log(`   Name: ${account.name}`);
+            console.log(`   Type: ${account.type}`);
+            console.log(`   Category: ${account.category}`);
+            console.log(`   Balance: $${depositBalance}`);
+            console.log(`   Debits: $${account.debit}`);
+            console.log(`   Credits: $${account.credit}`);
+            console.log(`   Will add to totalTenantDeposits: $${totalTenantDeposits} + $${depositBalance} = $${totalTenantDeposits + depositBalance}`);
+          }
+          
+          // CRITICAL FIX: Ensure balance is correct - recalculate if needed
+          let finalDepositBalance = depositBalance;
+          if (account.type === 'Liability') {
+            // For liabilities: balance = credit - debit
+            const recalculatedBalance = account.credit - account.debit;
+            if (Math.abs(recalculatedBalance - depositBalance) > 0.01) {
+              console.log(`   ⚠️ Balance mismatch for ${accountCode}: Stored=${depositBalance}, Recalculated=${recalculatedBalance} - using recalculated`);
+              finalDepositBalance = recalculatedBalance;
+              account.balance = recalculatedBalance; // Fix the stored balance
+            }
+          }
+          
+          // Always include deposit accounts in aggregation, even if balance is small or zero
+          totalTenantDeposits += finalDepositBalance;
+          tenantDepositsAccounts.push({
+            code: code,
+            name: account.name,
+            balance: finalDepositBalance,
+            debits: account.debit,
+            credits: account.credit,
+            category: account.category
+          });
+          console.log(`💰 Tenant Deposits (${code}): Balance = $${finalDepositBalance} (Debits: $${account.debit}, Credits: $${account.credit}), Category: ${account.category}`);
+          
+          // ALSO add deposit accounts to liabilities.all so they appear in the frontend list
+          // This ensures account 20002 shows up in the UI even though it's also aggregated into tenant deposits
+          // Use consistent key format
+          const depositKey = `liability_${accountCode}`;
+          balanceSheet.liabilities.all[depositKey] = {
+            amount: Math.max(0, finalDepositBalance),
+            accountCode: accountCode,
+            accountName: account.name,
+            type: account.type.toLowerCase() || 'liability',
+            category: account.category || 'Current Liabilities'
+          };
+          console.log(`📝 Also added deposit account ${accountCode} (${account.name}) to liabilities.all with key "${depositKey}": $${Math.max(0, finalDepositBalance)}`);
+        } else {
+          // Include ALL liability accounts from the Account collection, regardless of balance
         if (code === '2000') {
           // Main Accounts Payable (with aggregated child accounts)
           balanceSheet.liabilities.current.accountsPayable.amount = account.balance;
           balanceSheet.liabilities.current.accountsPayable.accountCode = code;
           balanceSheet.liabilities.current.accountsPayable.accountName = account.name;
-        } else if (code === '2020') {
-          // Tenant Deposits
-          balanceSheet.liabilities.current.tenantDeposits.amount = account.balance;
-          balanceSheet.liabilities.current.tenantDeposits.accountCode = code;
-          balanceSheet.liabilities.current.tenantDeposits.accountName = account.name;
         } else if (code === '2200') {
           // Deferred Income
           balanceSheet.liabilities.current.deferredIncome.amount = account.balance;
           balanceSheet.liabilities.current.deferredIncome.accountCode = code;
           balanceSheet.liabilities.current.deferredIncome.accountName = account.name;
         } else if (!this.isAccountsPayableChildAccount(code, accountMap)) {
-          // Other liabilities (show individual accounts that are not child accounts of 2000 series)
+          // ALL other liabilities - include them all, even with zero balance
+          // BUT skip deposit accounts (20001, 20002, 2002, 2020) as they're processed explicitly above
+          const depositCodes = ['20001', '20002', '2002', '2020'];
+          if (!depositCodes.includes(accountCode)) {
           const key = this.getLiabilityKey(code);
           balanceSheet.liabilities.all[key] = {
             amount: account.balance,
             accountCode: code,
-            accountName: account.name
+              accountName: account.name,
+              type: account.type.toLowerCase() || 'liability'
           };
+            console.log(`📝 Added liability account ${code} (${account.name}) to balance sheet: $${account.balance}`);
+          } else {
+            console.log(`📝 Skipping ${code} (${account.name}) from regular processing - already processed explicitly as deposit`);
+          }
+        }
         }
       }
     });
     
-    // Process equity
+    // Set aggregated tenant deposits amount (show even if 0 for visibility)
+    console.log(`\n💰 FINAL TENANT DEPOSITS AGGREGATION:`);
+    console.log(`   Total aggregated: $${totalTenantDeposits}`);
+    console.log(`   Number of accounts aggregated: ${tenantDepositsAccounts.length}`);
+    tenantDepositsAccounts.forEach(acc => {
+      console.log(`   - Account ${acc.code} (${acc.name}): $${acc.balance} (Debits: $${acc.debits}, Credits: $${acc.credits})`);
+    });
+    
+    // CRITICAL FIX: ALWAYS check for deposit accounts explicitly (20001, 20002, 2002, 2020)
+    // Process them directly from accountBalances to ensure they're included
+    console.log(`\n💰 EXPLICITLY PROCESSING DEPOSIT ACCOUNTS:`);
+    const depositCodesToProcess = ['2020', '20002', '2002', '20001'];
+    depositCodesToProcess.forEach(depositCode => {
+      // Try multiple ways to find the account
+      let account = accountBalances.get(depositCode) || 
+                    accountBalances.get(String(depositCode)) ||
+                    Array.from(accountBalances.entries()).find(([code]) => 
+                      String(code) === depositCode || code === depositCode
+                    )?.[1];
+      
+      if (account) {
+        const accountType = (account.type || '').toLowerCase();
+        if (accountType === 'liability') {
+          // Recalculate balance: For liabilities, balance = credit - debit
+          let depositBalance = account.balance || 0;
+          const recalculatedBalance = (account.credit || 0) - (account.debit || 0);
+          
+          // Use recalculated balance if different or if stored balance is 0 but credits exist
+          if (Math.abs(recalculatedBalance - depositBalance) > 0.01 || (depositBalance === 0 && account.credit > 0)) {
+            console.log(`   🔄 Recalculating balance for ${depositCode}: Stored=${depositBalance}, Recalculated=${recalculatedBalance}`);
+            depositBalance = recalculatedBalance;
+            account.balance = recalculatedBalance; // Update stored balance
+          }
+          
+          // Check if already added to avoid duplicates
+          const alreadyAdded = tenantDepositsAccounts.find(acc => 
+            String(acc.code) === depositCode || String(acc.code) === String(depositCode)
+          );
+          
+          if (!alreadyAdded) {
+            totalTenantDeposits += Math.max(0, depositBalance); // Only positive balances
+            tenantDepositsAccounts.push({
+              code: depositCode,
+              name: account.name || `Account ${depositCode}`,
+              balance: Math.max(0, depositBalance),
+              debits: account.debit || 0,
+              credits: account.credit || 0,
+              category: account.category
+            });
+            console.log(`   ✅ PROCESSED ${depositCode} (${account.name}): Balance = $${depositBalance}, Debits = $${account.debit || 0}, Credits = $${account.credit || 0}`);
+          } else {
+            console.log(`   ℹ️ ${depositCode} already in tenantDepositsAccounts`);
+          }
+          
+          // ALSO ensure it's in liabilities.all so it shows as individual account
+          // Use a unique key to ensure it doesn't get overwritten
+          const depositKey = `liability_${depositCode}`;
+          balanceSheet.liabilities.all[depositKey] = {
+            amount: Math.max(0, depositBalance),
+            accountCode: depositCode,
+            accountName: account.name || `Account ${depositCode}`,
+            type: 'liability',
+            category: account.category || 'Current Liabilities'
+          };
+          console.log(`   📝 Added ${depositCode} to liabilities.all with key "${depositKey}": $${Math.max(0, depositBalance)}`);
+        } else {
+          console.log(`   ⚠️ Account ${depositCode} found but type is "${account.type}" not Liability`);
+        }
+      } else {
+        console.log(`   ❌ Account ${depositCode} NOT FOUND in accountBalances`);
+      }
+    });
+    
+    console.log(`💰 After explicit processing: totalTenantDeposits = $${totalTenantDeposits}, tenantDepositsAccounts.length = ${tenantDepositsAccounts.length}`);
+    
+    // Ensure we're using the absolute value and it's at least 0
+    const finalTenantDeposits = Math.max(0, Math.abs(totalTenantDeposits));
+    
+    balanceSheet.liabilities.current.tenantDeposits.amount = finalTenantDeposits;
+    balanceSheet.liabilities.current.tenantDeposits.accountCode = '2020'; // Use primary account code for display
+    balanceSheet.liabilities.current.tenantDeposits.accountName = 'Tenant Deposits Held';
+    
+    if (tenantDepositsAccounts.length > 0) {
+      console.log(`✅ Total Tenant Deposits (aggregated from ${tenantDepositsAccounts.length} accounts): $${finalTenantDeposits}`);
+    } else {
+      console.log(`❌ ERROR: No tenant deposit accounts found after fallback search!`);
+    }
+    
+    // Process equity - include ALL equity accounts from Account collection
     accountBalances.forEach((account, code) => {
-      if (account.type === 'Equity' && Math.abs(account.balance) > 0.01) {
+      // Normalize type check
+      const normalizedType = (account.type || '').toLowerCase();
+      if (normalizedType === 'equity') {
+        // Include ALL equity accounts, regardless of balance
         if (code === '3001') {
           // Owner Capital
           balanceSheet.equity.ownerCapital.amount = account.balance;

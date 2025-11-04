@@ -83,13 +83,23 @@ exports.getRequestById = async (req, res) => {
 exports.getPendingCEOApproval = async (req, res) => {
     try {
         const { page = 1, limit = 10 } = req.query;
-        const skip = (page - 1) * limit;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
 
+        // Build query to find requests that need CEO approval
+        // Admin and Finance must have approved, CEO must not have approved
+        // Use a simpler query that handles missing fields gracefully
         const query = {
-            'approval.admin.approved': true,
-            'approval.finance.approved': true,
-            'approval.ceo.approved': { $ne: true },
-            type: { $in: ['financial', 'operational'] }
+            type: { $in: ['financial', 'operational'] },
+            $or: [
+                // Status-based query (simpler and more reliable)
+                { status: { $in: ['pending_ceo_approval', 'pending-ceo-approval'] } },
+                // Approval-based query (if approval structure exists)
+                {
+                    'approval.admin.approved': true,
+                    'approval.finance.approved': true,
+                    'approval.ceo.approved': { $ne: true }
+                }
+            ]
         };
 
         const [requests, total] = await Promise.all([
@@ -110,16 +120,22 @@ exports.getPendingCEOApproval = async (req, res) => {
         ]);
 
         res.json({
+            success: true,
             requests,
             pagination: {
                 current: parseInt(page),
-                total: Math.ceil(total / limit),
-                totalItems: total
+                total: Math.ceil(total / parseInt(limit)),
+                totalItems: total,
+                limit: parseInt(limit)
             }
         });
     } catch (error) {
         console.error('Error fetching pending CEO approval requests:', error);
-        res.status(500).json({ error: 'Error fetching pending CEO approval requests' });
+        res.status(500).json({ 
+            success: false,
+            error: 'Error fetching pending CEO approval requests',
+            message: error.message 
+        });
     }
 };
 

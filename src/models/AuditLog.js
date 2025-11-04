@@ -11,7 +11,7 @@ const AuditLogSchema = new mongoose.Schema({
     required: true,
     enum: [
       'create', 'read', 'update', 'delete',
-      'approve', 'reject', 'submit', 'convert',
+      'revert', 'restore', 'approve', 'reject', 'submit', 'convert',
       'mark_paid', 'login', 'logout', 'register',
       'upload', 'download', 'export', 'import',
       'bulk_create', 'bulk_update', 'bulk_delete',

@@ -11,14 +11,14 @@ const StudentARBalancesController = require('../../controllers/finance/studentAR
 // Get detailed outstanding balances for a student
 router.get('/:studentId/ar-balances', 
   auth, 
-  checkRole('admin', 'finance_admin', 'finance_user'), 
+  checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
   StudentARBalancesController.getDetailedOutstandingBalances
 );
 
 // Get outstanding balance summary for a student
 router.get('/:studentId/ar-summary', 
   auth, 
-  checkRole('admin', 'finance_admin', 'finance_user'), 
+  checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
   StudentARBalancesController.getOutstandingBalanceSummary
 );
 
@@ -32,7 +32,7 @@ router.post('/:studentId/test-allocation',
 // Get student invoices (accruals)
 router.get('/:studentId/invoices', 
   auth, 
-  checkRole('admin', 'finance_admin', 'finance_user'), 
+  checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
   StudentARBalancesController.getStudentInvoices
 );
 

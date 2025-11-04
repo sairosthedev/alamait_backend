@@ -14,6 +14,28 @@ const { adminUploadSignedLease } = require('../../controllers/admin/studentContr
 const admin = require('../../middleware/admin');
 const excelUpload = require('../../middleware/excelUpload');
 const StudentDeletionService = require('../../services/studentDeletionService');
+const multer = require('multer');
+const { s3, s3Configs, fileFilter, fileTypes } = require('../../config/s3');
+
+// Configure multer for single image upload
+const imageUpload = multer({
+    storage: multer.memoryStorage(),
+    fileFilter: fileFilter(fileTypes.images),
+    limits: {
+        fileSize: 10 * 1024 * 1024, // 10MB for images
+        files: 1
+    }
+});
+
+// Configure multer for multiple image uploads
+const imagesUpload = multer({
+    storage: multer.memoryStorage(),
+    fileFilter: fileFilter(fileTypes.images),
+    limits: {
+        fileSize: 10 * 1024 * 1024, // 10MB per image
+        files: 10 // Maximum 10 images at once
+    }
+});
 
 const {
     getAllStudents,
@@ -32,7 +54,11 @@ const {
     getStudentCsvTemplate,
     getStudentExcelTemplate,
     backfillAllTransactions,
-    backfillDebtorTransactions
+    backfillDebtorTransactions,
+    uploadImage,
+    uploadImages,
+    uploadPropertyImage,
+    deleteImage
 } = require('../../controllers/admin/studentController');
 
 // Validation middleware
@@ -76,7 +102,7 @@ const manualStudentValidation = [
 
 // All routes require admin role
 router.use(auth);
-router.use(checkRole('admin', 'finance', 'finance_admin', 'finance_user'));
+router.use(checkRole('admin', 'finance', 'finance_admin', 'finance_user', 'ceo'));
 
 // Place fixed routes BEFORE any :studentId routes
 router.get('/all-signed-leases', getAllSignedLeases);
@@ -180,6 +206,32 @@ router.post('/backfill-transactions', auth, checkRole(['admin']), backfillAllTra
  * POST /api/admin/students/:debtorId/backfill-transactions
  */
 router.post('/:debtorId/backfill-transactions', auth, checkRole(['admin']), backfillDebtorTransactions);
+
+/**
+ * Upload image (admin only)
+ * POST /api/admin/students/upload-image
+ * Query params: type (optional), folder (optional)
+ */
+router.post('/upload-image', auth, checkRole(['admin']), imageUpload.single('image'), uploadImage);
+
+/**
+ * Upload multiple images (admin only)
+ * POST /api/admin/students/upload-images
+ * Query params: type (optional), folder (optional)
+ */
+router.post('/upload-images', auth, checkRole(['admin']), imagesUpload.array('images', 10), uploadImages);
+
+/**
+ * Upload property image (admin only)
+ * POST /api/admin/students/property/:residenceId/upload-image
+ */
+router.post('/property/:residenceId/upload-image', auth, checkRole(['admin']), imageUpload.single('image'), uploadPropertyImage);
+
+/**
+ * Delete image from residence (admin only)
+ * DELETE /api/admin/students/delete-image/:imageId?residenceId=:residenceId
+ */
+router.delete('/delete-image/:imageId', auth, checkRole(['admin']), deleteImage);
 
 router.get('/:studentId', getStudentById);
 router.put('/:studentId', studentValidation, updateStudent);

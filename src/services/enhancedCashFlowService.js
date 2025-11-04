@@ -67,6 +67,52 @@ class EnhancedCashFlowService {
     }
     
     /**
+     * Check if a transaction is a deposit transaction by looking at account codes
+     * @param {Object} entry - Transaction entry
+     * @returns {boolean} True if it's a deposit transaction
+     */
+    static isDepositTransaction(entry) {
+        if (!entry.entries || !Array.isArray(entry.entries)) {
+            return false;
+        }
+        
+        // Deposit account codes: 2020, 20002, 2002, 2028 (and variations)
+        const depositAccountCodes = ['2020', '20002', '2002', '2028', '20020'];
+        
+        // Check if any entry in the transaction references a deposit account
+        for (const line of entry.entries) {
+            const accountCode = String(line.accountCode || line.account?.code || '').trim();
+            const accountName = (line.accountName || line.account?.name || '').toLowerCase();
+            
+            // Check account code
+            if (depositAccountCodes.includes(accountCode)) {
+                console.log(`💰 Deposit transaction identified by account code ${accountCode}: ${entry.transactionId}`);
+                return true;
+            }
+            
+            // Check account name
+            if (accountName.includes('deposit') && accountName.includes('security')) {
+                console.log(`💰 Deposit transaction identified by account name "${line.accountName || line.account?.name}": ${entry.transactionId}`);
+                return true;
+            }
+            
+            // Check if it's a liability account (200x) with deposit-related keywords
+            if (accountCode.startsWith('200') && (
+                accountName.includes('deposit') ||
+                accountName.includes('security') ||
+                accountCode === '2020' ||
+                accountCode === '20002' ||
+                accountCode === '2028'
+            )) {
+                console.log(`💰 Deposit transaction identified by liability account ${accountCode} (${line.accountName || line.account?.name}): ${entry.transactionId}`);
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
      * Generate comprehensive detailed cash flow statement
      * @param {string} period - Year (e.g., "2024") or Month (e.g., "2025-09")
      * @param {string} basis - "cash" or "accrual"
@@ -264,6 +310,40 @@ class EnhancedCashFlowService {
                 monthsDebug[month].forEach(t => {
                     console.log(`   ${t.id}: ${t.date} - ${t.desc} - $${t.debit || t.credit}`);
                 });
+            });
+            
+            // FINAL VERIFICATION: Ensure all monthly totals are correct from transactions
+            // This is the LAST CHANCE to fix any discrepancies before returning
+            Object.keys(oldFormatMonthlyBreakdown).forEach(monthName => {
+                const month = oldFormatMonthlyBreakdown[monthName];
+                if (month && month.expenses && month.expenses.transactions && Array.isArray(month.expenses.transactions) && month.expenses.transactions.length > 0) {
+                    // Calculate sum from transactions (the source of truth)
+                    let transactionSum = 0;
+                    month.expenses.transactions.forEach(trans => {
+                        if (trans && typeof trans.amount === 'number' && trans.amount > 0) {
+                            transactionSum += trans.amount;
+                        }
+                    });
+                    
+                    // FORCE UPDATE: Always use transaction sum
+                    const oldTotal = month.expenses.total || 0;
+                    month.expenses.total = transactionSum;
+                    
+                    // Update operating activities to match
+                    if (month.operating_activities) {
+                        month.operating_activities.outflows = transactionSum;
+                        month.operating_activities.net = (month.operating_activities.inflows || 0) - transactionSum;
+                    }
+                    
+                    // Log if there's a discrepancy (especially for October)
+                    if (monthName === 'october' && Math.abs(oldTotal - transactionSum) > 0.01) {
+                        console.log(`🔧 FINAL FIX [${monthName}]: Corrected expenses.total from ${oldTotal} to ${transactionSum} (transaction sum). Transaction count: ${month.expenses.transactions.length}`);
+                        const depositReturn = month.expenses.transactions.find(t => t.transactionId === 'TXN1762169297314NIEWO');
+                        if (depositReturn) {
+                            console.log(`✅ Deposit return found in final verification: ${depositReturn.amount}`);
+                        }
+                    }
+                }
             });
             
             // Calculate yearly totals from OLD FORMAT monthly breakdown (the one we're actually returning)
@@ -906,8 +986,8 @@ class EnhancedCashFlowService {
                                 effectiveDate = correspondingPayment.date;
                                 console.log(`🔍 Updated effective date for admin fee to payment date: ${effectiveDate.toISOString().slice(0, 7)}`);
                             }
-                        } else if (desc.includes('deposit')) {
-                            // For deposits, ALWAYS use payment date for categorization (NOT allocation month)
+                        } else if (desc.includes('deposit') || this.isDepositTransaction(entry)) {
+                            // For deposits, use payment date if available, otherwise use transaction date
                             const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
                             
                             if (correspondingPayment) {
@@ -918,10 +998,16 @@ class EnhancedCashFlowService {
                                 console.log(`💰 Deposit using PAYMENT DATE (not allocation month): ${paymentMonth} - Transaction: ${entry.transactionId}`);
                                 
                                 console.log(`💰 Deposit categorized in PAYMENT MONTH: ${paymentMonth} - Amount: ${incomeAmount}`);
+                            } else {
+                                // For manual deposits without payment records, use transaction date
+                                effectiveDate = entry.date;
+                                const transactionMonth = entry.date.toISOString().slice(0, 7);
+                                console.log(`💰 Deposit (manual transaction, no payment record) using TRANSACTION DATE: ${transactionMonth} - Transaction: ${entry.transactionId} - Amount: ${incomeAmount}`);
                             }
                             
                             category = 'deposits';
                             description = 'Security Deposits';
+                            console.log(`✅ DEPOSIT CATEGORIZED: Transaction ${entry.transactionId} - Amount: ${incomeAmount} - Description: ${entry.description || 'N/A'}`);
                         } else if (desc.includes('utilit')) {
                             category = 'utilities';
                             description = 'Utilities Income';
@@ -1107,7 +1193,7 @@ class EnhancedCashFlowService {
                     
                     // Add to appropriate category
                     incomeBreakdown.by_source[category].total += incomeAmount;
-                    incomeBreakdown.by_source[category].transactions.push({
+                    const transactionRecord = {
                         transactionId: entry.transactionId,
                         date: effectiveDate, // Use payment date instead of transaction date
                         amount: incomeAmount,
@@ -1117,7 +1203,13 @@ class EnhancedCashFlowService {
                         description: description,
                         source: 'Cash Payment',
                         isAdvancePayment: isAdvancePayment
-                    });
+                    };
+                    incomeBreakdown.by_source[category].transactions.push(transactionRecord);
+                    
+                    // Special logging for deposits
+                    if (category === 'deposits') {
+                        console.log(`✅ DEPOSIT ADDED TO CATEGORY: Transaction ${entry.transactionId} - Amount: ${incomeAmount} - Total in deposits: ${incomeBreakdown.by_source.deposits.total}`);
+                    }
                     
                     // Track advance payments separately
                     if (isAdvancePayment) {
@@ -1177,6 +1269,109 @@ class EnhancedCashFlowService {
                     incomeBreakdown.by_month[monthKey] += incomeAmount;
                 }
                 
+                // Check for deposits that credit deposit accounts (even if Cash isn't directly debited)
+                // OR if Cash IS debited but the transaction credits a deposit account
+                // Deposits can be recorded as: [any account] debited, [deposit account] credited
+                // This must happen for ALL transactions to catch deposits even if already processed as cash entries
+                const depositAccountCodes = ['2028', '20002', '2020', '2002', '20020'];
+                let depositEntry = null;
+                let depositAmount = 0;
+                let depositSourceAccount = null;
+                
+                entry.entries.forEach(line => {
+                    const accountCode = String(line.accountCode || line.account?.code || '').trim();
+                    const accountName = (line.accountName || line.account?.name || '').toLowerCase();
+                    const credit = line.credit || 0;
+                    
+                    // Check if this entry credits a deposit account
+                    if (credit > 0 && (depositAccountCodes.includes(accountCode) || 
+                        (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security')))) {
+                        depositEntry = line;
+                        depositAmount = credit;
+                        // Find the corresponding debit entry (could be Cash, opening balance account, etc.)
+                        const debitEntry = entry.entries.find(e => e.debit > 0);
+                        if (debitEntry) {
+                            depositSourceAccount = String(debitEntry.accountCode || debitEntry.account?.code || '').trim();
+                        }
+                    }
+                });
+                
+                // If we found a deposit account credit, ensure it's categorized as a deposit
+                // Even if already processed as a cash entry, we need to fix the categorization
+                if (depositEntry && depositAmount > 0) {
+                    const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
+                    const effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
+                    const monthKey = effectiveDate.toISOString().slice(0, 7);
+                    
+                    // Check if this transaction was already processed as a cash entry
+                    const wasProcessedAsCashEntry = processedTransactions.has(entry.transactionId);
+                    
+                    if (wasProcessedAsCashEntry) {
+                        // Transaction was already processed, but we need to ensure it's in deposits category
+                        // Find and update the existing transaction in deposits
+                        const existingDepositTransaction = incomeBreakdown.by_source.deposits.transactions.find(
+                            t => t.transactionId === entry.transactionId
+                        );
+                        
+                        if (!existingDepositTransaction) {
+                            // It was categorized incorrectly, add it to deposits
+                            incomeBreakdown.by_source.deposits.total += depositAmount;
+                            incomeBreakdown.by_source.deposits.transactions.push({
+                                transactionId: entry.transactionId,
+                                date: effectiveDate,
+                                amount: depositAmount,
+                                accountCode: depositEntry.accountCode || depositEntry.account?.code,
+                                accountName: depositEntry.accountName || depositEntry.account?.name,
+                                residence: entry.residence?.name || 'Unknown',
+                                description: entry.description || 'Security Deposit'
+                            });
+                            
+                            // Update monthly and residence totals
+                            const residenceName = entry.residence?.name || 'Unknown';
+                            if (!incomeBreakdown.by_residence[residenceName]) {
+                                incomeBreakdown.by_residence[residenceName] = 0;
+                            }
+                            incomeBreakdown.by_residence[residenceName] += depositAmount;
+                            
+                            if (!incomeBreakdown.by_month[monthKey]) {
+                                incomeBreakdown.by_month[monthKey] = 0;
+                            }
+                            incomeBreakdown.by_month[monthKey] += depositAmount;
+                            
+                            console.log(`💰 Deposit RECATEGORIZED from cash entry: ${depositEntry.accountCode || depositEntry.account?.code} - Amount: ${depositAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description || 'N/A'}`);
+                        }
+                    } else {
+                        // Not yet processed, add it as a deposit
+                        incomeBreakdown.total += depositAmount;
+                        incomeBreakdown.by_source.deposits.total += depositAmount;
+                        incomeBreakdown.by_source.deposits.transactions.push({
+                            transactionId: entry.transactionId,
+                            date: effectiveDate,
+                            amount: depositAmount,
+                            accountCode: depositEntry.accountCode || depositEntry.account?.code,
+                            accountName: depositEntry.accountName || depositEntry.account?.name,
+                            residence: entry.residence?.name || 'Unknown',
+                            description: entry.description || 'Security Deposit'
+                        });
+                        
+                        // Group by residence
+                        const residenceName = entry.residence?.name || 'Unknown';
+                        if (!incomeBreakdown.by_residence[residenceName]) {
+                            incomeBreakdown.by_residence[residenceName] = 0;
+                        }
+                        incomeBreakdown.by_residence[residenceName] += depositAmount;
+                        
+                        // Group by month
+                        if (!incomeBreakdown.by_month[monthKey]) {
+                            incomeBreakdown.by_month[monthKey] = 0;
+                        }
+                        incomeBreakdown.by_month[monthKey] += depositAmount;
+                        
+                        processedTransactions.add(entry.transactionId);
+                        console.log(`💰 Deposit identified from deposit account credit: ${depositEntry.accountCode || depositEntry.account?.code} (${depositEntry.accountName || depositEntry.account?.name}) - Amount: ${depositAmount} - Source Account: ${depositSourceAccount} - Transaction: ${entry.transactionId} - Description: ${entry.description || 'N/A'}`);
+                    }
+                }
+                
                 // Also check for traditional Income account types (for completeness)
                 entry.entries.forEach(line => {
                     const accountCode = line.accountCode;
@@ -1210,17 +1405,27 @@ class EnhancedCashFlowService {
                                 residence: entry.residence?.name || 'Unknown',
                                 description: entry.description || 'Admin Fee'
                             });
-                        } else if (accountCode.startsWith('4003') || accountName.toLowerCase().includes('deposit')) {
-                            incomeBreakdown.by_source.deposits.total += credit;
-                            incomeBreakdown.by_source.deposits.transactions.push({
-                                transactionId: entry.transactionId,
-                                date: effectiveDate, // Use payment date instead of transaction date
-                                amount: credit,
-                                accountCode,
-                                accountName,
-                                residence: entry.residence?.name || 'Unknown',
-                                description: entry.description || 'Security Deposit'
-                            });
+                        } else if (accountCode.startsWith('4003') || accountName.toLowerCase().includes('deposit') || 
+                                   accountCode === '2028' || accountCode === '20002' || accountCode === '2020' || 
+                                   accountCode === '2002' || accountCode === '20020' ||
+                                   (accountCode.startsWith('200') && accountName.includes('security') && accountName.includes('deposit'))) {
+                            // Deposits can be recorded as credits to liability accounts (2028, 20002, etc.)
+                            // Also check if this entire transaction is a deposit transaction
+                            const isDeposit = this.isDepositTransaction(entry);
+                            if (isDeposit || accountCode.startsWith('4003') || accountName.toLowerCase().includes('deposit') ||
+                                accountCode === '2028' || accountCode === '20002' || accountCode === '2020') {
+                                incomeBreakdown.by_source.deposits.total += credit;
+                                incomeBreakdown.by_source.deposits.transactions.push({
+                                    transactionId: entry.transactionId,
+                                    date: effectiveDate, // Use payment date instead of transaction date
+                                    amount: credit,
+                                    accountCode,
+                                    accountName,
+                                    residence: entry.residence?.name || 'Unknown',
+                                    description: entry.description || 'Security Deposit'
+                                });
+                                console.log(`💰 Deposit identified from Income/Income account credit: ${accountCode} (${accountName}) - Amount: ${credit} - Transaction: ${entry.transactionId}`);
+                            }
                         } else if (accountCode.startsWith('4004') || accountName.toLowerCase().includes('utilit')) {
                             incomeBreakdown.by_source.utilities.total += credit;
                             incomeBreakdown.by_source.utilities.transactions.push({
@@ -2334,12 +2539,43 @@ class EnhancedCashFlowService {
         transactionEntries.forEach(entry => {
             // Get the corresponding payment for accurate date handling
             const correspondingPayment = transactionToPaymentMap.get(entry.transactionId);
-            let effectiveDate = correspondingPayment ? correspondingPayment.date : entry.date;
+            
+            // CRITICAL: For deposits, ALWAYS use transaction date (not payment date)
+            // This ensures deposits appear in the month they were recorded
+            const isDepositTransaction = entry.entries && entry.entries.some(line => {
+                const accountCode = String(line.accountCode || line.account?.code || '').trim();
+                const accountName = (line.accountName || line.account?.name || '').toLowerCase();
+                const credit = line.credit || 0;
+                const depositAccountCodes = ['2028', '20002', '2020', '2002', '20020'];
+                const isDeposit = credit > 0 && (
+                    depositAccountCodes.includes(accountCode) ||
+                    (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security'))
+                );
+                if (isDeposit) {
+                    console.log(`🔍 [generateMonthlyBreakdown] Deposit detected at entry level: transactionId=${entry.transactionId}, accountCode=${accountCode}, credit=${credit}, date=${entry.date}`);
+                }
+                return isDeposit;
+            });
+            
+            let effectiveDate;
+            if (isDepositTransaction) {
+                // For deposits, ALWAYS use transaction date
+                effectiveDate = entry.date instanceof Date ? entry.date : new Date(entry.date);
+            } else {
+                // For other transactions, use payment date if available, otherwise transaction date
+                effectiveDate = correspondingPayment ? correspondingPayment.date : (entry.date instanceof Date ? entry.date : new Date(entry.date));
+            }
+            
             const monthKey = effectiveDate.toISOString().slice(0, 7);
             
             // For monthly periods, only process transactions in the specific month
             if (period.includes('-') && monthKey !== period) {
                 return; // Skip transactions not in the specified month
+            }
+            
+            // Ensure month exists before processing
+            if (!months[monthKey]) {
+                months[monthKey] = this.initializeMonthData(monthKey);
             }
             
             if (months[monthKey]) {
@@ -2368,8 +2604,134 @@ class EnhancedCashFlowService {
                 }
                 
                 if (entry.entries && entry.entries.length > 0) {
-                    // Process Cash/Bank debits (income) - include ALL cash accounts (1000-1099)
-                    const cashDebit = entry.entries.find(line => {
+                    // FIRST: Check for deposits that credit deposit accounts (e.g., debit 10005, credit 2028)
+                    // This must happen BEFORE processing cash debits to ensure deposits aren't missed
+                    // IMPORTANT: Only treat as deposit receipt if it credits deposit account AND debits asset
+                    // If it debits deposit account and credits Cash, it's a deposit return (expense), not income
+                    const depositAccountCodes = ['2028', '20002', '2020', '2002', '20020'];
+                    let depositAmount = 0;
+                    let hasDeposit = false;
+                    let hasAssetDebit = false; // Check if transaction debits an asset account (Cash, 10005, etc.)
+                    let hasDepositDebit = false; // Check if transaction debits deposit account (deposit return)
+                    
+                    entry.entries.forEach(line => {
+                        const accountCode = String(line.accountCode || line.account?.code || '').trim();
+                        const accountName = (line.accountName || line.account?.name || '').toLowerCase();
+                        const credit = line.credit || 0;
+                        const debit = line.debit || 0;
+                        
+                        // Check if this entry credits a deposit account (deposit receipt)
+                        if (credit > 0 && (
+                            depositAccountCodes.includes(accountCode) ||
+                            (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security'))
+                        )) {
+                            hasDeposit = true;
+                            depositAmount += credit; // Sum all deposit credits
+                            console.log(`✅ Deposit detected (credits deposit account): accountCode=${accountCode}, accountName=${accountName}, amount=${credit}, total so far=${depositAmount}, transactionId=${entry.transactionId}`);
+                        }
+                        
+                        // Check if this entry debits a deposit account (deposit return/refund)
+                        if (debit > 0 && (
+                            depositAccountCodes.includes(accountCode) ||
+                            (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security'))
+                        )) {
+                            hasDepositDebit = true;
+                        }
+                        
+                        // Check if this entry debits an asset account (Cash, 10005, etc.) - means cash received
+                        if (debit > 0 && accountCode && (
+                            accountCode.match(/^10[0-9]{2}$/) || // Cash accounts (1000-1099)
+                            accountCode === '10005' // Opening balance clearing account (also an asset)
+                        )) {
+                            hasAssetDebit = true;
+                        }
+                    });
+                    
+                    console.log(`🔍 After checking all entries: hasDeposit=${hasDeposit}, depositAmount=${depositAmount}, hasAssetDebit=${hasAssetDebit}, hasDepositDebit=${hasDepositDebit}, transactionId=${entry.transactionId}, date=${entry.date}`);
+                    
+                    // If we found a deposit RECEIPT (credits deposit account AND debits asset), process it here
+                    // BUT exclude deposit RETURNS (debits deposit account, credits Cash)
+                    // This must happen BEFORE processing cash debits to ensure deposits are categorized correctly
+                    console.log(`🔍 Checking deposit: hasDeposit=${hasDeposit}, depositAmount=${depositAmount}, hasAssetDebit=${hasAssetDebit}, hasDepositDebit=${hasDepositDebit}, monthKey=${monthKey}, transactionId=${entry.transactionId}`);
+                    
+                    if (hasDeposit && depositAmount > 0 && hasAssetDebit && !hasDepositDebit) {
+                        // This is a deposit receipt (cash inflow)
+                        // CRITICAL: For deposits, ALWAYS use transaction date (not payment date)
+                        // This ensures deposits appear in the month they were recorded
+                        const depositDate = entry.date instanceof Date ? entry.date : new Date(entry.date);
+                        const depositMonthKey = depositDate.toISOString().slice(0, 7);
+                        
+                        console.log(`💰 Processing deposit: amount=${depositAmount}, monthKey=${depositMonthKey}, originalMonthKey=${monthKey}, transactionId=${entry.transactionId}`);
+                        
+                        // Ensure month exists (should already exist from earlier, but double-check)
+                        if (!months[depositMonthKey]) {
+                            console.log(`⚠️ Month ${depositMonthKey} does not exist, creating it...`);
+                            months[depositMonthKey] = this.initializeMonthData(depositMonthKey);
+                        }
+                        
+                        // Add to deposits category
+                        const beforeDeposits = months[depositMonthKey].income.deposits || 0;
+                        months[depositMonthKey].income.deposits += depositAmount;
+                        months[depositMonthKey].income.total += depositAmount;
+                        months[depositMonthKey].operating_activities.inflows += depositAmount;
+                        months[depositMonthKey].operating_activities.net += depositAmount;
+                        if (months[depositMonthKey].operating_activities.breakdown && months[depositMonthKey].operating_activities.breakdown.deposits) {
+                            months[depositMonthKey].operating_activities.breakdown.deposits.amount += depositAmount;
+                        }
+                        
+                        console.log(`✅ Deposit RECEIPT ADDED: ${depositAmount} for ${depositMonthKey} - Transaction: ${entry.transactionId} - Description: ${entry.description || 'N/A'} - Deposits before: ${beforeDeposits}, Deposits after: ${months[depositMonthKey].income.deposits}`);
+                        // Don't process cash debit for this entry - skip to next transaction
+                        // Even if the deposit debits a cash account like 10005, we've already processed it as a deposit
+                        return; // Skip to next transaction entry in the outer forEach loop
+                    } else if (hasDepositDebit && !hasDeposit) {
+                        // This is a deposit return/refund (debits deposit account, credits Cash)
+                        // This should be treated as an expense/outflow, not income
+                        let depositReturnAmount = 0;
+                        entry.entries.forEach(line => {
+                            const accountCode = String(line.accountCode || line.account?.code || '').trim();
+                            const debit = line.debit || 0;
+                            if (debit > 0 && depositAccountCodes.includes(accountCode)) {
+                                depositReturnAmount += debit;
+                            }
+                        });
+                        
+                        if (depositReturnAmount > 0) {
+                            // Use transaction date for deposit returns
+                            const depositReturnDate = entry.date instanceof Date ? entry.date : new Date(entry.date);
+                            const depositReturnMonthKey = depositReturnDate.toISOString().slice(0, 7);
+                            
+                            // Ensure month exists
+                            if (!months[depositReturnMonthKey]) {
+                                months[depositReturnMonthKey] = this.initializeMonthData(depositReturnMonthKey);
+                            }
+                            
+                            // Ensure expenses.transactions array exists
+                            if (!months[depositReturnMonthKey].expenses.transactions) {
+                                months[depositReturnMonthKey].expenses.transactions = [];
+                            }
+                            
+                            // Add deposit return as cash outflow (expense)
+                            months[depositReturnMonthKey].operating_activities.outflows += depositReturnAmount;
+                            months[depositReturnMonthKey].operating_activities.net -= depositReturnAmount;
+                            months[depositReturnMonthKey].expenses.total += depositReturnAmount;
+                            
+                            // Add transaction to expenses transactions array
+                            months[depositReturnMonthKey].expenses.transactions.push({
+                                transactionId: entry.transactionId,
+                                date: entry.date,
+                                amount: depositReturnAmount,
+                                description: entry.description || 'Deposit return',
+                                category: 'expense'
+                            });
+                            
+                            console.log(`💰 Deposit RETURN (expense): ${depositReturnAmount} for ${depositReturnMonthKey} - Transaction: ${entry.transactionId} - Description: ${entry.description || 'N/A'}`);
+                            return; // Skip further processing
+                        }
+                    } else {
+                        // Only process cash debits if we didn't find a deposit (deposits are processed above)
+                        
+                        // Process Cash/Bank debits (income) - include ALL cash accounts (1000-1099)
+                        const cashDebit = entry.entries.find(line => {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
                         return accountCode && accountCode.match(/^10[0-9]{2}$/) && line.debit > 0;
@@ -2492,9 +2854,43 @@ class EnhancedCashFlowService {
                             }
                         }
                         
-                        // Recalculate category for monthly breakdown (same logic as main processing)
+                        // CRITICAL: Check for deposits FIRST, before any other categorization
+                        // Deposits should ALWAYS be detected if they credit a deposit account, regardless of description
                         let monthlyCategory = 'other_income';
-                        if (entry.description) {
+                        let isDeposit = false;
+                        
+                        // For deposits, ALWAYS use transaction date (not payment date) for monthKey
+                        let depositMonthKey = monthKey; // Default to the already-calculated monthKey
+                        
+                        if (entry.entries && entry.entries.length > 0) {
+                            const depositAccountCodes = ['2028', '20002', '2020', '2002', '20020'];
+                            const hasDepositCredit = entry.entries.some(line => {
+                                const accountCode = String(line.accountCode || line.account?.code || '').trim();
+                                const accountName = (line.accountName || line.account?.name || '').toLowerCase();
+                                const credit = line.credit || 0;
+                                return credit > 0 && (
+                                    depositAccountCodes.includes(accountCode) ||
+                                    (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security'))
+                                );
+                            });
+                            if (hasDepositCredit) {
+                                isDeposit = true;
+                                monthlyCategory = 'deposits';
+                                // CRITICAL: For deposits, ALWAYS use transaction date for monthKey
+                                // This ensures deposits appear in the month they were recorded, not when payment was made
+                                depositMonthKey = (entry.date instanceof Date ? entry.date : new Date(entry.date)).toISOString().slice(0, 7);
+                                
+                                // Ensure the deposit month exists
+                                if (!months[depositMonthKey]) {
+                                    months[depositMonthKey] = this.initializeMonthData(depositMonthKey);
+                                }
+                                
+                                console.log(`💰 Deposit detected from deposit account credit (BEFORE categorization): ${incomeAmount} for ${depositMonthKey} (transaction date) - Original monthKey: ${monthKey} - Transaction: ${entry.transactionId}`);
+                            }
+                        }
+                        
+                        // If not a deposit, use description-based categorization
+                        if (!isDeposit && entry.description) {
                             const desc = entry.description.toLowerCase();
                             
                             // Check for admin payments first (exclude from advance payments)
@@ -2517,11 +2913,26 @@ class EnhancedCashFlowService {
                                 monthlyCategory = 'rental_income';
                             } else if (desc.includes('admin')) {
                                 monthlyCategory = 'admin_fees';
-                            } else if (desc.includes('deposit')) {
+                            } else if (desc.includes('deposit') || this.isDepositTransaction(entry)) {
                                 monthlyCategory = 'deposits';
                             } else if (desc.includes('utilit')) {
                                 monthlyCategory = 'utilities';
                             }
+                        }
+                        
+                        // Final check: if still not categorized as deposit but is a deposit transaction, override
+                        if (!isDeposit && this.isDepositTransaction(entry)) {
+                            monthlyCategory = 'deposits';
+                            isDeposit = true;
+                            // CRITICAL: For deposits, ALWAYS use transaction date for monthKey
+                            depositMonthKey = (entry.date instanceof Date ? entry.date : new Date(entry.date)).toISOString().slice(0, 7);
+                            
+                            // Ensure the deposit month exists
+                            if (!months[depositMonthKey]) {
+                                months[depositMonthKey] = this.initializeMonthData(depositMonthKey);
+                            }
+                            
+                            console.log(`💰 Deposit detected from isDepositTransaction check: ${incomeAmount} for ${depositMonthKey} (transaction date) - Original monthKey: ${monthKey} - Transaction: ${entry.transactionId}`);
                         }
                         
                         // Apply categorization to monthly breakdown
@@ -2692,18 +3103,106 @@ class EnhancedCashFlowService {
                                 }
                             }
                         } else if (monthlyCategory === 'deposits') {
-                            months[monthKey].income.deposits += incomeAmount;
+                            // CRITICAL: For deposits, use depositMonthKey (transaction date) instead of monthKey (payment date)
+                            const finalDepositMonthKey = isDeposit ? depositMonthKey : monthKey;
+                            
+                            // Ensure the deposit month exists
+                            if (!months[finalDepositMonthKey]) {
+                                months[finalDepositMonthKey] = this.initializeMonthData(finalDepositMonthKey);
+                            }
+                            
+                            months[finalDepositMonthKey].income.deposits += incomeAmount;
+                            months[finalDepositMonthKey].income.total += incomeAmount;
+                            months[finalDepositMonthKey].operating_activities.inflows += incomeAmount;
+                            months[finalDepositMonthKey].operating_activities.net += incomeAmount;
+                            months[finalDepositMonthKey].operating_activities.breakdown.deposits.amount += incomeAmount;
+                            console.log(`💰 Cash deposit detected: ${incomeAmount} for ${finalDepositMonthKey} (transaction date) - Transaction: ${entry.transactionId} - Deposits total now: ${months[finalDepositMonthKey].income.deposits}`);
                         } else if (monthlyCategory === 'utilities') {
                             months[monthKey].income.utilities += incomeAmount;
                         } else {
-                        // Check for balance sheet adjustments (exclude from income)
-                        if (this.isBalanceSheetAdjustment(entry)) {
-                                // This is a balance sheet adjustment or internal transfer, not income - don't count as income
-                                console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${incomeAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
-                                return; // Skip this transaction entry
+                            // CRITICAL: Check for deposits BEFORE checking balance sheet adjustments
+                            // Deposits should NEVER be excluded, even if they match balance sheet patterns
+                            if (this.isDepositTransaction(entry)) {
+                                // This is a deposit - add it even if it was miscategorized
+                                monthlyCategory = 'deposits';
+                                
+                                // CRITICAL: For deposits, ALWAYS use transaction date for monthKey
+                                // This ensures deposits appear in the month they were recorded, not when payment was made
+                                const finalDepositMonthKey = (entry.date instanceof Date ? entry.date : new Date(entry.date)).toISOString().slice(0, 7);
+                                
+                                // Ensure the deposit month exists
+                                if (!months[finalDepositMonthKey]) {
+                                    months[finalDepositMonthKey] = this.initializeMonthData(finalDepositMonthKey);
+                                }
+                                
+                                months[finalDepositMonthKey].income.deposits += incomeAmount;
+                                months[finalDepositMonthKey].income.total += incomeAmount;
+                                months[finalDepositMonthKey].operating_activities.inflows += incomeAmount;
+                                months[finalDepositMonthKey].operating_activities.net += incomeAmount;
+                                months[finalDepositMonthKey].operating_activities.breakdown.deposits.amount += incomeAmount;
+                                console.log(`💰 Deposit detected in else block (fallback): ${incomeAmount} for ${finalDepositMonthKey} (transaction date) - Transaction: ${entry.transactionId} - Deposits total now: ${months[finalDepositMonthKey].income.deposits}`);
+                            } else {
+                                // Check for balance sheet adjustments (exclude from income)
+                                if (this.isBalanceSheetAdjustment(entry)) {
+                                    // This is a balance sheet adjustment or internal transfer, not income - don't count as income
+                                    console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${incomeAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                                    return; // Skip this transaction entry
+                                }
+                                
+                                months[monthKey].income.other_income += incomeAmount;
+                            }
+                        }
+                    }
+                    } // Close else block for non-cash deposit check
+                    
+                    // Check for deposits that credit deposit accounts (even if Cash isn't directly debited)
+                    // This is a FALLBACK check for deposits that weren't already processed in the cashDebit block
+                    // Only process deposits that don't have cash debits (those with cash debits should already be processed)
+                    const hasCashDebit = entry.entries.some(line => {
+                        const accountCode = String(line.accountCode || line.account?.code || '').trim();
+                        return line.debit > 0 && accountCode.match(/^10[0-9]{2}$/);
+                    });
+                    
+                    // Only process deposits here if they DON'T have a cash debit (those with cash debits are processed above)
+                    if (!hasCashDebit) {
+                        const depositAccountCodes = ['2028', '20002', '2020', '2002', '20020'];
+                        let depositEntry = null;
+                        let depositAmount = 0;
+                        
+                        entry.entries.forEach(line => {
+                            const accountCode = String(line.accountCode || line.account?.code || '').trim();
+                            const accountName = (line.accountName || line.account?.name || '').toLowerCase();
+                            const credit = line.credit || 0;
+                            
+                            // Check if this entry credits a deposit account
+                            if (credit > 0 && (depositAccountCodes.includes(accountCode) || 
+                                (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security')))) {
+                                depositEntry = line;
+                                depositAmount = credit;
+                            }
+                        });
+                        
+                        // If we found a deposit account credit, add it as a deposit inflow
+                        if (depositEntry && depositAmount > 0) {
+                            // CRITICAL: For deposits, ALWAYS use transaction date (not payment date)
+                            // This ensures deposits appear in the month they were recorded
+                            const depositMonthKey = (entry.date instanceof Date ? entry.date : new Date(entry.date)).toISOString().slice(0, 7);
+                            
+                            // Ensure month exists
+                            if (!months[depositMonthKey]) {
+                                months[depositMonthKey] = this.initializeMonthData(depositMonthKey);
                             }
                             
-                            months[monthKey].income.other_income += incomeAmount;
+                            // Add to deposits category
+                            months[depositMonthKey].income.deposits += depositAmount;
+                            months[depositMonthKey].income.total += depositAmount;
+                            months[depositMonthKey].operating_activities.inflows += depositAmount;
+                            months[depositMonthKey].operating_activities.net += depositAmount;
+                            if (months[depositMonthKey].operating_activities.breakdown && months[depositMonthKey].operating_activities.breakdown.deposits) {
+                                months[depositMonthKey].operating_activities.breakdown.deposits.amount += depositAmount;
+                            }
+                            
+                            console.log(`💰 Deposit detected from deposit account credit (fallback for non-cash debits): ${depositAmount} for ${depositMonthKey} - Transaction: ${entry.transactionId} - Account: ${depositEntry.accountCode || depositEntry.account?.code} - Description: ${entry.description || 'N/A'}`);
                         }
                     }
                     
@@ -3339,6 +3838,172 @@ class EnhancedCashFlowService {
 
             monthlyData[monthName].transaction_details.transaction_count++;
 
+            // FIRST: Check for deposit returns and receipts BEFORE processing other entries
+            // This must happen BEFORE processing cash debits to ensure deposits aren't missed
+            // IMPORTANT: 
+            // - Deposit RECEIPT: debits asset (Cash/10005) AND credits deposit account (2028, 20002, etc.) = income
+            // - Deposit RETURN: debits deposit account (2028, 20002, etc.) AND credits Cash = expense
+            const depositAccountCodes = ['2028', '20002', '2020', '2002', '20020'];
+            let depositCreditAmount = 0;
+            let depositDebitAmount = 0;
+            let hasDepositCredit = false;
+            let hasDepositDebit = false;
+            let hasAssetDebit = false; // Check if transaction debits an asset account (Cash, 10005, etc.)
+            let hasCashCredit = false; // Check if transaction credits Cash (cash outflow for deposit return)
+            
+            entry.entries.forEach(line => {
+                // Normalize account code - handle both string and number
+                let accountCode = line.accountCode;
+                if (typeof accountCode === 'number') {
+                    accountCode = String(accountCode);
+                } else if (typeof accountCode === 'string') {
+                    accountCode = accountCode.trim();
+                } else {
+                    accountCode = String(accountCode || '').trim();
+                }
+                const accountName = (line.accountName || '').toLowerCase();
+                const credit = line.credit || 0;
+                const debit = line.debit || 0;
+                
+                // Check if this entry credits a deposit account (deposit receipt)
+                if (credit > 0 && (
+                    depositAccountCodes.includes(accountCode) ||
+                    (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security'))
+                )) {
+                    hasDepositCredit = true;
+                    depositCreditAmount += credit; // Sum all deposit credits
+                }
+                
+                // Check if this entry debits a deposit account (deposit return/refund)
+                if (debit > 0 && (
+                    depositAccountCodes.includes(accountCode) ||
+                    (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security'))
+                )) {
+                    hasDepositDebit = true;
+                    depositDebitAmount += debit; // Sum all deposit debits
+                }
+                
+                // Check if this entry debits an asset account (Cash, 10005, etc.) - means cash received
+                if (debit > 0 && accountCode && (
+                    accountCode.match(/^10[0-9]{2}$/) || // Cash accounts (1000-1099)
+                    accountCode === '10005' // Opening balance clearing account (also an asset)
+                )) {
+                    hasAssetDebit = true;
+                }
+                
+                // Check if this entry credits Cash (cash outflow for deposit return)
+                if (credit > 0 && accountCode && (
+                    accountCode.match(/^10[0-9]{2}$/) || // Cash accounts (1000-1099)
+                    accountCode === '10005' // Opening balance clearing account (also an asset)
+                )) {
+                    hasCashCredit = true;
+                }
+            });
+            
+            // Enhanced logging for deposit return transactions
+            const isPotentialDepositReturn = hasDepositDebit && hasCashCredit;
+            if (isPotentialDepositReturn || entry.transactionId === 'TXN1762169297314NIEWO') {
+                console.log(`🔍 [generateReliableMonthlyBreakdown] Transaction ${entry.transactionId} (${entry.description}):`, {
+                    hasDepositCredit,
+                    hasDepositDebit,
+                    hasAssetDebit,
+                    hasCashCredit,
+                    depositCreditAmount,
+                    depositDebitAmount,
+                    conditionCheck: {
+                        hasDepositDebit,
+                        notHasDepositCredit: !hasDepositCredit,
+                        hasCashCredit,
+                        depositDebitAmountGreaterThanZero: depositDebitAmount > 0,
+                        notProcessed: !processedTransactions.has(entry.transactionId + '_deposit_return'),
+                        allConditionsMet: hasDepositDebit && !hasDepositCredit && hasCashCredit && depositDebitAmount > 0 && !processedTransactions.has(entry.transactionId + '_deposit_return')
+                    },
+                    entries: entry.entries.map(e => ({
+                        accountCode: e.accountCode,
+                        accountName: e.accountName,
+                        debit: e.debit,
+                        credit: e.credit
+                    }))
+                });
+            }
+            
+            // PRIORITY 1: Check for deposit RETURN first (debits deposit account, credits Cash) = expense
+            if (hasDepositDebit && !hasDepositCredit && hasCashCredit && depositDebitAmount > 0 && 
+                !processedTransactions.has(entry.transactionId + '_deposit_return')) {
+                // This is a deposit return/refund (debits deposit account, credits Cash)
+                // This should be treated as an expense/outflow, not income
+                console.log(`✅ [generateReliableMonthlyBreakdown] DEPOSIT RETURN DETECTED: transactionId=${entry.transactionId}, description="${entry.description}", depositDebitAmount=${depositDebitAmount}, hasCashCredit=${hasCashCredit}`);
+                
+                // Add deposit return as cash outflow (expense)
+                const beforeTotal = monthlyData[monthName].expenses.total || 0;
+                monthlyData[monthName].operating_activities.outflows += depositDebitAmount;
+                monthlyData[monthName].expenses.total += depositDebitAmount;
+                const afterTotal = monthlyData[monthName].expenses.total;
+                
+                // Use actual expense description as category name for deposit returns
+                const expenseName = entry.description || 'Deposit return';
+                
+                // Initialize the expense category if it doesn't exist
+                if (!monthlyData[monthName].expenses[expenseName]) {
+                    monthlyData[monthName].expenses[expenseName] = 0;
+                }
+                if (!monthlyData[monthName].operating_activities.breakdown[expenseName]) {
+                    monthlyData[monthName].operating_activities.breakdown[expenseName] = 0;
+                }
+                
+                // Add amount to the specific expense name (for breakdown)
+                monthlyData[monthName].expenses[expenseName] += depositDebitAmount;
+                monthlyData[monthName].operating_activities.breakdown[expenseName] += depositDebitAmount;
+                
+                // Ensure expenses.transactions array exists
+                if (!monthlyData[monthName].expenses.transactions) {
+                    monthlyData[monthName].expenses.transactions = [];
+                }
+                
+                // Add transaction to expenses transactions array
+                monthlyData[monthName].expenses.transactions.push({
+                    transactionId: entry.transactionId,
+                    date: entry.date,
+                    amount: depositDebitAmount,
+                    description: entry.description || 'Deposit return',
+                    category: 'expense'
+                });
+                
+                processedTransactions.add(entry.transactionId + '_deposit_return');
+                
+                console.log(`💰 [generateReliableMonthlyBreakdown] Deposit RETURN (expense) ADDED: ${depositDebitAmount} for ${monthName} - Transaction: ${entry.transactionId} - Expenses total BEFORE: ${beforeTotal}, AFTER: ${afterTotal} - Category: ${expenseName}`);
+                processedTransactions.add(entry.transactionId + '_expense');
+                return; // Skip further processing - CRITICAL: This prevents double-processing
+            } else if (isPotentialDepositReturn || entry.transactionId === 'TXN1762169297314NIEWO') {
+                // Log why deposit return detection failed
+                console.log(`❌ [generateReliableMonthlyBreakdown] Deposit RETURN NOT DETECTED (check failed): transactionId=${entry.transactionId}, description="${entry.description}"`, {
+                    reason: !hasDepositDebit ? 'No deposit debit' :
+                            hasDepositCredit ? 'Has deposit credit (not a return)' :
+                            !hasCashCredit ? 'No cash credit' :
+                            depositDebitAmount <= 0 ? 'Deposit debit amount <= 0' :
+                            processedTransactions.has(entry.transactionId + '_deposit_return') ? 'Already processed as deposit return' :
+                            'Unknown reason',
+                    willBeProcessedAsGeneralExpense: true
+                });
+            }
+            
+            // PRIORITY 2: Check for deposit RECEIPT (debits asset, credits deposit account) = income
+            if (hasDepositCredit && depositCreditAmount > 0 && hasAssetDebit && !hasDepositDebit && 
+                !processedTransactions.has(entry.transactionId + '_deposit')) {
+                // This is a deposit receipt (cash inflow)
+                monthlyData[monthName].operating_activities.inflows += depositCreditAmount;
+                monthlyData[monthName].income.total += depositCreditAmount;
+                monthlyData[monthName].income.deposits += depositCreditAmount;
+                monthlyData[monthName].operating_activities.breakdown.deposits += depositCreditAmount;
+                processedTransactions.add(entry.transactionId + '_deposit');
+                
+                console.log(`✅ [generateReliableMonthlyBreakdown] Deposit RECEIPT ADDED: ${depositCreditAmount} for ${monthName} - Transaction: ${entry.transactionId} - Deposits total now: ${monthlyData[monthName].income.deposits}`);
+                
+                // Mark this transaction as processed to prevent double-counting
+                processedTransactions.add(entry.transactionId + '_income');
+                return; // Skip further processing of this transaction
+            }
+
             // Process each line in the transaction
             entry.entries.forEach(line => {
                 const amount = line.debit || line.credit || 0;
@@ -3403,9 +4068,22 @@ class EnhancedCashFlowService {
                     } else if (desc.includes('admin') || desc.includes('administrative')) {
                         monthlyData[monthName].income.admin_fees += amount;
                         monthlyData[monthName].operating_activities.breakdown.admin_fees += amount;
-                    } else if (desc.includes('deposit') || desc.includes('security')) {
+                    } else if ((desc.includes('deposit') || desc.includes('security')) &&
+                               // Also verify this is a deposit receipt (credits deposit account), not a return (debits deposit account)
+                               entry.entries && entry.entries.some(line => {
+                                   const lineAccountCode = String(line.accountCode || '').trim();
+                                   const lineCredit = line.credit || 0;
+                                   return lineCredit > 0 && depositAccountCodes.includes(lineAccountCode);
+                               }) &&
+                               // Ensure it's NOT a deposit return (debits deposit account)
+                               !entry.entries.some(line => {
+                                   const lineAccountCode = String(line.accountCode || '').trim();
+                                   const lineDebit = line.debit || 0;
+                                   return lineDebit > 0 && depositAccountCodes.includes(lineAccountCode);
+                               })) {
                         monthlyData[monthName].income.deposits += amount;
                         monthlyData[monthName].operating_activities.breakdown.deposits += amount;
+                        console.log(`💰 [generateReliableMonthlyBreakdown] Cash deposit RECEIPT detected: ${amount} for ${monthName} - Transaction: ${entry.transactionId} - Deposits total now: ${monthlyData[monthName].income.deposits}`);
                     } else if (desc.includes('utilit') || desc.includes('internet') || desc.includes('wifi')) {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
@@ -3603,7 +4281,287 @@ class EnhancedCashFlowService {
             month.cash_accounts.total = totalCash;
         });
 
+        // Final verification: ALWAYS recalculate expenses.total from breakdown items (including deposit returns)
+        monthNames.forEach(monthName => {
+            const month = monthlyData[monthName];
+            if (month && month.expenses) {
+                // Sum ALL non-zero expense items from BOTH expenses object AND operating_activities.breakdown
+                let sumFromBreakdown = 0;
+                const breakdownItems = [];
+                const processedKeys = new Set(['total', 'transactions']); // Only track processed keys to avoid double-counting
+                
+                // First, sum from month.expenses (exclude only 'total' and 'transactions')
+                Object.keys(month.expenses).forEach(key => {
+                    // Skip only 'total' and 'transactions' keys
+                    if (key === 'total' || key === 'transactions') {
+                        return;
+                    }
+                    
+                    // Sum ALL numeric values (including zero values for now, we'll filter later if needed)
+                    if (typeof month.expenses[key] === 'number') {
+                        const value = month.expenses[key];
+                        // Sum ALL non-zero values (including deposit returns)
+                        if (value !== 0) {
+                            sumFromBreakdown += value;
+                            breakdownItems.push({ key, amount: value, source: 'expenses' });
+                            processedKeys.add(key);
+                        }
+                    }
+                });
+                
+                // Then, check operating_activities.breakdown for any expenses not already counted
+                if (month.operating_activities && month.operating_activities.breakdown) {
+                    Object.keys(month.operating_activities.breakdown).forEach(key => {
+                        // Only include expense-related keys (exclude income keys)
+                        const incomeKeys = ['rental_income', 'admin_fees', 'deposits', 'utilities', 'advance_payments', 'other_income'];
+                        if (!incomeKeys.includes(key) && !processedKeys.has(key) && typeof month.operating_activities.breakdown[key] === 'number') {
+                            const value = month.operating_activities.breakdown[key];
+                            if (value !== 0) {
+                                sumFromBreakdown += value;
+                                breakdownItems.push({ key, amount: value, source: 'breakdown' });
+                                // Also add to expenses object if not already there
+                                if (!month.expenses[key]) {
+                                    month.expenses[key] = value;
+                                }
+                            }
+                        }
+                    });
+                }
+                
+                // ALWAYS update total to match sum from breakdown (force recalculation)
+                const oldTotal = month.expenses.total;
+                
+                // Log the calculation for debugging (especially for October)
+                if (monthName === 'october') {
+                    console.log(`🔍 [generateReliableMonthlyBreakdown] ${monthName} expenses verification:`, {
+                        oldTotal,
+                        sumFromBreakdown,
+                        breakdownItemsCount: breakdownItems.length,
+                        depositReturnFound: breakdownItems.find(item => item.key && (item.key.toLowerCase().includes('deposit') && item.key.toLowerCase().includes('marula'))),
+                        alamaitFound: breakdownItems.find(item => item.key && item.key.toLowerCase().includes('alamait')),
+                        allBreakdownItems: breakdownItems.sort((a, b) => b.amount - a.amount).slice(0, 25) // Top 25 items sorted by amount
+                    });
+                    
+                    // Verify calculation manually
+                    let manualSum = 0;
+                    breakdownItems.forEach(item => {
+                        manualSum += item.amount;
+                    });
+                    console.log(`🔍 Manual sum verification: ${manualSum} (should match sumFromBreakdown: ${sumFromBreakdown})`);
+                }
+                
+                // CRITICAL: Calculate the SOURCE OF TRUTH - use TRANSACTIONS array if available
+                // Transactions are the definitive records - they include everything, even if line items are missing
+                let transactionSum = 0;
+                if (month.expenses.transactions && Array.isArray(month.expenses.transactions) && month.expenses.transactions.length > 0) {
+                    month.expenses.transactions.forEach(trans => {
+                        if (trans && typeof trans.amount === 'number' && trans.amount > 0) {
+                            transactionSum += trans.amount;
+                        }
+                    });
+                    
+                    // Log for October to verify deposit return is included
+                    if (monthName === 'october') {
+                        const depositReturnTransaction = month.expenses.transactions.find(t => 
+                            t.transactionId === 'TXN1762169297314NIEWO' || 
+                            (t.description && t.description.includes('Security deposit Marula'))
+                        );
+                        console.log(`🔍 [${monthName}] First Verification - Transaction Sum: ${transactionSum}, Transaction Count: ${month.expenses.transactions.length}, Deposit Return Found: ${depositReturnTransaction ? `YES (${depositReturnTransaction.amount})` : 'NO'}`);
+                        if (depositReturnTransaction) {
+                            console.log(`✅ Deposit Return Transaction Details:`, depositReturnTransaction);
+                        }
+                    }
+                }
+                
+                // Calculate verificationSum from line items as fallback
+                let verificationSum = 0;
+                Object.keys(month.expenses).forEach(key => {
+                    if (key !== 'total' && key !== 'transactions' && typeof month.expenses[key] === 'number' && month.expenses[key] !== 0) {
+                        verificationSum += month.expenses[key];
+                    }
+                });
+                
+                // PRIORITY: Use transaction sum if available (it's the source of truth)
+                // Otherwise use verificationSum (line items sum)
+                let finalTotal = transactionSum > 0 ? transactionSum : verificationSum;
+                
+                // Log if there's a discrepancy
+                if (transactionSum > 0 && Math.abs(verificationSum - transactionSum) > 0.01) {
+                    console.log(`⚠️ [generateReliableMonthlyBreakdown] ${monthName}: Transaction sum (${transactionSum}) differs from line items sum (${verificationSum}). Using transaction sum.`);
+                }
+                if (Math.abs(finalTotal - sumFromBreakdown) > 0.01) {
+                    console.log(`⚠️ [generateReliableMonthlyBreakdown] ${monthName}: Final total (${finalTotal}) differs from breakdown sum (${sumFromBreakdown}). Using final total.`);
+                }
+                
+                // FORCE UPDATE: Always use finalTotal (transaction sum if available, otherwise line items)
+                month.expenses.total = finalTotal;
+                sumFromBreakdown = finalTotal; // Update for consistency
+                
+                // Log if there's a discrepancy
+                if (Math.abs(oldTotal - sumFromBreakdown) > 0.01) {
+                    console.log(`⚠️ [generateReliableMonthlyBreakdown] ${monthName}: Expenses total mismatch - Old: ${oldTotal}, New: ${sumFromBreakdown}, Difference: ${sumFromBreakdown - oldTotal}`);
+                }
+                
+                // Update operating_activities.outflows to match expenses.total exactly
+                if (month.operating_activities) {
+                    const oldOutflows = month.operating_activities.outflows;
+                    // Set outflows to match expenses.total (they should be the same)
+                    month.operating_activities.outflows = sumFromBreakdown;
+                    month.operating_activities.net = month.operating_activities.inflows - month.operating_activities.outflows;
+                    
+                    if (Math.abs(oldTotal - sumFromBreakdown) > 0.01 || Math.abs(oldOutflows - sumFromBreakdown) > 0.01) {
+                        const outflowDifference = sumFromBreakdown - oldOutflows;
+                        console.log(`⚠️ [generateReliableMonthlyBreakdown] ${monthName}: Updated expenses.total ${oldTotal} → ${sumFromBreakdown} (diff: ${sumFromBreakdown - oldTotal})`);
+                        console.log(`💰 ${monthName}: Updated operating_activities.outflows ${oldOutflows} → ${sumFromBreakdown} (diff: ${outflowDifference}), net: ${month.operating_activities.net}`);
+                    }
+                }
+            }
+        });
+        
         console.log('✅ RELIABLE METHOD - Monthly breakdown completed');
+        
+        // Final verification for ALL months - double-check and force correct total
+        // COMPREHENSIVE: Calculate from all line items AND all transactions
+        monthNames.forEach(monthName => {
+            const month = monthlyData[monthName];
+            if (month && month.expenses) {
+                let sumFromLineItems = 0;
+                let sumFromTransactions = 0;
+                let sumFromBreakdown = 0;
+                const finalItems = [];
+                
+                // METHOD 1: Sum ALL non-zero expense items from month.expenses object (line items)
+                Object.keys(month.expenses).forEach(key => {
+                    if (key !== 'total' && key !== 'transactions' && typeof month.expenses[key] === 'number') {
+                        const value = month.expenses[key];
+                        if (value !== 0) {
+                            sumFromLineItems += value;
+                            finalItems.push({ key, amount: value, source: 'expenses' });
+                        }
+                    }
+                });
+                
+                // METHOD 2: Sum ALL transactions from month.expenses.transactions array
+                // This is the SOURCE OF TRUTH - transactions are definitive records of expenses
+                if (Array.isArray(month.expenses.transactions)) {
+                    month.expenses.transactions.forEach((trans, index) => {
+                        if (trans && typeof trans.amount === 'number') {
+                            // Include all amounts (expenses are positive)
+                            if (trans.amount > 0) {
+                                sumFromTransactions += trans.amount;
+                                // Log for October to verify deposit return is included
+                                if (monthName === 'october' && (trans.description?.includes('Security deposit Marula') || trans.description?.includes('deposit return'))) {
+                                    console.log(`🔍 [${monthName}] Transaction ${index + 1}/${month.expenses.transactions.length}: ${trans.description} = ${trans.amount}, Running sum: ${sumFromTransactions}`);
+                                }
+                            } else if (trans.amount < 0) {
+                                // Handle negative amounts (adjustments/refunds) - use absolute value
+                                sumFromTransactions += Math.abs(trans.amount);
+                            }
+                        }
+                    });
+                    
+                    // Log transaction sum calculation for October
+                    if (monthName === 'october') {
+                        console.log(`📊 [${monthName}] Transaction Sum Calculation:`, {
+                            transactionCount: month.expenses.transactions.length,
+                            sumFromTransactions,
+                            allTransactionAmounts: month.expenses.transactions.map(t => t.amount)
+                        });
+                    }
+                }
+                
+                // METHOD 3: Sum expense-related items from operating_activities.breakdown
+                if (month.operating_activities && month.operating_activities.breakdown) {
+                    const expenseKeys = ['electricity', 'water', 'gas', 'internet', 'maintenance', 'cleaning', 
+                                       'security', 'management', 'insurance', 'council_rates', 'plumbing', 
+                                       'sanitary', 'solar', 'other_expenses'];
+                    
+                    Object.keys(month.operating_activities.breakdown).forEach(key => {
+                        const value = month.operating_activities.breakdown[key];
+                        // Check if it's an expense (not income) and not already counted
+                        if (typeof value === 'number' && value > 0 && 
+                            !expenseKeys.includes(key.toLowerCase()) &&
+                            !['rental_income', 'admin_fees', 'deposits', 'utilities', 'advance_payments', 'other_income'].includes(key.toLowerCase())) {
+                            // This is likely an expense item (like "Security deposit Marula", "Alamait management fee", etc.)
+                            const alreadyInExpenses = month.expenses[key];
+                            if (!alreadyInExpenses || alreadyInExpenses === 0) {
+                                sumFromBreakdown += value;
+                                finalItems.push({ key, amount: value, source: 'breakdown' });
+                            }
+                        }
+                    });
+                }
+                
+                // CRITICAL: Transactions array is the SOURCE OF TRUTH for expenses
+                // ALWAYS use transaction sum when transactions array exists - transactions are definitive records
+                let finalSum;
+                const sumFromAllLineItems = sumFromLineItems + sumFromBreakdown;
+                
+                if (month.expenses.transactions && Array.isArray(month.expenses.transactions) && month.expenses.transactions.length > 0) {
+                    // ALWAYS use transaction sum as the definitive total - transactions are the source of truth
+                    finalSum = sumFromTransactions;
+                    
+                    // Log if there's a discrepancy between transactions and line items
+                    if (Math.abs(sumFromAllLineItems - sumFromTransactions) > 0.01) {
+                        console.log(`⚠️ [${monthName}] Using transaction sum (${sumFromTransactions}) instead of line items sum (${sumFromAllLineItems}). Difference: ${sumFromTransactions - sumFromAllLineItems}`);
+                    }
+                } else {
+                    // Fallback: If no transactions array exists, use line items
+                    finalSum = sumFromAllLineItems;
+                    console.log(`⚠️ [${monthName}] No transactions array found. Using line items sum: ${sumFromAllLineItems}`);
+                }
+                
+                const currentTotal = month.expenses.total || 0;
+                
+                // FORCE UPDATE the total - ALWAYS use transaction sum when available
+                month.expenses.total = finalSum;
+                
+                // Debug logging to understand discrepancies
+                if (monthName === 'october') {
+                    console.log(`🔍 [${monthName}] Verification Details:`, {
+                        sumFromLineItems,
+                        sumFromBreakdown,
+                        sumFromAllLineItems,
+                        sumFromTransactions,
+                        finalSum,
+                        currentTotal,
+                        transactionCount: month.expenses.transactions?.length || 0,
+                        lineItemKeys: Object.keys(month.expenses).filter(k => k !== 'total' && k !== 'transactions' && typeof month.expenses[k] === 'number' && month.expenses[k] !== 0),
+                        hasSecurityDeposit: month.expenses['Security deposit Marula'] || 0
+                    });
+                }
+                
+                // Also update operating_activities.outflows to match
+                if (month.operating_activities) {
+                    month.operating_activities.outflows = finalSum;
+                    month.operating_activities.net = month.operating_activities.inflows - month.operating_activities.outflows;
+                }
+                
+                // Log for debugging (especially October)
+                if (monthName === 'october' || Math.abs(currentTotal - finalSum) > 0.01) {
+                    console.log(`📊 [${monthName}] Expense Total Calculation:`, {
+                        sumFromLineItems,
+                        sumFromBreakdown,
+                        sumFromAllLineItems,
+                        sumFromTransactions,
+                        finalSum,
+                        currentTotal,
+                        difference: finalSum - currentTotal,
+                        itemCount: finalItems.length
+                    });
+                    
+                    if (Math.abs(currentTotal - finalSum) > 0.01) {
+                        console.log(`⚠️ FINAL FIX [${monthName}]: Expenses total corrected. Old: ${currentTotal}, New: ${finalSum}, Difference: ${finalSum - currentTotal}`);
+                        
+                        if (monthName === 'october') {
+                            console.log(`   Top 10 items:`, finalItems.sort((a, b) => b.amount - a.amount).slice(0, 10));
+                            console.log(`   All expense items (${finalItems.length}):`, finalItems.map(item => `${item.key}: ${item.amount} [${item.source}]`).join(', '));
+                        }
+                    }
+                }
+            }
+        });
+        
         return monthlyData;
     }
     
@@ -5213,8 +6171,15 @@ class EnhancedCashFlowService {
         
         Object.values(monthlyBreakdown).forEach(monthData => {
             yearlyTotals.operating_activities.inflows += monthData.operating_activities?.inflows || 0;
-            yearlyTotals.operating_activities.outflows += monthData.operating_activities?.outflows || 0;
-            yearlyTotals.operating_activities.net += monthData.operating_activities?.net || 0;
+            
+            // CRITICAL: Use expenses.total as the source of truth for outflows
+            // This ensures we use the verified total that includes all expense items
+            const monthOutflows = monthData.expenses?.total || monthData.operating_activities?.outflows || 0;
+            yearlyTotals.operating_activities.outflows += monthOutflows;
+            
+            // Recalculate net using the corrected outflows
+            const monthNet = (monthData.operating_activities?.inflows || 0) - monthOutflows;
+            yearlyTotals.operating_activities.net += monthNet;
             
             yearlyTotals.investing_activities.inflows += monthData.investing_activities?.inflows || 0;
             yearlyTotals.investing_activities.outflows += monthData.investing_activities?.outflows || 0;
@@ -5226,6 +6191,16 @@ class EnhancedCashFlowService {
             
             yearlyTotals.net_cash_flow += monthData.net_cash_flow || 0;
         });
+        
+        // Log for debugging (especially for October)
+        const octoberData = monthlyBreakdown.october;
+        if (octoberData) {
+            console.log(`📊 Yearly Totals Calculation - October:`, {
+                expensesTotal: octoberData.expenses?.total,
+                operatingOutflows: octoberData.operating_activities?.outflows,
+                usedForYearly: octoberData.expenses?.total || octoberData.operating_activities?.outflows
+            });
+        }
         
         return yearlyTotals;
     }

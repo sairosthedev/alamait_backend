@@ -199,8 +199,9 @@ exports.createAccount = async (req, res) => {
     }
 
     // Generate account code automatically
-    console.log('Generating account code for:', type, category);
-    const code = await AccountCodeService.generateAccountCode(type, category);
+    // Pass account name to detect non-AP accounts (management fees, deposits, etc.)
+    console.log('Generating account code for:', type, category, 'Account name:', name);
+    const code = await AccountCodeService.generateAccountCode(type, category, name);
     console.log('Generated code:', code);
 
     // Create account object

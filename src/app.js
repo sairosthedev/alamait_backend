@@ -49,9 +49,13 @@ const financeResidenceRoutes = require('./routes/finance/residenceRoutes');
 const leaseTemplateRoutes = require('./routes/admin/leaseTemplateRoutes');
 const adminLeaseRoutes = require('./routes/admin/leaseRoutes');
 const studentStatusRoutes = require('./routes/admin/studentStatusRoutes');
+const adminReportUploadRoutes = require('./routes/admin/reportUploadRoutes');
+const adminDeletionLogRoutes = require('./routes/admin/deletionLogRoutes');
 
 // CEO routes
 const ceoRoutes = require('./routes/ceo/index');
+const ceoReportUploadRoutes = require('./routes/ceo/reportUploadRoutes');
+const ceoDeletionLogRoutes = require('./routes/ceo/deletionLogRoutes');
 
 // Student routes
 const studentBookingRoutes = require('./routes/student/bookingRoutes');
@@ -80,6 +84,7 @@ const financeApplicationRoutes = require('./routes/finance/applicationRoutes');
 const financeRoomPriceRoutes = require('./routes/finance/roomPriceRoutes');
 const financeOtherIncomeRoutes = require('./routes/finance/otherIncomeRoutes');
 const financeOtherExpenseRoutes = require('./routes/finance/otherExpenseRoutes');
+const financeReportUploadRoutes = require('./routes/finance/reportUploadRoutes');
 const financeIndexRoutes = require('./routes/finance/index');
 const financeUsersRoutes = require('./routes/finance/users');
 const debtorRoutes = require('./routes/finance/debtorRoutes');
@@ -307,8 +312,20 @@ app.use('/api/admin/payment-allocation', adminPaymentAllocationRoutes);
 // Generic admin routes last
 app.use('/api/admin', adminRoutes);
 
+// Admin report upload routes
+app.use('/api/admin/reports', adminReportUploadRoutes);
+
+// Admin deletion log routes
+app.use('/api/admin/deletions', adminDeletionLogRoutes);
+
 // CEO routes
 app.use('/api/ceo', ceoRoutes);
+
+// CEO report upload routes
+app.use('/api/ceo/reports', ceoReportUploadRoutes);
+
+// CEO deletion log routes
+app.use('/api/ceo/deletions', ceoDeletionLogRoutes);
 
 // General lease routes
 const leaseRoutes = require('./routes/leaseRoutes');
@@ -347,6 +364,7 @@ app.use('/api/finance/applications', financeApplicationRoutes);
 app.use('/api/finance/room-prices', financeRoomPriceRoutes);
 app.use('/api/finance/other-income', financeOtherIncomeRoutes);
 app.use('/api/finance/other-expenses', financeOtherExpenseRoutes);
+app.use('/api/finance/reports', financeReportUploadRoutes);
 app.use('/api/finance/users', financeUsersRoutes);
 
 // Refunds endpoints

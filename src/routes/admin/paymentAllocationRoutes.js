@@ -27,8 +27,8 @@ const manualAllocationValidation = [
 // Basic authentication for all routes
 router.use(auth);
 
-// Admin and Finance roles can access payment allocation features
-const allowedRoles = ['admin', 'finance_admin', 'finance_user'];
+// Admin, Finance, and CEO roles can access payment allocation features
+const allowedRoles = ['admin', 'finance_admin', 'finance_user', 'ceo'];
 
 /**
  * STUDENT-SPECIFIC ROUTES

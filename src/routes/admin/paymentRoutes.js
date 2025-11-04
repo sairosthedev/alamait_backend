@@ -36,7 +36,7 @@ const verifyPopValidation = [
 router.use(auth);
 
 // Admin-only routes
-router.get('/total-income', checkRole('admin'), async (req, res) => {
+router.get('/total-income', checkRole('admin', 'ceo'), async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
         const query = { status: 'Confirmed' };
@@ -59,8 +59,8 @@ router.get('/total-income', checkRole('admin'), async (req, res) => {
 });
 
 // Admin-only routes
-router.get('/', checkRole('admin', 'finance_admin', 'finance_user'), getPayments);
-router.post('/', checkRole('admin', 'finance_admin', 'finance_user'), async (req, res) => {
+router.get('/', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getPayments);
+router.post('/', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), async (req, res) => {
     try {
         console.log('🚀 Admin: Creating payment with Smart FIFO allocation (via paymentRoutes)...');
         
@@ -122,9 +122,9 @@ router.post('/', checkRole('admin', 'finance_admin', 'finance_user'), async (req
         });
     }
 });
-router.put('/:paymentId/status', checkRole('admin', 'finance_admin', 'finance_user'), updateStatusValidation, updatePaymentStatus);
-router.delete('/:id', checkRole('admin', 'finance_admin'), deletePayment);
-router.get('/total', checkRole('admin', 'finance_admin', 'finance_user'), getPaymentTotals);
+router.put('/:paymentId/status', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), updateStatusValidation, updatePaymentStatus);
+router.delete('/:id', checkRole('admin', 'finance_admin', 'ceo'), deletePayment);
+router.get('/total', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getPaymentTotals);
 
 // Routes accessible to all authenticated users (POP related)
 router.post('/:paymentId/upload-pop', uploadProofOfPayment);

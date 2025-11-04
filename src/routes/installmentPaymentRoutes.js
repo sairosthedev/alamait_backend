@@ -27,7 +27,7 @@ const updateStatusValidation = [
  * @access  Private (Admin/Finance)
  */
 router.post('/', 
-    checkRole('admin', 'finance_admin', 'finance_user'),
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
     createInstallmentPaymentValidation,
     installmentPaymentController.createInstallmentPayment
 );
@@ -38,7 +38,7 @@ router.post('/',
  * @access  Private (Admin/Finance)
  */
 router.get('/summary/:monthlyRequestId/:itemIndex',
-    checkRole('admin', 'finance_admin', 'finance_user'),
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
     installmentPaymentController.getInstallmentSummary
 );
 
@@ -48,7 +48,7 @@ router.get('/summary/:monthlyRequestId/:itemIndex',
  * @access  Private (Admin/Finance)
  */
 router.get('/request/:monthlyRequestId',
-    checkRole('admin', 'finance_admin', 'finance_user'),
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
     installmentPaymentController.getAllInstallmentsForRequest
 );
 
@@ -58,7 +58,7 @@ router.get('/request/:monthlyRequestId',
  * @access  Private (Admin/Finance)
  */
 router.get('/:id',
-    checkRole('admin', 'finance_admin', 'finance_user'),
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
     installmentPaymentController.getInstallmentPaymentById
 );
 
@@ -68,7 +68,7 @@ router.get('/:id',
  * @access  Private (Admin/Finance)
  */
 router.patch('/:id/status',
-    checkRole('admin', 'finance_admin', 'finance_user'),
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
     updateStatusValidation,
     installmentPaymentController.updateInstallmentPaymentStatus
 );

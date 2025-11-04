@@ -52,3 +52,5 @@ router.post('/ledger/bulk', DebtorLedgerController.getMultipleDebtorLedgers);
 router.get('/ledger/summary', DebtorLedgerController.getAllDebtorLedgersSummary);
 
 module.exports = router;
+
+

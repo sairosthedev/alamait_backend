@@ -28,13 +28,13 @@ router.put('/:id',
 
 // Delete expense (admin and finance roles)
 router.delete('/:id', 
-    checkRole('admin', 'finance_admin', 'finance_user'),
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'),
     expenseController.deleteExpense
 );
 
 // Record payment for expense (creates transaction entries)
 router.post('/:id/payments', 
-    checkRole('admin', 'finance_admin', 'finance_user'), 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
     expenseController.recordExpensePayment
 );
 
@@ -51,7 +51,7 @@ router.patch('/:id/approve',
 
 // Mark expense as paid (finance users and admin)
 router.patch('/:id/mark-paid', 
-    checkRole('admin', 'finance_admin', 'finance_user'), 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
     expenseController.markExpenseAsPaid
 );
 

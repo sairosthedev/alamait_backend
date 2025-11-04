@@ -3817,3 +3817,440 @@ exports.checkBackgroundProcessing = async (req, res) => {
         });
     }
 };
+
+// Admin image upload controller
+exports.uploadImage = async (req, res) => {
+    try {
+        console.log('=== Admin Image Upload ===');
+        
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                message: 'No image file provided'
+            });
+        }
+
+        console.log('Image file received:', {
+            originalname: req.file.originalname,
+            size: req.file.size,
+            mimetype: req.file.mimetype
+        });
+
+        // Get upload type from query parameter (optional)
+        const uploadType = req.query.type || 'general';
+        const folder = req.query.folder || 'admin-uploads';
+
+        // Generate S3 key
+        const timestamp = Date.now();
+        const s3Key = `${folder}/${timestamp}_${req.file.originalname}`;
+
+        // Upload to S3
+        const s3UploadParams = {
+            Bucket: s3Configs.general.bucket,
+            Key: s3Key,
+            Body: req.file.buffer,
+            ContentType: req.file.mimetype,
+            ACL: 'public-read', // Make images publicly accessible
+            Metadata: {
+                fieldName: req.file.fieldname,
+                uploadedBy: req.user._id.toString(),
+                uploadDate: new Date().toISOString(),
+                uploadType: uploadType,
+                folder: folder
+            }
+        };
+
+        const s3Result = await s3.upload(s3UploadParams).promise();
+        console.log('Image uploaded successfully to S3:', s3Result.Location);
+
+        // If this is a residence image upload, update the residence document
+        let residenceUpdated = false;
+        if (uploadType === 'residence' && folder.includes('/')) {
+            try {
+                const residenceId = folder.split('/')[1]; // Extract residence ID from folder path
+                console.log('Updating residence with image URL:', residenceId);
+                
+                // Update the residence document to add the image URL
+                const residence = await Residence.findByIdAndUpdate(
+                    residenceId,
+                    { 
+                        $push: { 
+                            images: {
+                                url: s3Result.Location,
+                                fileName: req.file.originalname,
+                                uploadedAt: new Date(),
+                                uploadedBy: req.user._id
+                            }
+                        } 
+                    },
+                    { new: true }
+                );
+
+                if (residence) {
+                    console.log('Residence updated successfully with new image');
+                    residenceUpdated = true;
+                } else {
+                    console.log('Residence not found with ID:', residenceId);
+                }
+            } catch (residenceError) {
+                console.error('Error updating residence with image:', residenceError);
+                // Don't fail the upload if residence update fails
+            }
+        }
+
+        res.json({
+            success: true,
+            message: 'Image uploaded successfully',
+            data: {
+                url: s3Result.Location,
+                fileName: req.file.originalname,
+                size: req.file.size,
+                type: req.file.mimetype,
+                uploadType: uploadType,
+                folder: folder,
+                uploadedAt: new Date().toISOString(),
+                residenceUpdated: residenceUpdated
+            }
+        });
+
+    } catch (error) {
+        console.error('Error uploading image:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to upload image',
+            error: error.message
+        });
+    }
+};
+
+// Admin bulk image upload controller
+exports.uploadImages = async (req, res) => {
+    try {
+        console.log('=== Admin Bulk Image Upload ===');
+        
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No image files provided'
+            });
+        }
+
+        console.log(`${req.files.length} image files received`);
+
+        // Get upload type from query parameter (optional)
+        const uploadType = req.query.type || 'general';
+        const folder = req.query.folder || 'admin-uploads';
+
+        const uploadResults = [];
+        const errors = [];
+
+        // Process each file
+        for (let i = 0; i < req.files.length; i++) {
+            const file = req.files[i];
+            
+            try {
+                console.log(`Processing file ${i + 1}/${req.files.length}:`, {
+                    originalname: file.originalname,
+                    size: file.size,
+                    mimetype: file.mimetype
+                });
+
+                // Generate S3 key
+                const timestamp = Date.now();
+                const s3Key = `${folder}/${timestamp}_${i}_${file.originalname}`;
+
+                // Upload to S3
+                const s3UploadParams = {
+                    Bucket: s3Configs.general.bucket,
+                    Key: s3Key,
+                    Body: file.buffer,
+                    ContentType: file.mimetype,
+                    ACL: 'public-read',
+                    Metadata: {
+                        fieldName: file.fieldname,
+                        uploadedBy: req.user._id.toString(),
+                        uploadDate: new Date().toISOString(),
+                        uploadType: uploadType,
+                        folder: folder,
+                        fileIndex: i.toString()
+                    }
+                };
+
+                const s3Result = await s3.upload(s3UploadParams).promise();
+                console.log(`File ${i + 1} uploaded successfully to S3:`, s3Result.Location);
+
+                // If this is a residence image upload, update the residence document
+                let residenceUpdated = false;
+                if (uploadType === 'residence' && folder.includes('/')) {
+                    try {
+                        const residenceId = folder.split('/')[1]; // Extract residence ID from folder path
+                        console.log(`Updating residence with image ${i + 1} URL:`, residenceId);
+                        
+                        // Update the residence document to add the image URL
+                        const residence = await Residence.findByIdAndUpdate(
+                            residenceId,
+                            { 
+                                $push: { 
+                                    images: {
+                                        url: s3Result.Location,
+                                        fileName: file.originalname,
+                                        uploadedAt: new Date(),
+                                        uploadedBy: req.user._id
+                                    }
+                                } 
+                            },
+                            { new: true }
+                        );
+
+                        if (residence) {
+                            console.log(`Residence updated successfully with image ${i + 1}`);
+                            residenceUpdated = true;
+                        } else {
+                            console.log('Residence not found with ID:', residenceId);
+                        }
+                    } catch (residenceError) {
+                        console.error(`Error updating residence with image ${i + 1}:`, residenceError);
+                        // Don't fail the upload if residence update fails
+                    }
+                }
+
+                uploadResults.push({
+                    url: s3Result.Location,
+                    fileName: file.originalname,
+                    size: file.size,
+                    type: file.mimetype,
+                    uploadType: uploadType,
+                    folder: folder,
+                    uploadedAt: new Date().toISOString(),
+                    index: i,
+                    residenceUpdated: residenceUpdated
+                });
+
+            } catch (fileError) {
+                console.error(`Error uploading file ${i + 1}:`, fileError);
+                errors.push({
+                    fileName: file.originalname,
+                    error: fileError.message,
+                    index: i
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Uploaded ${uploadResults.length} images successfully`,
+            data: {
+                uploaded: uploadResults,
+                errors: errors,
+                totalFiles: req.files.length,
+                successfulUploads: uploadResults.length,
+                failedUploads: errors.length
+            }
+        });
+
+    } catch (error) {
+        console.error('Error uploading images:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to upload images',
+            error: error.message
+        });
+    }
+};
+
+// Admin property image upload controller (for properties page)
+exports.uploadPropertyImage = async (req, res) => {
+    try {
+        console.log('=== Admin Property Image Upload ===');
+        
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                message: 'No image file provided'
+            });
+        }
+
+        const { residenceId } = req.params;
+        if (!residenceId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Residence ID is required'
+            });
+        }
+
+        console.log('Property image file received:', {
+            residenceId,
+            originalname: req.file.originalname,
+            size: req.file.size,
+            mimetype: req.file.mimetype
+        });
+
+        // Verify residence exists
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        // Generate S3 key for property images
+        const timestamp = Date.now();
+        const s3Key = `residence-images/${residenceId}/${timestamp}_${req.file.originalname}`;
+
+        // Upload to S3
+        const s3UploadParams = {
+            Bucket: s3Configs.general.bucket,
+            Key: s3Key,
+            Body: req.file.buffer,
+            ContentType: req.file.mimetype,
+            ACL: 'public-read',
+            Metadata: {
+                fieldName: req.file.fieldname,
+                uploadedBy: req.user._id.toString(),
+                uploadDate: new Date().toISOString(),
+                uploadType: 'property',
+                residenceId: residenceId,
+                residenceName: residence.name
+            }
+        };
+
+        const s3Result = await s3.upload(s3UploadParams).promise();
+        console.log('Property image uploaded successfully to S3:', s3Result.Location);
+
+        // Update the residence document to add the image URL
+        const updatedResidence = await Residence.findByIdAndUpdate(
+            residenceId,
+            { 
+                $push: { 
+                    images: {
+                        url: s3Result.Location,
+                        fileName: req.file.originalname,
+                        uploadedAt: new Date(),
+                        uploadedBy: req.user._id,
+                        uploadType: 'property'
+                    }
+                } 
+            },
+            { new: true }
+        );
+
+        if (updatedResidence) {
+            console.log('Residence updated successfully with new property image');
+        }
+
+        res.json({
+            success: true,
+            message: 'Property image uploaded successfully',
+            data: {
+                url: s3Result.Location,
+                fileName: req.file.originalname,
+                size: req.file.size,
+                type: req.file.mimetype,
+                residenceId: residenceId,
+                residenceName: residence.name,
+                uploadedAt: new Date().toISOString(),
+                residenceUpdated: true
+            }
+        });
+
+    } catch (error) {
+        console.error('Error uploading property image:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to upload property image',
+            error: error.message
+        });
+    }
+};
+
+// Delete image from residence (admin only)
+exports.deleteImage = async (req, res) => {
+    try {
+        console.log('=== Admin Delete Image ===');
+        
+        const { imageId } = req.params;
+        const { residenceId } = req.query;
+        
+        if (!imageId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Image ID is required'
+            });
+        }
+
+        if (!residenceId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Residence ID is required'
+            });
+        }
+
+        console.log('Deleting image:', { imageId, residenceId });
+
+        // Find the residence and the specific image
+        const residence = await Residence.findById(residenceId);
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        // Find the image in the residence's images array
+        const imageIndex = residence.images.findIndex(img => img._id.toString() === imageId);
+        if (imageIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                message: 'Image not found in residence'
+            });
+        }
+
+        const imageToDelete = residence.images[imageIndex];
+        console.log('Found image to delete:', imageToDelete);
+
+        // Delete from S3
+        try {
+            // Extract the S3 key from the URL
+            const imageUrl = imageToDelete.url;
+            const urlParts = imageUrl.split('/');
+            const s3Key = urlParts.slice(3).join('/'); // Remove the domain and bucket name
+            
+            console.log('Deleting from S3 with key:', s3Key);
+            
+            await s3.deleteObject({
+                Bucket: s3Configs.general.bucket,
+                Key: s3Key
+            }).promise();
+            
+            console.log('Successfully deleted image from S3');
+        } catch (s3Error) {
+            console.error('Error deleting image from S3:', s3Error);
+            // Continue with database deletion even if S3 deletion fails
+        }
+
+        // Remove the image from the residence's images array
+        residence.images.splice(imageIndex, 1);
+        await residence.save();
+
+        console.log('Successfully deleted image from residence');
+
+        res.json({
+            success: true,
+            message: 'Image deleted successfully',
+            data: {
+                imageId: imageId,
+                residenceId: residenceId,
+                deletedAt: new Date().toISOString()
+            }
+        });
+
+    } catch (error) {
+        console.error('Error deleting image:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete image',
+            error: error.message
+        });
+    }
+};

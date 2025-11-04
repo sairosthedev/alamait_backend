@@ -4,7 +4,7 @@ const controller = require('../../controllers/finance/employeeController');
 const { auth, checkRole } = require('../../middleware/auth');
 
 router.use(auth);
-router.use(checkRole('admin', 'finance_admin', 'finance_user'));
+router.use(checkRole('admin', 'finance_admin', 'finance_user', 'ceo'));
 
 // Debug middleware for salary-request-by-residence
 router.post('/salary-request-by-residence', (req, res, next) => {
@@ -24,10 +24,10 @@ router.post('/salary-request', checkRole('admin', 'finance_admin'), controller.c
 router.delete('/:id', checkRole('admin'), controller.remove);
 
 // Salary request creation from selected employees
-router.post('/salary-requests', checkRole('admin', 'finance_admin', 'finance_user'), controller.createSalaryRequest);
+router.post('/salary-requests', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), controller.createSalaryRequest);
 
 // Individual salary requests with detailed allocation handling
-router.post('/individual-salary-requests', checkRole('admin', 'finance_admin', 'finance_user'), controller.createIndividualSalaryRequests);
+router.post('/individual-salary-requests', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), controller.createIndividualSalaryRequests);
 
 module.exports = router;
 

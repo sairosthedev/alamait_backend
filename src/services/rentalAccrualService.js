@@ -30,7 +30,7 @@ class RentalAccrualService {
                 {
                     $or: [
                         { 'metadata.type': 'monthly_rent_accrual' },
-                        { description: { $regex: /Monthly rent accrual/ } }
+                        { description: { $regex: /Monthly.*accrual/i } }
                     ]
                 },
                 {
@@ -44,11 +44,23 @@ class RentalAccrualService {
             ]
         };
 
-        // Add student identification criteria
+        // Add student identification criteria - check BOTH formats to catch duplicates from both services
         const studentCriteria = [];
-        if (studentId) studentCriteria.push({ 'metadata.studentId': studentId.toString() });
-        if (applicationId) studentCriteria.push({ 'metadata.applicationId': applicationId.toString() });
-        if (debtorId) studentCriteria.push({ sourceModel: 'Debtor', sourceId: debtorId });
+        if (studentId) {
+            // Check both studentId formats (student ID and application ID formats)
+            studentCriteria.push({ 'metadata.studentId': studentId.toString() });
+            studentCriteria.push({ 'metadata.userId': studentId.toString() });
+            // Also check if sourceId matches
+            studentCriteria.push({ sourceId: mongoose.Types.ObjectId.isValid(studentId) ? new mongoose.Types.ObjectId(studentId) : studentId });
+        }
+        if (applicationId) {
+            studentCriteria.push({ 'metadata.applicationId': applicationId.toString() });
+            // Also check if AccountingService used application ID as studentId
+            studentCriteria.push({ 'metadata.studentId': applicationId.toString() });
+        }
+        if (debtorId) {
+            studentCriteria.push({ sourceModel: 'Debtor', sourceId: debtorId });
+        }
 
         if (studentCriteria.length > 0) {
             query.$and.push({ $or: studentCriteria });
