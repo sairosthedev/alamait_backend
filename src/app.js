@@ -119,27 +119,75 @@ const allowedOrigins = [
   'https://alamait.vercel.app'
 ];
 
-// Enable CORS for all routes
-app.use(cors({
+// Add environment variable origins if specified
+if (process.env.FRONTEND_URL) {
+  const envOrigins = process.env.FRONTEND_URL.split(',').map(url => url.trim());
+  allowedOrigins.push(...envOrigins);
+}
+
+// Add any additional origins from environment
+if (process.env.ALLOWED_ORIGINS) {
+  const additionalOrigins = process.env.ALLOWED_ORIGINS.split(',').map(url => url.trim());
+  allowedOrigins.push(...additionalOrigins);
+}
+
+console.log('🌐 CORS allowed origins:', allowedOrigins);
+
+// CORS configuration object
+const corsOptions = {
   origin: function(origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
     if (allowedOrigins.indexOf(origin) === -1) {
+      console.warn(`⚠️ CORS: Blocked origin: ${origin}`);
       const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
       return callback(new Error(msg), false);
     }
+    console.log(`✅ CORS: Allowed origin: ${origin}`);
     return callback(null, true);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'HEAD'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'X-CSRF-Token'],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  maxAge: 86400 // 24 hours
-}));
+  maxAge: 86400, // 24 hours
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
 
-// Handle preflight requests
-app.options('*', cors());
+// Enable CORS for all routes
+app.use(cors(corsOptions));
+
+// Manual CORS handler as fallback (especially for preflight requests)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  
+  // Check if origin is allowed (normalize by removing trailing slashes)
+  const normalizedOrigin = origin ? origin.replace(/\/$/, '') : null;
+  const isAllowedOrigin = normalizedOrigin && allowedOrigins.some(allowed => 
+    allowed.replace(/\/$/, '') === normalizedOrigin
+  );
+  
+  if (isAllowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-Token');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, X-Content-Range');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    
+    // Handle preflight OPTIONS requests
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+  }
+  
+  next();
+});
+
+// Handle preflight requests explicitly with the same CORS configuration
+app.options('*', cors(corsOptions));
 
 // Log all incoming requests
 app.use((req, res, next) => {

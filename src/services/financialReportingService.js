@@ -1894,11 +1894,18 @@ class FinancialReportingService {
                     let depositsTotal = 0;
                     let deferredTotal = 0;
                     
-                    // Process accrual entries (AR debits)
+                    // Process accrual entries (AR debits, deposits, deferred income)
                     accrualEntries.forEach(tx => {
                         tx.entries.forEach(line => {
                             if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
                                 arDebits += Number(line.debit || 0);
+                            } else if (line.accountCode && line.accountCode.startsWith('2020')) {
+                                // Deposit accounts - include if transaction date is within month
+                                depositsTotal += (line.credit || 0) - (line.debit || 0);
+                            } else if (line.accountCode && line.accountCode.startsWith('2200')) {
+                                // Deferred income accounts (Advance Payment Liability) from accruals
+                                // Include all transactions up to month end (cumulative)
+                                deferredTotal += (line.credit || 0) - (line.debit || 0);
                             }
                         });
                     });
@@ -1914,10 +1921,23 @@ class FinancialReportingService {
                                     cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
                                 }
                             } else if (line.accountCode && line.accountCode.startsWith('2020')) {
-                                // Deposit accounts
+                                // Deposit accounts - include if transaction date is within month
                                 depositsTotal += (line.credit || 0) - (line.debit || 0);
                             } else if (line.accountCode && line.accountCode.startsWith('2200')) {
-                                // Deferred income accounts
+                                // Deferred income accounts (Advance Payment Liability) from payments
+                                // Include all transactions up to month end (cumulative)
+                                // For advance payments, we want to show the cumulative balance
+                                deferredTotal += (line.credit || 0) - (line.debit || 0);
+                            }
+                        });
+                    });
+                    
+                    // Also process other entries (advance_payment source transactions)
+                    otherEntries.forEach(tx => {
+                        tx.entries.forEach(line => {
+                            if (line.accountCode && line.accountCode.startsWith('2200')) {
+                                // Deferred income accounts (Advance Payment Liability) from other sources
+                                // Include all transactions up to month end (cumulative)
                                 deferredTotal += (line.credit || 0) - (line.debit || 0);
                             }
                         });
@@ -2047,6 +2067,20 @@ class FinancialReportingService {
                 monthlyBalanceSheet[monthName].assets.current['Accounts Receivable - Tenants (1100)'] = arByMonthOutstanding;
                 monthlyBalanceSheet[monthName].liabilities.current['Tenant Deposits Held (2020)'] = depositsTotal;
                 monthlyBalanceSheet[monthName].liabilities.current['Deferred Income - Tenant Advances (2200)'] = deferredTotal;
+                
+                // Debug logging for account 2200
+                if (monthName.toLowerCase() === 'october' || monthKey === '2025-10') {
+                    console.log(`📊 Account 2200 (Advance Payment Liability) for ${monthName} ${period}:`, {
+                        deferredTotal: deferredTotal,
+                        monthKey: monthKey,
+                        monthEndDate: monthEndDate.toISOString(),
+                        totalEntries: entries.length,
+                        accrualEntries: accrualEntries.length,
+                        paymentEntries: paymentEntries.length,
+                        otherEntries: otherEntries.length,
+                        accountBalance: Object.values(accountBalances).find(acc => acc.code === '2200')?.balance || 0
+                    });
+                }
                 
                 // 🆕 FIX: Override Accounts Payable with aggregated total
                 monthlyBalanceSheet[monthName].liabilities.current['Accounts Payable (2000)'] = accountsPayableTotal;
