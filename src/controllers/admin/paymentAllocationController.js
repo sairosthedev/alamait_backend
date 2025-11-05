@@ -828,106 +828,219 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
     try {
         const { residence, limit = 20, sortBy = 'totalBalance', sortOrder = 'desc' } = req.query;
 
-        console.log(`👥 Getting students with outstanding balances by month (MONTHLY BREAKDOWN)`);
+        console.log(`👥 Getting students with outstanding balances by month (using debtor logic)`);
 
-        // Use aggregation pipeline to get monthly breakdown
-        const pipeline = [
-            // Match AR transactions (both debits and credits)
-            {
-                $match: {
-                    'entries.accountCode': { $regex: '^1100-' },
-                    'entries.accountType': 'Asset',
-                    ...(residence && { residence: new mongoose.Types.ObjectId(residence) })
+        // Get all AR transactions for all students
+        // Use same calculation logic as balance sheet: cumulative balances by transaction date up to month end
+        const transactionQuery = {
+            'entries.accountCode': { $regex: '^1100-' },
+            'entries.accountType': 'Asset',
+            status: 'posted'
+        };
+        
+        // Apply residence filter if provided (check both top-level residence and metadata)
+        if (residence) {
+            const residenceId = new mongoose.Types.ObjectId(residence);
+            // Use $and to combine residence filter with other conditions
+            transactionQuery.$and = [
+                { 'entries.accountCode': { $regex: '^1100-' } },
+                { 'entries.accountType': 'Asset' },
+                { status: 'posted' },
+                {
+                    $or: [
+                        { residence: residenceId },
+                        { residence: residence }, // Also try as string
+                        { 'metadata.residenceId': residence },
+                        { 'metadata.residence': residenceId },
+                        { 'metadata.residence': residence } // Also try as string
+                    ]
                 }
-            },
-            // Unwind entries to process each AR entry
-            { $unwind: '$entries' },
-            // Match only AR entries
-            {
-                $match: {
-                    'entries.accountCode': { $regex: '^1100-' },
-                    'entries.accountType': 'Asset'
-                }
-            },
-            // Extract student ID from account code and create month key
-            {
-                $addFields: {
-                    studentId: { $arrayElemAt: [{ $split: ['$entries.accountCode', '-'] }, 1] },
-                    monthKey: {
-                        $dateToString: {
-                            format: "%Y-%m",
-                            date: "$date"
-                        }
-                    },
-                    year: { $year: "$date" },
-                    month: { $month: "$date" }
-                }
-            },
-            // Group by student ID and month to get monthly balances
-            {
-                $group: {
-                    _id: {
-                        studentId: '$studentId',
-                        monthKey: '$monthKey',
-                        year: '$year',
-                        month: '$month'
-                    },
-                    monthlyDebits: { $sum: { $ifNull: ['$entries.debit', 0] } },
-                    monthlyCredits: { $sum: { $ifNull: ['$entries.credit', 0] } },
-                    transactionCount: { $sum: 1 },
-                    latestTransaction: { $max: '$date' },
-                    residence: { $first: '$residence' }
-                }
-            },
-            // Calculate net monthly balance
-            {
-                $addFields: {
-                    monthlyBalance: { $subtract: ['$monthlyDebits', '$monthlyCredits'] }
-                }
-            },
-            // Only include months with positive balances
-            {
-                $match: {
-                    monthlyBalance: { $gt: 0 }
-                }
-            },
-            // Group by student to get all their monthly balances
-            {
-                $group: {
-                    _id: '$_id.studentId',
-                    monthlyBalances: {
-                        $push: {
-                            monthKey: '$_id.monthKey',
-                            year: '$_id.year',
-                            month: '$_id.month',
-                            balance: '$monthlyBalance',
-                            transactionCount: '$transactionCount',
-                            latestTransaction: '$latestTransaction'
-                        }
-                    },
-                    totalBalance: { $sum: '$monthlyBalance' },
-                    totalTransactions: { $sum: '$transactionCount' },
-                    latestTransaction: { $max: '$latestTransaction' },
-                    residence: { $first: '$residence' }
-                }
-            },
-            // Sort by total balance
-            { $sort: { totalBalance: -1 } }
-            // Note: Don't limit here - we need all students to process invoices
-            // Limit will be applied later after invoice processing
-        ];
+            ];
+        }
+        
+        const allARTransactions = await TransactionEntry.find(transactionQuery).sort({ date: 1 }).lean();
 
-        console.log(`🔍 Running monthly breakdown aggregation pipeline...`);
-        const studentBalances = await TransactionEntry.aggregate(pipeline);
+        console.log(`📊 Found ${allARTransactions.length} AR transactions${residence ? ` for residence ${residence}` : ''}`);
+        
+        // Track residence per student from transactions
+        const studentResidenceMap = new Map();
+
+        // Process transactions to calculate cumulative balances by month (like balance sheet)
+        // For each month, calculate cumulative balance up to the end of that month
+        // This matches balance sheet logic: cumulative debits - cumulative credits up to month end
+        const monthlyData = {}; // { studentId: { monthKey: { accruals, payments, outstanding } } }
+        const allMonthKeysSet = new Set(); // Track all months we've seen
+        
+        // First pass: collect all unique months from transactions and track residence per student
+        allARTransactions.forEach(transaction => {
+            const txDate = new Date(transaction.date);
+            const monthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+            allMonthKeysSet.add(monthKey);
+            
+            // Track residence from transaction
+            const txResidence = transaction.residence || 
+                              transaction.metadata?.residenceId || 
+                              transaction.metadata?.residence;
+            
+            transaction.entries.forEach(entry => {
+                if (entry.accountCode && entry.accountCode.startsWith('1100-') && 
+                    entry.accountType === 'Asset') {
+                    const studentId = entry.accountCode.split('-')[1];
+                    if (studentId && txResidence && !studentResidenceMap.has(studentId)) {
+                        studentResidenceMap.set(studentId, txResidence);
+                    }
+                }
+            });
+        });
+        
+        const allMonthKeys = Array.from(allMonthKeysSet).sort();
+        
+        // Second pass: for each student, calculate cumulative balance at end of each month
+        allARTransactions.forEach(transaction => {
+            transaction.entries.forEach(entry => {
+                if (entry.accountCode && entry.accountCode.startsWith('1100-') && 
+                    entry.accountType === 'Asset') {
+                    const studentId = entry.accountCode.split('-')[1];
+                    
+                    if (!studentId) return;
+                    
+                    // Apply residence filter if provided (check student's residence matches)
+                    if (residence) {
+                        const studentResidence = studentResidenceMap.get(studentId);
+                        if (studentResidence && studentResidence.toString() !== residence) {
+                            return; // Skip if student's residence doesn't match filter
+                        }
+                    }
+                    
+                    if (!monthlyData[studentId]) {
+                        monthlyData[studentId] = {};
+                    }
+                    
+                    // For each month, calculate cumulative balance up to that month end
+                    // This matches balance sheet logic: only include transactions dated <= month end
+                    const txDate = new Date(transaction.date);
+                    const txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+                    
+                    allMonthKeys.forEach(monthKey => {
+                        // Calculate month end date for comparison
+                        // JavaScript Date months are 0-indexed, so month 10 = November, month 10 day 0 = last day of October
+                        const [year, month] = monthKey.split('-').map(Number);
+                        const monthEndDate = new Date(year, month, 0, 23, 59, 59, 999); // Last day of the month (month is 1-based, Date uses 0-based)
+                        
+                        // Only include transactions dated <= month end (like balance sheet)
+                        if (txDate <= monthEndDate) {
+                            if (!monthlyData[studentId][monthKey]) {
+                                monthlyData[studentId][monthKey] = {
+                                    monthKey,
+                                    year,
+                                    month,
+                                    accruals: 0,
+                                    payments: 0,
+                                    outstanding: 0,
+                                    transactionCount: 0,
+                                    latestTransaction: null
+                                };
+                            }
+                            
+                            const monthData = monthlyData[studentId][monthKey];
+                            
+                            // Process based on transaction source (same as balance sheet)
+                            if (transaction.source === 'rental_accrual' || transaction.source === 'lease_start') {
+                                // Accrual: increases what's owed
+                                monthData.accruals += entry.debit || 0;
+                            } else if (transaction.source === 'payment' || transaction.source === 'accounts_receivable_collection') {
+                                // Payment: increases what's paid
+                                monthData.payments += entry.credit || 0;
+                            } else if (transaction.source === 'manual') {
+                                // Manual transactions: handle based on type
+                                if (transaction.metadata?.type === 'negotiated_payment_adjustment' || 
+                                    transaction.metadata?.type === 'security_deposit_reversal') {
+                                    // Reduces what's owed
+                                    monthData.accruals -= entry.credit || 0;
+                                } else {
+                                    // Other manual: debits increase, credits decrease
+                                    monthData.accruals += (entry.debit || 0) - (entry.credit || 0);
+                                }
+                            }
+                            
+                            // Update transaction count and latest transaction for this month
+                            if (txMonthKey === monthKey) {
+                                monthData.transactionCount++;
+                                if (!monthData.latestTransaction || txDate > new Date(monthData.latestTransaction)) {
+                                    monthData.latestTransaction = transaction.date;
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+        });
+
+        // Calculate outstanding for each month (like balance sheet: cumulative debits - cumulative credits)
+        Object.keys(monthlyData).forEach(studentId => {
+            Object.keys(monthlyData[studentId]).forEach(monthKey => {
+                const monthData = monthlyData[studentId][monthKey];
+                monthData.outstanding = Math.max(0, monthData.accruals - monthData.payments);
+            });
+        });
+
+        // Convert to array format similar to aggregation result
+        const studentBalances = Object.keys(monthlyData).map(studentId => {
+            const studentMonths = monthlyData[studentId];
+            const monthlyBalances = Object.values(studentMonths)
+                .filter(m => m.outstanding > 0) // Only include months with outstanding > 0
+                .map(m => ({
+                    monthKey: m.monthKey,
+                    year: m.year,
+                    month: m.month,
+                    balance: m.outstanding,
+                    debits: m.accruals,
+                    credits: m.payments,
+                    transactionCount: m.transactionCount,
+                    latestTransaction: m.latestTransaction
+                }))
+                .sort((a, b) => {
+                    if (a.year !== b.year) return b.year - a.year;
+                    return b.month - a.month;
+                });
+
+            const totalBalance = monthlyBalances.reduce((sum, m) => sum + m.balance, 0);
+            const totalTransactions = monthlyBalances.reduce((sum, m) => sum + m.transactionCount, 0);
+            const latestTransaction = monthlyBalances.length > 0 ? monthlyBalances[0].latestTransaction : null;
+
+            return {
+                _id: studentId,
+                monthlyBalances,
+                totalBalance,
+                totalTransactions,
+                latestTransaction,
+                residence: studentResidenceMap.get(studentId) || null
+            };
+        }).filter(s => {
+            // Filter by residence if provided
+            if (residence) {
+                const studentResidence = s.residence;
+                if (!studentResidence || studentResidence.toString() !== residence) {
+                    return false; // Exclude if residence doesn't match
+                }
+            }
+            // Only include students with outstanding balance
+            return s.totalBalance > 0;
+        }).sort((a, b) => b.totalBalance - a.totalBalance);
+
+        console.log(`📊 Processed ${studentBalances.length} students with outstanding balances`);
 
         console.log(`🔍 Found ${studentBalances.length} students with outstanding balances`);
         
-        // Debug: Log November balances specifically
-        studentBalances.forEach(student => {
+        // Debug: Log November balances specifically from transactions
+        const novStudentsFromTransactions = studentBalances.filter(student => {
             const novBalances = student.monthlyBalances?.filter(mb => mb.monthKey === '2025-11' || mb.month === 11);
-            if (novBalances && novBalances.length > 0) {
-                console.log(`📅 November 2025 balances for student ${student._id}:`, novBalances);
-            }
+            return novBalances && novBalances.length > 0 && (novBalances[0].balance || 0) > 0;
+        });
+        console.log(`📅 November 2025: ${novStudentsFromTransactions.length} students with transactions (balance > 0)`);
+        novStudentsFromTransactions.forEach(student => {
+            const novBalance = student.monthlyBalances.find(mb => mb.monthKey === '2025-11' || mb.month === 11);
+            console.log(`  - Student ${student._id}: balance = ${novBalance?.balance || 0}, transactions = ${novBalance?.transactionCount || 0}`);
         });
 
         // Get debtor information in batch for better performance
@@ -1069,14 +1182,30 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
                 billingPeriod: inv.billingPeriod,
                 billingStartDate: inv.billingStartDate
             })));
+            
+            // Group by student
+            const novInvoicesByStudent = new Map();
+            novInvoices.forEach(inv => {
+                const studentId = inv.student?.toString();
+                if (!novInvoicesByStudent.has(studentId)) {
+                    novInvoicesByStudent.set(studentId, []);
+                }
+                novInvoicesByStudent.get(studentId).push(inv);
+            });
+            console.log(`📅 November 2025: ${novInvoicesByStudent.size} unique students with invoices`);
+            novInvoicesByStudent.forEach((invoices, studentId) => {
+                const totalOutstanding = invoices.reduce((sum, inv) => sum + (inv.balanceDue || inv.totalAmount - (inv.amountPaid || 0)), 0);
+                console.log(`  - Student ${studentId}: ${invoices.length} invoice(s), total outstanding = ${totalOutstanding}`);
+            });
         }
 
         // Now enhance ALL students with invoices (not just limited ones)
+        // Note: Payments are already accounted for in the debtor logic above
         const studentsWithInvoices = studentsWithMonthlyBalances.map(student => {
             const studentId = student.studentId || student._id;
             const studentInvoices = invoicesByStudentAndMonth.get(studentId) || new Map();
             
-            // Enhance monthly balances with invoices
+            // Enhance monthly balances with invoices and payments
             const monthlyBalancesWithInvoices = student.monthlyBalances.map(monthBalance => {
                 const monthKey = monthBalance.monthKey;
                 const invoices = studentInvoices.get(monthKey) || [];
@@ -1091,22 +1220,27 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
                                    'July', 'August', 'September', 'October', 'November', 'December'];
                 const monthName = monthNames[monthBalance.month - 1];
                 
-                // Combined balance: use transaction balance or invoice outstanding, whichever is higher
-                // This ensures we capture both transaction-based and invoice-based outstanding
-                const combinedBalance = Math.max(monthBalance.balance, invoiceOutstanding);
+                // Outstanding balance is already calculated correctly using debtor logic:
+                // outstanding = accruals - payments (where payments are allocated by monthSettled)
+                // Use invoice outstanding if available (it may be more accurate), otherwise use transaction balance
+                const outstandingBalance = invoiceOutstanding > 0 && invoiceOutstanding > monthBalance.balance 
+                    ? invoiceOutstanding 
+                    : monthBalance.balance; // Already calculated as accruals - payments
                 
                 return {
                     ...monthBalance,
                     monthName: monthName,
-                    balance: combinedBalance, // Use combined balance
-                    originalBalance: monthBalance.balance, // Keep original transaction balance
+                    balance: outstandingBalance, // Outstanding (already calculated as accruals - payments)
+                    originalBalance: monthBalance.debits || monthBalance.balance, // Original accruals
+                    accruals: monthBalance.debits || 0, // Total accruals for this month
+                    payments: monthBalance.credits || 0, // Total payments for this month
                     invoices: invoices,
                     invoiceCount: invoices.length,
                     invoiceTotal: invoiceTotal,
                     invoicePaid: invoicePaid,
                     invoiceOutstanding: invoiceOutstanding,
-                    originalDebt: Math.max(invoiceTotal, monthBalance.balance), // Total original amount
-                    paidAmount: invoicePaid // Total paid amount
+                    originalDebt: Math.max(invoiceTotal, monthBalance.debits || monthBalance.balance), // Total original amount
+                    paidAmount: invoicePaid + (monthBalance.credits || 0) // Total paid (invoice + transaction payments)
                 };
             });
             
@@ -1129,13 +1263,17 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
                                        'July', 'August', 'September', 'October', 'November', 'December'];
                     const monthName = monthNames[month - 1];
                     
+                    // For invoice-only months, use invoice outstanding as balance
+                    // (payments would have been processed in the main transaction loop)
                     monthlyBalancesWithInvoices.push({
                         monthKey: monthKey,
                         year: year,
                         month: month,
                         monthName: monthName,
-                        balance: invoiceOutstanding, // Use invoice outstanding as balance
+                        balance: invoiceOutstanding, // Outstanding from invoice
                         originalBalance: 0, // No transaction balance
+                        accruals: 0, // No accruals from transactions
+                        payments: 0, // Payments would be in transaction data if any
                         transactionCount: 0,
                         latestTransaction: invoices[invoices.length - 1]?.issueDate || null,
                         invoices: invoices,
@@ -1187,15 +1325,14 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
             return 0;
         });
 
-        // Apply limit AFTER processing all students with invoices
-        const limitedStudents = studentsWithInvoices.slice(0, parseInt(limit));
-
-        // Get student details for the limited results (including expired students)
+        // Get student details for ALL students (for monthly view) - don't limit yet
         const { getStudentInfo } = require('../../utils/studentUtils');
         
-        // Get student details for all limited students (active and expired)
-        const studentsWithDetails = await Promise.all(
-            limitedStudents.map(async (student) => {
+        console.log(`📊 Getting student details for ${studentsWithInvoices.length} students (for monthly view)`);
+        
+        // Get student details for ALL students (active and expired) - needed for monthly view
+        const allStudentsWithDetails = await Promise.all(
+            studentsWithInvoices.map(async (student) => {
                 const studentId = student.studentId || student._id;
                 const studentInfo = await getStudentInfo(studentId);
                 
@@ -1242,73 +1379,310 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
         );
 
         // Add debug logging to see what we're returning
-        const expiredCount = studentsWithDetails.filter(s => s.studentDetails?.isExpired).length;
-        const activeCount = studentsWithDetails.filter(s => !s.studentDetails?.isExpired).length;
+        const expiredCount = allStudentsWithDetails.filter(s => s.studentDetails?.isExpired).length;
+        const activeCount = allStudentsWithDetails.filter(s => !s.studentDetails?.isExpired).length;
         
-        // Calculate monthly summary totals
-        const monthlySummary = {};
-        studentsWithDetails.forEach(student => {
-            if (student.monthlyBalances) {
+        console.log(`📊 Total students with outstanding balances: ${allStudentsWithDetails.length} (${activeCount} active, ${expiredCount} expired)`);
+        
+        // Create monthly view: Group students by month
+        // Structure: { "2025-10": { monthKey, year, month, monthName, students: [...], totals: {...} } }
+        // IMPORTANT: Use ALL students for monthly view, not limited ones
+        const monthlyView = {};
+        
+        allStudentsWithDetails.forEach(student => {
+            if (student.monthlyBalances && student.monthlyBalances.length > 0) {
                 student.monthlyBalances.forEach(monthBalance => {
+                    // Only include months with actual outstanding balance > 0
+                    const balance = monthBalance.balance || 0;
+                    const invoiceOutstanding = monthBalance.invoiceOutstanding || 0;
+                    const actualBalance = Math.max(balance, invoiceOutstanding);
+                    
+                    if (actualBalance <= 0) {
+                        return; // Skip months with no outstanding balance
+                    }
+                    
                     const monthKey = monthBalance.monthKey;
-                    if (!monthlySummary[monthKey]) {
-                        monthlySummary[monthKey] = {
+                    
+                    // Verify monthKey is valid and matches the year/month
+                    if (!monthKey || !monthKey.match(/^\d{4}-\d{2}$/)) {
+                        console.warn(`⚠️ Invalid monthKey for student ${student.studentId}: ${monthKey}`);
+                        return;
+                    }
+                    
+                    // Verify monthKey matches year and month
+                    const [year, month] = monthKey.split('-').map(Number);
+                    if (year !== monthBalance.year || month !== monthBalance.month) {
+                        console.warn(`⚠️ MonthKey mismatch for student ${student.studentId}: monthKey=${monthKey}, year=${monthBalance.year}, month=${monthBalance.month}`);
+                        return;
+                    }
+                    
+                    // Initialize month if it doesn't exist
+                    if (!monthlyView[monthKey]) {
+                        monthlyView[monthKey] = {
                             monthKey: monthKey,
                             year: monthBalance.year,
                             month: monthBalance.month,
                             monthName: monthBalance.monthName,
-                            totalOutstanding: 0,
-                            totalOriginalDebt: 0,
-                            totalPaid: 0,
-                            studentCount: 0,
-                            invoiceCount: 0
+                            students: [],
+                            studentIds: new Set(), // Track unique students
+                            totals: {
+                                totalOutstanding: 0,
+                                totalOriginalDebt: 0,
+                                totalPaid: 0,
+                                studentCount: 0,
+                                invoiceCount: 0,
+                                transactionCount: 0
+                            }
                         };
                     }
-                    monthlySummary[monthKey].totalOutstanding += monthBalance.balance || 0;
-                    monthlySummary[monthKey].totalOriginalDebt += monthBalance.originalDebt || 0;
-                    monthlySummary[monthKey].totalPaid += monthBalance.paidAmount || 0;
-                    monthlySummary[monthKey].studentCount += 1;
-                    monthlySummary[monthKey].invoiceCount += monthBalance.invoiceCount || 0;
+                    
+                    // Add student to this month's list (only if not already added)
+                    const monthData = monthlyView[monthKey];
+                    const studentId = student.studentId || student._id;
+                    
+                    // Check if student already exists in this month (avoid duplicates)
+                    if (!monthData.studentIds.has(studentId)) {
+                        monthData.studentIds.add(studentId);
+                        
+                        monthData.students.push({
+                            studentId: studentId,
+                            residence: student.residence,
+                            studentDetails: student.studentDetails,
+                            hasDebtorAccount: student.hasDebtorAccount,
+                            debtorCode: student.debtorCode,
+                            // Month-specific balance data
+                            monthBalance: {
+                                monthKey: monthBalance.monthKey,
+                                year: monthBalance.year,
+                                month: monthBalance.month,
+                                monthName: monthBalance.monthName,
+                                balance: actualBalance, // Use actual balance
+                                originalBalance: monthBalance.originalBalance || 0,
+                                transactionCount: monthBalance.transactionCount || 0,
+                                latestTransaction: monthBalance.latestTransaction,
+                                // Invoice details for this month
+                                invoices: monthBalance.invoices || [],
+                                invoiceCount: monthBalance.invoiceCount || 0,
+                                invoiceTotal: monthBalance.invoiceTotal || 0,
+                                invoicePaid: monthBalance.invoicePaid || 0,
+                                invoiceOutstanding: monthBalance.invoiceOutstanding || 0,
+                                originalDebt: monthBalance.originalDebt || 0,
+                                paidAmount: monthBalance.paidAmount || 0
+                            }
+                        });
+                        
+                        // Update totals for this month (only count once per student)
+                        monthData.totals.totalOutstanding += actualBalance;
+                        monthData.totals.totalOriginalDebt += monthBalance.originalDebt || 0;
+                        monthData.totals.totalPaid += monthBalance.paidAmount || 0;
+                        monthData.totals.studentCount += 1; // Count unique students
+                        monthData.totals.invoiceCount += monthBalance.invoiceCount || 0;
+                        monthData.totals.transactionCount += monthBalance.transactionCount || 0;
+                    } else {
+                        // Student already added, but update their balance if this one is higher
+                        const existingStudentIndex = monthData.students.findIndex(s => 
+                            (s.studentId || s._id) === studentId
+                        );
+                        if (existingStudentIndex >= 0) {
+                            const existingStudent = monthData.students[existingStudentIndex];
+                            const existingBalance = existingStudent.monthBalance.balance || 0;
+                            
+                            if (actualBalance > existingBalance) {
+                                // Update with higher balance
+                                monthData.totals.totalOutstanding -= existingBalance;
+                                monthData.totals.totalOutstanding += actualBalance;
+                                
+                                existingStudent.monthBalance.balance = actualBalance;
+                                existingStudent.monthBalance.invoiceOutstanding = invoiceOutstanding;
+                                existingStudent.monthBalance.invoices = monthBalance.invoices || [];
+                                existingStudent.monthBalance.invoiceCount = monthBalance.invoiceCount || 0;
+                                existingStudent.monthBalance.invoiceTotal = monthBalance.invoiceTotal || 0;
+                                existingStudent.monthBalance.invoicePaid = monthBalance.invoicePaid || 0;
+                            }
+                        }
+                    }
                 });
             }
         });
         
-        // Convert to array and sort by month
-        const monthlySummaryArray = Object.values(monthlySummary).sort((a, b) => {
+        // Clean up studentIds Set (not needed in response)
+        Object.values(monthlyView).forEach(month => {
+            delete month.studentIds;
+        });
+        
+        // Convert monthly view to array and sort by month (newest first)
+        const monthlyViewArray = Object.values(monthlyView).sort((a, b) => {
             if (a.year !== b.year) return b.year - a.year;
             return b.month - a.month;
         });
         
-        // Log November specifically
-        const novSummary = monthlySummaryArray.find(m => m.monthKey === '2025-11' || m.month === 11);
-        if (novSummary) {
-            console.log(`📅 November 2025 Summary:`, {
-                monthKey: novSummary.monthKey,
-                monthName: novSummary.monthName,
-                totalOutstanding: novSummary.totalOutstanding,
-                totalOriginalDebt: novSummary.totalOriginalDebt,
-                totalPaid: novSummary.totalPaid,
-                studentCount: novSummary.studentCount,
-                invoiceCount: novSummary.invoiceCount
+        // Sort students within each month by balance (highest first)
+        monthlyViewArray.forEach(monthData => {
+            monthData.students.sort((a, b) => {
+                return (b.monthBalance.balance || 0) - (a.monthBalance.balance || 0);
+            });
+        });
+        
+        // VALIDATION: Recalculate totals from actual student balances to ensure accuracy
+        monthlyViewArray.forEach(monthData => {
+            const recalculatedTotals = {
+                totalOutstanding: 0,
+                totalOriginalDebt: 0,
+                totalPaid: 0,
+                studentCount: monthData.students.length, // Count unique students
+                invoiceCount: 0,
+                transactionCount: 0
+            };
+            
+            monthData.students.forEach(student => {
+                const balance = student.monthBalance.balance || 0;
+                recalculatedTotals.totalOutstanding += balance;
+                recalculatedTotals.totalOriginalDebt += student.monthBalance.originalDebt || 0;
+                recalculatedTotals.totalPaid += student.monthBalance.paidAmount || 0;
+                recalculatedTotals.invoiceCount += student.monthBalance.invoiceCount || 0;
+                recalculatedTotals.transactionCount += student.monthBalance.transactionCount || 0;
+            });
+            
+            // Update totals with recalculated values
+            monthData.totals = recalculatedTotals;
+            
+            // Log if there's a discrepancy
+            if (Math.abs(monthData.totals.totalOutstanding - recalculatedTotals.totalOutstanding) > 0.01) {
+                console.warn(`⚠️ Month ${monthData.monthKey} total mismatch:`, {
+                    original: monthData.totals.totalOutstanding,
+                    recalculated: recalculatedTotals.totalOutstanding,
+                    difference: monthData.totals.totalOutstanding - recalculatedTotals.totalOutstanding
+                });
+            }
+        });
+        
+        // Calculate overall totals across all months (using ALL students)
+        const overallTotals = {
+            totalOutstanding: allStudentsWithDetails.reduce((sum, s) => sum + s.totalBalance, 0),
+            totalStudents: allStudentsWithDetails.length,
+            totalMonths: monthlyViewArray.length,
+            activeStudents: activeCount,
+            expiredStudents: expiredCount
+        };
+        
+        // Log October specifically with detailed breakdown
+        const octMonth = monthlyViewArray.find(m => m.monthKey === '2025-10' || m.month === 10);
+        if (octMonth) {
+            console.log(`📅 October 2025 Monthly View DETAILED:`, {
+                monthKey: octMonth.monthKey,
+                monthName: octMonth.monthName,
+                studentCount: octMonth.students.length,
+                totalOutstanding: octMonth.totals.totalOutstanding,
+                totalOriginalDebt: octMonth.totals.totalOriginalDebt,
+                totalPaid: octMonth.totals.totalPaid,
+                invoiceCount: octMonth.totals.invoiceCount,
+                transactionCount: octMonth.totals.transactionCount,
+                breakdown: {
+                    studentsWithTransactions: octMonth.students.filter(s => (s.monthBalance.originalBalance || 0) > 0).length,
+                    studentsWithInvoicesOnly: octMonth.students.filter(s => (s.monthBalance.originalBalance || 0) === 0 && (s.monthBalance.invoiceOutstanding || 0) > 0).length,
+                    studentsWithBoth: octMonth.students.filter(s => (s.monthBalance.originalBalance || 0) > 0 && (s.monthBalance.invoiceOutstanding || 0) > 0).length
+                },
+                students: octMonth.students.map(s => ({
+                    studentId: s.studentId,
+                    name: s.studentDetails ? `${s.studentDetails.firstName} ${s.studentDetails.lastName}` : 'Unknown',
+                    balance: s.monthBalance.balance,
+                    originalBalance: s.monthBalance.originalBalance,
+                    transactionCount: s.monthBalance.transactionCount,
+                    invoiceCount: s.monthBalance.invoiceCount,
+                    invoiceOutstanding: s.monthBalance.invoiceOutstanding,
+                    monthKey: s.monthBalance.monthKey,
+                    hasTransactions: (s.monthBalance.originalBalance || 0) > 0,
+                    hasInvoices: (s.monthBalance.invoiceOutstanding || 0) > 0
+                }))
+            });
+            
+            // Check if we should filter out students with zero October balance
+            const studentsWithNonZeroBalance = octMonth.students.filter(s => (s.monthBalance.balance || 0) > 0);
+            console.log(`⚠️ October Balance Check:`, {
+                totalStudentsInList: octMonth.students.length,
+                studentsWithBalanceGreaterThanZero: studentsWithNonZeroBalance.length,
+                studentsWithZeroBalance: octMonth.students.length - studentsWithNonZeroBalance.length
             });
         }
         
-        console.log(`📊 Monthly outstanding balances summary: ${studentsWithDetails.length} total students (${activeCount} active, ${expiredCount} expired)`);
+        // Log November specifically with detailed breakdown
+        const novMonth = monthlyViewArray.find(m => m.monthKey === '2025-11' || m.month === 11);
+        if (novMonth) {
+            console.log(`📅 November 2025 Monthly View DETAILED:`, {
+                monthKey: novMonth.monthKey,
+                monthName: novMonth.monthName,
+                studentCount: novMonth.students.length,
+                totalOutstanding: novMonth.totals.totalOutstanding,
+                totalOriginalDebt: novMonth.totals.totalOriginalDebt,
+                totalPaid: novMonth.totals.totalPaid,
+                invoiceCount: novMonth.totals.invoiceCount,
+                transactionCount: novMonth.totals.transactionCount,
+                breakdown: {
+                    studentsWithTransactions: novMonth.students.filter(s => (s.monthBalance.originalBalance || 0) > 0).length,
+                    studentsWithInvoicesOnly: novMonth.students.filter(s => (s.monthBalance.originalBalance || 0) === 0 && (s.monthBalance.invoiceOutstanding || 0) > 0).length,
+                    studentsWithBoth: novMonth.students.filter(s => (s.monthBalance.originalBalance || 0) > 0 && (s.monthBalance.invoiceOutstanding || 0) > 0).length
+                },
+                students: novMonth.students.map(s => ({
+                    studentId: s.studentId,
+                    name: s.studentDetails ? `${s.studentDetails.firstName} ${s.studentDetails.lastName}` : 'Unknown',
+                    balance: s.monthBalance.balance,
+                    originalBalance: s.monthBalance.originalBalance,
+                    transactionCount: s.monthBalance.transactionCount,
+                    invoiceCount: s.monthBalance.invoiceCount,
+                    invoiceOutstanding: s.monthBalance.invoiceOutstanding,
+                    invoiceTotal: s.monthBalance.invoiceTotal,
+                    invoicePaid: s.monthBalance.invoicePaid,
+                    hasTransactions: (s.monthBalance.originalBalance || 0) > 0,
+                    hasInvoices: (s.monthBalance.invoiceOutstanding || 0) > 0,
+                    invoices: s.monthBalance.invoices?.map(inv => ({
+                        invoiceNumber: inv.invoiceNumber,
+                        totalAmount: inv.totalAmount,
+                        amountPaid: inv.amountPaid,
+                        balanceDue: inv.balanceDue,
+                        billingPeriod: inv.billingPeriod
+                    })) || []
+                }))
+            });
+            
+            // Verify sum
+            const calculatedTotal = novMonth.students.reduce((sum, s) => sum + (s.monthBalance.balance || 0), 0);
+            console.log(`📊 November Total Verification:`, {
+                fromTotals: novMonth.totals.totalOutstanding,
+                fromStudentsSum: calculatedTotal,
+                difference: novMonth.totals.totalOutstanding - calculatedTotal,
+                expectedTotal: 52 // User mentioned this should be 52
+            });
+            
+            // Check if we should filter out students with zero November balance
+            const studentsWithNonZeroBalance = novMonth.students.filter(s => (s.monthBalance.balance || 0) > 0);
+            console.log(`⚠️ November Balance Check:`, {
+                totalStudentsInList: novMonth.students.length,
+                studentsWithBalanceGreaterThanZero: studentsWithNonZeroBalance.length,
+                studentsWithZeroBalance: novMonth.students.length - studentsWithNonZeroBalance.length
+            });
+        }
+        
+        console.log(`📊 Monthly outstanding balances view: ${monthlyViewArray.length} months with outstanding balances`);
+        console.log(`📊 Total students in monthly view: ${allStudentsWithDetails.length} (${activeCount} active, ${expiredCount} expired)`);
         
         res.status(200).json({
             success: true,
             message: 'Students with monthly outstanding balances retrieved successfully',
             data: {
-                totalStudents: studentsWithDetails.length,
-                totalOutstanding: studentsWithDetails.reduce((sum, s) => sum + s.totalBalance, 0),
-                students: studentsWithDetails,
-                monthlySummary: monthlySummaryArray, // Add monthly breakdown summary
-                // Add summary for debugging
-                summary: {
-                    activeStudents: activeCount,
-                    expiredStudents: expiredCount,
-                    totalStudents: studentsWithDetails.length
-                }
+                // Overall summary (from ALL students)
+                summary: overallTotals,
+                // Monthly view: organized by month, each month contains ALL students who owe
+                monthlyView: monthlyViewArray,
+                // Legacy format: students organized by student (all students, no limit)
+                students: allStudentsWithDetails,
+                // Monthly summary (totals per month)
+                monthlySummary: monthlyViewArray.map(month => ({
+                    monthKey: month.monthKey,
+                    year: month.year,
+                    month: month.month,
+                    monthName: month.monthName,
+                    ...month.totals
+                }))
             }
         });
 

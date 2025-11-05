@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const BalanceSheet = require('../../models/finance/BalanceSheet');
 const { validateMongoId } = require('../../utils/validators');
 const { createAuditLog } = require('../../utils/auditLogger');
@@ -1122,9 +1123,11 @@ exports.getAccountTransactionDetails = async (req, res) => {
             date: { $lte: asOfDate },
             status: 'posted'
         };
+        
         // If this is AR parent 1100, include all child entries using regex to avoid missing credits
+        // Regex should match: "1100" or "1100-anything" (student-specific AR accounts)
         if (useRegexForAR && accountCode === '1100') {
-            query['entries.accountCode'] = { $regex: '^1100(-|$)' };
+            query['entries.accountCode'] = { $regex: '^1100(-.*)?$' };
         } else {
             query['entries.accountCode'] = { $in: allAccountCodes };
         }
@@ -1132,10 +1135,17 @@ exports.getAccountTransactionDetails = async (req, res) => {
         if (residenceId) {
             // Include transactions tied to the residence either via top-level residence
             // or via metadata (some manual/adjustment entries may only record residence in metadata)
+            // Ensure residenceId is converted to ObjectId for comparison
+            const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId) 
+                ? new mongoose.Types.ObjectId(residenceId) 
+                : residenceId;
+            
             query.$or = [
-                { residence: residenceId },
+                { residence: residenceObjectId },
+                { residence: residenceId }, // Also try as string in case it's stored as string
                 { 'metadata.residenceId': residenceId },
-                { 'metadata.residence': residenceId }
+                { 'metadata.residence': residenceId },
+                { 'metadata.residence': residenceObjectId }
             ];
         }
         
