@@ -1093,6 +1093,14 @@ class EnhancedPaymentAllocationService {
     try {
       console.log(`💳 Creating advance payment transaction for $${amount} ${paymentType}`);
       
+      const mongoose = require('mongoose');
+      
+      // Convert paymentId to ObjectId if it's a string
+      let paymentObjectId = paymentId;
+      if (typeof paymentId === 'string' && mongoose.Types.ObjectId.isValid(paymentId)) {
+        paymentObjectId = new mongoose.Types.ObjectId(paymentId);
+      }
+      
       // Determine liability account based on type
       const isDeposit = paymentType === 'deposit';
       const liabilityAccountCode = isDeposit ? '2020' : '2200';
@@ -1144,8 +1152,8 @@ class EnhancedPaymentAllocationService {
         totalDebit: amount,
         totalCredit: amount,
         source: 'advance_payment',
-        sourceId: null, // Don't set sourceId if it's not a valid ObjectId
-        sourceModel: 'AdvancePayment',
+        sourceId: paymentObjectId, // Link to Payment model
+        sourceModel: 'Payment',
         residence: paymentData.residence || null, // Handle null residence
         createdBy: 'system',
         status: 'posted',
@@ -1155,6 +1163,7 @@ class EnhancedPaymentAllocationService {
           amount: amount,
           paymentType: paymentType,
           advanceType: 'future_payment',
+          allocationType: 'advance_payment',
           description: isDeposit ? 'Deposit received (liability)' : `Advance ${paymentType} payment for future periods`,
           monthSettled: monthSettled
         }

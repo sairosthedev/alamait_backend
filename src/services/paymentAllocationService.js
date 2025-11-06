@@ -975,6 +975,13 @@ class PaymentAllocationService {
       console.log(`💳 Creating advance payment transaction for student ${studentId}, amount: $${amount}`);
       
       const TransactionEntry = require('../models/TransactionEntry');
+      const mongoose = require('mongoose');
+      
+      // Convert paymentId to ObjectId if it's a string
+      let paymentObjectId = paymentId;
+      if (typeof paymentId === 'string' && mongoose.Types.ObjectId.isValid(paymentId)) {
+        paymentObjectId = new mongoose.Types.ObjectId(paymentId);
+      }
       
       // Create advance payment transaction
       const advanceTransaction = new TransactionEntry({
@@ -1004,9 +1011,9 @@ class PaymentAllocationService {
         ],
         totalDebit: amount,
         totalCredit: amount,
-        source: 'manual',
-        sourceId: null, // No specific source for manual transactions
-        sourceModel: 'TransactionEntry',
+        source: 'advance_payment',
+        sourceId: paymentObjectId, // Link to Payment model
+        sourceModel: 'Payment',
         residence: paymentData.residence,
         createdBy: 'system@alamait.com',
         status: 'posted',
@@ -1015,12 +1022,40 @@ class PaymentAllocationService {
           studentId: studentId,
           amount: amount,
           type: 'advance_payment',
+          allocationType: 'advance_payment',
           originalPayment: paymentData
         }
       });
       
       await advanceTransaction.save();
       console.log(`✅ Advance payment transaction created: ${advanceTransaction._id}`);
+      
+      // Update debtor deferred income for advance payments
+      try {
+        const Debtor = require('../models/Debtor');
+        const prepayment = {
+          paymentId: paymentId.toString(),
+          amount: amount,
+          paymentType: 'rent', // Default to rent for advance payments
+          paymentDate: paymentData.date ? new Date(paymentData.date) : new Date(),
+          allocatedMonth: null, // Will be set when monthly accrual is created
+          status: 'pending'
+        };
+        
+        await Debtor.findOneAndUpdate(
+          { user: studentId },
+          { 
+            $inc: { 'deferredIncome.totalAmount': amount },
+            $push: { 'deferredIncome.prepayments': prepayment }
+          },
+          { upsert: false } // Don't create if doesn't exist
+        );
+        
+        console.log(`✅ Updated debtor deferred income for student ${studentId}: +$${amount}`);
+      } catch (debtorError) {
+        console.error(`⚠️ Error updating debtor deferred income: ${debtorError.message}`);
+        // Don't throw - continue even if debtor update fails
+      }
       
       return advanceTransaction;
       

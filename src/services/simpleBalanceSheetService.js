@@ -573,9 +573,10 @@ class SimpleBalanceSheetService {
         current: {
           accountsPayable: { amount: 0, accountCode: '2000', accountName: 'Accounts Payable' },
           tenantDeposits: { amount: 0, accountCode: '2020', accountName: 'Tenant Deposits Held' },
-          deferredIncome: { amount: 0, accountCode: '2200', accountName: 'Advance Payment Liability' }
+          deferredIncome: { amount: 0, accountCode: '2200', accountName: 'Advance Payment Liability' },
+          otherCurrentLiabilities: {}
         },
-        all: {},
+        nonCurrent: {},
         total: 0
       },
       equity: {
@@ -717,18 +718,18 @@ class SimpleBalanceSheetService {
           });
           console.log(`💰 Tenant Deposits (${code}): Balance = $${finalDepositBalance} (Debits: $${account.debit}, Credits: $${account.credit}), Category: ${account.category}`);
           
-          // ALSO add deposit accounts to liabilities.all so they appear in the frontend list
+          // ALSO add deposit accounts to liabilities.current.otherCurrentLiabilities so they appear in the frontend list
           // This ensures account 20002 shows up in the UI even though it's also aggregated into tenant deposits
           // Use consistent key format
           const depositKey = `liability_${accountCode}`;
-          balanceSheet.liabilities.all[depositKey] = {
+          balanceSheet.liabilities.current.otherCurrentLiabilities[depositKey] = {
             amount: Math.max(0, finalDepositBalance),
             accountCode: accountCode,
             accountName: account.name,
             type: account.type.toLowerCase() || 'liability',
             category: account.category || 'Current Liabilities'
           };
-          console.log(`📝 Also added deposit account ${accountCode} (${account.name}) to liabilities.all with key "${depositKey}": $${Math.max(0, finalDepositBalance)}`);
+          console.log(`📝 Also added deposit account ${accountCode} (${account.name}) to current liabilities with key "${depositKey}": $${Math.max(0, finalDepositBalance)}`);
         } else {
           // Include ALL liability accounts from the Account collection, regardless of balance
         if (code === '2000') {
@@ -742,18 +743,28 @@ class SimpleBalanceSheetService {
           balanceSheet.liabilities.current.deferredIncome.accountCode = code;
           balanceSheet.liabilities.current.deferredIncome.accountName = account.name;
         } else if (!this.isAccountsPayableChildAccount(code, accountMap)) {
-          // ALL other liabilities - include them all, even with zero balance
+          // ALL other liabilities - categorize into current or non-current
           // BUT skip deposit accounts (20001, 20002, 2002, 2020) as they're processed explicitly above
           const depositCodes = ['20001', '20002', '2002', '2020'];
           if (!depositCodes.includes(accountCode)) {
-          const key = this.getLiabilityKey(code);
-          balanceSheet.liabilities.all[key] = {
-            amount: account.balance,
-            accountCode: code,
+            // Check if this is a current or non-current liability
+            const BalanceSheetService = require('./balanceSheetService');
+            const isCurrent = BalanceSheetService.isCurrentLiability(code, account.name);
+            
+            const key = this.getLiabilityKey(code);
+            const liabilityData = {
+              amount: account.balance,
+              accountCode: code,
               accountName: account.name,
               type: account.type.toLowerCase() || 'liability'
-          };
-            console.log(`📝 Added liability account ${code} (${account.name}) to balance sheet: $${account.balance}`);
+            };
+            
+            if (isCurrent) {
+              balanceSheet.liabilities.current.otherCurrentLiabilities[key] = liabilityData;
+            } else {
+              balanceSheet.liabilities.nonCurrent[key] = liabilityData;
+            }
+            console.log(`📝 Added ${isCurrent ? 'current' : 'non-current'} liability account ${code} (${account.name}) to balance sheet: $${account.balance}`);
           } else {
             console.log(`📝 Skipping ${code} (${account.name}) from regular processing - already processed explicitly as deposit`);
           }
@@ -816,17 +827,17 @@ class SimpleBalanceSheetService {
             console.log(`   ℹ️ ${depositCode} already in tenantDepositsAccounts`);
           }
           
-          // ALSO ensure it's in liabilities.all so it shows as individual account
+          // ALSO ensure it's in liabilities.current.otherCurrentLiabilities so it shows as individual account
           // Use a unique key to ensure it doesn't get overwritten
           const depositKey = `liability_${depositCode}`;
-          balanceSheet.liabilities.all[depositKey] = {
+          balanceSheet.liabilities.current.otherCurrentLiabilities[depositKey] = {
             amount: Math.max(0, depositBalance),
             accountCode: depositCode,
             accountName: account.name || `Account ${depositCode}`,
             type: 'liability',
             category: account.category || 'Current Liabilities'
           };
-          console.log(`   📝 Added ${depositCode} to liabilities.all with key "${depositKey}": $${Math.max(0, depositBalance)}`);
+          console.log(`   📝 Added ${depositCode} to current liabilities with key "${depositKey}": $${Math.max(0, depositBalance)}`);
         } else {
           console.log(`   ⚠️ Account ${depositCode} found but type is "${account.type}" not Liability`);
         }
@@ -900,18 +911,23 @@ class SimpleBalanceSheetService {
     balanceSheet.assets.total = balanceSheet.assets.current.total + balanceSheet.assets.nonCurrent.total;
     
     // Current liabilities total
+    const otherCurrentLiabilitiesTotal = Object.values(balanceSheet.liabilities.current.otherCurrentLiabilities || {})
+      .reduce((sum, acc) => sum + (acc.amount || 0), 0);
     balanceSheet.liabilities.current.total = 
-      balanceSheet.liabilities.current.accountsPayable.amount +
-      balanceSheet.liabilities.current.tenantDeposits.amount +
-      balanceSheet.liabilities.current.deferredIncome.amount;
+      (balanceSheet.liabilities.current.accountsPayable.amount || 0) +
+      (balanceSheet.liabilities.current.tenantDeposits.amount || 0) +
+      (balanceSheet.liabilities.current.deferredIncome.amount || 0) +
+      otherCurrentLiabilitiesTotal;
     
-    // All liabilities total
-    balanceSheet.liabilities.all.total = 
-      balanceSheet.liabilities.current.total +
-      Object.values(balanceSheet.liabilities.all).reduce((sum, acc) => sum + acc.amount, 0);
+    // Non-current liabilities total
+    balanceSheet.liabilities.nonCurrent.total = 
+      Object.values(balanceSheet.liabilities.nonCurrent || {})
+        .reduce((sum, acc) => sum + (acc.amount || 0), 0);
     
     // Total liabilities
-    balanceSheet.liabilities.total = balanceSheet.liabilities.all.total;
+    balanceSheet.liabilities.total = 
+      balanceSheet.liabilities.current.total + 
+      balanceSheet.liabilities.nonCurrent.total;
     
     // Total equity
     balanceSheet.equity.total = 

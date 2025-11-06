@@ -9,17 +9,17 @@ const {
 } = require('../../middleware/leaseValidation');
 
 // GET /api/admin/leases - Fetch all leases
-router.get('/', auth, checkRole('admin'), leaseController.getAllLeases);
+router.get('/', auth, checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), leaseController.getAllLeases);
 
 // GET /api/admin/leases/student/:studentId - Fetch leases for a specific student
-router.get('/student/:studentId', auth, checkRole('admin'), leaseController.getLeasesByStudentId);
+router.get('/student/:studentId', auth, checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), leaseController.getLeasesByStudentId);
 
 // 🆕 NEW LEASE UPDATE ENDPOINTS
 
 // GET /api/admin/students/:studentId/lease - Get student lease information
 router.get('/students/:studentId/lease', 
     auth, 
-    checkRole('admin'), 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
     validateStudentId, 
     leaseController.getStudentLeaseInfo
 );
@@ -27,7 +27,7 @@ router.get('/students/:studentId/lease',
 // PUT /api/admin/students/:studentId/lease - Update student lease dates
 router.put('/students/:studentId/lease', 
     auth, 
-    checkRole('admin'), 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
     validateStudentId, 
     validateLeaseDates, 
     leaseController.updateStudentLeaseDates
@@ -36,7 +36,7 @@ router.put('/students/:studentId/lease',
 // PUT /api/admin/students/lease/bulk - Bulk update lease dates
 router.put('/students/lease/bulk', 
     auth, 
-    checkRole('admin'), 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
     validateBulkLeaseUpdates, 
     leaseController.bulkUpdateLeaseDates
 );
@@ -44,7 +44,7 @@ router.put('/students/lease/bulk',
 // GET /api/admin/students/:studentId/lease/history - Get lease update history
 router.get('/students/:studentId/lease/history', 
     auth, 
-    checkRole('admin'), 
+    checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), 
     validateStudentId, 
     leaseController.getLeaseUpdateHistory
 );

@@ -84,7 +84,7 @@ exports.createAuditLog = async (logData) => {
  * Log vendor operations
  */
 exports.logVendorOperation = async (action, vendor, userId, details = '', before = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: 'Vendor',
         recordId: vendor._id,
@@ -99,7 +99,7 @@ exports.logVendorOperation = async (action, vendor, userId, details = '', before
  * Log transaction entry operations
  */
 exports.logTransactionOperation = async (action, transaction, userId, details = '', before = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: 'TransactionEntry',
         recordId: transaction._id,
@@ -114,7 +114,7 @@ exports.logTransactionOperation = async (action, transaction, userId, details = 
  * Log account operations
  */
 exports.logAccountOperation = async (action, account, userId, details = '', before = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: 'Account',
         recordId: account._id,
@@ -129,7 +129,7 @@ exports.logAccountOperation = async (action, account, userId, details = '', befo
  * Log expense operations
  */
 exports.logExpenseOperation = async (action, expense, userId, details = '', before = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: 'Expense',
         recordId: expense._id,
@@ -144,7 +144,7 @@ exports.logExpenseOperation = async (action, expense, userId, details = '', befo
  * Log payment operations
  */
 exports.logPaymentOperation = async (action, payment, userId, details = '', before = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: 'Payment',
         recordId: payment._id,
@@ -159,7 +159,7 @@ exports.logPaymentOperation = async (action, payment, userId, details = '', befo
  * Log debtor operations
  */
 exports.logDebtorOperation = async (action, debtor, userId, details = '', before = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: 'Debtor',
         recordId: debtor._id,
@@ -175,7 +175,7 @@ exports.logDebtorOperation = async (action, debtor, userId, details = '', before
  */
 exports.logSystemOperation = async (action, collection, recordId, details = '', before = null, after = null) => {
     const systemUserId = '68b7909295210ad2fa2c5dcf'; // System user ID
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection,
         recordId,
@@ -190,7 +190,7 @@ exports.logSystemOperation = async (action, collection, recordId, details = '', 
  * Log user authentication operations
  */
 exports.logAuthOperation = async (action, userId, details = '', ipAddress = null, userAgent = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: 'User',
         recordId: userId,
@@ -205,7 +205,7 @@ exports.logAuthOperation = async (action, userId, details = '', ipAddress = null
  * Log file operations
  */
 exports.logFileOperation = async (action, fileInfo, userId, details = '', ipAddress = null, userAgent = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: 'File',
         recordId: fileInfo.id || null,
@@ -223,7 +223,7 @@ exports.logFileOperation = async (action, fileInfo, userId, details = '', ipAddr
  * Log bulk operations
  */
 exports.logBulkOperation = async (action, collection, userId, details = '', ipAddress = null, userAgent = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action: `bulk_${action}`,
         collection,
         recordId: null, // Bulk operations don't have a single record ID
@@ -241,7 +241,7 @@ exports.logAPIOperation = async (req, res, action, collection, recordId = null, 
     const startTime = req.startTime || Date.now();
     const duration = Date.now() - startTime;
     
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection,
         recordId,
@@ -266,7 +266,7 @@ exports.logAPIOperation = async (req, res, action, collection, recordId = null, 
  * Log approval workflow operations
  */
 exports.logApprovalOperation = async (action, record, userId, details = '', before = null, ipAddress = null, userAgent = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: record.constructor.modelName,
         recordId: record._id,
@@ -283,7 +283,7 @@ exports.logApprovalOperation = async (action, record, userId, details = '', befo
  * Log financial operations
  */
 exports.logFinancialOperation = async (action, record, userId, details = '', before = null, ipAddress = null, userAgent = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection: record.constructor.modelName,
         recordId: record._id,
@@ -300,7 +300,7 @@ exports.logFinancialOperation = async (action, record, userId, details = '', bef
  * Log data export/import operations
  */
 exports.logDataOperation = async (action, collection, userId, details = '', ipAddress = null, userAgent = null) => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action,
         collection,
         recordId: null,
@@ -315,7 +315,7 @@ exports.logDataOperation = async (action, collection, userId, details = '', ipAd
  * Log error operations
  */
 exports.logErrorOperation = async (error, req, details = '') => {
-    return await this.createAuditLog({
+    return await exports.createAuditLog({
         action: 'error',
         collection: 'Error',
         recordId: null,

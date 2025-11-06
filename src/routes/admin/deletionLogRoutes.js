@@ -26,3 +26,5 @@ router.patch('/:modelName/:id/permanent', deletionLogController.markAsPermanent)
 
 module.exports = router;
 
+
+

@@ -688,20 +688,33 @@ exports.createMonthlyRequest = async (req, res) => {
         } = req.body;
 
         // Validate required fields
-        if (!title || !residence) {
+        if (!title) {
             return res.status(400).json({
                 success: false,
-                message: 'Title and residence are required'
+                message: 'Title is required'
             });
         }
 
-        // Validate residence exists
-        const residenceExists = await Residence.findById(residence);
-        if (!residenceExists) {
-            return res.status(404).json({
+        // Check if this is a salary request (residence is optional for salary requests)
+        const isSalaryRequest = /salary|salaries/i.test(title || '');
+        
+        // Validate residence (optional for salary requests)
+        if (!isSalaryRequest && !residence) {
+            return res.status(400).json({
                 success: false,
-                message: 'Residence not found'
+                message: 'Residence is required for non-salary requests'
             });
+        }
+
+        // Validate residence exists if provided
+        if (residence) {
+            const residenceExists = await Residence.findById(residence);
+            if (!residenceExists) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Residence not found'
+                });
+            }
         }
 
         // Process items with historical data if provided

@@ -17,7 +17,8 @@ router.get('/download/:leaseId', auth, async (req, res) => {
     }
 
     // Check if the user has permission to download this lease
-    if (req.user.role !== 'admin' && lease.studentId.toString() !== req.user._id.toString()) {
+    const allowedRoles = ['admin', 'finance_admin', 'finance_user', 'ceo'];
+    if (!allowedRoles.includes(req.user.role) && lease.studentId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -44,7 +45,8 @@ router.get('/view/:leaseId', auth, async (req, res) => {
     if (!lease) {
       return res.status(404).json({ error: 'Lease not found' });
     }
-    if (req.user.role !== 'admin' && lease.studentId.toString() !== req.user._id.toString()) {
+    const allowedRoles = ['admin', 'finance_admin', 'finance_user', 'ceo'];
+    if (!allowedRoles.includes(req.user.role) && lease.studentId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ error: 'Access denied' });
     }
     if (lease.path && lease.path.startsWith('http')) {

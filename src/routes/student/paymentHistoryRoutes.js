@@ -7,7 +7,7 @@ const { s3, bucketName } = require('../../config/s3');
 
 // Apply authentication and role middleware
 router.use(auth);
-router.use(checkRole('student'));
+router.use(checkRole('student', 'admin', 'finance_admin', 'finance_user', 'ceo'));
 
 // Apply timeout middleware for file uploads
 router.use(timeoutMiddleware(60000)); // 60 seconds timeout for uploads

@@ -887,7 +887,7 @@ class TransactionController {
     }
 
     /**
-     * Delete transaction entry
+     * Delete transaction entry with cascade delete for related records
      */
     static async deleteTransactionEntry(req, res) {
         try {
@@ -906,29 +906,138 @@ class TransactionController {
             
             // Store data for audit
             const deletedData = transactionEntry.toObject();
+            const deletedItems = {
+                transactionEntry: 1,
+                relatedEntries: 0,
+                accruals: 0,
+                reversals: 0,
+                transactions: 0
+            };
             
-            // Check if this is part of a balanced transaction
-            // If it's part of a double-entry transaction, we might need to handle it differently
-            if (transactionEntry.source && transactionEntry.sourceId) {
-                console.log('⚠️ Transaction entry is part of a source transaction:', {
-                    source: transactionEntry.source,
-                    sourceId: transactionEntry.sourceId
-                });
+            console.log('🔍 Checking for related records...');
+            
+            // 1. Find all transaction entries that reference this entry as sourceId
+            // (e.g., accruals created from this entry, reversals, payment allocations, etc.)
+            const entryIdString = id.toString();
+            const relatedEntries = await TransactionEntry.find({
+                $or: [
+                    { sourceId: id, sourceModel: 'TransactionEntry' }, // Direct references
+                    { transactionId: transactionEntry.transactionId }, // Same transaction
+                    { 'metadata.parentEntryId': entryIdString }, // Metadata references
+                    { 'metadata.originalEntryId': entryIdString }, // Original entry references
+                    { 'metadata.paymentAllocation.originalTransactionId': entryIdString }, // Payment allocations
+                    { 'metadata.arTransactionId': entryIdString }, // AR transaction references
+                    { reference: { $regex: `AR-${entryIdString}` } }, // Reference field links
+                    { reference: { $regex: `.*${entryIdString}.*` } } // Any reference containing the ID
+                ]
+            });
+            
+            console.log(`   📊 Found ${relatedEntries.length} related transaction entries`);
+            
+            if (relatedEntries.length > 0) {
+                // Get unique transaction IDs that will be affected
+                const relatedTransactionIds = [...new Set(relatedEntries.map(entry => entry.transactionId))];
                 
-                // For now, we'll allow deletion but log a warning
-                // In a production system, you might want to prevent deletion of system-generated entries
+                // Delete related transaction entries
+                const relatedEntryIds = relatedEntries.map(entry => entry._id);
+                const deleteResult = await TransactionEntry.deleteMany({
+                    _id: { $in: relatedEntryIds }
+                });
+                deletedItems.relatedEntries = deleteResult.deletedCount;
+                console.log(`   ✅ Deleted ${deleteResult.deletedCount} related transaction entries`);
+                
+                // Categorize what was deleted
+                const accrualsDeleted = relatedEntries.filter(entry => 
+                    entry.source === 'rental_accrual' || 
+                    entry.source === 'expense_accrual'
+                ).length;
+                const reversalsDeleted = relatedEntries.filter(entry => 
+                    entry.source === 'rental_accrual_reversal' || 
+                    entry.source === 'expense_accrual_reversal'
+                ).length;
+                
+                deletedItems.accruals = accrualsDeleted;
+                deletedItems.reversals = reversalsDeleted;
+                
+                if (accrualsDeleted > 0) {
+                    console.log(`   ✅ Deleted ${accrualsDeleted} accrual entries`);
+                }
+                if (reversalsDeleted > 0) {
+                    console.log(`   ✅ Deleted ${reversalsDeleted} reversal entries`);
+                }
+                
+                // Check if any transactions are now empty and delete them
+                const Transaction = require('../../models/Transaction');
+                for (const transactionId of relatedTransactionIds) {
+                    const remainingEntries = await TransactionEntry.countDocuments({ 
+                        transactionId: transactionId 
+                    });
+                    if (remainingEntries === 0) {
+                        const transaction = await Transaction.findOneAndDelete({ 
+                            transactionId: transactionId 
+                        });
+                        if (transaction) {
+                            deletedItems.transactions++;
+                            console.log(`   ✅ Deleted empty transaction: ${transactionId}`);
+                        }
+                    }
+                }
             }
             
-            // Delete the transaction entry
-            await TransactionEntry.findByIdAndDelete(id);
+            // 2. Check if this entry itself is part of a transaction
+            if (transactionEntry.transactionId) {
+                const Transaction = require('../../models/Transaction');
+                const remainingEntries = await TransactionEntry.countDocuments({ 
+                    transactionId: transactionEntry.transactionId 
+                });
+                if (remainingEntries <= 1) { // Only this entry remains
+                    const transaction = await Transaction.findOneAndDelete({ 
+                        transactionId: transactionEntry.transactionId 
+                    });
+                    if (transaction) {
+                        deletedItems.transactions++;
+                        console.log(`   ✅ Deleted associated transaction: ${transactionEntry.transactionId}`);
+                    }
+                }
+            }
             
+            // 3. Delete the main transaction entry
+            await TransactionEntry.findByIdAndDelete(id);
             console.log('✅ Transaction entry deleted successfully');
+            
+            // 4. Log audit trail
+            try {
+                const { createAuditLog } = require('../../utils/auditLogger');
+                await createAuditLog({
+                    user: req.user?._id || req.user?.id,
+                    action: 'delete_transaction_entry',
+                    collection: 'TransactionEntry',
+                    recordId: id,
+                    details: JSON.stringify({
+                        deletedEntry: deletedData,
+                        cascadeDeleted: {
+                            relatedEntries: deletedItems.relatedEntries,
+                            accruals: deletedItems.accruals,
+                            reversals: deletedItems.reversals,
+                            transactions: deletedItems.transactions
+                        }
+                    })
+                });
+            } catch (auditError) {
+                console.error('⚠️ Failed to create audit log:', auditError);
+            }
             
             res.status(200).json({
                 success: true,
-                message: 'Transaction entry deleted successfully',
+                message: 'Transaction entry deleted successfully with cascade delete',
                 data: {
-                    deletedEntry: deletedData
+                    deletedEntry: deletedData,
+                    cascadeDeleted: {
+                        relatedEntries: deletedItems.relatedEntries,
+                        accruals: deletedItems.accruals,
+                        reversals: deletedItems.reversals,
+                        transactions: deletedItems.transactions
+                    }
                 }
             });
             

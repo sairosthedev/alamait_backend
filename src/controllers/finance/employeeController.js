@@ -189,7 +189,12 @@ exports.createSalaryRequestByResidence = async (req, res) => {
             employeeAllocations.forEach(allocation => {
                 const employee = employeeDocs.find(e => e._id.toString() === allocation.employeeId);
                 if (employee) {
-                    const residenceId = allocation.residenceId;
+                    // Handle undefined/null residenceId - use 'no-residence' as key
+                    let residenceId = allocation.residenceId;
+                    if (!residenceId || residenceId === 'undefined' || residenceId === 'null') {
+                        residenceId = 'no-residence';
+                        console.log(`⚠️ Employee ${employee.firstName} ${employee.lastName} has no residence - grouping under 'no-residence'`);
+                    }
                     const allocationPercentage = allocation.allocationPercentage || 100;
                     
                     if (!employeesByResidence[residenceId]) {
@@ -201,7 +206,7 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                         ...employee,
                         allocationPercentage: allocationPercentage,
                         allocatedSalary: (employee.salary || 0) * (allocationPercentage / 100),
-                        residenceId: residenceId
+                        residenceId: residenceId === 'no-residence' ? null : residenceId
                     };
                     
                     employeesByResidence[residenceId].push(employeeWithAllocation);
@@ -215,7 +220,12 @@ exports.createSalaryRequestByResidence = async (req, res) => {
             employeeResidences.forEach(assignment => {
                 const employee = employeeDocs.find(e => e._id.toString() === assignment.employeeId);
                 if (employee) {
-                    const residenceId = assignment.residenceId;
+                    // Handle undefined/null residenceId - use 'no-residence' as key
+                    let residenceId = assignment.residenceId;
+                    if (!residenceId || residenceId === 'undefined' || residenceId === 'null') {
+                        residenceId = 'no-residence';
+                        console.log(`⚠️ Employee ${employee.firstName} ${employee.lastName} has no residence - grouping under 'no-residence'`);
+                    }
                     const allocationPercentage = assignment.allocationPercentage || 100;
                     
                     if (!employeesByResidence[residenceId]) {
@@ -227,7 +237,7 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                         ...employee,
                         allocationPercentage: allocationPercentage,
                         allocatedSalary: (employee.salary || 0) * (allocationPercentage / 100),
-                        residenceId: residenceId
+                        residenceId: residenceId === 'no-residence' ? null : residenceId
                     };
                     
                     employeesByResidence[residenceId].push(employeeWithAllocation);
@@ -270,39 +280,62 @@ exports.createSalaryRequestByResidence = async (req, res) => {
             console.log(`Creating request for residence ${residenceId} with ${residenceEmployees.length} employees`);
             
             try {
-                const residence = residenceMap[residenceId];
-                const residenceName = residence ? residence.name : 'Unknown Residence';
+                // Handle employees without residence
+                const isNoResidence = residenceId === 'no-residence' || residenceId === 'undefined' || residenceId === 'null' || !residenceId;
+                const residence = isNoResidence ? null : residenceMap[residenceId];
+                const residenceName = residence ? residence.name : (isNoResidence ? 'All Residences' : 'Unknown Residence');
                 
-                console.log(`Residence found: ${residenceName}`);
+                console.log(`Residence: ${isNoResidence ? 'No residence (multi-residence)' : residenceName}`);
                 
                 const totalForResidence = residenceEmployees.reduce((sum, e) => sum + (e.allocatedSalary || 0), 0);
                 
-                const title = `Salary Request - ${residenceName} - ${actualMonth}/${actualYear}`;
-                const items = residenceEmployees.map(e => ({
-                    title: e.fullName || `${e.firstName} ${e.lastName}`,
-                    description: `${e.jobTitle || 'Employee'} salary for ${residenceName} (${e.allocationPercentage || 100}%)`,
-                    quantity: 1,
-                    unitCost: e.allocatedSalary || 0,
-                    totalCost: e.allocatedSalary || 0,
-                    category: 'services',
-                    priority: 'high',
-                    notes: notes || undefined,
-                    provider: undefined
-                }));
+                // Use different title format for no-residence requests
+                const title = isNoResidence 
+                    ? `Salary Request - All Residences - ${actualMonth}/${actualYear}`
+                    : `Salary Request - ${residenceName} - ${actualMonth}/${actualYear}`;
+                
+                const items = residenceEmployees.map(e => {
+                    const employeeName = e.fullName || `${e.firstName} ${e.lastName}`;
+                    const jobTitle = e.jobTitle || 'Employee';
+                    return {
+                        title: employeeName, // Keep for backward compatibility
+                        description: isNoResidence
+                            ? `${employeeName} - ${jobTitle} salary (${e.allocationPercentage || 100}%)`
+                            : `${employeeName} - ${jobTitle} salary for ${residenceName} (${e.allocationPercentage || 100}%)`,
+                        quantity: 1,
+                        unitCost: e.allocatedSalary || 0,
+                        totalCost: e.allocatedSalary || 0,
+                        category: 'services',
+                        priority: 'high',
+                        notes: notes || undefined,
+                        provider: undefined
+                    };
+                });
 
-                console.log(`Creating MonthlyRequest with title: ${title}`);
+                console.log(`Creating Request with title: ${title}`);
                 console.log(`Items:`, items);
-                console.log(`Residence ID: ${residenceId} (type: ${typeof residenceId})`);
+                console.log(`Residence ID: ${residenceId} (type: ${typeof residenceId}, isNoResidence: ${isNoResidence})`);
 
-                // Validate residenceId is a valid ObjectId
-                if (!mongoose.Types.ObjectId.isValid(residenceId)) {
-                    throw new Error(`Invalid residence ID: ${residenceId}`);
+                // For salary requests, residence is optional
+                // Only validate if residenceId is provided and not 'no-residence'
+                let finalResidenceId = null;
+                if (!isNoResidence && residenceId && mongoose.Types.ObjectId.isValid(residenceId)) {
+                    finalResidenceId = new mongoose.Types.ObjectId(residenceId);
+                } else if (isNoResidence) {
+                    // Allow null/undefined residence for salary requests
+                    finalResidenceId = null;
+                    console.log(`✅ Creating salary request without residence (multi-residence)`);
+                } else {
+                    console.log(`⚠️ Invalid residence ID format: ${residenceId}, but allowing for salary request (will be null)`);
+                    finalResidenceId = null;
                 }
 
                 const reqDoc = new Request({
                     title,
-                    description: description || `Salaries for ${residenceName} - ${actualMonth}/${actualYear}`,
-                    residence: residenceId, // This should be a valid ObjectId
+                    description: description || (isNoResidence 
+                        ? `Salaries for all residences - ${actualMonth}/${actualYear}`
+                        : `Salaries for ${residenceName} - ${actualMonth}/${actualYear}`),
+                    residence: finalResidenceId, // null for multi-residence salary requests
                     type: 'financial',
                     category: 'salary',
                     status: 'pending-ceo-approval', // Set to pending CEO approval since finance already approved
@@ -373,24 +406,55 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                 };
 
             } catch (residenceError) {
-                console.error(`Error creating request for residence ${residenceId}:`, residenceError);
-                throw residenceError;
+                console.error(`❌ Error creating request for residence ${residenceId}:`, residenceError);
+                // Return error info instead of throwing, so other requests can still be created
+                return {
+                    error: true,
+                    residenceId: residenceId,
+                    residenceName: residenceMap[residenceId]?.name || 'Unknown Residence',
+                    errorMessage: residenceError.message,
+                    employeeCount: residenceEmployees.length
+                };
             }
         });
 
-        // Wait for all requests to be created in parallel
-        const results = await Promise.all(requestPromises);
-        const createdRequests = results.filter(result => result !== null);
+        // Wait for all requests to be created in parallel (use allSettled to handle partial failures)
+        const results = await Promise.allSettled(requestPromises);
+        
+        // Separate successful and failed requests
+        const createdRequests = [];
+        const failedRequests = [];
+        
+        results.forEach((result, index) => {
+            if (result.status === 'fulfilled' && result.value !== null) {
+                if (result.value.error) {
+                    failedRequests.push(result.value);
+                } else {
+                    createdRequests.push(result.value);
+                }
+            } else if (result.status === 'rejected') {
+                const residenceId = Object.keys(employeesByResidence)[index];
+                failedRequests.push({
+                    error: true,
+                    residenceId: residenceId || 'unknown',
+                    residenceName: residenceMap[residenceId]?.name || 'Unknown Residence',
+                    errorMessage: result.reason?.message || 'Unknown error',
+                    employeeCount: employeesByResidence[residenceId]?.length || 0
+                });
+            }
+        });
 
         return res.status(201).json({
             message: `Created ${createdRequests.length} salary requests by residence`,
             requests: createdRequests,
+            failedRequests: failedRequests,
             totalRequests: createdRequests.length,
-            totalAmount: createdRequests.reduce((sum, req) => sum + req.total, 0),
+            totalAmount: createdRequests.reduce((sum, req) => sum + (req.total || 0), 0),
             summary: {
                 residencesProcessed: createdRequests.length,
-                totalEmployees: createdRequests.reduce((sum, req) => sum + req.employeeCount, 0),
-                totalAmount: createdRequests.reduce((sum, req) => sum + req.total, 0),
+                residencesFailed: failedRequests.length,
+                totalEmployees: createdRequests.reduce((sum, req) => sum + (req.employeeCount || 0), 0),
+                totalAmount: createdRequests.reduce((sum, req) => sum + (req.total || 0), 0),
                 month: actualMonth,
                 year: actualYear
             }
@@ -445,12 +509,18 @@ exports.createIndividualSalaryRequests = async (req, res) => {
 
         // Extract unique employee IDs and residence IDs
         const employeeIds = [...new Set(employeeAllocations.map(a => a.employeeId))];
-        const residenceIds = [...new Set(employeeAllocations.map(a => a.residenceId))];
+        // Filter out undefined/null/string 'undefined' residence IDs and convert to ObjectIds
+        const residenceIds = [...new Set(
+            employeeAllocations
+                .map(a => a.residenceId)
+                .filter(id => id && id !== 'undefined' && id !== 'null' && id !== 'no-residence' && mongoose.Types.ObjectId.isValid(id))
+                .map(id => new mongoose.Types.ObjectId(id))
+        )];
 
         // Load employees and residences in parallel
         const [employeeDocs, residenceDocs] = await Promise.all([
             Employee.find({ _id: { $in: employeeIds } }).lean(),
-            Residence.find({ _id: { $in: residenceIds } }).lean()
+            residenceIds.length > 0 ? Residence.find({ _id: { $in: residenceIds } }).lean() : Promise.resolve([])
         ]);
 
         // Create lookup maps
@@ -464,10 +534,15 @@ exports.createIndividualSalaryRequests = async (req, res) => {
             residenceMap[res._id.toString()] = res;
         });
 
-        // Group allocations by residence
+        // Group allocations by residence (handle undefined/null residenceId)
         const allocationsByResidence = {};
         employeeAllocations.forEach(allocation => {
-            const residenceId = allocation.residenceId;
+            // Handle undefined/null residenceId - use 'no-residence' as key
+            let residenceId = allocation.residenceId;
+            if (!residenceId || residenceId === 'undefined' || residenceId === 'null') {
+                residenceId = 'no-residence';
+                console.log(`⚠️ Employee allocation has no residence - grouping under 'no-residence'`);
+            }
             if (!allocationsByResidence[residenceId]) {
                 allocationsByResidence[residenceId] = [];
             }
@@ -477,10 +552,12 @@ exports.createIndividualSalaryRequests = async (req, res) => {
         // Create one request per residence with list of allocated employees
         const requestPromises = Object.entries(allocationsByResidence).map(async ([residenceId, allocations]) => {
             try {
-                const residence = residenceMap[residenceId];
-                const residenceName = residence ? residence.name : 'Unknown Residence';
+                // Handle employees without residence
+                const isNoResidence = residenceId === 'no-residence' || residenceId === 'undefined' || residenceId === 'null' || !residenceId;
+                const residence = isNoResidence ? null : residenceMap[residenceId];
+                const residenceName = residence ? residence.name : (isNoResidence ? 'All Residences' : 'Unknown Residence');
 
-                console.log(`🏠 Creating salary request for ${residenceName} with ${allocations.length} allocated employees`);
+                console.log(`🏠 Creating salary request for ${isNoResidence ? 'All Residences (no residence)' : residenceName} with ${allocations.length} allocated employees`);
 
                 // Calculate total for this residence
                 let totalForResidence = 0;
@@ -509,27 +586,52 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                     }
                 });
 
-                const title = `Salary Request - ${residenceName} - ${month}/${year}`;
-                const descriptionText = description || `Monthly salary payments for ${residenceName} - ${month}/${year}`;
+                // Use different title format for no-residence requests
+                const title = isNoResidence 
+                    ? `Salary Request - All Residences - ${month}/${year}`
+                    : `Salary Request - ${residenceName} - ${month}/${year}`;
+                const descriptionText = description || (isNoResidence 
+                    ? `Monthly salary payments for all residences - ${month}/${year}`
+                    : `Monthly salary payments for ${residenceName} - ${month}/${year}`);
                 
                 // Create items for the request
-                const items = allocatedEmployees.map(emp => ({
-                    title: emp.employeeName,
-                    description: `${emp.jobTitle || 'Employee'} salary for ${residenceName} (${emp.allocationPercentage || 100}%)`,
-                    quantity: 1,
-                    unitCost: emp.allocatedSalary || 0,
-                    totalCost: emp.allocatedSalary || 0,
-                    category: 'services',
-                    priority: 'high',
-                    notes: notes || undefined,
-                    provider: undefined
-                }));
+                const items = allocatedEmployees.map(emp => {
+                    const employeeName = emp.employeeName;
+                    const jobTitle = emp.jobTitle || 'Employee';
+                    return {
+                        title: employeeName, // Keep for backward compatibility
+                        description: isNoResidence
+                            ? `${employeeName} - ${jobTitle} salary (${emp.allocationPercentage || 100}%)`
+                            : `${employeeName} - ${jobTitle} salary for ${residenceName} (${emp.allocationPercentage || 100}%)`,
+                        quantity: 1,
+                        unitCost: emp.allocatedSalary || 0,
+                        totalCost: emp.allocatedSalary || 0,
+                        category: 'services',
+                        priority: 'high',
+                        notes: notes || undefined,
+                        provider: undefined
+                    };
+                });
+                
+                // For salary requests, residence is optional
+                // Only set residence if it's valid and not 'no-residence'
+                let finalResidenceId = null;
+                if (!isNoResidence && residenceId && mongoose.Types.ObjectId.isValid(residenceId)) {
+                    finalResidenceId = new mongoose.Types.ObjectId(residenceId);
+                } else if (isNoResidence) {
+                    // Allow null/undefined residence for salary requests
+                    finalResidenceId = null;
+                    console.log(`✅ Creating salary request without residence (multi-residence)`);
+                } else {
+                    console.log(`⚠️ Invalid residence ID format: ${residenceId}, but allowing for salary request (will be null)`);
+                    finalResidenceId = null;
+                }
                 
                 // Create the request with allocated employees list
                 const reqDoc = new Request({
                     title,
                     description: descriptionText,
-                    residence: residenceId,
+                    residence: finalResidenceId, // null for multi-residence salary requests
                     type: 'financial',
                     category: 'salary',
                     status: 'pending-ceo-approval', // Set to pending CEO approval since finance already approved
@@ -622,10 +724,30 @@ exports.createIndividualSalaryRequests = async (req, res) => {
             }
         });
 
-        // Wait for all requests to be created
-        const results = await Promise.all(requestPromises);
-        const successfulRequests = results.filter(result => !result.error);
-        const failedRequests = results.filter(result => result.error);
+        // Wait for all requests to be created (use allSettled to handle partial failures)
+        const results = await Promise.allSettled(requestPromises);
+        
+        // Separate successful and failed requests
+        const successfulRequests = [];
+        const failedRequests = [];
+        
+        results.forEach((result, index) => {
+            if (result.status === 'fulfilled' && result.value !== null) {
+                if (result.value.error) {
+                    failedRequests.push(result.value);
+                } else {
+                    successfulRequests.push(result.value);
+                }
+            } else if (result.status === 'rejected') {
+                const residenceId = Object.keys(allocationsByResidence)[index];
+                failedRequests.push({
+                    error: true,
+                    residenceId: residenceId || 'unknown',
+                    residenceName: residenceMap[residenceId]?.name || 'Unknown Residence',
+                    errorMessage: result.reason?.message || 'Unknown error'
+                });
+            }
+        });
 
         console.log(`📊 Results: ${successfulRequests.length} successful, ${failedRequests.length} failed`);
 
@@ -719,17 +841,21 @@ exports.createSalaryRequest = async (req, res) => {
         // Prefer MonthlyRequest if available
         if (MonthlyRequest) {
             const title = 'Salary Payment Request';
-            const items = employeeDocs.map(e => ({
-                title: e.fullName || `${e.firstName} ${e.lastName}`,
-                description: `${e.jobTitle || 'Employee'} salary`,
-                quantity: 1,
-                unitCost: e.salary || 0,
-                totalCost: e.salary || 0,
-                category: 'services',
-                priority: 'high',
-                notes: notes || undefined,
-                provider: undefined
-            }));
+            const items = employeeDocs.map(e => {
+                const employeeName = e.fullName || `${e.firstName} ${e.lastName}`;
+                const jobTitle = e.jobTitle || 'Employee';
+                return {
+                    title: employeeName, // Keep for backward compatibility
+                    description: `${employeeName} - ${jobTitle} salary`,
+                    quantity: 1,
+                    unitCost: e.salary || 0,
+                    totalCost: e.salary || 0,
+                    category: 'services',
+                    priority: 'high',
+                    notes: notes || undefined,
+                    provider: undefined
+                };
+            });
 
             const reqDoc = new MonthlyRequest({
                 title,
@@ -763,12 +889,18 @@ exports.createSalaryRequest = async (req, res) => {
             residence: residence,
             department: 'Finance',
             requestedBy: req.user?.email,
-            items: employeeDocs.map(e => ({
-                description: `${e.fullName || e.firstName + ' ' + e.lastName} - ${e.jobTitle || 'Employee'}`,
-                quantity: 1,
-                unitCost: e.salary || 0,
-                purpose: 'Salary'
-            })),
+            items: employeeDocs.map(e => {
+                const employeeName = e.fullName || `${e.firstName} ${e.lastName}`;
+                const jobTitle = e.jobTitle || 'Employee';
+                return {
+                    title: employeeName, // Keep for backward compatibility
+                    description: `${employeeName} - ${jobTitle} salary`,
+                    quantity: 1,
+                    unitCost: e.salary || 0,
+                    totalCost: e.salary || 0,
+                    purpose: 'Salary'
+                };
+            }),
             totalEstimatedCost: total,
             expenseCategory: 'Salaries',
             paymentMethod: 'Bank Transfer',

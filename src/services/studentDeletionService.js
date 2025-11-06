@@ -104,7 +104,8 @@ class StudentDeletionService {
                     { special: 'deleteTransactionEntriesAdvanced', description: 'Transaction entries (advanced patterns)' },
                     { collection: 'Transaction', field: 'reference', description: 'Transactions' },
                     
-                    // Step 2: Delete financial records
+                    // Step 2: Delete financial records (delete payment-related transactions BEFORE payments)
+                    { special: 'deletePaymentRelatedTransactions', description: 'Payment-related transaction entries' },
                     { collection: 'Payment', field: 'student', description: 'Payments (student field)' },
                     { collection: 'Payment', field: 'user', description: 'Payments (user field)' },
                     { collection: 'Receipt', field: 'student', description: 'Receipts' },
@@ -288,6 +289,9 @@ class StudentDeletionService {
             case 'deleteStudentSpecificAccounts':
                 await this.deleteStudentSpecificAccounts(student, session, deletionSummary);
                 break;
+            case 'deletePaymentRelatedTransactions':
+                await this.deletePaymentRelatedTransactions(student, session, deletionSummary);
+                break;
             default:
                 console.log(`⚠️ Unknown special deletion type: ${type}`);
         }
@@ -427,6 +431,103 @@ class StudentDeletionService {
             
         } catch (error) {
             console.error('❌ Error in student-specific account deletion:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Delete payment-related transaction entries
+     */
+    static async deletePaymentRelatedTransactions(student, session, deletionSummary) {
+        try {
+            const studentId = student._id.toString();
+            const studentIdObj = student._id;
+            
+            console.log(`🔍 Deleting payment-related transaction entries for: ${student.email}`);
+            
+            // First, get all payment IDs for this student
+            const payments = await Payment.find({
+                $or: [
+                    { student: studentIdObj },
+                    { user: studentIdObj }
+                ]
+            }).select('_id').session(session);
+            
+            const paymentIds = payments.map(p => p._id);
+            const paymentIdStrings = paymentIds.map(id => id.toString());
+            
+            console.log(`   📊 Found ${paymentIds.length} payments for this student`);
+            
+            // Pattern 1: Transaction entries with source='payment' and sourceId pointing to a payment
+            const pattern1 = paymentIds.length > 0 ? await TransactionEntry.deleteMany({
+                source: 'payment',
+                sourceModel: 'Payment',
+                sourceId: { $in: paymentIds }
+            }).session(session) : { deletedCount: 0 };
+            
+            // Pattern 2: Transaction entries with metadata.paymentId matching any payment
+            const pattern2 = paymentIdStrings.length > 0 ? await TransactionEntry.deleteMany({
+                'metadata.paymentId': { $in: paymentIdStrings }
+            }).session(session) : { deletedCount: 0 };
+            
+            // Pattern 3: Transaction entries with metadata.paymentAllocation.paymentId
+            const pattern3 = paymentIdStrings.length > 0 ? await TransactionEntry.deleteMany({
+                'metadata.paymentAllocation.paymentId': { $in: paymentIdStrings }
+            }).session(session) : { deletedCount: 0 };
+            
+            // Pattern 4: Transaction entries with source='payment' and metadata.studentId matching
+            const pattern4 = await TransactionEntry.deleteMany({
+                source: 'payment',
+                'metadata.studentId': studentId
+            }).session(session);
+            
+            // Pattern 5: Transaction entries with reference containing payment IDs
+            const pattern5 = paymentIdStrings.length > 0 ? await TransactionEntry.deleteMany({
+                $or: paymentIdStrings.map(paymentId => ({
+                    reference: { $regex: paymentId, $options: 'i' }
+                }))
+            }).session(session) : { deletedCount: 0 };
+            
+            // Pattern 6: Transaction entries with description containing payment-related info
+            const pattern6 = await TransactionEntry.deleteMany({
+                source: 'payment',
+                $or: [
+                    { description: { $regex: student.email, $options: 'i' } },
+                    { description: { $regex: `${student.firstName} ${student.lastName}`, $options: 'i' } }
+                ]
+            }).session(session);
+            
+            // Pattern 7: Transaction entries with metadata.paymentAllocation.studentId
+            const pattern7 = await TransactionEntry.deleteMany({
+                'metadata.paymentAllocation.studentId': studentId
+            }).session(session);
+            
+            const totalDeleted = pattern1.deletedCount + pattern2.deletedCount + 
+                               pattern3.deletedCount + pattern4.deletedCount + 
+                               pattern5.deletedCount + pattern6.deletedCount + 
+                               pattern7.deletedCount;
+            
+            if (totalDeleted > 0) {
+                if (!deletionSummary.deletedCollections['TransactionEntry (Payment-Related)']) {
+                    deletionSummary.deletedCollections['TransactionEntry (Payment-Related)'] = {
+                        count: 0,
+                        description: 'Payment-related transaction entries'
+                    };
+                }
+                deletionSummary.deletedCollections['TransactionEntry (Payment-Related)'].count += totalDeleted;
+                
+                console.log(`🗑️ Payment-related transaction entry deletion: ${totalDeleted} entries`);
+                console.log(`  - By sourceId (Payment): ${pattern1.deletedCount}`);
+                console.log(`  - By metadata.paymentId: ${pattern2.deletedCount}`);
+                console.log(`  - By metadata.paymentAllocation.paymentId: ${pattern3.deletedCount}`);
+                console.log(`  - By source=payment & metadata.studentId: ${pattern4.deletedCount}`);
+                console.log(`  - By reference (paymentId): ${pattern5.deletedCount}`);
+                console.log(`  - By description (student info): ${pattern6.deletedCount}`);
+                console.log(`  - By metadata.paymentAllocation.studentId: ${pattern7.deletedCount}`);
+            }
+            
+        } catch (error) {
+            console.error('❌ Error in payment-related transaction entry deletion:', error);
             throw error;
         }
     }

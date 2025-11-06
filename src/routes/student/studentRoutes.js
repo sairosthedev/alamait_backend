@@ -36,9 +36,9 @@ const passwordValidation = [
     check('newPassword', 'Please enter a password with 8 or more characters').isLength({ min: 8 })
 ];
 
-// All routes require student role
+// All routes require student role (or admin/finance for certain operations)
 router.use(auth);
-router.use(checkRole('student'));
+router.use(checkRole('student', 'admin', 'finance_admin', 'finance_user', 'ceo'));
 
 // Routes
 router.get('/profile', getProfile);

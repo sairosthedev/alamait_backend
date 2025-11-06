@@ -604,13 +604,14 @@ const uploadSignedLeaseHandler = async (req, res) => {
       console.log('Signed lease uploaded successfully to S3:', s3Result.Location);
 
     // Save S3 file URL in user model
+      const user = await User.findById(req.user._id).populate('residence', 'name');
       await User.findByIdAndUpdate(req.user._id, { 
         signedLeasePath: s3Result.Location,
         signedLeaseUploadDate: new Date()
       });
       console.log('User record updated with signed lease path');
 
-      // Update the latest Application document for this student
+      // Update the latest Application document for this student (if exists)
       const application = await Application.findOne({ student: req.user._id }).sort({ createdAt: -1 });
       if (application) {
         application.signedLeasePath = s3Result.Location;
@@ -619,35 +620,122 @@ const uploadSignedLeaseHandler = async (req, res) => {
         application.signedLeaseSize = req.file.size;
         await application.save();
         console.log('Application updated with signed lease:', application._id);
-
-        // Create a Lease document for admin visibility
-        const Lease = require('../../models/Lease');
-        const fileName = req.file.filename || req.file.originalname;
-        const s3Url = s3Result.Location;
-        // Compose backend download/view URLs
-        const downloadUrl = `/api/leases/download/${fileName}`;
-        const viewUrl = `/api/leases/view/${fileName}`;
-        await Lease.create({
-          studentId: req.user._id,
-          studentName: `${application.firstName} ${application.lastName}`,
-          email: application.email,
-          residence: application.residence,
-          residenceName: application.allocatedRoomDetails?.residenceName || application.residenceName || '',
-          startDate: application.allocatedRoomDetails?.startDate || application.startDate || null,
-          endDate: application.allocatedRoomDetails?.endDate || application.endDate || null,
-          filename: fileName,
-          originalname: req.file.originalname,
-          path: s3Url,
-          mimetype: req.file.mimetype,
-          size: req.file.size,
-          uploadedAt: new Date(),
-          downloadUrl,
-          viewUrl
-        });
-        console.log('Lease document created for admin visibility');
-      } else {
-        console.log('No application found for student, only updated user record');
       }
+
+      // ALWAYS create a Lease document in the leases collection
+      const Lease = require('../../models/Lease');
+      const { Residence } = require('../../models/Residence');
+      
+      const fileName = req.file.filename || req.file.originalname;
+      const s3Url = s3Result.Location;
+      
+      // Get residence info - prefer from request body, then application, then user
+      let residence = null;
+      let residenceName = null;
+      let startDate = null;
+      let endDate = null;
+      
+      // Use student info from request body if provided, otherwise from user/application
+      let studentName = req.body?.studentName || `${user.firstName} ${user.lastName}`;
+      let email = req.body?.studentEmail || user.email;
+      
+      // Check request body for startDate and endDate (if provided)
+      if (req.body?.startDate) {
+        startDate = new Date(req.body.startDate);
+        console.log(`✅ Using startDate from request body: ${startDate.toISOString()}`);
+      }
+      if (req.body?.endDate) {
+        endDate = new Date(req.body.endDate);
+        console.log(`✅ Using endDate from request body: ${endDate.toISOString()}`);
+      }
+      
+      // Priority 1: Check request body for residence (if provided)
+      if (req.body && req.body.residence) {
+        const mongoose = require('mongoose');
+        const providedResidence = req.body.residence;
+        
+        // Convert to ObjectId if it's a string
+        if (mongoose.Types.ObjectId.isValid(providedResidence)) {
+          const residenceId = new mongoose.Types.ObjectId(providedResidence);
+          
+          // Validate that residence exists in database
+          const residenceDoc = await Residence.findById(residenceId).select('name');
+          if (residenceDoc) {
+            residence = residenceId;
+            residenceName = residenceDoc.name;
+            console.log(`✅ Using residence from request body: ${residenceName} (${residenceId})`);
+          } else {
+            console.log(`⚠️ Residence ID from request body not found in database: ${providedResidence}, will try application/user`);
+            // Don't set residence - will fall through to check application/user
+          }
+        } else {
+          console.log(`⚠️ Invalid residence ID format in request body: ${providedResidence}, will try application/user`);
+        }
+      }
+      
+      // Priority 2: Check application for residence and dates (if not already set from request body)
+      if (!residence && application) {
+        residence = application.residence;
+        residenceName = application.allocatedRoomDetails?.residenceName || application.residenceName || '';
+        // Only use application dates if not already set from request body
+        if (!startDate) {
+          startDate = application.allocatedRoomDetails?.startDate || application.startDate || null;
+        }
+        if (!endDate) {
+          endDate = application.allocatedRoomDetails?.endDate || application.endDate || null;
+        }
+        // Only override student name/email if not provided in request body
+        if (!req.body?.studentName) {
+          studentName = `${application.firstName} ${application.lastName}`;
+        }
+        if (!req.body?.studentEmail) {
+          email = application.email || user.email;
+        }
+        console.log(`✅ Using residence from application: ${residenceName || residence}`);
+      }
+      
+      // Priority 3: Check user's residence
+      if (!residence && user.residence) {
+        residence = user.residence._id || user.residence;
+        residenceName = user.residence.name || null;
+        console.log(`✅ Using residence from user record: ${residenceName || residence}`);
+      }
+      
+      // If residence name is not set, try to get it from Residence model
+      if (!residenceName && residence) {
+        const residenceDoc = await Residence.findById(residence).select('name');
+        if (residenceDoc) {
+          residenceName = residenceDoc.name;
+        }
+      }
+      
+      // Ensure we have a residence (required for Lease model)
+      const finalResidence = residence;
+      if (!finalResidence) {
+        console.error('❌ Error: No residence found for student. Cannot create lease document.');
+        return res.status(400).json({ 
+          error: 'No residence found for student. Please contact administrator to assign a residence.',
+          message: 'Lease cannot be created without a residence assignment'
+        });
+      }
+      
+      // Create Lease document in leases collection
+      const leaseDoc = await Lease.create({
+        studentId: req.user._id,
+        studentName: studentName,
+        email: email,
+        residence: finalResidence,
+        residenceName: residenceName || null,
+        startDate: startDate,
+        endDate: endDate,
+        filename: fileName,
+        originalname: req.file.originalname,
+        path: s3Url,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        uploadedAt: new Date()
+      });
+      console.log('✅ Lease document created in leases collection:', leaseDoc._id);
 
       res.json({ 
         message: 'Signed lease uploaded successfully', 

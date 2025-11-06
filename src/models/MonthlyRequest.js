@@ -187,7 +187,13 @@ const monthlyRequestSchema = new mongoose.Schema({
     residence: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Residence',
-        required: true
+        required: function() {
+            // Make residence optional for salary requests
+            // Salary requests are identified by title containing "Salary" or "salary"
+            const title = this.title || '';
+            const isSalaryRequest = /salary|salaries/i.test(title);
+            return !isSalaryRequest; // Not required for salary requests
+        }
     },
     month: {
         type: Number,

@@ -131,7 +131,6 @@ function transformFixedBalanceSheetToMonthly(balanceSheetData, month, year) {
     // Build comprehensive structure with ALL accounts
     const allCurrentAssets = {};
     const allNonCurrentAssets = {};
-    const allLiabilities = {};
     const allEquity = {};
 
     // Process ALL current assets with parent-child aggregation
@@ -171,9 +170,29 @@ function transformFixedBalanceSheetToMonthly(balanceSheetData, month, year) {
         }
     });
 
+    // Helper function to convert account name to camelCase key
+    const toCamelCase = (str) => {
+        return str
+            .replace(/\s+/g, ' ')
+            .trim()
+            .split(' ')
+            .map((word, index) => {
+                if (index === 0) {
+                    return word.toLowerCase();
+                }
+                return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+            })
+            .join('')
+            .replace(/[^a-zA-Z0-9]/g, '');
+    };
+    
     // Process ALL liabilities with parent-child aggregation
     // Define accounts that are already included in specific sections to avoid duplication
     const specificLiabilityAccountCodes = ['2000', '2020', '2200'];
+    const BalanceSheetService = require('../services/balanceSheetService');
+    
+    const currentLiabilities = {};
+    const nonCurrentLiabilities = {};
     
     Object.entries(liabilities || {}).forEach(([key, account]) => {
         if (key !== 'total_liabilities') {
@@ -187,12 +206,23 @@ function transformFixedBalanceSheetToMonthly(balanceSheetData, month, year) {
                 return;
             }
             
-            allLiabilities[key] = {
+            // Check if this is a current or non-current liability
+            const isCurrent = BalanceSheetService.isCurrentLiability(account.code, account.name);
+            
+            // Create clean camelCase key from account name (like accountsPayable, tenantDeposits, deferredIncome)
+            const cleanKey = toCamelCase(account.name || `account_${account.code}`);
+            
+            const liabilityData = {
                 amount: account.balance || 0,
                 accountCode: account.code,
-                accountName: account.name,
-                type: 'liability'
+                accountName: account.name
             };
+            
+            if (isCurrent) {
+                currentLiabilities[cleanKey] = liabilityData;
+            } else {
+                nonCurrentLiabilities[cleanKey] = liabilityData;
+            }
         }
     });
 
@@ -311,9 +341,10 @@ function transformFixedBalanceSheetToMonthly(balanceSheetData, month, year) {
                     amount: deferredIncomeAccount?.balance || 0,
                     accountCode: '2200',
                     accountName: 'Advance Payment Liability'
-                }
+                },
+                ...currentLiabilities
             },
-            all: allLiabilities, // Include ALL liabilities
+            nonCurrent: nonCurrentLiabilities,
             total: totalLiabilities
         },
         equity: {
@@ -2118,12 +2149,44 @@ class FinancialReportsController {
             }
             
             // Get the account details
-            const account = await Account.findOne({ code: accountCode });
-            if (!account) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Account not found'
+            // For deposits, fetch all deposit accounts
+            let account = null;
+            let depositAccounts = [];
+            const depositAccountCodes = ['2201', '2020', '20002', '2002', '2028', '20020'];
+            
+            if (depositAccountCodes.includes(accountCode)) {
+                // Fetch all deposit accounts
+                depositAccounts = await Account.find({
+                    $or: [
+                        { code: { $in: depositAccountCodes } },
+                        { 
+                            type: 'Liability',
+                            $or: [
+                                { name: /deposit/i },
+                                { name: /security deposit/i },
+                                { name: /tenant deposit/i }
+                            ]
+                        }
+                    ]
                 });
+                
+                // Use the requested account code as primary, or first found
+                account = depositAccounts.find(acc => acc.code === accountCode) || depositAccounts[0];
+                
+                if (!account || depositAccounts.length === 0) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Deposit account not found'
+                    });
+                }
+            } else {
+                account = await Account.findOne({ code: accountCode });
+                if (!account) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Account not found'
+                    });
+                }
             }
             
             // Generate cash flow data for the specific account
@@ -2257,35 +2320,75 @@ class FinancialReportsController {
                 };
             }
             
+            // For all accounts, if accountData is not found in cashFlowData, create a placeholder
+            // We'll calculate the actual data from transactions
+            // This ensures all accounts work, not just those found in cash flow data
             if (!accountData) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Account not found in cash flow data'
-                });
+                accountData = {
+                    totalDebit: 0,
+                    totalCredit: 0,
+                    netAmount: 0,
+                    transactionCount: 0,
+                    type: depositAccountCodes.includes(accountCode) ? 'deposit' : 
+                          account.type === 'Income' ? 'income' : 
+                          account.type === 'Expense' ? 'expense' : 'cash_flow',
+                    category: account.category || account.type || 'Other'
+                };
             }
             
             // Get detailed transactions for this account
             const TransactionEntry = require('../models/TransactionEntry');
             
-            // For cash flow account details, we want to show cash payments, not accruals
-            // Look for payment allocation transactions that represent cash coming in for rent
-            const query = {
-                status: { $nin: ['reversed', 'draft'] },
-                // Look for payment allocation transactions that represent cash payments for rent
-                $or: [
-                    { 
-                        source: 'payment_allocation',
-                        description: { $regex: /rent.*payment|payment.*rent/i }
-                    },
-                    {
-                        description: { $regex: /Payment allocation: rent/i }
-                    },
-                    {
-                        source: 'payment',
-                        description: { $regex: /rent/i }
-                    }
-                ]
-            };
+            let query = {};
+            
+            // For income accounts, we need to show payment transactions (cash received)
+            // Payment transactions don't have the income account code directly - they have cash (1000) and AR (1100-...)
+            if (account.type === 'Income') {
+                // Query payment transactions that have cash entries (cash received)
+                query = {
+                    'entries.accountCode': { $regex: '^1000' }, // Has cash account entry
+                    source: { $in: ['payment', 'accounts_receivable_collection'] },
+                    status: { $nin: ['reversed', 'draft'] }
+                };
+            } else if (account.type === 'Expense') {
+                // For expense accounts, show transactions where cash was paid out (expense transactions)
+                // Expense transactions can have the expense account code directly OR have cash entries (cash paid out)
+                // First, try to find transactions with the expense account code directly
+                query = {
+                    $or: [
+                        { 'entries.accountCode': accountCode }, // Direct expense account entries (primary)
+                        {
+                            'entries.accountCode': { $regex: '^1000' }, // Cash transactions (cash paid out)
+                            source: { $in: ['expense', 'manual'] }
+                        }
+                    ],
+                    status: { $nin: ['reversed', 'draft'] }
+                };
+            } else if (depositAccountCodes.includes(accountCode)) {
+                // For deposit accounts, show payment transactions with cash and deposits
+                // Include all deposit account codes and payment transactions with deposits
+                const allDepositCodes = depositAccounts.length > 0 
+                    ? depositAccounts.map(acc => acc.code)
+                    : depositAccountCodes;
+                
+                query = {
+                    $or: [
+                        { 'entries.accountCode': { $in: allDepositCodes } }, // All deposit account entries
+                        {
+                            'entries.accountCode': { $regex: '^1000' }, // Payment transactions with cash
+                            source: { $in: ['payment', 'accounts_receivable_collection'] },
+                            description: { $regex: /deposit|security/i }
+                        }
+                    ],
+                    status: { $nin: ['reversed', 'draft'] }
+                };
+            } else {
+                // For non-income accounts, query by account code directly
+                query = {
+                    'entries.accountCode': accountCode,
+                    status: { $nin: ['reversed', 'draft'] }
+                };
+            }
             
             // Add date filter if period is specified
             if (period && period.length === 4) {
@@ -2300,9 +2403,96 @@ class FinancialReportsController {
                 query.date = { $gte: startDate, $lte: endDate };
             }
             
-            const transactions = await TransactionEntry.find(query)
+            let transactions = await TransactionEntry.find(query)
                 .sort({ date: -1 })
-                .limit(100); // Limit to recent 100 transactions
+                .limit(500); // Get more transactions to filter by description
+            
+            // For income accounts, ensure we only include transactions with cash entries and match description
+            if (account.type === 'Income') {
+                transactions = transactions.filter(tx => {
+                    // Must have a cash account entry (1000 series) indicating cash was received
+                    const cashEntry = tx.entries.find(e => e.accountCode.match(/^1000/));
+                    if (!cashEntry || cashEntry.debit <= 0) {
+                        return false;
+                    }
+                    
+                    // Filter by description to match the income account type
+                    const description = (tx.description || '').toLowerCase();
+                    if (accountCode === '4001') {
+                        // Rent income - look for "rent" in description
+                        return description.includes('rent');
+                    } else if (accountCode === '4002') {
+                        // Admin fees - look for "admin" or "fee" in description
+                        return description.includes('admin') || description.includes('fee');
+                    }
+                    
+                    // For other income accounts, include all payment transactions
+                    return true;
+                });
+                
+                // Limit to 100 after filtering
+                transactions = transactions.slice(0, 100);
+            } else if (account.type === 'Expense') {
+                // For expense accounts, filter to include only expense-related transactions
+                transactions = transactions.filter(tx => {
+                    // Check if transaction has the expense account code directly
+                    const expenseEntry = tx.entries.find(e => e.accountCode === accountCode);
+                    if (expenseEntry) {
+                        return true; // Include transactions with expense account code
+                    }
+                    
+                    // Or check if it's an expense transaction with cash paid out
+                    const cashEntry = tx.entries.find(e => e.accountCode.match(/^1000/));
+                    if (cashEntry && cashEntry.credit > 0) {
+                        // For expense transactions, cash is credited (paid out)
+                        // Include if it's an expense transaction or has expense-related entries
+                        if (tx.source === 'expense') {
+                            return true;
+                        }
+                        
+                        // Check if there's an expense account entry in the transaction
+                        const hasExpenseAccount = tx.entries.some(e => 
+                            e.accountType === 'Expense' || 
+                            (e.accountCode && e.accountCode.match(/^5|^6|^7/)) // Expense account codes usually start with 5, 6, or 7
+                        );
+                        
+                        // Include if it's a manual transaction with expense account
+                        if (tx.source === 'manual' && hasExpenseAccount) {
+                            return true;
+                        }
+                    }
+                    
+                    return false;
+                });
+                
+                // Limit to 100 after filtering
+                transactions = transactions.slice(0, 100);
+            } else if (depositAccountCodes.includes(accountCode)) {
+                // For deposit accounts, filter to include only deposit-related transactions
+                const allDepositCodes = depositAccounts.length > 0 
+                    ? depositAccounts.map(acc => acc.code)
+                    : depositAccountCodes;
+                
+                transactions = transactions.filter(tx => {
+                    // Check if transaction has any deposit account entry
+                    const depositEntry = tx.entries.find(e => allDepositCodes.includes(e.accountCode));
+                    if (depositEntry) {
+                        return true; // Include transactions with any deposit account code
+                    }
+                    
+                    // Or check if it's a payment transaction with deposit in description
+                    const cashEntry = tx.entries.find(e => e.accountCode.match(/^1000/));
+                    const description = (tx.description || '').toLowerCase();
+                    if (cashEntry && (description.includes('deposit') || description.includes('security'))) {
+                        return true;
+                    }
+                    
+                    return false;
+                });
+                
+                // Limit to 100 after filtering
+                transactions = transactions.slice(0, 100);
+            }
             
             // Calculate monthly breakdown
             const monthlyBreakdown = {};
@@ -2318,14 +2508,101 @@ class FinancialReportsController {
                     };
                 }
                 
-                const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
-                if (accountEntry) {
-                    monthlyBreakdown[monthKey].totalDebit += accountEntry.debit || 0;
-                    monthlyBreakdown[monthKey].totalCredit += accountEntry.credit || 0;
-                    monthlyBreakdown[monthKey].netAmount += (accountEntry.debit || 0) - (accountEntry.credit || 0);
-                    monthlyBreakdown[monthKey].transactionCount += 1;
+                if (account.type === 'Income') {
+                    // For income accounts, use cash received amount (cash debit)
+                    const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
+                    if (cashEntry && cashEntry.debit > 0) {
+                        const cashAmount = cashEntry.debit || 0;
+                        monthlyBreakdown[monthKey].totalDebit += 0; // Income accounts don't have debits
+                        monthlyBreakdown[monthKey].totalCredit += cashAmount; // Cash received = income credit
+                        monthlyBreakdown[monthKey].netAmount += cashAmount; // Net amount = cash received
+                        monthlyBreakdown[monthKey].transactionCount += 1;
+                    }
+                } else if (depositAccountCodes.includes(accountCode)) {
+                    // For deposit accounts, show cash received for deposits
+                    // Check for any deposit account entry across all deposit accounts
+                    const allDepositCodes = depositAccounts.length > 0 
+                        ? depositAccounts.map(acc => acc.code)
+                        : depositAccountCodes;
+                    
+                    const depositEntry = transaction.entries.find(entry => allDepositCodes.includes(entry.accountCode));
+                    const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
+                    
+                    if (depositEntry) {
+                        // Direct deposit account entry - use credit amount (liability increases)
+                        const depositAmount = depositEntry.credit || 0;
+                        monthlyBreakdown[monthKey].totalDebit += depositEntry.debit || 0;
+                        monthlyBreakdown[monthKey].totalCredit += depositAmount;
+                        // For deposits: netAmount = credit - debit (credits increase liability, which means cash received)
+                        monthlyBreakdown[monthKey].netAmount += depositAmount - (depositEntry.debit || 0);
+                        monthlyBreakdown[monthKey].transactionCount += 1;
+                    } else if (cashEntry && cashEntry.debit > 0) {
+                        // Payment transaction with deposit - use cash amount received
+                        const cashAmount = cashEntry.debit || 0;
+                        monthlyBreakdown[monthKey].totalDebit += 0;
+                        monthlyBreakdown[monthKey].totalCredit += cashAmount; // Cash received = deposit credit
+                        monthlyBreakdown[monthKey].netAmount += cashAmount; // Net amount = cash received
+                        monthlyBreakdown[monthKey].transactionCount += 1;
+                    }
+                } else if (account.type === 'Expense') {
+                    // For expense accounts, use the expense account entry or cash entry
+                    const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
+                    const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
+                    
+                    if (accountEntry) {
+                        // Direct expense account entry - use debit amount (expenses increase with debits)
+                        const expenseAmount = accountEntry.debit || 0;
+                        monthlyBreakdown[monthKey].totalDebit += expenseAmount;
+                        monthlyBreakdown[monthKey].totalCredit += accountEntry.credit || 0;
+                        // For expenses: netAmount = debit - credit (debits increase expenses)
+                        monthlyBreakdown[monthKey].netAmount += expenseAmount - (accountEntry.credit || 0);
+                        monthlyBreakdown[monthKey].transactionCount += 1;
+                    } else if (cashEntry && cashEntry.credit > 0) {
+                        // Expense transaction with cash paid out - use cash credit amount (cash paid out = expense)
+                        const cashAmount = cashEntry.credit || 0;
+                        monthlyBreakdown[monthKey].totalDebit += cashAmount; // Cash paid out = expense debit
+                        monthlyBreakdown[monthKey].totalCredit += 0;
+                        monthlyBreakdown[monthKey].netAmount += cashAmount; // Net amount = expense amount
+                        monthlyBreakdown[monthKey].transactionCount += 1;
+                    }
+                } else {
+                    // For all other accounts (assets, liabilities, equity, etc.), use the account entry directly
+                    const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
+                    if (accountEntry) {
+                        monthlyBreakdown[monthKey].totalDebit += accountEntry.debit || 0;
+                        monthlyBreakdown[monthKey].totalCredit += accountEntry.credit || 0;
+                        
+                        // Calculate netAmount based on account type
+                        // For assets: netAmount = debit - credit (debits increase)
+                        // For liabilities, equity, and income: netAmount = credit - debit (credits increase)
+                        if (account.type === 'Asset') {
+                            monthlyBreakdown[monthKey].netAmount += (accountEntry.debit || 0) - (accountEntry.credit || 0);
+                        } else {
+                            // Liability, Equity, Income
+                            monthlyBreakdown[monthKey].netAmount += (accountEntry.credit || 0) - (accountEntry.debit || 0);
+                        }
+                        monthlyBreakdown[monthKey].transactionCount += 1;
+                    }
                 }
             });
+            
+            // Calculate cashFlowData from monthlyBreakdown to ensure consistency
+            let cashFlowType = 'cash_flow';
+            if (account.type === 'Income') {
+                cashFlowType = 'income';
+            } else if (account.type === 'Expense') {
+                cashFlowType = 'expense';
+            } else if (depositAccountCodes.includes(accountCode)) {
+                cashFlowType = 'deposit'; // Deposits are liability accounts
+            }
+            
+            const calculatedCashFlowData = {
+                totalCredit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalCredit, 0),
+                totalDebit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalDebit, 0),
+                netAmount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.netAmount, 0),
+                transactionCount: transactions.length,
+                type: cashFlowType
+            };
             
             const response = {
                 success: true,
@@ -2335,7 +2612,16 @@ class FinancialReportsController {
                     type: account.type,
                     category: account.category
                 },
-                cashFlowData: accountData,
+                // Include all deposit accounts if querying for deposits
+                ...(depositAccounts.length > 0 && depositAccountCodes.includes(accountCode) ? {
+                    depositAccounts: depositAccounts.map(acc => ({
+                        code: acc.code,
+                        name: acc.name,
+                        type: acc.type,
+                        category: acc.category
+                    }))
+                } : {}),
+                cashFlowData: calculatedCashFlowData,
                 transactions: await Promise.all(transactions.map(async (tx) => {
                     // For cash flow, we want to show the cash amount that came in
                     // Look for cash account entries (1000 series) in payment transactions
@@ -2345,14 +2631,56 @@ class FinancialReportsController {
                     let amount = 0;
                     let type = 'credit';
                     
-                    if (cashEntry) {
-                        // For payment transactions, cash is debited (money coming in)
-                        amount = cashEntry.debit || 0;
-                        type = 'debit';
-                    } else if (accountEntry) {
-                        // Fallback to account entry if no cash entry found
-                        amount = accountEntry.debit || accountEntry.credit || 0;
-                        type = accountEntry.debit > 0 ? 'debit' : 'credit';
+                    if (account.type === 'Income') {
+                        // For income accounts, cash received is when cash account is debited
+                        if (cashEntry) {
+                            // Cash is debited (money coming in) - this is the cash received amount
+                            amount = cashEntry.debit || 0;
+                            type = 'debit'; // Cash debit means cash received
+                        } else if (accountEntry && accountEntry.credit > 0) {
+                            // Fallback: if no cash entry, use income account credit (income recognized = cash received)
+                            amount = accountEntry.credit || 0;
+                            type = 'credit';
+                        }
+                    } else if (depositAccountCodes.includes(accountCode)) {
+                        // For deposit accounts, show cash received for deposits
+                        // Check for any deposit account entry across all deposit accounts
+                        const allDepositCodes = depositAccounts.length > 0 
+                            ? depositAccounts.map(acc => acc.code)
+                            : depositAccountCodes;
+                        
+                        const depositEntry = tx.entries.find(e => allDepositCodes.includes(e.accountCode));
+                        
+                        if (cashEntry && cashEntry.debit > 0) {
+                            // Cash is debited (money coming in) - this is the cash received amount
+                            amount = cashEntry.debit || 0;
+                            type = 'debit'; // Cash debit means cash received
+                        } else if (depositEntry) {
+                            // Use deposit account credit (liability increases = cash received)
+                            amount = depositEntry.credit || 0;
+                            type = 'credit';
+                        } else if (accountEntry) {
+                            // Fallback to requested account code entry
+                            amount = accountEntry.credit || 0;
+                            type = 'credit';
+                        }
+                    } else {
+                        // For all other accounts (expenses, assets, liabilities, equity, etc.), use account entry directly
+                        if (cashEntry) {
+                            // For cash flow, show cash movement
+                            if (account.type === 'Expense') {
+                                amount = cashEntry.credit || 0; // Cash credit means cash paid out
+                                type = 'credit';
+                            } else {
+                                // For other account types, show cash movement
+                                amount = cashEntry.debit || cashEntry.credit || 0;
+                                type = cashEntry.debit > 0 ? 'debit' : 'credit';
+                            }
+                        } else if (accountEntry) {
+                            // Use account entry amount directly
+                            amount = accountEntry.debit || accountEntry.credit || 0;
+                            type = accountEntry.debit > 0 ? 'debit' : 'credit';
+                        }
                     }
                     
                     // Try to get student information from the transaction
@@ -2360,12 +2688,70 @@ class FinancialReportsController {
                     let studentId = null;
                     
                     try {
-                        // Look for student ID in AR account entries (1100-<studentId>)
+                        // Method 1: Look for student ID in AR account entries (1100-<studentId>)
                         const arEntry = tx.entries.find(e => e.accountCode.match(/^1100-/));
                         if (arEntry) {
                             studentId = arEntry.accountCode.replace('1100-', '');
-                            
-                            // Try to get student name from User collection
+                        }
+                        
+                        // Method 2: Check transaction metadata for studentId
+                        if (!studentId && tx.metadata && tx.metadata.studentId) {
+                            studentId = tx.metadata.studentId.toString();
+                        }
+                        
+                        // Method 3: Check sourceId if it's a Payment or relates to a student
+                        if (!studentId && tx.sourceId) {
+                            if (tx.sourceModel === 'Payment' || !tx.sourceModel) {
+                                const Payment = require('../models/Payment');
+                                const payment = await Payment.findById(tx.sourceId).select('student').populate('student', 'firstName lastName');
+                                if (payment && payment.student) {
+                                    studentId = payment.student._id ? payment.student._id.toString() : payment.student.toString();
+                                    if (payment.student.firstName && payment.student.lastName) {
+                                        studentName = `${payment.student.firstName} ${payment.student.lastName}`;
+                                    }
+                                }
+                            } else if (tx.sourceModel === 'Lease') {
+                                const Lease = require('../models/Lease');
+                                const lease = await Lease.findById(tx.sourceId).select('student').populate('student', 'firstName lastName');
+                                if (lease && lease.student) {
+                                    studentId = lease.student._id ? lease.student._id.toString() : lease.student.toString();
+                                    if (lease.student.firstName && lease.student.lastName) {
+                                        studentName = `${lease.student.firstName} ${lease.student.lastName}`;
+                                    }
+                                }
+                            } else if (tx.sourceModel === 'Application') {
+                                const Application = require('../models/Application');
+                                const application = await Application.findById(tx.sourceId).select('student firstName lastName').populate('student', 'firstName lastName');
+                                if (application) {
+                                    if (application.student) {
+                                        studentId = application.student._id ? application.student._id.toString() : application.student.toString();
+                                        if (application.student.firstName && application.student.lastName) {
+                                            studentName = `${application.student.firstName} ${application.student.lastName}`;
+                                        }
+                                    } else if (application.firstName && application.lastName) {
+                                        studentName = `${application.firstName} ${application.lastName}`;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Method 4: Check reference field for student ID
+                        if (!studentId && tx.reference) {
+                            // Try to parse student ID from reference if it's an ObjectId
+                            const mongoose = require('mongoose');
+                            if (mongoose.Types.ObjectId.isValid(tx.reference)) {
+                                // Check if it's a student ID by checking User collection
+                                const User = require('../models/User');
+                                const user = await User.findById(tx.reference).select('firstName lastName');
+                                if (user) {
+                                    studentId = tx.reference.toString();
+                                    studentName = `${user.firstName} ${user.lastName}`;
+                                }
+                            }
+                        }
+                        
+                        // If we have studentId but no studentName, fetch it
+                        if (studentId && !studentName) {
                             const User = require('../models/User');
                             const student = await User.findById(studentId).select('firstName lastName');
                             if (student) {
@@ -2379,8 +2765,58 @@ class FinancialReportsController {
                                 }
                             }
                         }
+                        
+                        // Method 5: Try to extract from description (for deposit transactions)
+                        // Example: "Security deposit Marula" - try to find student by name
+                        if (!studentId && !studentName && tx.description) {
+                            // Look for common patterns like "Security deposit [Name]" or "Deposit for [Name]"
+                            const namePatterns = [
+                                /(?:security\s+)?deposit\s+(?:for\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+                                /deposit\s+(?:for|from|of)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+                                /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+deposit/i
+                            ];
+                            
+                            for (const pattern of namePatterns) {
+                                const match = tx.description.match(pattern);
+                                if (match && match[1]) {
+                                    const possibleName = match[1].trim();
+                                    // Skip common words that aren't names
+                                    const skipWords = ['tenant', 'student', 'security', 'deposit', 'payment', 'for', 'from', 'of'];
+                                    if (skipWords.includes(possibleName.toLowerCase())) {
+                                        continue;
+                                    }
+                                    
+                                    // Try to find student by name
+                                    const User = require('../models/User');
+                                    const nameParts = possibleName.split(/\s+/).filter(part => part.length > 0);
+                                    if (nameParts.length >= 1) {
+                                        const firstName = nameParts[0];
+                                        const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+                                        
+                                        let student = null;
+                                        if (lastName) {
+                                            student = await User.findOne({ 
+                                                firstName: new RegExp(`^${firstName}$`, 'i'),
+                                                lastName: new RegExp(`^${lastName}$`, 'i')
+                                            }).select('firstName lastName');
+                                        } else {
+                                            // Try to find by first name only (might match multiple, take first)
+                                            student = await User.findOne({ 
+                                                firstName: new RegExp(`^${firstName}$`, 'i')
+                                            }).select('firstName lastName');
+                                        }
+                                        
+                                        if (student) {
+                                            studentId = student._id.toString();
+                                            studentName = `${student.firstName} ${student.lastName}`;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     } catch (error) {
-                        console.log('Could not fetch student name for transaction:', tx.transactionId);
+                        console.log('Could not fetch student name for transaction:', tx.transactionId, error.message);
                     }
                     
                     return {
