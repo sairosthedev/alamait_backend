@@ -58,6 +58,22 @@ TransactionSchema.index({ expenseId: 1 });
 TransactionSchema.index({ type: 1 });
 TransactionSchema.index({ reference: 1 });
 
+// Compound indexes for common query patterns
+// Residence + date (filter by residence and date range)
+TransactionSchema.index({ residence: 1, date: -1 });
+
+// Type + date (filter by type and date range)
+TransactionSchema.index({ type: 1, date: -1 });
+
+// ExpenseId + date (get transactions for an expense)
+TransactionSchema.index({ expenseId: 1, date: -1 });
+
+// Reference + date (find transactions by reference)
+TransactionSchema.index({ reference: 1, date: -1 });
+
+// Residence + type + date (common filter pattern)
+TransactionSchema.index({ residence: 1, type: 1, date: -1 });
+
 // Virtual for total debit
 TransactionSchema.virtual('totalDebit').get(function() {
   if (!this.entries || this.entries.length === 0) return 0;

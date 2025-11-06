@@ -151,6 +151,41 @@ bookingSchema.statics.checkAvailability = async function(residenceId, roomNumber
     }
 };
 
+// Performance indexes for Booking
+// Index on student for finding student's bookings
+bookingSchema.index({ student: 1 });
+
+// Index on residence for filtering by residence
+bookingSchema.index({ residence: 1 });
+
+// Index on status for filtering by status
+bookingSchema.index({ status: 1 });
+
+// Index on paymentStatus for filtering by payment status
+bookingSchema.index({ paymentStatus: 1 });
+
+// Index on dates for availability checks and date range queries
+bookingSchema.index({ startDate: 1, endDate: 1 });
+
+// Compound indexes for common query patterns
+// Residence + room + status (for availability checks)
+bookingSchema.index({ residence: 1, 'room.roomNumber': 1, status: 1 });
+
+// Student + status (get student's active bookings)
+bookingSchema.index({ student: 1, status: 1 });
+
+// Residence + status + dates (for availability queries)
+bookingSchema.index({ residence: 1, status: 1, startDate: 1, endDate: 1 });
+
+// Date range index for finding overlapping bookings
+bookingSchema.index({ startDate: 1, endDate: 1, status: 1 });
+
+// Student + dates (get student's bookings in date range)
+bookingSchema.index({ student: 1, startDate: -1 });
+
+// Residence + dates (get residence bookings in date range)
+bookingSchema.index({ residence: 1, startDate: -1 });
+
 const Booking = mongoose.model('Booking', bookingSchema);
 
 module.exports = Booking; 

@@ -412,6 +412,8 @@ app.use('/api/finance/applications', financeApplicationRoutes);
 app.use('/api/finance/room-prices', financeRoomPriceRoutes);
 app.use('/api/finance/other-income', financeOtherIncomeRoutes);
 app.use('/api/finance/other-expenses', financeOtherExpenseRoutes);
+const financeProfileRoutes = require('./routes/finance/profileRoutes');
+app.use('/api/finance/profile', financeProfileRoutes);
 app.use('/api/finance/reports', financeReportUploadRoutes);
 app.use('/api/finance/users', financeUsersRoutes);
 

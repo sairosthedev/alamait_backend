@@ -709,6 +709,25 @@ requestSchema.index({
     }
 });
 
+// Compound indexes for common query patterns
+// Status + type + createdAt (common filter pattern)
+requestSchema.index({ status: 1, type: 1, createdAt: -1 });
+
+// Residence + status + createdAt (filter by residence and status)
+requestSchema.index({ residence: 1, status: 1, createdAt: -1 });
+
+// SubmittedBy + status + createdAt (user's requests)
+requestSchema.index({ submittedBy: 1, status: 1, createdAt: -1 });
+
+// Type + priority + createdAt (filter by type and priority)
+requestSchema.index({ type: 1, priority: 1, createdAt: -1 });
+
+// Category + status + createdAt (for financial requests)
+requestSchema.index({ category: 1, status: 1, createdAt: -1 });
+
+// Residence + type + status (residence-specific requests)
+requestSchema.index({ residence: 1, type: 1, status: 1 });
+
 // Custom validation for conditional field requirements
 requestSchema.pre('validate', function(next) {
     const errors = [];

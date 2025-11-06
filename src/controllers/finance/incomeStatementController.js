@@ -130,12 +130,23 @@ class IncomeStatementController {
                         status: 'posted',
                         'entries.accountCode': { $in: allAccountCodes }
                     },
-                    // Lease start transactions for this month
+                    // Lease start transactions for this month (by metadata)
                     {
                         source: 'rental_accrual',
                         'metadata.type': 'lease_start',
                         'metadata.accrualMonth': monthNumber + 1, // Convert 0-based to 1-based
                         'metadata.accrualYear': parseInt(period),
+                        status: 'posted',
+                        'entries.accountCode': { $in: allAccountCodes }
+                    },
+                    // Lease start transactions for this month (by date and description)
+                    {
+                        source: 'rental_accrual',
+                        description: { $regex: /lease start/i },
+                        date: { 
+                            $gte: startOfMonth,
+                            $lte: endOfMonth
+                        },
                         status: 'posted',
                         'entries.accountCode': { $in: allAccountCodes }
                     },
@@ -204,10 +215,23 @@ class IncomeStatementController {
                 }
                 
                 // For lease start transactions, check if they're in the requested month
-                if (transaction.metadata?.type === 'lease_start') {
-                    const transactionMonth = transaction.metadata?.month;
-                    const expectedMonth = `${period}-${String(monthNumber + 1).padStart(2, '0')}`;
-                    return transactionMonth === expectedMonth;
+                // Lease start transactions can be identified by:
+                // 1. metadata.type === 'lease_start' with accrualMonth/accrualYear
+                // 2. metadata.type === 'lease_start' with date in the requested month
+                // 3. Description contains "Lease start" and date in the requested month
+                if (transaction.metadata?.type === 'lease_start' || 
+                    (transaction.description && transaction.description.toLowerCase().includes('lease start'))) {
+                    // Check if it has accrualMonth/accrualYear metadata
+                    if (transaction.metadata?.accrualMonth && transaction.metadata?.accrualYear) {
+                        const accrualMonth = transaction.metadata.accrualMonth;
+                        const accrualYear = transaction.metadata.accrualYear;
+                        return accrualMonth === (monthNumber + 1) && accrualYear === parseInt(period);
+                    }
+                    // Otherwise, check if the transaction date is in the requested month
+                    const transactionDate = new Date(transaction.date);
+                    const transactionYear = transactionDate.getFullYear();
+                    const transactionMonth = transactionDate.getMonth() + 1;
+                    return transactionYear === parseInt(period) && transactionMonth === (monthNumber + 1);
                 }
                 
                 // For negotiated payment adjustments, check if they're for the requested month

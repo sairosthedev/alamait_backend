@@ -2181,11 +2181,11 @@ class FinancialReportsController {
                 }
             } else {
                 account = await Account.findOne({ code: accountCode });
-                if (!account) {
-                    return res.status(404).json({
-                        success: false,
-                        message: 'Account not found'
-                    });
+            if (!account) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Account not found'
+                });
                 }
             }
             
@@ -2341,13 +2341,24 @@ class FinancialReportsController {
             
             let query = {};
             
-            // For income accounts, we need to show payment transactions (cash received)
-            // Payment transactions don't have the income account code directly - they have cash (1000) and AR (1100-...)
+            // For income accounts, we need to show:
+            // 1. Payment transactions (cash received) - these have cash (1000) and AR (1100-...)
+            // 2. Accrual transactions (income earned) - these have the income account code (4001) directly
             if (account.type === 'Income') {
-                // Query payment transactions that have cash entries (cash received)
+                // Query both payment transactions (cash received) AND accrual transactions (income earned)
                 query = {
-                    'entries.accountCode': { $regex: '^1000' }, // Has cash account entry
-                    source: { $in: ['payment', 'accounts_receivable_collection'] },
+                    $or: [
+                        {
+                            // Payment transactions: cash received
+                            'entries.accountCode': { $regex: '^1000' }, // Has cash account entry
+                            source: { $in: ['payment', 'accounts_receivable_collection'] }
+                        },
+                        {
+                            // Accrual transactions: income earned (lease start, monthly accruals)
+                            'entries.accountCode': accountCode, // Has the income account code directly
+                            source: { $in: ['rental_accrual', 'expense_accrual'] }
+                        }
+                    ],
                     status: { $nin: ['reversed', 'draft'] }
                 };
             } else if (account.type === 'Expense') {
@@ -2385,17 +2396,35 @@ class FinancialReportsController {
             } else {
                 // For non-income accounts, query by account code directly
                 query = {
-                    'entries.accountCode': accountCode,
-                    status: { $nin: ['reversed', 'draft'] }
-                };
+                'entries.accountCode': accountCode,
+                status: { $nin: ['reversed', 'draft'] }
+            };
             }
             
             // Add date filter if period is specified
             if (period && period.length === 4) {
                 // Year filter
-                const startDate = new Date(`${period}-01-01`);
-                const endDate = new Date(`${period}-12-31`);
-                query.date = { $gte: startDate, $lte: endDate };
+                if (month) {
+                    // Month name provided (e.g., "october")
+                    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+                    const monthIndex = monthNames.indexOf(month.toLowerCase());
+                    if (monthIndex !== -1) {
+                        // Specific month within the year
+                        const startDate = new Date(parseInt(period), monthIndex, 1);
+                        const endDate = new Date(parseInt(period), monthIndex + 1, 0); // Last day of the month
+                        query.date = { $gte: startDate, $lte: endDate };
+                    } else {
+                        // Year only
+                        const startDate = new Date(`${period}-01-01`);
+                        const endDate = new Date(`${period}-12-31`);
+                        query.date = { $gte: startDate, $lte: endDate };
+                    }
+                } else {
+                    // Year only
+                    const startDate = new Date(`${period}-01-01`);
+                    const endDate = new Date(`${period}-12-31`);
+                    query.date = { $gte: startDate, $lte: endDate };
+                }
             } else if (period && period.includes('-')) {
                 // Month filter (YYYY-MM)
                 const startDate = new Date(`${period}-01`);
@@ -2407,27 +2436,46 @@ class FinancialReportsController {
                 .sort({ date: -1 })
                 .limit(500); // Get more transactions to filter by description
             
-            // For income accounts, ensure we only include transactions with cash entries and match description
+            // For income accounts, include both payment transactions (cash received) and accrual transactions (income earned)
             if (account.type === 'Income') {
                 transactions = transactions.filter(tx => {
-                    // Must have a cash account entry (1000 series) indicating cash was received
+                    // Check if this is an accrual transaction (has the income account code directly)
+                    const incomeEntry = tx.entries.find(e => e.accountCode === accountCode);
+                    if (incomeEntry && (incomeEntry.credit > 0 || incomeEntry.debit > 0)) {
+                        // This is an accrual transaction - include it
+                        // Filter by description to match the income account type
+                        const description = (tx.description || '').toLowerCase();
+                        if (accountCode === '4001') {
+                            // Rent income - look for "rent", "lease", "accrual" in description
+                            return description.includes('rent') || 
+                                   description.includes('lease') || 
+                                   description.includes('accrual') ||
+                                   description.includes('income');
+                        } else if (accountCode === '4002') {
+                            // Admin fees - look for "admin" or "fee" in description
+                            return description.includes('admin') || description.includes('fee');
+                        }
+                        // For other income accounts, include all accrual transactions
+                        return true;
+                    }
+                    
+                    // Otherwise, check if this is a payment transaction (cash received)
                     const cashEntry = tx.entries.find(e => e.accountCode.match(/^1000/));
-                    if (!cashEntry || cashEntry.debit <= 0) {
-                        return false;
+                    if (cashEntry && cashEntry.debit > 0) {
+                        // This is a payment transaction - filter by description
+                        const description = (tx.description || '').toLowerCase();
+                        if (accountCode === '4001') {
+                            // Rent income - look for "rent" in description
+                            return description.includes('rent');
+                        } else if (accountCode === '4002') {
+                            // Admin fees - look for "admin" or "fee" in description
+                            return description.includes('admin') || description.includes('fee');
+                        }
+                        // For other income accounts, include all payment transactions
+                        return true;
                     }
                     
-                    // Filter by description to match the income account type
-                    const description = (tx.description || '').toLowerCase();
-                    if (accountCode === '4001') {
-                        // Rent income - look for "rent" in description
-                        return description.includes('rent');
-                    } else if (accountCode === '4002') {
-                        // Admin fees - look for "admin" or "fee" in description
-                        return description.includes('admin') || description.includes('fee');
-                    }
-                    
-                    // For other income accounts, include all payment transactions
-                    return true;
+                    return false;
                 });
                 
                 // Limit to 100 after filtering
@@ -2509,9 +2557,21 @@ class FinancialReportsController {
                 }
                 
                 if (account.type === 'Income') {
-                    // For income accounts, use cash received amount (cash debit)
+                    // For income accounts, handle both:
+                    // 1. Payment transactions (cash received) - cash debit
+                    // 2. Accrual transactions (income earned) - income account credit
+                    const incomeEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
                     const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
-                    if (cashEntry && cashEntry.debit > 0) {
+                    
+                    if (incomeEntry && incomeEntry.credit > 0) {
+                        // This is an accrual transaction - use income account credit (income earned)
+                        const incomeAmount = incomeEntry.credit || 0;
+                        monthlyBreakdown[monthKey].totalDebit += incomeEntry.debit || 0;
+                        monthlyBreakdown[monthKey].totalCredit += incomeAmount; // Income earned = credit
+                        monthlyBreakdown[monthKey].netAmount += incomeAmount - (incomeEntry.debit || 0); // Net = credit - debit
+                        monthlyBreakdown[monthKey].transactionCount += 1;
+                    } else if (cashEntry && cashEntry.debit > 0) {
+                        // This is a payment transaction - use cash received amount (cash debit)
                         const cashAmount = cashEntry.debit || 0;
                         monthlyBreakdown[monthKey].totalDebit += 0; // Income accounts don't have debits
                         monthlyBreakdown[monthKey].totalCredit += cashAmount; // Cash received = income credit
@@ -2546,14 +2606,14 @@ class FinancialReportsController {
                     }
                 } else if (account.type === 'Expense') {
                     // For expense accounts, use the expense account entry or cash entry
-                    const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
+                const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
                     const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
                     
-                    if (accountEntry) {
+                if (accountEntry) {
                         // Direct expense account entry - use debit amount (expenses increase with debits)
                         const expenseAmount = accountEntry.debit || 0;
                         monthlyBreakdown[monthKey].totalDebit += expenseAmount;
-                        monthlyBreakdown[monthKey].totalCredit += accountEntry.credit || 0;
+                    monthlyBreakdown[monthKey].totalCredit += accountEntry.credit || 0;
                         // For expenses: netAmount = debit - credit (debits increase expenses)
                         monthlyBreakdown[monthKey].netAmount += expenseAmount - (accountEntry.credit || 0);
                         monthlyBreakdown[monthKey].transactionCount += 1;
@@ -2565,7 +2625,7 @@ class FinancialReportsController {
                         monthlyBreakdown[monthKey].netAmount += cashAmount; // Net amount = expense amount
                         monthlyBreakdown[monthKey].transactionCount += 1;
                     }
-                } else {
+                    } else {
                     // For all other accounts (assets, liabilities, equity, etc.), use the account entry directly
                     const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
                     if (accountEntry) {
@@ -2576,13 +2636,13 @@ class FinancialReportsController {
                         // For assets: netAmount = debit - credit (debits increase)
                         // For liabilities, equity, and income: netAmount = credit - debit (credits increase)
                         if (account.type === 'Asset') {
-                            monthlyBreakdown[monthKey].netAmount += (accountEntry.debit || 0) - (accountEntry.credit || 0);
+                        monthlyBreakdown[monthKey].netAmount += (accountEntry.debit || 0) - (accountEntry.credit || 0);
                         } else {
                             // Liability, Equity, Income
                             monthlyBreakdown[monthKey].netAmount += (accountEntry.credit || 0) - (accountEntry.debit || 0);
-                        }
-                        monthlyBreakdown[monthKey].transactionCount += 1;
                     }
+                    monthlyBreakdown[monthKey].transactionCount += 1;
+                }
                 }
             });
             
@@ -2633,9 +2693,9 @@ class FinancialReportsController {
                     
                     if (account.type === 'Income') {
                         // For income accounts, cash received is when cash account is debited
-                        if (cashEntry) {
+                    if (cashEntry) {
                             // Cash is debited (money coming in) - this is the cash received amount
-                            amount = cashEntry.debit || 0;
+                        amount = cashEntry.debit || 0;
                             type = 'debit'; // Cash debit means cash received
                         } else if (accountEntry && accountEntry.credit > 0) {
                             // Fallback: if no cash entry, use income account credit (income recognized = cash received)
@@ -2659,7 +2719,7 @@ class FinancialReportsController {
                             // Use deposit account credit (liability increases = cash received)
                             amount = depositEntry.credit || 0;
                             type = 'credit';
-                        } else if (accountEntry) {
+                    } else if (accountEntry) {
                             // Fallback to requested account code entry
                             amount = accountEntry.credit || 0;
                             type = 'credit';
@@ -2678,8 +2738,8 @@ class FinancialReportsController {
                             }
                         } else if (accountEntry) {
                             // Use account entry amount directly
-                            amount = accountEntry.debit || accountEntry.credit || 0;
-                            type = accountEntry.debit > 0 ? 'debit' : 'credit';
+                        amount = accountEntry.debit || accountEntry.credit || 0;
+                        type = accountEntry.debit > 0 ? 'debit' : 'credit';
                         }
                     }
                     

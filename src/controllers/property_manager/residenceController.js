@@ -148,8 +148,14 @@ exports.updateRoom = async (req, res) => {
             return res.status(404).json({ error: 'Room not found' });
         }
 
-        // Update allowed room fields
-        const allowedUpdates = ['type', 'price', 'status', 'features'];
+        const oldRoomNumber = residence.rooms[roomIndex].roomNumber;
+        const newRoomNumber = req.body.roomNumber;
+
+        // Check if room number is being changed
+        const roomNumberChanged = newRoomNumber && newRoomNumber !== oldRoomNumber;
+
+        // Update allowed room fields (including roomNumber if provided)
+        const allowedUpdates = ['type', 'price', 'status', 'features', 'roomNumber'];
         allowedUpdates.forEach(update => {
             if (req.body[update] !== undefined) {
                 residence.rooms[roomIndex][update] = req.body[update];
@@ -157,7 +163,28 @@ exports.updateRoom = async (req, res) => {
         });
 
         await residence.save();
-        res.json(residence.rooms[roomIndex]);
+
+        // Cascade update all related documents if room number changed
+        let cascadeUpdateResult = null;
+        if (roomNumberChanged) {
+            try {
+                const RoomUpdateService = require('../../services/roomUpdateService');
+                cascadeUpdateResult = await RoomUpdateService.cascadeUpdateRoomNumber(
+                    req.params.residenceId,
+                    oldRoomNumber,
+                    newRoomNumber
+                );
+                console.log('✅ Cascade update completed:', cascadeUpdateResult);
+            } catch (cascadeError) {
+                console.error('⚠️ Error in cascade update (room still updated):', cascadeError);
+                // Don't fail the request if cascade update fails, but log it
+            }
+        }
+
+        res.json({
+            ...residence.rooms[roomIndex].toObject(),
+            cascadeUpdate: cascadeUpdateResult || undefined
+        });
     } catch (error) {
         console.error('Update room error:', error);
         res.status(500).json({ error: 'Error updating room' });

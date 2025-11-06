@@ -111,7 +111,13 @@ router.get('/transaction-history/:sourceType/:sourceId', TransactionController.g
 router.put('/entries/:id', TransactionController.updateTransactionEntry);
 
 /**
- * Delete transaction entry
+ * Delete individual entry from entries array within a TransactionEntry
+ * DELETE /api/finance/transactions/entries/:id/entry/:entryId
+ */
+router.delete('/entries/:id/entry/:entryId', TransactionController.deleteEntryFromTransactionEntry);
+
+/**
+ * Delete transaction entry (entire document)
  * DELETE /api/finance/transactions/entries/:id
  */
 router.delete('/entries/:id', TransactionController.deleteTransactionEntry);

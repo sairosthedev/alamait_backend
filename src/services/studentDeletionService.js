@@ -34,6 +34,7 @@ const OtherIncome = require('../models/finance/OtherIncome');
 const Account = require('../models/Account');
 
 const { createAuditLog } = require('../utils/auditLogger');
+const DeletionLogService = require('./deletionLogService');
 
 class StudentDeletionService {
     /**
@@ -99,10 +100,12 @@ class StudentDeletionService {
 
                 // Delete from all collections in the correct order (dependencies first)
                 const deletionPlan = [
-                    // Step 1: Delete transaction-related data (multiple patterns)
-                    { collection: 'TransactionEntry', field: 'reference', description: 'Transaction entries (by reference)' },
-                    { special: 'deleteTransactionEntriesAdvanced', description: 'Transaction entries (advanced patterns)' },
-                    { collection: 'Transaction', field: 'reference', description: 'Transactions' },
+                    // Step 1: Delete transaction-related data (ONLY by explicit ID references - no fuzzy matching)
+                    { special: 'deleteTransactionEntriesByMetadata', description: 'Transaction entries (by metadata.studentId only - safest)' },
+                    { collection: 'TransactionEntry', field: 'reference', description: 'Transaction entries (by reference - exact match only)' },
+                    { special: 'deleteAccrualTransactions', description: 'Accrual transaction entries (by explicit student ID only)' },
+                    { special: 'deleteNegotiationTransactions', description: 'Negotiation transaction entries (by explicit student ID only)' },
+                    { collection: 'Transaction', field: 'reference', description: 'Transactions (by reference - exact match only)' },
                     
                     // Step 2: Delete financial records (delete payment-related transactions BEFORE payments)
                     { special: 'deletePaymentRelatedTransactions', description: 'Payment-related transaction entries' },
@@ -153,9 +156,9 @@ class StudentDeletionService {
                 for (const step of deletionPlan) {
                     try {
                         if (step.special) {
-                            await this.handleSpecialDeletion(step.special, student, session, deletionSummary);
+                            await this.handleSpecialDeletion(step.special, student, session, deletionSummary, adminUser);
                         } else {
-                            await this.deleteFromCollection(step.collection, step.field, actualStudentId, session, deletionSummary, step.description);
+                            await this.deleteFromCollection(step.collection, step.field, actualStudentId, session, deletionSummary, step.description, adminUser);
                         }
                     } catch (error) {
                         console.error(`❌ Error in step ${step.description}:`, error.message);
@@ -204,6 +207,22 @@ class StudentDeletionService {
                 $or: [{ student: student._id }, { user: student._id }] 
             }).lean().session(session);
             const debtor = await Debtor.findOne({ user: student._id }).lean().session(session);
+            
+            // IMPORTANT: Archive transaction entries before deletion
+            // Get all transaction entries that will be deleted
+            const studentId = student._id.toString();
+            const studentIdObj = student._id;
+            
+            const transactionEntries = await TransactionEntry.find({
+                $or: [
+                    { 'metadata.studentId': studentId },
+                    { reference: studentId },
+                    { reference: studentIdObj },
+                    { sourceId: studentIdObj }
+                ]
+            }).lean().session(session);
+            
+            console.log(`📦 Archiving ${transactionEntries.length} transaction entries...`);
 
             // Create comprehensive archive
             const archiveData = {
@@ -217,10 +236,12 @@ class StudentDeletionService {
                 payments,
                 debtor,
                 bookings,
+                transactionEntries: transactionEntries, // Archive transaction entries
                 archiveMetadata: {
                     deletedBy: deletionSummary.adminUserId || 'system',
                     deletionType: 'comprehensive',
-                    totalRelatedRecords: bookings.length + payments.length + leases.length
+                    totalRelatedRecords: bookings.length + payments.length + leases.length + transactionEntries.length,
+                    transactionEntryCount: transactionEntries.length
                 }
             };
 
@@ -239,8 +260,9 @@ class StudentDeletionService {
 
     /**
      * Delete records from a specific collection
+     * Logs all deleted records to deletions collection
      */
-    static async deleteFromCollection(collectionName, fieldName, studentId, session, deletionSummary, description) {
+    static async deleteFromCollection(collectionName, fieldName, studentId, session, deletionSummary, description, adminUser) {
         try {
             const Model = this.getModel(collectionName);
             if (!Model) {
@@ -252,21 +274,52 @@ class StudentDeletionService {
             if (fieldName === '_id') {
                 query._id = studentId;
             } else if (fieldName === 'reference') {
-                // For transactions, the reference field contains student ID as string
+                // For transactions, the reference field contains student ID as string (exact match only)
                 query.reference = studentId.toString();
             } else {
                 query[fieldName] = studentId;
             }
 
-            const deleteResult = await Model.deleteMany(query).session(session);
+            // Fetch records before deletion to log them
+            const recordsToDelete = await Model.find(query).lean().session(session);
             
-            if (deleteResult.deletedCount > 0) {
-                deletionSummary.deletedCollections[collectionName] = {
-                    count: deleteResult.deletedCount,
-                    field: fieldName,
-                    description
-                };
-                console.log(`🗑️ Deleted ${deleteResult.deletedCount} records from ${collectionName} (${description})`);
+            if (recordsToDelete.length > 0) {
+                // Log each deleted record to deletions collection
+                for (const record of recordsToDelete) {
+                    try {
+                        await DeletionLogService.logDeletion({
+                            modelName: collectionName,
+                            documentId: record._id,
+                            deletedData: record,
+                            deletedBy: adminUser._id,
+                            reason: `Student deletion: ${deletionSummary.studentInfo?.name || studentId}`,
+                            context: 'cascade_delete',
+                            metadata: {
+                                studentId: studentId.toString(),
+                                deletionType: 'comprehensive_student_deletion',
+                                field: fieldName,
+                                description: description
+                            },
+                            session: session
+                        });
+                    } catch (logError) {
+                        console.error(`⚠️ Error logging deletion for ${collectionName} (${record._id}):`, logError.message);
+                        // Don't fail deletion if logging fails
+                    }
+                }
+
+                // Now delete the records
+                const deleteResult = await Model.deleteMany(query).session(session);
+                
+                if (deleteResult.deletedCount > 0) {
+                    deletionSummary.deletedCollections[collectionName] = {
+                        count: deleteResult.deletedCount,
+                        field: fieldName,
+                        description,
+                        loggedToDeletions: recordsToDelete.length
+                    };
+                    console.log(`🗑️ Deleted ${deleteResult.deletedCount} records from ${collectionName} (${description}) - Logged to deletions collection`);
+                }
             }
 
         } catch (error) {
@@ -278,7 +331,7 @@ class StudentDeletionService {
     /**
      * Handle special deletion cases
      */
-    static async handleSpecialDeletion(type, student, session, deletionSummary) {
+    static async handleSpecialDeletion(type, student, session, deletionSummary, adminUser) {
         switch (type) {
             case 'updateResidenceOccupancy':
                 await this.updateResidenceOccupancy(student, session, deletionSummary);
@@ -287,10 +340,19 @@ class StudentDeletionService {
                 await this.deleteTransactionEntriesAdvanced(student, session, deletionSummary);
                 break;
             case 'deleteStudentSpecificAccounts':
-                await this.deleteStudentSpecificAccounts(student, session, deletionSummary);
+                await this.deleteStudentSpecificAccounts(student, session, deletionSummary, adminUser);
                 break;
             case 'deletePaymentRelatedTransactions':
-                await this.deletePaymentRelatedTransactions(student, session, deletionSummary);
+                await this.deletePaymentRelatedTransactions(student, session, deletionSummary, adminUser);
+                break;
+            case 'deleteAccrualTransactions':
+                await this.deleteAccrualTransactions(student, session, deletionSummary, adminUser);
+                break;
+            case 'deleteNegotiationTransactions':
+                await this.deleteNegotiationTransactions(student, session, deletionSummary, adminUser);
+                break;
+            case 'deleteTransactionEntriesByMetadata':
+                await this.deleteTransactionEntriesByMetadata(student, session, deletionSummary, adminUser);
                 break;
             default:
                 console.log(`⚠️ Unknown special deletion type: ${type}`);
@@ -298,135 +360,162 @@ class StudentDeletionService {
     }
 
     /**
-     * Delete transaction entries using advanced patterns
+     * Delete transaction entries by metadata.studentId only (safest method)
+     * ONLY uses explicit student ID - no description/regex matching
      */
-    static async deleteTransactionEntriesAdvanced(student, session, deletionSummary) {
+    static async deleteTransactionEntriesByMetadata(student, session, deletionSummary, adminUser) {
         try {
             const studentId = student._id.toString();
-            const studentEmail = student.email;
-            const studentName = `${student.firstName} ${student.lastName}`;
             
-            console.log(`🔍 Advanced transaction entry deletion for: ${studentEmail}`);
+            console.log(`🔍 Deleting transaction entries by metadata.studentId for: ${student.email} (ID-based only)`);
             
-            // Pattern 1: Reference contains student ID as ObjectId
-            const pattern1 = await TransactionEntry.deleteMany({
-                reference: new mongoose.Types.ObjectId(studentId)
-            }).session(session);
+            // Fetch records before deletion to log them
+            const recordsToDelete = await TransactionEntry.find({
+                'metadata.studentId': studentId
+            }).lean().session(session);
             
-            // Pattern 2: Reference contains student ID as string
-            const pattern2 = await TransactionEntry.deleteMany({
-                reference: studentId
-            }).session(session);
+            // Log each deleted record to deletions collection BEFORE deletion
+            let loggedCount = 0;
+            for (const record of recordsToDelete) {
+                try {
+                    // Double-check: verify this record actually belongs to this student
+                    const recordStudentId = record.metadata?.studentId;
+                    if (!recordStudentId || recordStudentId !== studentId) {
+                        console.warn(`⚠️ Skipping record ${record._id} - metadata.studentId (${recordStudentId}) doesn't match student ID (${studentId})`);
+                        continue;
+                    }
+                    
+                    await DeletionLogService.logDeletion({
+                        modelName: 'TransactionEntry',
+                        documentId: record._id,
+                        deletedData: record,
+                        deletedBy: adminUser._id,
+                        reason: `Student deletion: ${student.email}`,
+                        context: 'cascade_delete',
+                        metadata: {
+                            studentId: studentId,
+                            deletionType: 'transaction_entry_by_metadata',
+                            transactionId: record.transactionId,
+                            source: record.source
+                        },
+                        session: session
+                    });
+                    loggedCount++;
+                } catch (logError) {
+                    console.error(`⚠️ Error logging deletion for TransactionEntry (${record._id}):`, logError.message);
+                    console.error(`   Full error:`, logError);
+                    // Don't fail deletion if logging fails, but log the error
+                }
+            }
             
-            // Pattern 3: Description contains student email
-            const pattern3 = await TransactionEntry.deleteMany({
-                description: { $regex: studentEmail, $options: 'i' }
-            }).session(session);
+            // Only delete transactions where metadata.studentId explicitly matches (ID-based only)
+            // Only delete records that were successfully logged (safety check)
+            const recordsToDeleteIds = recordsToDelete
+                .filter(r => {
+                    const recordStudentId = r.metadata?.studentId;
+                    return recordStudentId === studentId;
+                })
+                .map(r => r._id);
             
-            // Pattern 4: Description contains student name
-            const pattern4 = await TransactionEntry.deleteMany({
-                description: { $regex: studentName, $options: 'i' }
-            }).session(session);
+            const result = recordsToDeleteIds.length > 0 
+                ? await TransactionEntry.deleteMany({ _id: { $in: recordsToDeleteIds } }).session(session)
+                : { deletedCount: 0 };
             
-            // Pattern 5: Reference contains PAYMENT- prefix with student ID
-            const pattern5 = await TransactionEntry.deleteMany({
-                reference: { $regex: `PAYMENT.*${studentId}`, $options: 'i' }
-            }).session(session);
-            
-            // Pattern 6: Any field that might contain the student ID
-            const pattern6 = await TransactionEntry.deleteMany({
-                $or: [
-                    { relatedDocument: studentId },
-                    { relatedDocument: new mongoose.Types.ObjectId(studentId) },
-                    { metadata: { $regex: studentId, $options: 'i' } }
-                ]
-            }).session(session);
-            
-            const totalDeleted = pattern1.deletedCount + pattern2.deletedCount + 
-                               pattern3.deletedCount + pattern4.deletedCount + 
-                               pattern5.deletedCount + pattern6.deletedCount;
-            
-            if (totalDeleted > 0) {
-                if (!deletionSummary.deletedCollections['TransactionEntry (Advanced)']) {
-                    deletionSummary.deletedCollections['TransactionEntry (Advanced)'] = {
+            if (result.deletedCount > 0) {
+                if (!deletionSummary.deletedCollections['TransactionEntry (By Metadata)']) {
+                    deletionSummary.deletedCollections['TransactionEntry (By Metadata)'] = {
                         count: 0,
-                        description: 'Transaction entries (advanced patterns)'
+                        description: 'Transaction entries (by metadata.studentId only - ID-based)',
+                        loggedToDeletions: 0
                     };
                 }
-                deletionSummary.deletedCollections['TransactionEntry (Advanced)'].count += totalDeleted;
+                deletionSummary.deletedCollections['TransactionEntry (By Metadata)'].count += result.deletedCount;
+                deletionSummary.deletedCollections['TransactionEntry (By Metadata)'].loggedToDeletions = loggedCount;
                 
-                console.log(`🗑️ Advanced transaction entry deletion: ${totalDeleted} entries`);
-                console.log(`  - ObjectId reference: ${pattern1.deletedCount}`);
-                console.log(`  - String reference: ${pattern2.deletedCount}`);
-                console.log(`  - Email in description: ${pattern3.deletedCount}`);
-                console.log(`  - Name in description: ${pattern4.deletedCount}`);
-                console.log(`  - Payment reference: ${pattern5.deletedCount}`);
-                console.log(`  - Other patterns: ${pattern6.deletedCount}`);
+                console.log(`🗑️ Deleted ${result.deletedCount} transaction entries by metadata.studentId - Logged ${loggedCount} to deletions collection`);
             }
             
         } catch (error) {
-            console.error('❌ Error in advanced transaction entry deletion:', error);
+            console.error('❌ Error in metadata-based transaction entry deletion:', error);
             throw error;
         }
     }
 
     /**
-     * Delete student-specific accounts from the Account collection
+     * Delete transaction entries using advanced patterns
+     * REMOVED - This function is no longer used to prevent deleting unrelated transactions
+     * Only explicit ID-based matching is now used
      */
-    static async deleteStudentSpecificAccounts(student, session, deletionSummary) {
+    static async deleteTransactionEntriesAdvanced(student, session, deletionSummary) {
+        // This function is disabled - we only use explicit ID matching now
+        console.log(`⚠️ Advanced transaction entry deletion skipped - using only explicit ID matching`);
+        return;
+    }
+
+    /**
+     * Delete student-specific accounts from the Account collection
+     * ONLY by explicit student ID in account code - no name/description matching
+     */
+    static async deleteStudentSpecificAccounts(student, session, deletionSummary, adminUser) {
         try {
             const studentId = student._id.toString();
             const studentEmail = student.email;
             const studentName = `${student.firstName} ${student.lastName}`;
             
-            console.log(`🔍 Deleting student-specific accounts for: ${studentEmail}`);
+            console.log(`🔍 Deleting student-specific accounts for: ${studentEmail} (ID-based only)`);
             
-            // Pattern 1: Code contains student ID (1100-{studentId})
-            const pattern1 = await Account.deleteMany({
-                code: { $regex: studentId, $options: 'i' }
-            }).session(session);
+            // ONLY delete accounts where code exactly matches the student-specific AR account format
+            // Account codes are like "1100-{studentId}" - we use EXACT string matching only
+            // No regex - only exact match to prevent deleting unrelated accounts
+            const exactAccountCode = `1100-${studentId}`;
+            const accountQuery = {
+                code: exactAccountCode  // Exact string match only - no regex
+            };
             
-            // Pattern 2: Name contains student name
-            const pattern2 = await Account.deleteMany({
-                name: { $regex: studentName, $options: 'i' }
-            }).session(session);
+            // Fetch records before deletion to log them
+            const recordsToDelete = await Account.find(accountQuery).lean().session(session);
             
-            // Pattern 3: Description indicates student-specific
-            const pattern3 = await Account.deleteMany({
-                description: { $regex: 'Student-specific', $options: 'i' },
-                $or: [
-                    { code: { $regex: studentId, $options: 'i' } },
-                    { name: { $regex: studentName, $options: 'i' } }
-                ]
-            }).session(session);
+            // Log each deleted record to deletions collection
+            let loggedCount = 0;
+            for (const record of recordsToDelete) {
+                try {
+                    await DeletionLogService.logDeletion({
+                        modelName: 'Account',
+                        documentId: record._id,
+                        deletedData: record,
+                        deletedBy: adminUser._id,
+                        reason: `Student deletion: ${student.email}`,
+                        context: 'cascade_delete',
+                        metadata: {
+                            studentId: studentId,
+                            deletionType: 'student_specific_account',
+                            accountCode: record.code,
+                            accountName: record.name
+                        },
+                        session: session
+                    });
+                    loggedCount++;
+                } catch (logError) {
+                    console.error(`⚠️ Error logging deletion for Account (${record._id}):`, logError.message);
+                    // Don't fail deletion if logging fails
+                }
+            }
             
-            // Pattern 4: Subcategory is "Accounts Receivable" and contains student info
-            const pattern4 = await Account.deleteMany({
-                subcategory: 'Accounts Receivable',
-                $or: [
-                    { code: { $regex: studentId, $options: 'i' } },
-                    { name: { $regex: studentName, $options: 'i' } },
-                    { name: { $regex: studentEmail, $options: 'i' } }
-                ]
-            }).session(session);
+            // Now delete the accounts (ID-based only - code contains student ID)
+            const result = await Account.deleteMany(accountQuery).session(session);
             
-            const totalDeleted = pattern1.deletedCount + pattern2.deletedCount + 
-                               pattern3.deletedCount + pattern4.deletedCount;
-            
-            if (totalDeleted > 0) {
+            if (result.deletedCount > 0) {
                 if (!deletionSummary.deletedCollections['Account (Student-Specific)']) {
                     deletionSummary.deletedCollections['Account (Student-Specific)'] = {
                         count: 0,
-                        description: 'Student-specific AR control accounts'
+                        description: 'Student-specific AR control accounts (ID-based only)',
+                        loggedToDeletions: 0
                     };
                 }
-                deletionSummary.deletedCollections['Account (Student-Specific)'].count += totalDeleted;
+                deletionSummary.deletedCollections['Account (Student-Specific)'].count += result.deletedCount;
+                deletionSummary.deletedCollections['Account (Student-Specific)'].loggedToDeletions = loggedCount;
                 
-                console.log(`🗑️ Student-specific account deletion: ${totalDeleted} accounts`);
-                console.log(`  - Code pattern: ${pattern1.deletedCount}`);
-                console.log(`  - Name pattern: ${pattern2.deletedCount}`);
-                console.log(`  - Description pattern: ${pattern3.deletedCount}`);
-                console.log(`  - AR subcategory: ${pattern4.deletedCount}`);
+                console.log(`🗑️ Student-specific account deletion: ${result.deletedCount} accounts (ID-based only) - Logged ${loggedCount} to deletions collection`);
             }
             
         } catch (error) {
@@ -437,13 +526,14 @@ class StudentDeletionService {
 
     /**
      * Delete payment-related transaction entries
+     * ONLY by explicit payment ID or student ID - no description matching
      */
-    static async deletePaymentRelatedTransactions(student, session, deletionSummary) {
+    static async deletePaymentRelatedTransactions(student, session, deletionSummary, adminUser) {
         try {
             const studentId = student._id.toString();
             const studentIdObj = student._id;
             
-            console.log(`🔍 Deleting payment-related transaction entries for: ${student.email}`);
+            console.log(`🔍 Deleting payment-related transaction entries for: ${student.email} (ID-based only)`);
             
             // First, get all payment IDs for this student
             const payments = await Payment.find({
@@ -458,76 +548,358 @@ class StudentDeletionService {
             
             console.log(`   📊 Found ${paymentIds.length} payments for this student`);
             
-            // Pattern 1: Transaction entries with source='payment' and sourceId pointing to a payment
-            const pattern1 = paymentIds.length > 0 ? await TransactionEntry.deleteMany({
-                source: 'payment',
-                sourceModel: 'Payment',
-                sourceId: { $in: paymentIds }
-            }).session(session) : { deletedCount: 0 };
-            
-            // Pattern 2: Transaction entries with metadata.paymentId matching any payment
-            const pattern2 = paymentIdStrings.length > 0 ? await TransactionEntry.deleteMany({
-                'metadata.paymentId': { $in: paymentIdStrings }
-            }).session(session) : { deletedCount: 0 };
-            
-            // Pattern 3: Transaction entries with metadata.paymentAllocation.paymentId
-            const pattern3 = paymentIdStrings.length > 0 ? await TransactionEntry.deleteMany({
-                'metadata.paymentAllocation.paymentId': { $in: paymentIdStrings }
-            }).session(session) : { deletedCount: 0 };
-            
-            // Pattern 4: Transaction entries with source='payment' and metadata.studentId matching
-            const pattern4 = await TransactionEntry.deleteMany({
-                source: 'payment',
-                'metadata.studentId': studentId
-            }).session(session);
-            
-            // Pattern 5: Transaction entries with reference containing payment IDs
-            const pattern5 = paymentIdStrings.length > 0 ? await TransactionEntry.deleteMany({
-                $or: paymentIdStrings.map(paymentId => ({
-                    reference: { $regex: paymentId, $options: 'i' }
-                }))
-            }).session(session) : { deletedCount: 0 };
-            
-            // Pattern 6: Transaction entries with description containing payment-related info
-            const pattern6 = await TransactionEntry.deleteMany({
-                source: 'payment',
+            // Build query for all payment-related transactions (ID-based only)
+            const paymentQuery = {
                 $or: [
-                    { description: { $regex: student.email, $options: 'i' } },
-                    { description: { $regex: `${student.firstName} ${student.lastName}`, $options: 'i' } }
+                    // Pattern 1: sourceId pointing to a payment (explicit payment ID)
+                    ...(paymentIds.length > 0 ? [{
+                        source: 'payment',
+                        sourceModel: 'Payment',
+                        sourceId: { $in: paymentIds }
+                    }] : []),
+                    // Pattern 2: metadata.paymentId matching any payment (explicit payment ID)
+                    ...(paymentIdStrings.length > 0 ? [{
+                        'metadata.paymentId': { $in: paymentIdStrings }
+                    }] : []),
+                    // Pattern 3: metadata.paymentAllocation.paymentId (explicit payment ID)
+                    ...(paymentIdStrings.length > 0 ? [{
+                        'metadata.paymentAllocation.paymentId': { $in: paymentIdStrings }
+                    }] : []),
+                    // Pattern 4: source='payment' and metadata.studentId matching (explicit student ID)
+                    {
+                        source: 'payment',
+                        'metadata.studentId': studentId
+                    },
+                    // Pattern 5: reference exactly matching payment IDs (exact match only)
+                    ...(paymentIdStrings.length > 0 ? [{
+                        reference: { $in: paymentIdStrings }
+                    }] : []),
+                    // Pattern 6: metadata.paymentAllocation.studentId (explicit student ID)
+                    {
+                        'metadata.paymentAllocation.studentId': studentId
+                    }
                 ]
-            }).session(session);
+            };
             
-            // Pattern 7: Transaction entries with metadata.paymentAllocation.studentId
-            const pattern7 = await TransactionEntry.deleteMany({
-                'metadata.paymentAllocation.studentId': studentId
-            }).session(session);
+            // Fetch records before deletion to log them
+            const recordsToDelete = await TransactionEntry.find(paymentQuery).lean().session(session);
             
-            const totalDeleted = pattern1.deletedCount + pattern2.deletedCount + 
-                               pattern3.deletedCount + pattern4.deletedCount + 
-                               pattern5.deletedCount + pattern6.deletedCount + 
-                               pattern7.deletedCount;
+            // Log each deleted record to deletions collection
+            let loggedCount = 0;
+            for (const record of recordsToDelete) {
+                try {
+                    await DeletionLogService.logDeletion({
+                        modelName: 'TransactionEntry',
+                        documentId: record._id,
+                        deletedData: record,
+                        deletedBy: adminUser._id,
+                        reason: `Student deletion: ${student.email}`,
+                        context: 'cascade_delete',
+                        metadata: {
+                            studentId: studentId,
+                            deletionType: 'payment_related_transaction',
+                            transactionId: record.transactionId,
+                            source: record.source,
+                            paymentId: record.metadata?.paymentId || record.sourceId
+                        },
+                        session: session
+                    });
+                    loggedCount++;
+                } catch (logError) {
+                    console.error(`⚠️ Error logging deletion for TransactionEntry (${record._id}):`, logError.message);
+                    // Don't fail deletion if logging fails
+                }
+            }
             
-            if (totalDeleted > 0) {
+            // Now delete the records (ID-based only - no description matching)
+            const result = await TransactionEntry.deleteMany(paymentQuery).session(session);
+            
+            if (result.deletedCount > 0) {
                 if (!deletionSummary.deletedCollections['TransactionEntry (Payment-Related)']) {
                     deletionSummary.deletedCollections['TransactionEntry (Payment-Related)'] = {
                         count: 0,
-                        description: 'Payment-related transaction entries'
+                        description: 'Payment-related transaction entries (ID-based only)',
+                        loggedToDeletions: 0
                     };
                 }
-                deletionSummary.deletedCollections['TransactionEntry (Payment-Related)'].count += totalDeleted;
+                deletionSummary.deletedCollections['TransactionEntry (Payment-Related)'].count += result.deletedCount;
+                deletionSummary.deletedCollections['TransactionEntry (Payment-Related)'].loggedToDeletions = loggedCount;
                 
-                console.log(`🗑️ Payment-related transaction entry deletion: ${totalDeleted} entries`);
-                console.log(`  - By sourceId (Payment): ${pattern1.deletedCount}`);
-                console.log(`  - By metadata.paymentId: ${pattern2.deletedCount}`);
-                console.log(`  - By metadata.paymentAllocation.paymentId: ${pattern3.deletedCount}`);
-                console.log(`  - By source=payment & metadata.studentId: ${pattern4.deletedCount}`);
-                console.log(`  - By reference (paymentId): ${pattern5.deletedCount}`);
-                console.log(`  - By description (student info): ${pattern6.deletedCount}`);
-                console.log(`  - By metadata.paymentAllocation.studentId: ${pattern7.deletedCount}`);
+                console.log(`🗑️ Payment-related transaction entry deletion: ${result.deletedCount} entries (ID-based only) - Logged ${loggedCount} to deletions collection`);
             }
             
         } catch (error) {
             console.error('❌ Error in payment-related transaction entry deletion:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Delete accrual transaction entries (rental_accrual, expense_accrual)
+     * ONLY by explicit student ID - no description matching
+     */
+    static async deleteAccrualTransactions(student, session, deletionSummary, adminUser) {
+        try {
+            const studentId = student._id.toString();
+            const studentIdObj = student._id;
+            
+            console.log(`🔍 Deleting accrual transaction entries for: ${student.email} (ID-based only)`);
+            
+            // Build query for all accrual transactions (ID-based only)
+            const accrualQuery = {
+                $or: [
+                    // Pattern 1: source='rental_accrual' and sourceId pointing to student
+                    {
+                        source: 'rental_accrual',
+                        sourceId: studentIdObj
+                    },
+                    // Pattern 2: source='rental_accrual' and metadata.studentId matching
+                    {
+                        source: 'rental_accrual',
+                        'metadata.studentId': studentId
+                    },
+                    // Pattern 3: source='expense_accrual' and metadata.studentId matching
+                    {
+                        source: 'expense_accrual',
+                        'metadata.studentId': studentId
+                    },
+                    // Pattern 4: source='rental_accrual_reversal' and metadata.studentId matching
+                    {
+                        source: 'rental_accrual_reversal',
+                        'metadata.studentId': studentId
+                    },
+                    // Pattern 5: source='expense_accrual_reversal' and metadata.studentId matching
+                    {
+                        source: 'expense_accrual_reversal',
+                        'metadata.studentId': studentId
+                    },
+                    // Pattern 6: reference containing student ID (exact match) AND metadata.studentId matching AND source indicating accrual
+                    // This ensures we only delete accruals that explicitly belong to this student
+                    {
+                        $and: [
+                            {
+                                $or: [
+                                    { reference: studentId }, // String match
+                                    { reference: studentIdObj } // ObjectId match
+                                ]
+                            },
+                            {
+                                'metadata.studentId': studentId  // MUST have explicit studentId match
+                            },
+                            {
+                                source: { $in: ['rental_accrual', 'expense_accrual', 'rental_accrual_reversal', 'expense_accrual_reversal'] }
+                            }
+                        ]
+                    }
+                ]
+            };
+            
+            // Fetch records before deletion to log them
+            const recordsToDelete = await TransactionEntry.find(accrualQuery).lean().session(session);
+            
+            // Log each deleted record to deletions collection BEFORE deletion
+            let loggedCount = 0;
+            for (const record of recordsToDelete) {
+                try {
+                    // Verify this record actually belongs to this student before logging
+                    const recordStudentId = record.metadata?.studentId;
+                    if (recordStudentId && recordStudentId !== studentId) {
+                        console.warn(`⚠️ Skipping record ${record._id} - metadata.studentId (${recordStudentId}) doesn't match student ID (${studentId})`);
+                        continue;
+                    }
+                    
+                    await DeletionLogService.logDeletion({
+                        modelName: 'TransactionEntry',
+                        documentId: record._id,
+                        deletedData: record,
+                        deletedBy: adminUser._id,
+                        reason: `Student deletion: ${student.email}`,
+                        context: 'cascade_delete',
+                        metadata: {
+                            studentId: studentId,
+                            deletionType: 'accrual_transaction',
+                            transactionId: record.transactionId,
+                            source: record.source,
+                            accrualMonth: record.metadata?.accrualMonth,
+                            accrualYear: record.metadata?.accrualYear
+                        },
+                        session: session
+                    });
+                    loggedCount++;
+                } catch (logError) {
+                    console.error(`⚠️ Error logging deletion for TransactionEntry (${record._id}):`, logError.message);
+                    console.error(`   Full error:`, logError);
+                    // Don't fail deletion if logging fails, but log the error
+                }
+            }
+            
+            // Now delete the records (ID-based only - no description matching)
+            // Only delete records that were successfully logged (safety check)
+            const recordsToDeleteIds = recordsToDelete
+                .filter(r => {
+                    const recordStudentId = r.metadata?.studentId;
+                    return !recordStudentId || recordStudentId === studentId;
+                })
+                .map(r => r._id);
+            
+            const result = recordsToDeleteIds.length > 0 
+                ? await TransactionEntry.deleteMany({ _id: { $in: recordsToDeleteIds } }).session(session)
+                : { deletedCount: 0 };
+            
+            if (result.deletedCount > 0) {
+                if (!deletionSummary.deletedCollections['TransactionEntry (Accruals)']) {
+                    deletionSummary.deletedCollections['TransactionEntry (Accruals)'] = {
+                        count: 0,
+                        description: 'Accrual transaction entries (ID-based only)',
+                        loggedToDeletions: 0
+                    };
+                }
+                deletionSummary.deletedCollections['TransactionEntry (Accruals)'].count += result.deletedCount;
+                deletionSummary.deletedCollections['TransactionEntry (Accruals)'].loggedToDeletions = loggedCount;
+                
+                console.log(`🗑️ Accrual transaction entry deletion: ${result.deletedCount} entries (ID-based only) - Logged ${loggedCount} to deletions collection`);
+            }
+            
+        } catch (error) {
+            console.error('❌ Error in accrual transaction entry deletion:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Delete negotiation transaction entries
+     * ONLY by explicit student ID - no description matching
+     */
+    static async deleteNegotiationTransactions(student, session, deletionSummary, adminUser) {
+        try {
+            const studentId = student._id.toString();
+            const studentIdObj = student._id;
+            
+            console.log(`🔍 Deleting negotiation transaction entries for: ${student.email} (ID-based only)`);
+            
+            // Build query for all negotiation transactions (ID-based only)
+            const negotiationQuery = {
+                $or: [
+                    // Pattern 1: source='manual' and metadata.isNegotiated=true AND metadata.studentId matching
+                    {
+                        source: 'manual',
+                        'metadata.isNegotiated': true,
+                        'metadata.studentId': studentId
+                    },
+                    // Pattern 2: source='manual' and metadata.transactionType='negotiated_payment_adjustment' AND metadata.studentId matching
+                    {
+                        source: 'manual',
+                        'metadata.transactionType': 'negotiated_payment_adjustment',
+                        'metadata.studentId': studentId
+                    },
+                    // Pattern 3: metadata.negotiationReason AND metadata.studentId matching
+                    {
+                        'metadata.negotiationReason': { $exists: true },
+                        'metadata.studentId': studentId
+                    },
+                    // Pattern 4: metadata containing negotiation data AND student ID (explicit match)
+                    {
+                        'metadata.studentId': studentId,
+                        $or: [
+                            { 'metadata.negotiationReason': { $exists: true } },
+                            { 'metadata.isNegotiated': true },
+                            { 'metadata.negotiatedAmount': { $exists: true } },
+                            { 'metadata.discountAmount': { $exists: true } }
+                        ]
+                    },
+                    // Pattern 5: reference matching student ID (exact match) AND metadata.studentId matching AND negotiation indicators
+                    // This ensures we only delete negotiations that explicitly belong to this student
+                    {
+                        $and: [
+                            {
+                                $or: [
+                                    { reference: studentId }, // String match
+                                    { reference: studentIdObj } // ObjectId match
+                                ]
+                            },
+                            {
+                                'metadata.studentId': studentId  // MUST have explicit studentId match
+                            },
+                            {
+                                $or: [
+                                    { 'metadata.isNegotiated': true },
+                                    { 'metadata.transactionType': 'negotiated_payment_adjustment' },
+                                    { 'metadata.negotiationReason': { $exists: true } }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            };
+            
+            // Fetch records before deletion to log them
+            const recordsToDelete = await TransactionEntry.find(negotiationQuery).lean().session(session);
+            
+            // Log each deleted record to deletions collection BEFORE deletion
+            let loggedCount = 0;
+            for (const record of recordsToDelete) {
+                try {
+                    // Verify this record actually belongs to this student before logging
+                    const recordStudentId = record.metadata?.studentId;
+                    if (recordStudentId && recordStudentId !== studentId) {
+                        console.warn(`⚠️ Skipping record ${record._id} - metadata.studentId (${recordStudentId}) doesn't match student ID (${studentId})`);
+                        continue;
+                    }
+                    
+                    await DeletionLogService.logDeletion({
+                        modelName: 'TransactionEntry',
+                        documentId: record._id,
+                        deletedData: record,
+                        deletedBy: adminUser._id,
+                        reason: `Student deletion: ${student.email}`,
+                        context: 'cascade_delete',
+                        metadata: {
+                            studentId: studentId,
+                            deletionType: 'negotiation_transaction',
+                            transactionId: record.transactionId,
+                            source: record.source,
+                            isNegotiated: record.metadata?.isNegotiated,
+                            negotiationReason: record.metadata?.negotiationReason
+                        },
+                        session: session
+                    });
+                    loggedCount++;
+                } catch (logError) {
+                    console.error(`⚠️ Error logging deletion for TransactionEntry (${record._id}):`, logError.message);
+                    console.error(`   Full error:`, logError);
+                    // Don't fail deletion if logging fails, but log the error
+                }
+            }
+            
+            // Now delete the records (ID-based only - no description matching)
+            // Only delete records that were successfully logged (safety check)
+            const recordsToDeleteIds = recordsToDelete
+                .filter(r => {
+                    const recordStudentId = r.metadata?.studentId;
+                    return !recordStudentId || recordStudentId === studentId;
+                })
+                .map(r => r._id);
+            
+            const result = recordsToDeleteIds.length > 0 
+                ? await TransactionEntry.deleteMany({ _id: { $in: recordsToDeleteIds } }).session(session)
+                : { deletedCount: 0 };
+            
+            if (result.deletedCount > 0) {
+                if (!deletionSummary.deletedCollections['TransactionEntry (Negotiations)']) {
+                    deletionSummary.deletedCollections['TransactionEntry (Negotiations)'] = {
+                        count: 0,
+                        description: 'Negotiation transaction entries (ID-based only)',
+                        loggedToDeletions: 0
+                    };
+                }
+                deletionSummary.deletedCollections['TransactionEntry (Negotiations)'].count += result.deletedCount;
+                deletionSummary.deletedCollections['TransactionEntry (Negotiations)'].loggedToDeletions = loggedCount;
+                
+                console.log(`🗑️ Negotiation transaction entry deletion: ${result.deletedCount} entries (ID-based only) - Logged ${loggedCount} to deletions collection`);
+            }
+            
+        } catch (error) {
+            console.error('❌ Error in negotiation transaction entry deletion:', error);
             throw error;
         }
     }

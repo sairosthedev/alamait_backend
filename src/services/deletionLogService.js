@@ -20,6 +20,7 @@ class DeletionLogService {
      * @param {String} options.reason - Optional reason for deletion
      * @param {String} options.context - Context of deletion (e.g., 'soft_delete', 'hard_delete', 'cascade_delete')
      * @param {Object} options.metadata - Additional metadata
+     * @param {Object} options.session - MongoDB session (optional, for transactions)
      * 
      * @returns {Promise<DeletionLog>} The created deletion log entry
      */
@@ -30,11 +31,15 @@ class DeletionLogService {
         deletedBy,
         reason = null,
         context = 'soft_delete',
-        metadata = {}
+        metadata = {},
+        session = null
     }) {
         try {
-            // Get user info
-            const user = await User.findById(deletedBy);
+            // Get user info (with session if provided)
+            const user = session 
+                ? await User.findById(deletedBy).session(session)
+                : await User.findById(deletedBy);
+                
             if (!user) {
                 throw new Error(`User not found: ${deletedBy}`);
             }
@@ -54,13 +59,19 @@ class DeletionLogService {
                 deletedAt: new Date()
             });
 
-            await deletionLog.save();
+            // Save with session if provided (for transaction support)
+            if (session) {
+                await deletionLog.save({ session });
+            } else {
+                await deletionLog.save();
+            }
             
             console.log(`✅ Deletion logged: ${modelName} (${documentId}) deleted by ${user.email} (${user.role})`);
             
             return deletionLog;
         } catch (error) {
             console.error(`❌ Error logging deletion for ${modelName} (${documentId}):`, error);
+            console.error(`   Full error stack:`, error.stack);
             // Don't throw - deletion logging should not break the deletion process
             return null;
         }

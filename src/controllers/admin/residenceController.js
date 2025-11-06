@@ -271,7 +271,59 @@ exports.updateResidence = async (req, res) => {
             type: 'Point',
             coordinates: req.body.location.coordinates
         };
-        residence.rooms = req.body.rooms.map(room => ({
+
+        // Track room number changes for cascade updates
+        const roomNumberChanges = [];
+        const oldRooms = residence.rooms || [];
+        const newRooms = req.body.rooms || [];
+
+        // Create a map of old room numbers
+        const oldRoomMap = {};
+        oldRooms.forEach((room) => {
+            oldRoomMap[room.roomNumber] = room;
+        });
+
+        // Create a map of new room numbers
+        const newRoomMap = {};
+        newRooms.forEach((room) => {
+            newRoomMap[room.roomNumber] = room;
+        });
+
+        // Find rooms that changed their number
+        // A room number changed if:
+        // 1. An old room number doesn't exist in new rooms, AND
+        // 2. A new room number doesn't exist in old rooms, AND
+        // 3. They're at the same position (or we can't determine position)
+        // OR: We check if a room at the same position has a different number
+        
+        // Method: Compare by position first, then by room properties
+        const maxLength = Math.max(oldRooms.length, newRooms.length);
+        for (let i = 0; i < maxLength; i++) {
+            const oldRoom = oldRooms[i];
+            const newRoom = newRooms[i];
+            
+            if (oldRoom && newRoom && oldRoom.roomNumber !== newRoom.roomNumber) {
+                // Room number changed at this position
+                // Check if the new room number already exists elsewhere (room swap)
+                const newRoomExistsElsewhere = oldRooms.some((r, idx) => 
+                    idx !== i && r.roomNumber === newRoom.roomNumber
+                );
+                
+                if (!newRoomExistsElsewhere) {
+                    // This is a rename, not a swap
+                    roomNumberChanges.push({
+                        oldRoomNumber: oldRoom.roomNumber,
+                        newRoomNumber: newRoom.roomNumber
+                    });
+                }
+            } else if (oldRoom && !newRoom) {
+                // Room was deleted - no cascade needed
+            } else if (!oldRoom && newRoom) {
+                // Room was added - no cascade needed
+            }
+        }
+
+        residence.rooms = newRooms.map(room => ({
             roomNumber: room.roomNumber,
             type: room.type,
             capacity: room.capacity,
@@ -298,19 +350,124 @@ exports.updateResidence = async (req, res) => {
 
         await residence.save();
 
+        // Cascade update all related documents for each room number change
+        const cascadeUpdateResults = [];
+        if (roomNumberChanges.length > 0) {
+            try {
+                const RoomUpdateService = require('../services/roomUpdateService');
+                for (const change of roomNumberChanges) {
+                    try {
+                        const result = await RoomUpdateService.cascadeUpdateRoomNumber(
+                            req.params.id,
+                            change.oldRoomNumber,
+                            change.newRoomNumber
+                        );
+                        cascadeUpdateResults.push(result);
+                        console.log(`✅ Cascade update for room ${change.oldRoomNumber} → ${change.newRoomNumber}:`, result);
+                    } catch (cascadeError) {
+                        console.error(`⚠️ Error in cascade update for room ${change.oldRoomNumber} → ${change.newRoomNumber}:`, cascadeError);
+                        cascadeUpdateResults.push({
+                            oldRoomNumber: change.oldRoomNumber,
+                            newRoomNumber: change.newRoomNumber,
+                            success: false,
+                            error: cascadeError.message
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error('⚠️ Error in cascade update process:', error);
+            }
+        }
+
         // Populate the response with manager info
         await residence.populate('manager', 'firstName lastName email');
 
         res.status(200).json({
             success: true,
             data: residence,
-            message: 'Residence updated successfully'
+            message: 'Residence updated successfully',
+            cascadeUpdates: cascadeUpdateResults.length > 0 ? cascadeUpdateResults : undefined
         });
     } catch (error) {
         console.error('Error in updateResidence:', error);
         res.status(500).json({
             success: false,
             message: 'Error updating residence',
+            error: error.message
+        });
+    }
+};
+
+// Update a single room in a residence
+exports.updateRoom = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const residence = await Residence.findById(req.params.residenceId || req.params.id);
+        if (!residence) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
+        }
+
+        const roomNumber = req.params.roomNumber;
+        const roomIndex = residence.rooms.findIndex(
+            room => room.roomNumber === roomNumber
+        );
+
+        if (roomIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                message: 'Room not found'
+            });
+        }
+
+        const oldRoomNumber = residence.rooms[roomIndex].roomNumber;
+        const newRoomNumber = req.body.roomNumber;
+
+        // Check if room number is being changed
+        const roomNumberChanged = newRoomNumber && newRoomNumber !== oldRoomNumber;
+
+        // Update room fields while preserving existing data
+        residence.rooms[roomIndex] = {
+            ...residence.rooms[roomIndex].toObject(),
+            ...req.body
+        };
+
+        await residence.save();
+
+        // Cascade update all related documents if room number changed
+        let cascadeUpdateResult = null;
+        if (roomNumberChanged) {
+            try {
+                const RoomUpdateService = require('../../services/roomUpdateService');
+                cascadeUpdateResult = await RoomUpdateService.cascadeUpdateRoomNumber(
+                    req.params.residenceId || req.params.id,
+                    oldRoomNumber,
+                    newRoomNumber
+                );
+                console.log('✅ Cascade update completed:', cascadeUpdateResult);
+            } catch (cascadeError) {
+                console.error('⚠️ Error in cascade update (room still updated):', cascadeError);
+                // Don't fail the request if cascade update fails, but log it
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            data: residence.rooms[roomIndex],
+            message: 'Room updated successfully',
+            cascadeUpdate: cascadeUpdateResult || undefined
+        });
+    } catch (error) {
+        console.error('Error in updateRoom:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating room',
             error: error.message
         });
     }

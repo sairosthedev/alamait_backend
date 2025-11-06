@@ -85,4 +85,39 @@ const AuditLogSchema = new mongoose.Schema({
   collection: 'auditlogs'
 });
 
+// Performance indexes for AuditLog
+// Index on user for user-specific queries
+AuditLogSchema.index({ user: 1 });
+
+// Index on action for filtering by action type
+AuditLogSchema.index({ action: 1 });
+
+// Index on collection for filtering by collection
+AuditLogSchema.index({ collection: 1 });
+
+// Index on timestamp for date range queries and sorting
+AuditLogSchema.index({ timestamp: -1 });
+
+// Index on recordId for finding logs for specific records
+AuditLogSchema.index({ recordId: 1 });
+
+// Compound indexes for common query patterns
+// User + timestamp (get user's activity over time)
+AuditLogSchema.index({ user: 1, timestamp: -1 });
+
+// Collection + action (get all actions for a collection)
+AuditLogSchema.index({ collection: 1, action: 1 });
+
+// Collection + timestamp (get recent activity for a collection)
+AuditLogSchema.index({ collection: 1, timestamp: -1 });
+
+// Action + timestamp (get recent actions of a type)
+AuditLogSchema.index({ action: 1, timestamp: -1 });
+
+// User + action + timestamp (get user's specific actions)
+AuditLogSchema.index({ user: 1, action: 1, timestamp: -1 });
+
+// RecordId + timestamp (get history for a specific record)
+AuditLogSchema.index({ recordId: 1, timestamp: -1 });
+
 module.exports = mongoose.model('AuditLog', AuditLogSchema); 

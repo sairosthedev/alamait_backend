@@ -222,4 +222,59 @@ transactionEntrySchema.post('save', async function(doc) {
   }
 });
 
+// Performance indexes for TransactionEntry
+// Index on transactionId (already unique, but explicit index helps)
+transactionEntrySchema.index({ transactionId: 1 });
+
+// Index on date for sorting and date range queries
+transactionEntrySchema.index({ date: -1 });
+
+// Index on sourceId and sourceModel for finding related transactions
+transactionEntrySchema.index({ sourceId: 1, sourceModel: 1 });
+
+// Index on residence for filtering by residence
+transactionEntrySchema.index({ residence: 1 });
+
+// Index on status for filtering
+transactionEntrySchema.index({ status: 1 });
+
+// Index on source for filtering by transaction source (used in balance sheet, cash flow, income statement)
+transactionEntrySchema.index({ source: 1 });
+
+// Index on createdBy for audit queries
+transactionEntrySchema.index({ createdBy: 1 });
+
+// Compound index for common query: date range + status
+transactionEntrySchema.index({ date: -1, status: 1 });
+
+// Compound index for residence + date queries
+transactionEntrySchema.index({ residence: 1, date: -1 });
+
+// Index on entries.accountCode for account-based queries (used in aggregation)
+transactionEntrySchema.index({ 'entries.accountCode': 1 });
+
+// Index on metadata fields for flexible queries
+transactionEntrySchema.index({ 'metadata.debtorId': 1 });
+transactionEntrySchema.index({ 'metadata.studentId': 1 });
+transactionEntrySchema.index({ 'metadata.paymentId': 1 });
+transactionEntrySchema.index({ 'metadata.parentEntryId': 1 });
+transactionEntrySchema.index({ 'metadata.originalEntryId': 1 });
+transactionEntrySchema.index({ 'metadata.arTransactionId': 1 });
+
+// Compound index for sourceId + date (common query pattern)
+transactionEntrySchema.index({ sourceId: 1, date: -1 });
+
+// Compound index for account code + date (for account transaction history)
+transactionEntrySchema.index({ 'entries.accountCode': 1, date: -1 });
+
+// Compound indexes for financial reports (most critical for performance)
+// Source + date + status (used in balance sheet, cash flow, income statement)
+transactionEntrySchema.index({ source: 1, date: -1, status: 1 });
+
+// Residence + source + date + status (residence-specific financial reports)
+transactionEntrySchema.index({ residence: 1, source: 1, date: -1, status: 1 });
+
+// Account code + source + date + status (account-specific queries in income statement)
+transactionEntrySchema.index({ 'entries.accountCode': 1, source: 1, date: -1, status: 1 });
+
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 

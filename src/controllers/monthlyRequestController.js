@@ -708,12 +708,12 @@ exports.createMonthlyRequest = async (req, res) => {
 
         // Validate residence exists if provided
         if (residence) {
-            const residenceExists = await Residence.findById(residence);
-            if (!residenceExists) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Residence not found'
-                });
+        const residenceExists = await Residence.findById(residence);
+        if (!residenceExists) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residence not found'
+            });
             }
         }
 

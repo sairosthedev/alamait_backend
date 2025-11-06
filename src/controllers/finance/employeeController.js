@@ -302,13 +302,13 @@ exports.createSalaryRequestByResidence = async (req, res) => {
                         description: isNoResidence
                             ? `${employeeName} - ${jobTitle} salary (${e.allocationPercentage || 100}%)`
                             : `${employeeName} - ${jobTitle} salary for ${residenceName} (${e.allocationPercentage || 100}%)`,
-                        quantity: 1,
-                        unitCost: e.allocatedSalary || 0,
-                        totalCost: e.allocatedSalary || 0,
-                        category: 'services',
-                        priority: 'high',
-                        notes: notes || undefined,
-                        provider: undefined
+                    quantity: 1,
+                    unitCost: e.allocatedSalary || 0,
+                    totalCost: e.allocatedSalary || 0,
+                    category: 'services',
+                    priority: 'high',
+                    notes: notes || undefined,
+                    provider: undefined
                     };
                 });
 
@@ -603,13 +603,13 @@ exports.createIndividualSalaryRequests = async (req, res) => {
                         description: isNoResidence
                             ? `${employeeName} - ${jobTitle} salary (${emp.allocationPercentage || 100}%)`
                             : `${employeeName} - ${jobTitle} salary for ${residenceName} (${emp.allocationPercentage || 100}%)`,
-                        quantity: 1,
-                        unitCost: emp.allocatedSalary || 0,
-                        totalCost: emp.allocatedSalary || 0,
-                        category: 'services',
-                        priority: 'high',
-                        notes: notes || undefined,
-                        provider: undefined
+                    quantity: 1,
+                    unitCost: emp.allocatedSalary || 0,
+                    totalCost: emp.allocatedSalary || 0,
+                    category: 'services',
+                    priority: 'high',
+                    notes: notes || undefined,
+                    provider: undefined
                     };
                 });
                 
@@ -847,13 +847,13 @@ exports.createSalaryRequest = async (req, res) => {
                 return {
                     title: employeeName, // Keep for backward compatibility
                     description: `${employeeName} - ${jobTitle} salary`,
-                    quantity: 1,
-                    unitCost: e.salary || 0,
-                    totalCost: e.salary || 0,
-                    category: 'services',
-                    priority: 'high',
-                    notes: notes || undefined,
-                    provider: undefined
+                quantity: 1,
+                unitCost: e.salary || 0,
+                totalCost: e.salary || 0,
+                category: 'services',
+                priority: 'high',
+                notes: notes || undefined,
+                provider: undefined
                 };
             });
 
@@ -895,10 +895,10 @@ exports.createSalaryRequest = async (req, res) => {
                 return {
                     title: employeeName, // Keep for backward compatibility
                     description: `${employeeName} - ${jobTitle} salary`,
-                    quantity: 1,
-                    unitCost: e.salary || 0,
+                quantity: 1,
+                unitCost: e.salary || 0,
                     totalCost: e.salary || 0,
-                    purpose: 'Salary'
+                purpose: 'Salary'
                 };
             }),
             totalEstimatedCost: total,

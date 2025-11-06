@@ -109,4 +109,25 @@ messageSchema.index({ pinned: 1 });
 messageSchema.index({ createdAt: -1 });
 messageSchema.index({ 'deliveryStatus.recipient': 1 });
 
+// Compound indexes for common query patterns
+// Type + pinned + createdAt (sort by pinned, then date)
+messageSchema.index({ type: 1, pinned: -1, createdAt: -1 });
+
+// Author + createdAt (get author's messages)
+messageSchema.index({ author: 1, createdAt: -1 });
+
+// Recipients + type + createdAt (get messages for recipient)
+messageSchema.index({ 'recipients': 1, type: 1, createdAt: -1 });
+
+// Recipients + pinned + createdAt (common query pattern for students)
+messageSchema.index({ 'recipients': 1, pinned: -1, createdAt: -1 });
+
+// Residence + type + createdAt (residence-specific messages)
+messageSchema.index({ residence: 1, type: 1, createdAt: -1 });
+
+// Compound index for $or queries (author OR recipients)
+// Note: MongoDB can use both indexes for $or queries
+messageSchema.index({ author: 1, type: 1, createdAt: -1 });
+messageSchema.index({ 'recipients': 1, type: 1, createdAt: -1 });
+
 module.exports = mongoose.model('Message', messageSchema); 

@@ -12,7 +12,8 @@ const {
     deleteResidence,
     getRoomsByResidence,
     getResidenceRooms,
-    bulkAddRooms
+    bulkAddRooms,
+    updateRoom
 } = require('../../controllers/admin/residenceController');
 
 // Validation middleware
@@ -84,7 +85,7 @@ const bulkRoomsValidation = [
 
 // Apply auth middleware to all routes
 router.use(auth);
-router.use(checkRole('admin', 'ceo'));
+router.use(checkRole('admin', 'ceo', 'finance_admin', 'finance_user'));
 
 // Routes
 router.post(
@@ -187,5 +188,32 @@ router.put(
 router.delete('/:id', deleteResidence);
 router.get('/:residenceId/rooms', getRoomsByResidence);
 router.post('/:id/rooms/bulk', bulkRoomsValidation, bulkAddRooms);
+// Update a single room
+router.patch('/:residenceId/rooms/:roomNumber', [
+    body('roomNumber').optional().notEmpty().withMessage('Room number cannot be empty'),
+    body('type').optional().isIn(['single', 'double', 'studio', 'apartment', 'triple', 'quad']).withMessage('Invalid room type'),
+    body('capacity').optional().isInt({ min: 1 }).withMessage('Capacity must be at least 1'),
+    body('price').optional().isFloat({ min: 0 }).withMessage('Price must be a positive number'),
+    body('status').optional().isIn(['available', 'occupied', 'maintenance', 'reserved']).withMessage('Invalid status'),
+    body('currentOccupancy').optional().isInt({ min: 0 }).withMessage('Current occupancy must be a non-negative number'),
+    body('features').optional().isArray().withMessage('Features must be an array'),
+    body('amenities').optional().isArray().withMessage('Amenities must be an array'),
+    body('floor').optional().isInt({ min: 0 }).withMessage('Floor must be a non-negative number'),
+    body('area').optional().isFloat({ min: 0 }).withMessage('Area must be a positive number'),
+    body('images').optional().isArray().withMessage('Images must be an array'),
+], updateRoom);
+router.put('/:residenceId/rooms/:roomNumber', [
+    body('roomNumber').optional().notEmpty().withMessage('Room number cannot be empty'),
+    body('type').optional().isIn(['single', 'double', 'studio', 'apartment', 'triple', 'quad']).withMessage('Invalid room type'),
+    body('capacity').optional().isInt({ min: 1 }).withMessage('Capacity must be at least 1'),
+    body('price').optional().isFloat({ min: 0 }).withMessage('Price must be a positive number'),
+    body('status').optional().isIn(['available', 'occupied', 'maintenance', 'reserved']).withMessage('Invalid status'),
+    body('currentOccupancy').optional().isInt({ min: 0 }).withMessage('Current occupancy must be a non-negative number'),
+    body('features').optional().isArray().withMessage('Features must be an array'),
+    body('amenities').optional().isArray().withMessage('Amenities must be an array'),
+    body('floor').optional().isInt({ min: 0 }).withMessage('Floor must be a non-negative number'),
+    body('area').optional().isFloat({ min: 0 }).withMessage('Area must be a positive number'),
+    body('images').optional().isArray().withMessage('Images must be an array'),
+], updateRoom);
 
 module.exports = router;

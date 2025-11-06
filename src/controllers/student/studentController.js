@@ -623,11 +623,11 @@ const uploadSignedLeaseHandler = async (req, res) => {
       }
 
       // ALWAYS create a Lease document in the leases collection
-      const Lease = require('../../models/Lease');
+        const Lease = require('../../models/Lease');
       const { Residence } = require('../../models/Residence');
       
-      const fileName = req.file.filename || req.file.originalname;
-      const s3Url = s3Result.Location;
+        const fileName = req.file.filename || req.file.originalname;
+        const s3Url = s3Result.Location;
       
       // Get residence info - prefer from request body, then application, then user
       let residence = null;
@@ -721,20 +721,20 @@ const uploadSignedLeaseHandler = async (req, res) => {
       
       // Create Lease document in leases collection
       const leaseDoc = await Lease.create({
-        studentId: req.user._id,
+          studentId: req.user._id,
         studentName: studentName,
         email: email,
         residence: finalResidence,
         residenceName: residenceName || null,
         startDate: startDate,
         endDate: endDate,
-        filename: fileName,
-        originalname: req.file.originalname,
-        path: s3Url,
-        mimetype: req.file.mimetype,
-        size: req.file.size,
+          filename: fileName,
+          originalname: req.file.originalname,
+          path: s3Url,
+          mimetype: req.file.mimetype,
+          size: req.file.size,
         uploadedAt: new Date()
-      });
+        });
       console.log('✅ Lease document created in leases collection:', leaseDoc._id);
 
       res.json({ 

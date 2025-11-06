@@ -501,6 +501,12 @@ exports.updateRoom = async (req, res) => {
             });
         }
 
+        const oldRoomNumber = residence.rooms[roomIndex].roomNumber;
+        const newRoomNumber = req.body.roomNumber;
+
+        // Check if room number is being changed
+        const roomNumberChanged = newRoomNumber && newRoomNumber !== oldRoomNumber;
+
         // Update room fields while preserving existing data
         residence.rooms[roomIndex] = {
             ...residence.rooms[roomIndex].toObject(),
@@ -509,10 +515,28 @@ exports.updateRoom = async (req, res) => {
 
         await residence.save();
 
+        // Cascade update all related documents if room number changed
+        let cascadeUpdateResult = null;
+        if (roomNumberChanged) {
+            try {
+                const RoomUpdateService = require('../services/roomUpdateService');
+                cascadeUpdateResult = await RoomUpdateService.cascadeUpdateRoomNumber(
+                    req.params.residenceId,
+                    oldRoomNumber,
+                    newRoomNumber
+                );
+                console.log('✅ Cascade update completed:', cascadeUpdateResult);
+            } catch (cascadeError) {
+                console.error('⚠️ Error in cascade update (room still updated):', cascadeError);
+                // Don't fail the request if cascade update fails, but log it
+            }
+        }
+
         res.status(200).json({
             success: true,
             data: residence,
-            message: 'Room updated successfully'
+            message: 'Room updated successfully',
+            cascadeUpdate: cascadeUpdateResult || undefined
         });
     } catch (error) {
         res.status(500).json({

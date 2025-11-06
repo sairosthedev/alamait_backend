@@ -4,6 +4,9 @@ const TransactionEntry = require('../../models/TransactionEntry');
 const Payment = require('../../models/Payment');
 const Expense = require('../../models/finance/Expense');
 const Invoice = require('../../models/Invoice');
+const Transaction = require('../../models/Transaction');
+const { createAuditLog } = require('../../utils/auditLogger');
+const DeletionLogService = require('../../services/deletionLogService');
 
 /**
  * Transaction Controller
@@ -806,18 +809,24 @@ class TransactionController {
     }
 
     /**
-     * Update transaction entry
+     * Update transaction entry with cascade update for linked records
+     * Logs all updates to AuditLog
      */
     static async updateTransactionEntry(req, res) {
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        
         try {
             const { id } = req.params;
             const updateData = req.body;
+            const userId = req.user?._id || req.user?.id;
             
             console.log('🔧 Updating transaction entry:', id, 'with data:', updateData);
             
             // Find the transaction entry
-            const transactionEntry = await TransactionEntry.findById(id);
+            const transactionEntry = await TransactionEntry.findById(id).session(session);
             if (!transactionEntry) {
+                await session.abortTransaction();
                 return res.status(404).json({
                     success: false,
                     message: 'Transaction entry not found'
@@ -850,6 +859,7 @@ class TransactionController {
             // Validate debits and credits if both are provided
             if (filteredUpdateData.debit !== undefined && filteredUpdateData.credit !== undefined) {
                 if (filteredUpdateData.debit > 0 && filteredUpdateData.credit > 0) {
+                    await session.abortTransaction();
                     return res.status(400).json({
                         success: false,
                         message: 'Transaction entry cannot have both debit and credit amounts'
@@ -858,158 +868,610 @@ class TransactionController {
             }
             
             // Add audit information
-            filteredUpdateData.updatedBy = req.user._id;
+            filteredUpdateData.updatedBy = userId;
             filteredUpdateData.updatedAt = new Date();
             
             // Update the transaction entry
             const updatedEntry = await TransactionEntry.findByIdAndUpdate(
                 id,
                 filteredUpdateData,
-                { new: true, runValidators: true }
+                { new: true, runValidators: true, session }
             );
+            
+            // Find and update related transaction entries if needed
+            const { cascadeUpdate = false } = req.query;
+            let updatedRelatedEntries = 0;
+            
+            if (cascadeUpdate === 'true' || cascadeUpdate === true) {
+                console.log('🔄 Cascade update requested - updating related entries...');
+                
+                const entryIdObj = new mongoose.Types.ObjectId(id);
+                const entryIdString = id.toString();
+                
+                // Find related entries using explicit ID matching only
+                const relatedEntriesQuery = {
+                    $or: [
+                        { sourceId: entryIdObj, sourceModel: 'TransactionEntry' },
+                        { transactionId: transactionEntry.transactionId },
+                        { 'metadata.parentEntryId': entryIdString },
+                        { 'metadata.originalEntryId': entryIdString }
+                    ]
+                };
+                
+                const relatedEntries = await TransactionEntry.find(relatedEntriesQuery).session(session);
+                console.log(`   📊 Found ${relatedEntries.length} related transaction entries to update`);
+                
+                // Update related entries with relevant fields
+                for (const entry of relatedEntries) {
+                    const relatedUpdate = {};
+                    if (filteredUpdateData.date) relatedUpdate.date = filteredUpdateData.date;
+                    if (filteredUpdateData.status) relatedUpdate.status = filteredUpdateData.status;
+                    if (filteredUpdateData.description) relatedUpdate.description = `[Updated] ${filteredUpdateData.description}`;
+                    
+                    if (Object.keys(relatedUpdate).length > 0) {
+                        relatedUpdate.updatedBy = userId;
+                        relatedUpdate.updatedAt = new Date();
+                        await TransactionEntry.findByIdAndUpdate(entry._id, relatedUpdate, { session });
+                        updatedRelatedEntries++;
+                    }
+                }
+                
+                console.log(`   ✅ Updated ${updatedRelatedEntries} related transaction entries`);
+            }
+            
+            // Log to audit trail
+            try {
+                await createAuditLog({
+                    user: userId,
+                    action: 'update_transaction_entry',
+                    collection: 'TransactionEntry',
+                    recordId: id,
+                    before: originalData,
+                    after: updatedEntry.toObject(),
+                    details: JSON.stringify({
+                        updatedFields: Object.keys(filteredUpdateData),
+                        cascadeUpdated: updatedRelatedEntries > 0 ? { relatedEntries: updatedRelatedEntries } : null
+                    })
+                });
+            } catch (auditError) {
+                console.error('⚠️ Failed to create audit log:', auditError);
+            }
+            
+            await session.commitTransaction();
             
             console.log('✅ Transaction entry updated successfully');
             
             res.status(200).json({
                 success: true,
                 message: 'Transaction entry updated successfully',
-                data: updatedEntry
+                data: {
+                    updatedEntry: updatedEntry,
+                    cascadeUpdated: updatedRelatedEntries > 0 ? { relatedEntries: updatedRelatedEntries } : null,
+                    loggedToAudit: true
+                }
             });
             
         } catch (error) {
+            await session.abortTransaction();
             console.error('Error updating transaction entry:', error);
             res.status(500).json({
                 success: false,
                 message: 'Failed to update transaction entry',
                 error: error.message
             });
+        } finally {
+            session.endSession();
+        }
+    }
+
+    /**
+     * Delete individual entry from entries array within a TransactionEntry
+     * This removes a single entry from the entries array and recalculates totals
+     */
+    static async deleteEntryFromTransactionEntry(req, res) {
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        
+        try {
+            const { id, entryId } = req.params;
+            const userId = req.user?._id || req.user?.id;
+            
+            console.log('🗑️ Deleting entry from transaction entry:', { transactionEntryId: id, entryId });
+            
+            // Find the transaction entry
+            const transactionEntry = await TransactionEntry.findById(id).session(session);
+            if (!transactionEntry) {
+                await session.abortTransaction();
+                return res.status(404).json({
+                    success: false,
+                    message: `Transaction entry not found with ID: ${id}`
+                });
+            }
+            
+            // Store original data for audit
+            const originalData = transactionEntry.toObject();
+            
+            // Find the entry within the entries array
+            const entryIndex = transactionEntry.entries.findIndex(
+                entry => entry._id.toString() === entryId
+            );
+            
+            if (entryIndex === -1) {
+                await session.abortTransaction();
+                return res.status(404).json({
+                    success: false,
+                    message: `Entry with ID ${entryId} not found in transaction entry ${id}`
+                });
+            }
+            
+            // Get the entry to be deleted for logging
+            const deletedEntry = transactionEntry.entries[entryIndex].toObject();
+            
+            // Check if removing this entry would leave less than 2 entries (minimum for double-entry)
+            if (transactionEntry.entries.length <= 2) {
+                await session.abortTransaction();
+                return res.status(400).json({
+                    success: false,
+                    message: 'Cannot delete entry: Transaction entry must have at least 2 entries for double-entry accounting. Delete the entire transaction entry instead.'
+                });
+            }
+            
+            // Remove the entry from the array
+            transactionEntry.entries.splice(entryIndex, 1);
+            
+            // Recalculate totalDebit and totalCredit
+            let newTotalDebit = 0;
+            let newTotalCredit = 0;
+            
+            for (const entry of transactionEntry.entries) {
+                newTotalDebit += entry.debit || 0;
+                newTotalCredit += entry.credit || 0;
+            }
+            
+            // Validate that debits still equal credits
+            if (Math.abs(newTotalDebit - newTotalCredit) > 0.01) {
+                await session.abortTransaction();
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot delete entry: Removing this entry would make the transaction unbalanced (Debits: ${newTotalDebit}, Credits: ${newTotalCredit}). Transaction must remain balanced.`
+                });
+            }
+            
+            // Update totals
+            transactionEntry.totalDebit = newTotalDebit;
+            transactionEntry.totalCredit = newTotalCredit;
+            transactionEntry.updatedBy = userId;
+            transactionEntry.updatedAt = new Date();
+            
+            // Save the updated transaction entry
+            await transactionEntry.save({ session });
+            
+            // Log to deletion log
+            try {
+                    await DeletionLogService.logDeletion({
+                        modelName: 'TransactionEntryEntry',
+                        documentId: entryId,
+                        deletedData: deletedEntry,
+                        deletedBy: userId,
+                        reason: `Entry deleted from transaction entry ${id}`,
+                        context: 'delete_entry',
+                        metadata: {
+                            transactionEntryId: id,
+                            transactionId: transactionEntry.transactionId,
+                            deletionType: 'entry_from_transaction',
+                            accountCode: deletedEntry.accountCode,
+                            accountName: deletedEntry.accountName,
+                            debit: deletedEntry.debit,
+                            credit: deletedEntry.credit
+                        },
+                        session: session
+                    });
+            } catch (logError) {
+                console.error(`⚠️ Error logging deletion for entry (${entryId}):`, logError.message);
+            }
+            
+            // Log to audit log
+            try {
+                await createAuditLog({
+                    user: userId,
+                    action: 'delete_entry_from_transaction',
+                    collection: 'TransactionEntry',
+                    recordId: id,
+                    before: originalData,
+                    after: transactionEntry.toObject(),
+                    details: JSON.stringify({
+                        deletedEntry: deletedEntry,
+                        newTotalDebit: newTotalDebit,
+                        newTotalCredit: newTotalCredit,
+                        remainingEntries: transactionEntry.entries.length
+                    })
+                });
+            } catch (auditError) {
+                console.error('⚠️ Failed to create audit log:', auditError);
+            }
+            
+            await session.commitTransaction();
+            
+            console.log('✅ Entry deleted from transaction entry successfully');
+            
+            res.status(200).json({
+                success: true,
+                message: 'Entry deleted from transaction entry successfully',
+                data: {
+                    deletedEntry: deletedEntry,
+                    updatedTransactionEntry: {
+                        _id: transactionEntry._id,
+                        transactionId: transactionEntry.transactionId,
+                        totalDebit: transactionEntry.totalDebit,
+                        totalCredit: transactionEntry.totalCredit,
+                        entriesCount: transactionEntry.entries.length
+                    },
+                    loggedToDeletions: true,
+                    loggedToAudit: true
+                }
+            });
+            
+        } catch (error) {
+            await session.abortTransaction();
+            console.error('Error deleting entry from transaction entry:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to delete entry from transaction entry',
+                error: error.message
+            });
+        } finally {
+            session.endSession();
         }
     }
 
     /**
      * Delete transaction entry with cascade delete for related records
+     * ONLY uses explicit linking IDs - no regex/fuzzy matching
+     * Logs all deletions to both AuditLog and DeletionLog
      */
     static async deleteTransactionEntry(req, res) {
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        
         try {
             const { id } = req.params;
+            const userId = req.user?._id || req.user?.id;
             
-            console.log('🗑️ Deleting transaction entry:', id);
+            console.log('🗑️ Deleting transaction entry:', id, '(ID-based only)');
             
             // Find the transaction entry
-            const transactionEntry = await TransactionEntry.findById(id);
+            let transactionEntry = await TransactionEntry.findById(id).session(session);
+            
+            // If not found, check if this might be an entry ID within the entries array
             if (!transactionEntry) {
+                // Try to find a transaction entry that contains this ID in its entries array
+                const parentEntry = await TransactionEntry.findOne({
+                    'entries._id': id
+                }).session(session);
+                
+                if (parentEntry) {
+                    await session.abortTransaction();
+                    return res.status(400).json({
+                        success: false,
+                        message: `The ID provided (${id}) is an entry ID within the entries array, not a TransactionEntry document ID. Use the TransactionEntry document ID: ${parentEntry._id}`,
+                        suggestedId: parentEntry._id.toString(),
+                        transactionId: parentEntry.transactionId
+                    });
+                }
+                
+                await session.abortTransaction();
                 return res.status(404).json({
                     success: false,
-                    message: 'Transaction entry not found'
+                    message: `Transaction entry not found with ID: ${id}. Please verify you're using the correct TransactionEntry document ID (not an entry ID from the entries array).`
                 });
             }
             
-            // Store data for audit
+            // Store data for audit and deletion logs
             const deletedData = transactionEntry.toObject();
             const deletedItems = {
                 transactionEntry: 1,
                 relatedEntries: 0,
-                accruals: 0,
-                reversals: 0,
+                linkedPayments: 0,
+                linkedExpenses: 0,
                 transactions: 0
             };
             
-            console.log('🔍 Checking for related records...');
+            console.log('🔍 Checking for related records (ID-based only)...');
             
-            // 1. Find all transaction entries that reference this entry as sourceId
-            // (e.g., accruals created from this entry, reversals, payment allocations, etc.)
+            const entryIdObj = new mongoose.Types.ObjectId(id);
             const entryIdString = id.toString();
-            const relatedEntries = await TransactionEntry.find({
-                $or: [
-                    { sourceId: id, sourceModel: 'TransactionEntry' }, // Direct references
-                    { transactionId: transactionEntry.transactionId }, // Same transaction
-                    { 'metadata.parentEntryId': entryIdString }, // Metadata references
-                    { 'metadata.originalEntryId': entryIdString }, // Original entry references
-                    { 'metadata.paymentAllocation.originalTransactionId': entryIdString }, // Payment allocations
-                    { 'metadata.arTransactionId': entryIdString }, // AR transaction references
-                    { reference: { $regex: `AR-${entryIdString}` } }, // Reference field links
-                    { reference: { $regex: `.*${entryIdString}.*` } } // Any reference containing the ID
-                ]
-            });
             
-            console.log(`   📊 Found ${relatedEntries.length} related transaction entries`);
+            // 1. Find all transaction entries that reference this entry using EXPLICIT ID matching only
+            // ONLY matches entries with explicit parent-child relationships - no broad transactionId matching
+            const relatedEntriesQuery = {
+                $or: [
+                    // Direct sourceId reference (exact ObjectId match) - entry explicitly created from this entry
+                    { sourceId: entryIdObj, sourceModel: 'TransactionEntry' },
+                    // Metadata references (exact string match) - explicit parent-child links
+                    { 'metadata.parentEntryId': entryIdString },
+                    { 'metadata.originalEntryId': entryIdString },
+                    { 'metadata.paymentAllocation.originalTransactionId': entryIdString },
+                    { 'metadata.arTransactionId': entryIdString },
+                    // Reference field (exact match only - no regex) - explicit reference to this entry ID
+                    { reference: entryIdString },
+                    { reference: entryIdObj }
+                ]
+            };
+            
+            // Note: We intentionally do NOT match by transactionId to avoid deleting unrelated entries
+            // that happen to share the same transactionId. Only entries with explicit linking are deleted.
+            
+            const relatedEntries = await TransactionEntry.find(relatedEntriesQuery).lean().session(session);
+            console.log(`   📊 Found ${relatedEntries.length} related transaction entries (ID-based only)`);
+            
+            // Log and delete related transaction entries
+            let loggedRelatedEntries = 0;
+            for (const entry of relatedEntries) {
+                try {
+                    await DeletionLogService.logDeletion({
+                        modelName: 'TransactionEntry',
+                        documentId: entry._id,
+                        deletedData: entry,
+                        deletedBy: userId,
+                        reason: `Cascade deletion: linked to transaction entry ${id}`,
+                        context: 'cascade_delete',
+                        metadata: {
+                            parentEntryId: id,
+                            deletionType: 'related_transaction_entry',
+                            transactionId: entry.transactionId,
+                            source: entry.source
+                        },
+                        session: session
+                    });
+                    loggedRelatedEntries++;
+                } catch (logError) {
+                    console.error(`⚠️ Error logging deletion for related TransactionEntry (${entry._id}):`, logError.message);
+                }
+            }
             
             if (relatedEntries.length > 0) {
-                // Get unique transaction IDs that will be affected
-                const relatedTransactionIds = [...new Set(relatedEntries.map(entry => entry.transactionId))];
-                
-                // Delete related transaction entries
                 const relatedEntryIds = relatedEntries.map(entry => entry._id);
                 const deleteResult = await TransactionEntry.deleteMany({
                     _id: { $in: relatedEntryIds }
-                });
+                }).session(session);
                 deletedItems.relatedEntries = deleteResult.deletedCount;
-                console.log(`   ✅ Deleted ${deleteResult.deletedCount} related transaction entries`);
-                
-                // Categorize what was deleted
-                const accrualsDeleted = relatedEntries.filter(entry => 
-                    entry.source === 'rental_accrual' || 
-                    entry.source === 'expense_accrual'
-                ).length;
-                const reversalsDeleted = relatedEntries.filter(entry => 
-                    entry.source === 'rental_accrual_reversal' || 
-                    entry.source === 'expense_accrual_reversal'
-                ).length;
-                
-                deletedItems.accruals = accrualsDeleted;
-                deletedItems.reversals = reversalsDeleted;
-                
-                if (accrualsDeleted > 0) {
-                    console.log(`   ✅ Deleted ${accrualsDeleted} accrual entries`);
+                console.log(`   ✅ Deleted ${deleteResult.deletedCount} related transaction entries - Logged ${loggedRelatedEntries} to deletions collection`);
+            }
+            
+            // 2. Find linked payments using explicit linking IDs only
+            let linkedPaymentIds = new Set();
+            
+            // Find payments linked via sourceId
+            if (transactionEntry.sourceId && transactionEntry.sourceModel === 'Payment') {
+                linkedPaymentIds.add(transactionEntry.sourceId.toString());
+            }
+            
+            // Find payments linked via metadata.paymentId
+            if (transactionEntry.metadata?.paymentId) {
+                linkedPaymentIds.add(transactionEntry.metadata.paymentId);
+            }
+            
+            // Find payments linked via reference (exact match only)
+            if (transactionEntry.reference) {
+                try {
+                    const refAsObjectId = new mongoose.Types.ObjectId(transactionEntry.reference);
+                    const payment = await Payment.findById(refAsObjectId).session(session);
+                    if (payment) {
+                        linkedPaymentIds.add(transactionEntry.reference);
+                    }
+                } catch (e) {
+                    // Reference is not a valid ObjectId, skip
                 }
-                if (reversalsDeleted > 0) {
-                    console.log(`   ✅ Deleted ${reversalsDeleted} reversal entries`);
+            }
+            
+            // Find payments linked via related entries (only entries with explicit links)
+            for (const entry of relatedEntries) {
+                // Only use explicit sourceId links (exact match)
+                if (entry.sourceId && entry.sourceModel === 'Payment') {
+                    linkedPaymentIds.add(entry.sourceId.toString());
                 }
-                
-                // Check if any transactions are now empty and delete them
-                const Transaction = require('../../models/Transaction');
-                for (const transactionId of relatedTransactionIds) {
-                    const remainingEntries = await TransactionEntry.countDocuments({ 
-                        transactionId: transactionId 
-                    });
-                    if (remainingEntries === 0) {
-                        const transaction = await Transaction.findOneAndDelete({ 
-                            transactionId: transactionId 
-                        });
-                        if (transaction) {
-                            deletedItems.transactions++;
-                            console.log(`   ✅ Deleted empty transaction: ${transactionId}`);
+                // Only use explicit metadata.paymentId (exact match)
+                if (entry.metadata?.paymentId) {
+                    linkedPaymentIds.add(entry.metadata.paymentId);
+                }
+                // Check reference field only if it's a valid ObjectId (exact match)
+                if (entry.reference) {
+                    try {
+                        const refAsObjectId = new mongoose.Types.ObjectId(entry.reference);
+                        const payment = await Payment.findById(refAsObjectId).session(session);
+                        if (payment) {
+                            linkedPaymentIds.add(entry.reference);
                         }
+                    } catch (e) {
+                        // Reference is not a valid ObjectId, skip
                     }
                 }
             }
             
-            // 2. Check if this entry itself is part of a transaction
-            if (transactionEntry.transactionId) {
-                const Transaction = require('../../models/Transaction');
+            console.log(`   📊 Found ${linkedPaymentIds.size} linked payments`);
+            
+            // Log and delete linked payments (if requested via query parameter)
+            const { deleteLinkedPayments = false, deleteLinkedExpenses = false } = req.query;
+            
+            if (deleteLinkedPayments === 'true' || deleteLinkedPayments === true) {
+                for (const paymentId of linkedPaymentIds) {
+                    try {
+                        const payment = await Payment.findById(paymentId).session(session);
+                        if (payment) {
+                            await DeletionLogService.logDeletion({
+                                modelName: 'Payment',
+                                documentId: paymentId,
+                                deletedData: payment.toObject(),
+                                deletedBy: userId,
+                                reason: `Cascade deletion: linked to transaction entry ${id}`,
+                                context: 'cascade_delete',
+                                metadata: {
+                                    transactionEntryId: id,
+                                    deletionType: 'linked_payment'
+                                },
+                                session: session
+                            });
+                            await Payment.findByIdAndDelete(paymentId).session(session);
+                            deletedItems.linkedPayments++;
+                            console.log(`   ✅ Deleted linked payment: ${paymentId} - Logged to deletions collection`);
+                        }
+                    } catch (logError) {
+                        console.error(`⚠️ Error deleting linked payment (${paymentId}):`, logError.message);
+                    }
+                }
+            } else if (linkedPaymentIds.size > 0) {
+                console.log(`   ℹ️ Found ${linkedPaymentIds.size} linked payments (not deleted - use ?deleteLinkedPayments=true to delete)`);
+            }
+            
+            // 3. Find linked expenses using explicit linking IDs only
+            let linkedExpenseIds = new Set();
+            
+            // Find expenses linked via sourceId
+            if (transactionEntry.sourceId && transactionEntry.sourceModel === 'Expense') {
+                linkedExpenseIds.add(transactionEntry.sourceId.toString());
+            }
+            
+            // Find expenses linked via metadata.expenseId
+            if (transactionEntry.metadata?.expenseId) {
+                linkedExpenseIds.add(transactionEntry.metadata.expenseId);
+            }
+            
+            // Find expenses linked via related entries (only entries with explicit links)
+            for (const entry of relatedEntries) {
+                // Only use explicit sourceId links (exact match)
+                if (entry.sourceId && entry.sourceModel === 'Expense') {
+                    linkedExpenseIds.add(entry.sourceId.toString());
+                }
+                // Only use explicit metadata.expenseId (exact match)
+                if (entry.metadata?.expenseId) {
+                    linkedExpenseIds.add(entry.metadata.expenseId);
+                }
+                // Check reference field only if it's a valid ObjectId (exact match)
+                if (entry.reference) {
+                    try {
+                        const refAsObjectId = new mongoose.Types.ObjectId(entry.reference);
+                        const expense = await Expense.findById(refAsObjectId).session(session);
+                        if (expense) {
+                            linkedExpenseIds.add(entry.reference);
+                        }
+                    } catch (e) {
+                        // Reference is not a valid ObjectId, skip
+                    }
+                }
+            }
+            
+            console.log(`   📊 Found ${linkedExpenseIds.size} linked expenses`);
+            
+            // Log and delete linked expenses (if requested via query parameter)
+            if (deleteLinkedExpenses === 'true' || deleteLinkedExpenses === true) {
+                for (const expenseId of linkedExpenseIds) {
+                    try {
+                        const expense = await Expense.findById(expenseId).session(session);
+                        if (expense) {
+                            await DeletionLogService.logDeletion({
+                                modelName: 'Expense',
+                                documentId: expenseId,
+                                deletedData: expense.toObject(),
+                                deletedBy: userId,
+                                reason: `Cascade deletion: linked to transaction entry ${id}`,
+                                context: 'cascade_delete',
+                                metadata: {
+                                    transactionEntryId: id,
+                                    deletionType: 'linked_expense'
+                                },
+                                session: session
+                            });
+                            await Expense.findByIdAndDelete(expenseId).session(session);
+                            deletedItems.linkedExpenses++;
+                            console.log(`   ✅ Deleted linked expense: ${expenseId} - Logged to deletions collection`);
+                        }
+                    } catch (logError) {
+                        console.error(`⚠️ Error deleting linked expense (${expenseId}):`, logError.message);
+                    }
+                }
+            } else if (linkedExpenseIds.size > 0) {
+                console.log(`   ℹ️ Found ${linkedExpenseIds.size} linked expenses (not deleted - use ?deleteLinkedExpenses=true to delete)`);
+            }
+            
+            // 4. Check if any transactions are now empty and delete them
+            const relatedTransactionIds = [...new Set([
+                ...relatedEntries.map(e => e.transactionId),
+                transactionEntry.transactionId
+            ].filter(Boolean))];
+            
+            let loggedTransactions = 0;
+            for (const transactionId of relatedTransactionIds) {
                 const remainingEntries = await TransactionEntry.countDocuments({ 
-                    transactionId: transactionEntry.transactionId 
-                });
-                if (remainingEntries <= 1) { // Only this entry remains
-                    const transaction = await Transaction.findOneAndDelete({ 
-                        transactionId: transactionEntry.transactionId 
-                    });
+                    transactionId: transactionId 
+                }).session(session);
+                
+                if (remainingEntries === 0) {
+                    const transaction = await Transaction.findOne({ 
+                        transactionId: transactionId 
+                    }).session(session);
+                    
                     if (transaction) {
+                        try {
+                            await DeletionLogService.logDeletion({
+                                modelName: 'Transaction',
+                                documentId: transaction._id,
+                                deletedData: transaction.toObject(),
+                                deletedBy: userId,
+                                reason: `Cascade deletion: empty transaction after entry deletion`,
+                                context: 'cascade_delete',
+                                metadata: {
+                                    transactionEntryId: id,
+                                    transactionId: transactionId,
+                                    deletionType: 'empty_transaction'
+                                },
+                                session: session
+                            });
+                            loggedTransactions++;
+                        } catch (logError) {
+                            console.error(`⚠️ Error logging deletion for Transaction (${transaction._id}):`, logError.message);
+                        }
+                        
+                        await Transaction.findOneAndDelete({ 
+                            transactionId: transactionId 
+                        }).session(session);
                         deletedItems.transactions++;
-                        console.log(`   ✅ Deleted associated transaction: ${transactionEntry.transactionId}`);
+                        console.log(`   ✅ Deleted empty transaction: ${transactionId} - Logged to deletions collection`);
                     }
                 }
             }
             
-            // 3. Delete the main transaction entry
-            await TransactionEntry.findByIdAndDelete(id);
+            // 5. Log the main transaction entry deletion
+            try {
+                await DeletionLogService.logDeletion({
+                    modelName: 'TransactionEntry',
+                    documentId: id,
+                    deletedData: deletedData,
+                    deletedBy: userId,
+                    reason: `Transaction entry deletion with cascade`,
+                    context: 'delete',
+                    metadata: {
+                        deletionType: 'transaction_entry',
+                        transactionId: transactionEntry.transactionId,
+                        source: transactionEntry.source,
+                        cascadeDeleted: {
+                            relatedEntries: deletedItems.relatedEntries,
+                            transactions: deletedItems.transactions
+                        }
+                    },
+                    session: session
+                });
+            } catch (logError) {
+                console.error(`⚠️ Error logging deletion for TransactionEntry (${id}):`, logError.message);
+            }
+            
+            // 6. Delete the main transaction entry
+            await TransactionEntry.findByIdAndDelete(id).session(session);
             console.log('✅ Transaction entry deleted successfully');
             
-            // 4. Log audit trail
+            // 7. Log to audit trail
             try {
-                const { createAuditLog } = require('../../utils/auditLogger');
                 await createAuditLog({
-                    user: req.user?._id || req.user?.id,
+                    user: userId,
                     action: 'delete_transaction_entry',
                     collection: 'TransactionEntry',
                     recordId: id,
@@ -1017,8 +1479,8 @@ class TransactionController {
                         deletedEntry: deletedData,
                         cascadeDeleted: {
                             relatedEntries: deletedItems.relatedEntries,
-                            accruals: deletedItems.accruals,
-                            reversals: deletedItems.reversals,
+                            linkedPayments: deletedItems.linkedPayments,
+                            linkedExpenses: deletedItems.linkedExpenses,
                             transactions: deletedItems.transactions
                         }
                     })
@@ -1027,27 +1489,34 @@ class TransactionController {
                 console.error('⚠️ Failed to create audit log:', auditError);
             }
             
+            await session.commitTransaction();
+            
             res.status(200).json({
                 success: true,
-                message: 'Transaction entry deleted successfully with cascade delete',
+                message: 'Transaction entry deleted successfully with cascade delete (ID-based only)',
                 data: {
                     deletedEntry: deletedData,
                     cascadeDeleted: {
                         relatedEntries: deletedItems.relatedEntries,
-                        accruals: deletedItems.accruals,
-                        reversals: deletedItems.reversals,
+                        linkedPayments: deletedItems.linkedPayments,
+                        linkedExpenses: deletedItems.linkedExpenses,
                         transactions: deletedItems.transactions
-                    }
+                    },
+                    loggedToDeletions: true,
+                    loggedToAudit: true
                 }
             });
             
         } catch (error) {
+            await session.abortTransaction();
             console.error('Error deleting transaction entry:', error);
             res.status(500).json({
                 success: false,
                 message: 'Failed to delete transaction entry',
                 error: error.message
             });
+        } finally {
+            session.endSession();
         }
     }
 

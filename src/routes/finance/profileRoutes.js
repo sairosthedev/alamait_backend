@@ -1,4 +1,4 @@
-// src/routes/admin/adminProfileRoutes.js
+// src/routes/finance/profileRoutes.js
 const express = require('express');
 const router = express.Router();
 const { check } = require('express-validator');
@@ -22,13 +22,13 @@ const profilePictureUpload = multer({
     }
 });
 
-// Get admin profile (for admin, CEO, and finance roles)
-router.get('/', auth, checkRole('admin', 'ceo', 'finance_admin', 'finance_user'), getAdminProfile);
+// Get finance profile (for finance roles)
+router.get('/', auth, checkRole('finance_admin', 'finance_user', 'admin', 'ceo'), getAdminProfile);
 
-// Update admin profile (for admin, CEO, and finance roles)
+// Update finance profile (for finance roles)
 router.put('/', [
     auth,
-    checkRole('admin', 'ceo', 'finance_admin', 'finance_user'),
+    checkRole('finance_admin', 'finance_user', 'admin', 'ceo'),
     check('firstName', 'First name is required').optional().notEmpty(),
     check('lastName', 'Last name is required').optional().notEmpty(),
     check('phone', 'Please include a valid phone number').optional().notEmpty(),
@@ -37,18 +37,18 @@ router.put('/', [
     check('bio', 'Bio must be less than 500 characters').optional().isLength({ max: 500 }),
 ], updateAdminProfile);
 
-// Change password (for admin, CEO, and finance roles)
+// Change password (for finance roles)
 router.put('/change-password', [
     auth,
-    checkRole('admin', 'ceo', 'finance_admin', 'finance_user'),
+    checkRole('finance_admin', 'finance_user', 'admin', 'ceo'),
     check('currentPassword', 'Current password is required').notEmpty(),
     check('newPassword', 'Please enter a password with 8 or more characters').isLength({ min: 8 }),
 ], changePassword);
 
-// Upload profile picture (for admin, CEO, and finance roles) - supports both POST and PUT
+// Upload profile picture (for finance roles) - supports both POST and PUT
 router.post('/picture', 
     auth, 
-    checkRole('admin', 'ceo', 'finance_admin', 'finance_user'),
+    checkRole('finance_admin', 'finance_user', 'admin', 'ceo'),
     (req, res, next) => {
         profilePictureUpload.single('profilePicture')(req, res, (err) => {
             if (err instanceof multer.MulterError) {
@@ -76,7 +76,7 @@ router.post('/picture',
 
 router.put('/picture', 
     auth, 
-    checkRole('admin', 'ceo', 'finance_admin', 'finance_user'),
+    checkRole('finance_admin', 'finance_user', 'admin', 'ceo'),
     (req, res, next) => {
         profilePictureUpload.single('profilePicture')(req, res, (err) => {
             if (err instanceof multer.MulterError) {
@@ -102,4 +102,5 @@ router.put('/picture',
     uploadProfilePicture
 );
 
-module.exports = router; 
+module.exports = router;
+

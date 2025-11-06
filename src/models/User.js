@@ -119,6 +119,20 @@ const userSchema = new mongoose.Schema({
     enum: ['active', 'inactive', 'suspended', 'expired'],
     default: 'active'
   },
+  // Profile fields
+  bio: {
+    type: String,
+    trim: true,
+    maxlength: 500
+  },
+  department: {
+    type: String,
+    trim: true
+  },
+  office: {
+    type: String,
+    trim: true
+  },
   // Signed lease fields
   signedLeasePath: {
     type: String,
