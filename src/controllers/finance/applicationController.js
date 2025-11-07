@@ -7,8 +7,6 @@ const { validationResult } = require('express-validator');
 exports.getAllApplications = async (req, res) => {
     try {
         const { 
-            page = 1, 
-            limit = 10, 
             status, 
             type,
             sortBy = 'applicationDate',
@@ -33,14 +31,9 @@ exports.getAllApplications = async (req, res) => {
         const sortOptions = {};
         sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
-        // Pagination
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-        
-        // Get applications with pagination
+        // Get all applications (no pagination)
         const applications = await Application.find(filter)
             .sort(sortOptions)
-            .skip(skip)
-            .limit(parseInt(limit))
             .lean();
 
         // Get all residences to check room status
@@ -109,7 +102,7 @@ exports.getAllApplications = async (req, res) => {
         // Return response in the format expected by frontend (similar to admin endpoint)
         res.json({
             success: true,
-            count: transformedApplications.length,
+            count: transformedApplications.length, // Total count of all applications matching the filter
             applications: transformedApplications,
             rooms: Object.entries(roomStatusMap).map(([roomNumber, details]) => ({
                 name: roomNumber,

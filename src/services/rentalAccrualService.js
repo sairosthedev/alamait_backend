@@ -738,12 +738,70 @@ class RentalAccrualService {
             let totalSkipped = 0;
             let totalErrors = 0;
             const errors = [];
+            const incorrectAccruals = []; // Track accruals created after lease end date
 
             for (const app of approvedApplications) {
                 const leaseStart = new Date(app.startDate);
                 const leaseEnd = new Date(app.endDate);
                 if (isNaN(leaseStart) || isNaN(leaseEnd)) {
                     continue;
+                }
+
+                const leaseEndYear = leaseEnd.getFullYear();
+                const leaseEndMonth = leaseEnd.getMonth() + 1;
+
+                // Check for existing accruals that are AFTER the lease end date
+                const appIdString = app._id.toString();
+                const appIdObj = new mongoose.Types.ObjectId(app._id);
+                
+                const existingAccrualsQuery = {
+                    $or: [
+                        { source: 'rental_accrual', sourceId: appIdObj },
+                        { source: 'rental_accrual', 'metadata.studentId': appIdString },
+                        { source: 'rental_accrual', 'metadata.applicationId': appIdString }
+                    ],
+                    status: 'posted'
+                };
+                
+                const allAccruals = await TransactionEntry.find(existingAccrualsQuery).lean();
+                
+                for (const accrual of allAccruals) {
+                    // Get accrual month/year from metadata or date
+                    let accrualMonth, accrualYear;
+                    
+                    if (accrual.metadata?.accrualMonth && accrual.metadata?.accrualYear) {
+                        accrualMonth = accrual.metadata.accrualMonth;
+                        accrualYear = accrual.metadata.accrualYear;
+                    } else {
+                        const accrualDate = new Date(accrual.date);
+                        accrualMonth = accrualDate.getMonth() + 1;
+                        accrualYear = accrualDate.getFullYear();
+                    }
+                    
+                    // Check if accrual is for a month after the lease end date
+                    const isAfterLeaseEnd = 
+                        accrualYear > leaseEndYear || 
+                        (accrualYear === leaseEndYear && accrualMonth > leaseEndMonth);
+                    
+                    // Skip lease start transactions (they're handled separately)
+                    const isLeaseStart = accrual.metadata?.type === 'lease_start' || 
+                                        (accrual.description && /lease start/i.test(accrual.description));
+                    
+                    if (isAfterLeaseEnd && !isLeaseStart) {
+                        incorrectAccruals.push({
+                            applicationId: app._id.toString(),
+                            studentName: `${app.firstName || ''} ${app.lastName || ''}`.trim(),
+                            email: app.email,
+                            leaseEndDate: app.endDate,
+                            accrualId: accrual._id.toString(),
+                            accrualTransactionId: accrual.transactionId,
+                            accrualMonth,
+                            accrualYear,
+                            accrualAmount: accrual.totalDebit,
+                            accrualDescription: accrual.description,
+                            issue: `Accrual for ${accrualMonth}/${accrualYear} is after lease end date (${leaseEndMonth}/${leaseEndYear})`
+                        });
+                    }
                 }
 
                 // Determine backfill window: from month AFTER lease start up to current month
@@ -800,11 +858,35 @@ class RentalAccrualService {
             }
 
             console.log(`✅ Backfill complete. Created: ${totalCreated}, Skipped existing: ${totalSkipped}, Errors: ${totalErrors}`);
+            
+            if (incorrectAccruals.length > 0) {
+                console.log(`\n⚠️ Found ${incorrectAccruals.length} incorrect accruals (created after lease end date):`);
+                incorrectAccruals.slice(0, 10).forEach(issue => {
+                    console.log(`   - ${issue.studentName} (${issue.email}): Accrual for ${issue.accrualMonth}/${issue.accrualYear} after lease end ${issue.leaseEndDate}`);
+                });
+                if (incorrectAccruals.length > 10) {
+                    console.log(`   ... and ${incorrectAccruals.length - 10} more`);
+                }
+                console.log(`\n💡 Use POST /api/finance/accrual-correction/correct to fix these issues`);
+            }
+            
             if (errors.length > 0) {
                 console.log('⚠️ Backfill errors:', errors.slice(0, 10)); // print first few
             }
 
-            return { success: true, created: totalCreated, skipped: totalSkipped, errors };
+            return { 
+                success: true, 
+                created: totalCreated, 
+                skipped: totalSkipped, 
+                errors,
+                incorrectAccruals: incorrectAccruals.length > 0 ? incorrectAccruals : undefined,
+                summary: {
+                    totalCreated,
+                    totalSkipped,
+                    totalErrors: errors.length,
+                    incorrectAccrualsCount: incorrectAccruals.length
+                }
+            };
         } catch (error) {
             console.error('❌ Error backfilling monthly rent accruals:', error);
             return { success: false, error: error.message };

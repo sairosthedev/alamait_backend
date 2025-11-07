@@ -443,6 +443,10 @@ app.use('/api/financial-reports', financialReportsRoutes);
 const rentalAccrualRoutes = require('./routes/rentalAccrualRoutes');
 app.use('/api/rental-accrual', rentalAccrualRoutes);
 
+// Accrual correction routes
+const accrualCorrectionRoutes = require('./routes/finance/accrualCorrectionRoutes');
+app.use('/api/finance/accrual-correction', accrualCorrectionRoutes);
+
 // Accounting routes (Accrual vs Cash Basis)
 const accountingRoutes = require('./routes/accountingRoutes');
 app.use('/api/accounting', accountingRoutes);
