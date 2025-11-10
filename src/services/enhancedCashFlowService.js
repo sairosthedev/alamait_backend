@@ -121,7 +121,11 @@ class EnhancedCashFlowService {
      */
     static async generateDetailedCashFlowStatement(period, basis = 'cash', residenceId = null) {
         try {
-            console.log(`💰 Generating Enhanced Detailed Cash Flow Statement for ${period} (${basis} basis)${residenceId ? ` - Residence: ${residenceId}` : ''}`);
+            // Optimize: Reduce logging in production
+            const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+            if (isDebugMode) {
+                console.log(`💰 Generating Enhanced Detailed Cash Flow Statement for ${period} (${basis} basis)${residenceId ? ` - Residence: ${residenceId}` : ''}`);
+            }
             
             // Determine if period is monthly (YYYY-MM) or yearly (YYYY)
             let startDate, endDate;
@@ -159,12 +163,7 @@ class EnhancedCashFlowService {
             // Exclude reversed and draft transactions from cash flow
             transactionQuery.status = { $nin: ['reversed', 'draft'] };
             
-            const transactionEntries = await TransactionEntry.find(transactionQuery)
-                .populate('residence')
-                .populate('entries')
-                .sort({ date: 1 });
-            
-            // Get payments for additional income details
+            // Optimize: Run all queries in parallel for better performance
             const paymentQuery = {
                 date: { $gte: startDate, $lte: endDate },
                 status: { $in: ['confirmed', 'completed', 'paid', 'Confirmed', 'Completed', 'Paid'] }
@@ -174,12 +173,6 @@ class EnhancedCashFlowService {
                 paymentQuery.residence = residenceId;
             }
             
-            const payments = await Payment.find(paymentQuery)
-                .populate('student')
-                .populate('residence')
-                .sort({ date: 1 });
-            
-            // Get expenses for additional expense details
             const expenseQuery = {
                 expenseDate: { $gte: startDate, $lte: endDate },
                 paymentStatus: 'Paid'
@@ -189,21 +182,32 @@ class EnhancedCashFlowService {
                 expenseQuery.residence = residenceId;
             }
             
-            const expenses = await Expense.find(expenseQuery)
-                .populate('residence')
-                .sort({ expenseDate: 1 });
+            // Run all three queries in parallel
+            const [transactionEntries, payments, expenses] = await Promise.all([
+                TransactionEntry.find(transactionQuery)
+                    .select('transactionId date description source status residence entries accountCode accountName debit credit totalDebit totalCredit metadata')
+                    .sort({ date: 1 })
+                    .lean(),
+                Payment.find(paymentQuery)
+                    .select('paymentId date amount rentAmount adminFee deposit status residence student')
+                    .sort({ date: 1 })
+                    .lean(),
+                Expense.find(expenseQuery)
+                    .select('expenseId expenseDate amount category paymentStatus residence description title')
+                    .sort({ expenseDate: 1 })
+                    .lean()
+            ]);
             
-            // Process detailed income breakdown
-            const incomeBreakdown = await this.processDetailedIncome(transactionEntries, payments, period, residenceId);
-            
-            // Create comprehensive transaction-expense mapping
+            // Optimize: Run processing functions in parallel where possible
+            // First, create transaction-expense mapping (needed by other functions)
             const transactionExpenseMapping = await this.createTransactionExpenseMapping(transactionEntries, expenses, residenceId);
             
-            // Process detailed expense breakdown with proper mapping
-            const expenseBreakdown = await this.processDetailedExpenses(transactionEntries, expenses, period, residenceId, transactionExpenseMapping);
-            
-            // Process individual expenses (not combined by category)
-            const individualExpenses = await this.processIndividualExpenses(transactionEntries, expenses, period, residenceId, transactionExpenseMapping);
+            // Then run independent processing functions in parallel
+            const [incomeBreakdown, expenseBreakdown, individualExpenses] = await Promise.all([
+                this.processDetailedIncome(transactionEntries, payments, period, residenceId),
+                this.processDetailedExpenses(transactionEntries, expenses, period, residenceId, transactionExpenseMapping),
+                this.processIndividualExpenses(transactionEntries, expenses, period, residenceId, transactionExpenseMapping)
+            ]);
             
             // Calculate cash flow by activity
             const operatingActivities = this.calculateOperatingActivities(incomeBreakdown, individualExpenses);
@@ -223,94 +227,50 @@ class EnhancedCashFlowService {
             
             const netChangeInCash = netOperatingCashFlow + netInvestingCashFlow + netFinancingCashFlow;
             
-            // Calculate actual opening cash balance at beginning of period
-            // For cashflow, we need the balance BEFORE the period starts
+            // Optimize: Calculate opening/closing balances and account breakdown in parallel
             const openingDate = new Date(startDate);
             openingDate.setDate(openingDate.getDate() - 1); // Day before period starts
             
-            // Ensure the opening date is valid
-            let openingCashBalance;
-            if (isNaN(openingDate.getTime())) {
-                console.log('⚠️ Invalid opening date, using start date instead');
-                openingCashBalance = await this.getOpeningCashBalance(startDate, residenceId);
-            } else {
-                openingCashBalance = await this.getOpeningCashBalance(openingDate, residenceId);
+            // Run cash balance calculations in parallel
+            const [openingCashBalance, closingCashBalance, cashBalanceByAccount] = await Promise.all([
+                isNaN(openingDate.getTime()) 
+                    ? this.getOpeningCashBalance(startDate, residenceId)
+                    : this.getOpeningCashBalance(openingDate, residenceId),
+                this.getClosingCashBalance(endDate, residenceId),
+                this.getCashBalanceByAccount(endDate, residenceId)
+            ]);
+            
+            // Calculate total from account breakdown (optimized)
+            const totalFromAccountBreakdown = Object.values(cashBalanceByAccount).reduce(
+                (sum, account) => sum + (account.balance || 0), 
+                0
+            );
+            
+            // Optimize: Calculate cash breakdown and generate monthly breakdown in parallel
+            const [cashBreakdown, monthlyBreakdown] = await Promise.all([
+                this.calculateCashBreakdown(transactionEntries, payments, period, residenceId),
+                this.generateMonthlyBreakdown(transactionEntries, payments, expenses, period, openingCashBalance, startDate, endDate, null, cashBalanceByAccount)
+            ]);
+            
+            // Update monthly breakdown with cash breakdown data if needed
+            if (cashBreakdown) {
+                // Merge cash breakdown data into monthly breakdown
+                Object.keys(monthlyBreakdown).forEach(monthKey => {
+                    if (cashBreakdown.by_month && cashBreakdown.by_month[monthKey]) {
+                        monthlyBreakdown[monthKey].cash_breakdown = cashBreakdown.by_month[monthKey];
+                    }
+                });
             }
             
-            // Calculate actual closing cash balance at end of period
-            const closingCashBalance = await this.getClosingCashBalance(endDate, residenceId);
-            console.log(`💰 Actual closing cash balance: $${closingCashBalance}`);
-            
-            // Get cash balance breakdown by account
-            const cashBalanceByAccount = await this.getCashBalanceByAccount(endDate, residenceId);
-            console.log('💰 Cash balance by account result:', cashBalanceByAccount);
-            
-            // Calculate total from account breakdown
-            let totalFromAccountBreakdown = 0;
-            Object.values(cashBalanceByAccount).forEach(account => {
-                totalFromAccountBreakdown += account.balance || 0;
-            });
-            console.log(`💰 Total from account breakdown: $${totalFromAccountBreakdown}`);
-            
-            // Calculate cash breakdown
-            const cashBreakdown = await this.calculateCashBreakdown(transactionEntries, payments, period, residenceId);
-            
-            // Generate monthly breakdown
-            const monthlyBreakdown = await this.generateMonthlyBreakdown(transactionEntries, payments, expenses, period, openingCashBalance, startDate, endDate, cashBreakdown, cashBalanceByAccount);
-            
-            // FIXED: Use reliable monthly breakdown method
-            console.log('🔧 RELIABLE METHOD - Creating monthly breakdown with simple logic...');
-            console.log('🔧 RELIABLE METHOD - Transaction entries count:', transactionEntries.length);
-            console.log('🔧 RELIABLE METHOD - First few transactions:', transactionEntries.slice(0, 3).map(t => ({ id: t.transactionId, date: t.date, description: t.description })));
-            
-            // DEBUG: Check what transactions we have
-            console.log('🐛 DEBUG - Checking transaction entries for monthly breakdown:');
-            transactionEntries.forEach((entry, index) => {
-                console.log(`📊 Transaction ${index + 1}:`);
-                console.log(`   ID: ${entry.transactionId}`);
-                console.log(`   Date: ${entry.date}`);
-                console.log(`   Description: ${entry.description}`);
-                console.log(`   Total Debit: ${entry.totalDebit}`);
-                console.log(`   Total Credit: ${entry.totalCredit}`);
-                console.log(`   Entries count: ${entry.entries?.length || 0}`);
-                
-                if (entry.entries && entry.entries.length > 0) {
-                    entry.entries.forEach((line, lineIndex) => {
-                        console.log(`   Line ${lineIndex + 1}: ${line.accountCode} ${line.accountName} - Debit: ${line.debit}, Credit: ${line.credit}`);
-                    });
-                }
-            });
+            // Optimize: Reduce debug logging in production (reuse isDebugMode from above)
+            if (isDebugMode) {
+                console.log('🔧 RELIABLE METHOD - Transaction entries count:', transactionEntries.length);
+            }
             
             const oldFormatMonthlyBreakdown = EnhancedCashFlowService.generateReliableMonthlyBreakdown(transactionEntries, period, openingCashBalance, cashBalanceByAccount);
             
             // Generate tabular monthly breakdown with proper cash balances
             const tabularMonthlyBreakdown = await EnhancedCashFlowService.generateTabularMonthlyBreakdown(oldFormatMonthlyBreakdown, period, openingCashBalance, cashBalanceByAccount);
-            console.log('🔧 RELIABLE METHOD - October data:', oldFormatMonthlyBreakdown?.october?.operating_activities);
-            console.log('🔧 RELIABLE METHOD - October expenses:', oldFormatMonthlyBreakdown?.october?.expenses);
-            console.log('🔧 RELIABLE METHOD - All months with data:', Object.keys(oldFormatMonthlyBreakdown).filter(month => oldFormatMonthlyBreakdown[month].expenses.total > 0));
-            
-            // Debug transaction dates by month
-            console.log('🐛 DEBUG - Transaction Dates by Month:');
-            const monthsDebug = {};
-            transactionEntries.forEach(entry => {
-                const month = new Date(entry.date).getMonth();
-                const monthName = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'][month];
-                if (!monthsDebug[monthName]) monthsDebug[monthName] = [];
-                monthsDebug[monthName].push({
-                    id: entry.transactionId,
-                    date: entry.date,
-                    desc: entry.description,
-                    debit: entry.totalDebit,
-                    credit: entry.totalCredit
-                });
-            });
-
-            Object.keys(monthsDebug).forEach(month => {
-                console.log(`📅 ${month}: ${monthsDebug[month].length} transactions`);
-                monthsDebug[month].forEach(t => {
-                    console.log(`   ${t.id}: ${t.date} - ${t.desc} - $${t.debit || t.credit}`);
-                });
-            });
             
             // FINAL VERIFICATION: Ensure all monthly totals are correct from transactions
             // This is the LAST CHANCE to fix any discrepancies before returning
@@ -465,8 +425,7 @@ class EnhancedCashFlowService {
                 admin_fees: { total: 0, transactions: [] },
                 deposits: { total: 0, transactions: [] },
                 utilities: { total: 0, transactions: [] },
-                advance_payments: { total: 0, transactions: [] },
-                other_income: { total: 0, transactions: [] }
+                advance_payments: { total: 0, transactions: [] }
             },
             by_residence: {},
             by_month: {},
@@ -486,40 +445,43 @@ class EnhancedCashFlowService {
         // Create a map of transaction entries to their corresponding payments for accurate date handling
         const transactionToPaymentMap = new Map();
         
-        // Debug: Log all transaction IDs to see what we're working with
-        console.log(`🔍 Total transactions loaded: ${transactionEntries.length}`);
-        const transactionIds = transactionEntries.map(t => t.transactionId);
-        console.log(`🔍 Transaction IDs:`, transactionIds);
+        // Optimize: Reduce logging in production
+        const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+        
+        // Optimize: Create payment lookup maps for O(1) access instead of O(n) find()
+        const paymentMapById = new Map();
+        const paymentMapByPaymentId = new Map();
+        payments.forEach(payment => {
+            if (payment._id) {
+                paymentMapById.set(payment._id.toString(), payment);
+            }
+            if (payment.paymentId) {
+                paymentMapByPaymentId.set(payment.paymentId, payment);
+            }
+        });
         
         // Filter transactions by residence if specified
         if (residenceId) {
-            console.log(`🏠 Filtering transactions for residence: ${residenceId}`);
-            const originalCount = transactionEntries.length;
-            
-            // Filter transactions that belong to the specified residence
+            // Optimize: Use filter with efficient lookup
             const filteredTransactions = transactionEntries.filter(entry => {
                 // Check if transaction has direct residence match
                 if (entry.residence && entry.residence._id && 
                     entry.residence._id.toString() === residenceId.toString()) {
-                    console.log(`✅ Transaction ${entry.transactionId} has direct residence match`);
                     return true;
                 }
                 
                 // For transactions without residence field, check if they're linked to payments for this residence
                 if (!entry.residence || entry.residence === "Unknown") {
-                    const correspondingPayment = payments.find(p => 
-                        p._id.toString() === entry.reference || 
-                        p.paymentId === entry.reference
-                    );
+                    const correspondingPayment = entry.reference 
+                        ? (paymentMapById.get(entry.reference) || paymentMapByPaymentId.get(entry.reference))
+                        : null;
                     
                     if (correspondingPayment && correspondingPayment.residence && 
                         correspondingPayment.residence._id.toString() === residenceId.toString()) {
-                        console.log(`✅ Transaction ${entry.transactionId} linked to payment for residence ${correspondingPayment.residence.name}`);
                         return true;
                     }
                 }
                 
-                console.log(`❌ Transaction ${entry.transactionId} does not belong to residence ${residenceId}`);
                 return false;
             });
             
@@ -527,10 +489,7 @@ class EnhancedCashFlowService {
             transactionEntries.length = 0;
             transactionEntries.push(...filteredTransactions);
             
-            console.log(`🏠 Filtered transactions: ${originalCount} → ${transactionEntries.length} (residence: ${residenceId})`);
-            
             // Also filter payments by residence
-            const originalPaymentCount = payments.length;
             const filteredPayments = payments.filter(payment => {
                 if (payment.residence && payment.residence._id && 
                     payment.residence._id.toString() === residenceId.toString()) {
@@ -543,43 +502,26 @@ class EnhancedCashFlowService {
             payments.length = 0;
             payments.push(...filteredPayments);
             
-            console.log(`🏠 Filtered payments: ${originalPaymentCount} → ${payments.length} (residence: ${residenceId})`);
-        }
-        
-        // Check if R180 transaction is in the loaded transactions
-        const r180Transaction = transactionEntries.find(t => t.transactionId === 'TXN17570154497464WBST');
-        if (r180Transaction) {
-            console.log(`✅ R180 Transaction found in loaded transactions:`, {
-                transactionId: r180Transaction.transactionId,
-                reference: r180Transaction.reference,
-                date: r180Transaction.date
+            // Rebuild payment maps after filtering
+            paymentMapById.clear();
+            paymentMapByPaymentId.clear();
+            payments.forEach(payment => {
+                if (payment._id) {
+                    paymentMapById.set(payment._id.toString(), payment);
+                }
+                if (payment.paymentId) {
+                    paymentMapByPaymentId.set(payment.paymentId, payment);
+                }
             });
-        } else {
-            console.log(`❌ R180 Transaction NOT found in loaded transactions`);
         }
         
-        // First, create a simple mapping based on reference field
+        // Optimize: Create transaction-to-payment mapping using efficient O(1) lookups
         transactionEntries.forEach(entry => {
             if (entry.reference) {
-                const payment = payments.find(p => p._id.toString() === entry.reference);
+                const payment = paymentMapById.get(entry.reference) || paymentMapByPaymentId.get(entry.reference);
                 if (payment) {
                     transactionToPaymentMap.set(entry.transactionId, payment);
-                    console.log(`🔗 Mapped transaction ${entry.transactionId} to payment ${payment.paymentId}`);
-                } else {
-                    console.log(`⚠️ No payment found for reference ${entry.reference} in transaction ${entry.transactionId}`);
                 }
-            } else {
-                console.log(`📝 Processing transaction ${entry.transactionId} without payment reference`);
-            }
-            
-            // Special logging for R180 transaction
-            if (entry.transactionId === 'TXN17570154497464WBST') {
-                console.log(`🔍 R180 Transaction in mapping loop:`, {
-                    transactionId: entry.transactionId,
-                    reference: entry.reference,
-                    hasReference: !!entry.reference,
-                    foundPayment: !!payments.find(p => p._id.toString() === entry.reference)
-                });
             }
         });
         
@@ -588,21 +530,19 @@ class EnhancedCashFlowService {
             transactionEntries.forEach(entry => {
                 let correspondingPayment = null;
                 
-                // PRIORITY 1: Reference field (payment ID)
+                // PRIORITY 1: Reference field (payment ID) - use map for O(1) lookup
                 if (entry.reference) {
-                    correspondingPayment = payments.find(p => p._id.toString() === entry.reference);
+                    correspondingPayment = paymentMapById.get(entry.reference) || paymentMapByPaymentId.get(entry.reference);
                     if (correspondingPayment) {
                         transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
-                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} by reference with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
                     }
                 }
                 
-                // PRIORITY 2: PaymentId in metadata
+                // PRIORITY 2: PaymentId in metadata - use map for O(1) lookup
                 if (!correspondingPayment && entry.metadata && entry.metadata.paymentId) {
-                    correspondingPayment = payments.find(p => p.paymentId === entry.metadata.paymentId);
+                    correspondingPayment = paymentMapByPaymentId.get(entry.metadata.paymentId);
                     if (correspondingPayment) {
                         transactionToPaymentMap.set(entry.transactionId, correspondingPayment);
-                        console.log(`🔗 Linked transaction ${entry.transactionId} to payment ${correspondingPayment.paymentId} by paymentId with date ${correspondingPayment.date.toISOString().slice(0, 7)}`);
                     }
                 }
                 
@@ -759,6 +699,29 @@ class EnhancedCashFlowService {
                     
                     // Mark this transaction as processed
                     processedTransactions.add(entry.transactionId);
+                    
+                    // Check for late payment fees - exclude from cash flow entirely
+                    const entryDescription = (entry.description || '').toLowerCase();
+                    const isLatePaymentFee = entryDescription.includes('late') && 
+                                             (entryDescription.includes('payment') || entryDescription.includes('fee'));
+                    
+                    // Also check if any entry line has late payment fee account
+                    let hasLatePaymentFeeAccount = false;
+                    if (entry.entries && Array.isArray(entry.entries)) {
+                        for (const line of entry.entries) {
+                            const lineAccountName = (line.accountName || line.account?.name || '').toLowerCase();
+                            if (lineAccountName.includes('late') && 
+                                (lineAccountName.includes('payment') || lineAccountName.includes('fee'))) {
+                                hasLatePaymentFeeAccount = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (isLatePaymentFee || hasLatePaymentFeeAccount) {
+                        // Late payment fees should be excluded from cash flow income entirely
+                        return; // Skip this transaction entry
+                    }
                     
                     incomeBreakdown.total += incomeAmount;
                     
@@ -1380,6 +1343,16 @@ class EnhancedCashFlowService {
                     const credit = line.credit || 0;
                     
                     if (accountType === 'Income' || accountType === 'income') {
+                        // Check if this is a late payment fee - exclude from cash flow entirely
+                        const accountNameLower = accountName.toLowerCase();
+                        const isLatePaymentFee = accountNameLower.includes('late') && 
+                                                 (accountNameLower.includes('payment') || accountNameLower.includes('fee'));
+                        
+                        if (isLatePaymentFee) {
+                            // Late payment fees should be excluded from cash flow income
+                            return; // Skip this entry entirely
+                        }
+                        
                         incomeBreakdown.total += credit;
                         
                         // Categorize by account code
@@ -1409,9 +1382,21 @@ class EnhancedCashFlowService {
                                    accountCode === '2028' || accountCode === '20002' || accountCode === '2020' || 
                                    accountCode === '2002' || accountCode === '20020' ||
                                    (accountCode.startsWith('200') && accountName.includes('security') && accountName.includes('deposit'))) {
+                            // Check if this is actually a late payment fee (not a deposit) - exclude from cash flow
+                            const accountNameLower = accountName.toLowerCase();
+                            const isLatePaymentFee = accountNameLower.includes('late') && 
+                                                     (accountNameLower.includes('payment') || accountNameLower.includes('fee'));
+                            
+                            if (isLatePaymentFee) {
+                                // Late payment fees should be excluded from cash flow income entirely
+                                return; // Skip this entry entirely
+                            }
+                            
                             // Deposits can be recorded as credits to liability accounts (2028, 20002, etc.)
                             // Also check if this entire transaction is a deposit transaction
                             const isDeposit = this.isDepositTransaction(entry);
+                            
+                            // Only categorize as deposit if it's actually a deposit
                             if (isDeposit || accountCode.startsWith('4003') || accountName.toLowerCase().includes('deposit') ||
                                 accountCode === '2028' || accountCode === '20002' || accountCode === '2020') {
                                 incomeBreakdown.by_source.deposits.total += credit;
@@ -1445,16 +1430,8 @@ class EnhancedCashFlowService {
                                 return; // Skip this transaction entry
                             }
                             
-                            incomeBreakdown.by_source.other_income.total += credit;
-                            incomeBreakdown.by_source.other_income.transactions.push({
-                                transactionId: entry.transactionId,
-                                date: effectiveDate, // Use payment date instead of transaction date
-                                amount: credit,
-                                accountCode,
-                                accountName,
-                                residence: entry.residence?.name || 'Unknown',
-                                description: entry.description || 'Other Income'
-                            });
+                            // Exclude other_income from cash flow entirely - skip this entry
+                            return; // Skip this transaction entry - don't add to any income category
                         }
                         
                         // Group by residence
@@ -1621,8 +1598,15 @@ class EnhancedCashFlowService {
                 
                 return false;
             });
-            console.log(`🏠 Filtered ${filteredTransactionEntries.length} transactions for residence ${residenceId} out of ${transactionEntries.length} total`);
+            // Optimize: Reduce logging in production
+            const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+            if (isDebugMode) {
+                console.log(`🏠 Filtered ${filteredTransactionEntries.length} transactions for residence ${residenceId} out of ${transactionEntries.length} total`);
+            }
         }
+        
+        // Optimize: Reduce logging in production
+        const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
         
         // Helper function to get residence name from transaction entry or related expense
         const getResidenceName = (entry, expenses) => {
@@ -1633,7 +1617,6 @@ class EnhancedCashFlowService {
                 const linkedExpense = transactionExpenseMapping.transactionToExpense.get(entry._id.toString());
                 if (linkedExpense && linkedExpense.residence) {
                     residenceName = linkedExpense.residence.name || 'Unknown';
-                    console.log(`🏠 Found residence for transaction ${entry.transactionId}: ${residenceName} from mapped expense ${linkedExpense.expenseId}`);
                     return residenceName;
                 }
             }
@@ -2398,7 +2381,6 @@ class EnhancedCashFlowService {
                 deposits: 0,
                 utilities: 0,
                 advance_payments: 0,
-                other_income: 0,
                 transactions: []
             },
             expenses: {
@@ -2414,8 +2396,7 @@ class EnhancedCashFlowService {
                     admin_fees: { amount: 0, description: "Administrative Fees" },
                     deposits: { amount: 0, description: "Security Deposits" },
                     utilities_income: { amount: 0, description: "Utilities Income" },
-                    advance_payments: { amount: 0, description: "Advance Payments from Students" },
-                    other_income: { amount: 0, description: "Other Income Sources" }
+                    advance_payments: { amount: 0, description: "Advance Payments from Students" }
                 }
             },
             investing_activities: {
@@ -3149,7 +3130,8 @@ class EnhancedCashFlowService {
                                     return; // Skip this transaction entry
                                 }
                                 
-                                months[monthKey].income.other_income += incomeAmount;
+                                // Exclude other_income from cash flow entirely - skip this entry
+                                return; // Skip this transaction entry - don't add to any income category
                             }
                         }
                     }
@@ -3755,7 +3737,6 @@ class EnhancedCashFlowService {
                         deposits: 0,
                         utilities: 0,
                         advance_payments: 0,
-                        other_income: 0,
                         // Individual expense categories
                         electricity: 0,
                         water: 0,
@@ -3780,8 +3761,7 @@ class EnhancedCashFlowService {
                     admin_fees: 0,
                     deposits: 0,
                     utilities: 0,
-                    advance_payments: 0,
-                    other_income: 0
+                    advance_payments: 0
                 },
                 expenses: { 
                     total: 0, 
@@ -4095,8 +4075,8 @@ class EnhancedCashFlowService {
                             return; // Skip this transaction entry
                         }
                         
-                        monthlyData[monthName].income.other_income += amount;
-                        monthlyData[monthName].operating_activities.breakdown.other_income += amount;
+                        // Exclude other_income from cash flow entirely - skip this entry
+                        return; // Skip this transaction entry - don't add to any income category
                     }
                 }
                 
@@ -4120,8 +4100,19 @@ class EnhancedCashFlowService {
                         monthlyData[monthName].income.admin_fees += amount;
                         monthlyData[monthName].operating_activities.breakdown.admin_fees += amount;
                     } else if (accountCode.startsWith('4003') || fallbackDesc.includes('deposit')) {
-                        monthlyData[monthName].income.deposits += amount;
-                        monthlyData[monthName].operating_activities.breakdown.deposits += amount;
+                        // Check if this is actually a late payment fee (not a deposit) - exclude from cash flow
+                        const accountNameLower = (line.accountName || '').toLowerCase();
+                        const isLatePaymentFee = accountNameLower.includes('late') && 
+                                                 (accountNameLower.includes('payment') || accountNameLower.includes('fee'));
+                        
+                        if (isLatePaymentFee) {
+                            // Late payment fees should be excluded from cash flow income entirely
+                            // Skip this entry - don't add to any income category
+                            return; // Skip to next line item in forEach
+                        } else {
+                            monthlyData[monthName].income.deposits += amount;
+                            monthlyData[monthName].operating_activities.breakdown.deposits += amount;
+                        }
                     } else if (accountCode.startsWith('4004') || accountCode.startsWith('4005') || fallbackDesc.includes('utilit') || fallbackDesc.includes('internet') || fallbackDesc.includes('wifi')) {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
@@ -4133,8 +4124,8 @@ class EnhancedCashFlowService {
                             return; // Skip this transaction entry
                         }
                         
-                        monthlyData[monthName].income.other_income += amount;
-                        monthlyData[monthName].operating_activities.breakdown.other_income += amount;
+                        // Exclude other_income from cash flow entirely - skip this entry
+                        return; // Skip this transaction entry - don't add to any income category
                     }
                 }
 
@@ -5336,9 +5327,8 @@ class EnhancedCashFlowService {
                             return; // Skip this transaction entry
                         }
                         
-                        months[monthKey].income.other_income += amount;
-                        months[monthKey].operating_activities.breakdown.other_income.amount += amount;
-                        months[monthKey].operating_activities.breakdown.other_income.transactions.push(entry);
+                        // Exclude other_income from cash flow entirely - skip this entry
+                        return; // Skip this transaction entry - don't add to any income category
                     }
                     
                     months[monthKey].income.total += amount;
@@ -6593,21 +6583,27 @@ class EnhancedCashFlowService {
                 query.residence = new mongoose.Types.ObjectId(residenceId);
             }
             
-            const entries = await TransactionEntry.find(query)
-                .populate('entries')
-                .sort({ date: 1 });
-            
-            let cashBalance = 0;
-            
-            entries.forEach(entry => {
-                entry.entries.forEach(line => {
-                    // Include all cash accounts (1000-1999)
-                    if (line.accountCode && (line.accountCode.startsWith('100') || line.accountCode.startsWith('101'))) {
-                        cashBalance += (line.debit || 0) - (line.credit || 0);
-                        console.log(`💰 Cash transaction: ${line.accountCode} (${line.accountName}) - Debit: ${line.debit || 0}, Credit: ${line.credit || 0}, Balance: ${cashBalance}`);
+            // Optimize: Use aggregation pipeline for much faster cash balance calculation
+            const cashBalanceResult = await TransactionEntry.aggregate([
+                { $match: query },
+                { $unwind: '$entries' },
+                {
+                    $match: {
+                        'entries.accountCode': { $regex: '^(100|101)' }
                     }
-                });
-            });
+                },
+                {
+                    $group: {
+                        _id: null,
+                        totalDebits: { $sum: { $ifNull: ['$entries.debit', 0] } },
+                        totalCredits: { $sum: { $ifNull: ['$entries.credit', 0] } }
+                    }
+                }
+            ]);
+            
+            const totalDebits = cashBalanceResult[0]?.totalDebits || 0;
+            const totalCredits = cashBalanceResult[0]?.totalCredits || 0;
+            const cashBalance = totalDebits - totalCredits;
             
             console.log(`💰 Total opening cash balance: $${cashBalance}`);
             return cashBalance;
@@ -6624,7 +6620,11 @@ class EnhancedCashFlowService {
      */
     static async getCashBalanceByAccount(asOfDate, residenceId = null) {
         try {
-            console.log(`💰 Calculating cash balance by account as of ${asOfDate.toISOString().slice(0, 10)}`);
+            // Optimize: Reduce logging in production
+            const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+            if (isDebugMode) {
+                console.log(`💰 Calculating cash balance by account as of ${asOfDate.toISOString().slice(0, 10)}`);
+            }
             
             // Get all transaction entries up to the specified date
             const query = {
@@ -6638,33 +6638,47 @@ class EnhancedCashFlowService {
                 query.residence = new mongoose.Types.ObjectId(residenceId);
             }
             
-            const entries = await TransactionEntry.find(query)
-                .populate('entries')
-                .sort({ date: 1 });
+            // Optimize: Use aggregation pipeline for much faster cash balance by account calculation
+            const accountBalancesResult = await TransactionEntry.aggregate([
+                { $match: query },
+                { $unwind: '$entries' },
+                {
+                    $match: {
+                        'entries.accountCode': { $regex: '^(100|101)' }
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            accountCode: '$entries.accountCode',
+                            accountName: '$entries.accountName'
+                        },
+                        totalDebits: { $sum: { $ifNull: ['$entries.debit', 0] } },
+                        totalCredits: { $sum: { $ifNull: ['$entries.credit', 0] } }
+                    }
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        accountCode: '$_id.accountCode',
+                        accountName: '$_id.accountName',
+                        balance: { $subtract: ['$totalDebits', '$totalCredits'] }
+                    }
+                }
+            ]);
             
             const accountBalances = {};
-            
-            entries.forEach(entry => {
-                entry.entries.forEach(line => {
-                    // Include all cash accounts (1000-1999)
-                    if (line.accountCode && (line.accountCode.startsWith('100') || line.accountCode.startsWith('101'))) {
-                        const accountCode = line.accountCode;
-                        const accountName = line.accountName;
-                        
-                        if (!accountBalances[accountCode]) {
-                            accountBalances[accountCode] = {
-                                accountCode,
-                                accountName,
-                                balance: 0
-                            };
-                        }
-                        
-                        accountBalances[accountCode].balance += (line.debit || 0) - (line.credit || 0);
-                    }
-                });
+            accountBalancesResult.forEach(account => {
+                accountBalances[account.accountCode] = {
+                    accountCode: account.accountCode,
+                    accountName: account.accountName,
+                    balance: account.balance
+                };
             });
             
-            console.log(`💰 Cash balance by account:`, accountBalances);
+            if (isDebugMode) {
+                console.log(`💰 Cash balance by account:`, accountBalances);
+            }
             return accountBalances;
             
         } catch (error) {
@@ -6679,7 +6693,11 @@ class EnhancedCashFlowService {
      */
     static async getClosingCashBalance(asOfDate, residenceId = null) {
         try {
-            console.log(`💰 Calculating closing cash balance as of ${asOfDate.toISOString().slice(0, 10)}`);
+            // Optimize: Reduce logging in production
+            const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+            if (isDebugMode) {
+                console.log(`💰 Calculating closing cash balance as of ${asOfDate.toISOString().slice(0, 10)}`);
+            }
             
             // Get all transaction entries up to the specified date
             const query = {
@@ -6693,22 +6711,31 @@ class EnhancedCashFlowService {
                 query.residence = new mongoose.Types.ObjectId(residenceId);
             }
             
-            const entries = await TransactionEntry.find(query)
-                .populate('entries')
-                .sort({ date: 1 });
-            
-            let cashBalance = 0;
-            
-            entries.forEach(entry => {
-                entry.entries.forEach(line => {
-                    // Include all cash accounts (1000-1999)
-                    if (line.accountCode && (line.accountCode.startsWith('100') || line.accountCode.startsWith('101'))) {
-                        cashBalance += (line.debit || 0) - (line.credit || 0);
+            // Optimize: Use aggregation pipeline for much faster cash balance calculation
+            const cashBalanceResult = await TransactionEntry.aggregate([
+                { $match: query },
+                { $unwind: '$entries' },
+                {
+                    $match: {
+                        'entries.accountCode': { $regex: '^(100|101)' }
                     }
-                });
-            });
+                },
+                {
+                    $group: {
+                        _id: null,
+                        totalDebits: { $sum: { $ifNull: ['$entries.debit', 0] } },
+                        totalCredits: { $sum: { $ifNull: ['$entries.credit', 0] } }
+                    }
+                }
+            ]);
             
-            console.log(`💰 Total closing cash balance: $${cashBalance}`);
+            const totalDebits = cashBalanceResult[0]?.totalDebits || 0;
+            const totalCredits = cashBalanceResult[0]?.totalCredits || 0;
+            const cashBalance = totalDebits - totalCredits;
+            
+            if (isDebugMode) {
+                console.log(`💰 Total closing cash balance: $${cashBalance}`);
+            }
             return cashBalance;
             
         } catch (error) {

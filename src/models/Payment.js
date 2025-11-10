@@ -178,6 +178,9 @@ paymentSchema.index({
     date: -1
 });
 
+// Optimize: Compound index for cash flow queries (date range + status + residence)
+paymentSchema.index({ date: 1, status: 1, residence: 1 });
+
 // 🆕 NEW: Compound index for user + residence queries
 paymentSchema.index({
     user: 1,

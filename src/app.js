@@ -205,10 +205,10 @@ app.options('*', cors(corsOptions));
 
 // Log all incoming requests (only in development or with DEBUG flag)
 if (process.env.NODE_ENV === 'development' || process.env.DEBUG === 'true') {
-  app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
-    next();
-  });
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
 }
 
 // Parse JSON bodies with increased limits

@@ -1061,6 +1061,26 @@ class FinancialReportsController {
                 });
             }
             
+            // Check cache first
+            const { cache } = require('../utils/cache');
+            const cacheKey = `cashflow:${period}:${basis}:${residence || 'all'}`;
+            const cached = cache.get(cacheKey);
+            if (cached) {
+                const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+                if (isDebugMode) {
+                    console.log('✅ Returning cached cash flow data');
+                }
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Cached cash flow data for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
+                });
+            }
+            
+            // Optimize: Reduce logging in production
+            const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+            
             // Use the Enhanced Cash Flow Service for detailed breakdowns
             const detailedCashFlow = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             
@@ -1072,7 +1092,7 @@ class FinancialReportsController {
             monthNames.forEach((month, index) => {
                 const monthKey = `${period}-${String(index + 1).padStart(2, '0')}`;
                 const monthData = detailedCashFlow.detailed_breakdown.monthly_breakdown[monthKey] || {
-                    income: { total: 0, rental_income: 0, admin_fees: 0, deposits: 0, utilities: 0, other_income: 0 },
+                    income: { total: 0, rental_income: 0, admin_fees: 0, deposits: 0, utilities: 0, advance_payments: 0 },
                     expenses: { total: 0, maintenance: 0, utilities: 0, cleaning: 0, security: 0, management: 0 },
                     net_cash_flow: 0,
                     transaction_count: 0,
@@ -1092,7 +1112,6 @@ class FinancialReportsController {
                             deposits: { amount: monthData.income.deposits, description: 'Security Deposits' },
                             utilities_income: { amount: monthData.income.utilities, description: 'Utilities Income' },
                             advance_payments: { amount: monthData.income.advance_payments, description: 'Advance Payments from Students' },
-                            other_income: { amount: monthData.income.other_income, description: 'Other Income Sources' },
                             // Detailed expense breakdown
                             maintenance_expenses: { amount: monthData.expenses.maintenance, description: 'Property Maintenance' },
                             utilities_expenses: { amount: monthData.expenses.utilities, description: 'Utility Bills' },
@@ -1109,7 +1128,6 @@ class FinancialReportsController {
                         deposits: monthData.income.deposits,
                         utilities: monthData.income.utilities,
                         advance_payments: monthData.income.advance_payments,
-                        other_income: monthData.income.other_income,
                         transactions: monthData.income.transactions || [] // Include detailed income transactions
                     },
                     // Add detailed expense transactions
@@ -1181,11 +1199,6 @@ class FinancialReportsController {
                             amount: detailedCashFlow.detailed_breakdown.income.by_source.utilities.total, 
                             description: 'Total Utilities Income',
                             transactions: detailedCashFlow.detailed_breakdown.income.by_source.utilities.transactions.length
-                        },
-                        other_income: { 
-                            amount: detailedCashFlow.detailed_breakdown.income.by_source.other_income.total, 
-                            description: 'Total Other Income',
-                            transactions: detailedCashFlow.detailed_breakdown.income.by_source.other_income.transactions.length
                         },
                         // Expense breakdown - Updated to use expenses_by_category
                         maintenance_expenses: { 
@@ -1315,9 +1328,16 @@ class FinancialReportsController {
                 metadata: detailedCashFlow.metadata
             };
             
+            // Cache the result for 5 minutes (300000ms) - reuse cache from above
+            cache.set(cacheKey, enhancedCashFlowData, 300000);
+            if (isDebugMode) {
+                console.log('✅ Cash flow data cached for 5 minutes');
+            }
+            
             res.json({
                 success: true,
                 data: enhancedCashFlowData,
+                cached: false,
                 message: `Enhanced monthly cash flow with detailed breakdowns generated for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
             });
             
@@ -1360,6 +1380,20 @@ class FinancialReportsController {
                 });
             }
             
+            // Check cache first
+            const { cache } = require('../utils/cache');
+            const cacheKey = `balancesheet:${period}:${basis}:${residence || 'all'}`;
+            const cached = cache.get(cacheKey);
+            if (cached) {
+                console.log('✅ Returning cached balance sheet data');
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Cached balance sheet data for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
+                });
+            }
+            
             const year = parseInt(period);
             const monthlyData = {};
             let totalAnnualAssets = 0;
@@ -1369,8 +1403,13 @@ class FinancialReportsController {
             // Use the FIXED balance sheet service that includes ALL accounts
             const FinancialReportingService = require('../services/financialReportingService');
             
-            // Fetch balance sheet for each month (1-12)
+            // Optimize: Reduce logging in production
+            const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+            
+            // Fetch balance sheet for each month (1-12) - can be parallelized for better performance
+            const monthPromises = [];
             for (let month = 1; month <= 12; month++) {
+                monthPromises.push((async () => {
                 try {
                     // Calculate end of month date
                     const endOfMonth = new Date(year, month, 0); // Last day of month
@@ -1403,25 +1442,60 @@ class FinancialReportsController {
                         // Transform the fixed balance sheet data to match expected structure
                         const transformedData = transformFixedBalanceSheetToMonthly(monthData, month, year);
                         
-                        monthlyData[month] = transformedData;
-                        
-                        totalAnnualAssets += monthData.assets?.total_assets || 0;
-                        totalAnnualLiabilities += monthData.liabilities?.total_liabilities || 0;
-                        totalAnnualEquity += monthData.equity?.total_equity || 0;
+                        return {
+                            month,
+                            data: transformedData,
+                            totals: {
+                                assets: monthData.assets?.total_assets || 0,
+                                liabilities: monthData.liabilities?.total_liabilities || 0,
+                                equity: monthData.equity?.total_equity || 0
+                            }
+                        };
                     }
+                    return {
+                        month,
+                        data: {
+                            month: month,
+                            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+                            assets: { total: 0, current: { cashAndBank: { total: 0 }, accountsReceivable: { amount: 0 } } },
+                            liabilities: { total: 0, current: { accountsPayable: { amount: 0 }, tenantDeposits: { amount: 0 } } },
+                            equity: { total: 0, retainedEarnings: { amount: 0 } },
+                            balanceCheck: 'No data',
+                            summary: { totalAssets: 0, totalLiabilities: 0, totalEquity: 0 }
+                        },
+                        totals: { assets: 0, liabilities: 0, equity: 0 }
+                    };
                 } catch (monthError) {
-                    console.log(`⚠️ Failed to fetch month ${month}:`, monthError.message);
-                    monthlyData[month] = {
-                        month: month,
-                        monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
-                        assets: { total: 0, current: { cashAndBank: { total: 0 }, accountsReceivable: { amount: 0 } } },
-                        liabilities: { total: 0, current: { accountsPayable: { amount: 0 }, tenantDeposits: { amount: 0 } } },
-                        equity: { total: 0, retainedEarnings: { amount: 0 } },
-                        balanceCheck: 'No data',
-                        summary: { totalAssets: 0, totalLiabilities: 0, totalEquity: 0 }
+                    if (isDebugMode) {
+                        console.log(`⚠️ Failed to fetch month ${month}:`, monthError.message);
+                    }
+                    return {
+                        month,
+                        data: {
+                            month: month,
+                            monthName: new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' }),
+                            assets: { total: 0, current: { cashAndBank: { total: 0 }, accountsReceivable: { amount: 0 } } },
+                            liabilities: { total: 0, current: { accountsPayable: { amount: 0 }, tenantDeposits: { amount: 0 } } },
+                            equity: { total: 0, retainedEarnings: { amount: 0 } },
+                            balanceCheck: 'No data',
+                            summary: { totalAssets: 0, totalLiabilities: 0, totalEquity: 0 }
+                        },
+                        totals: { assets: 0, liabilities: 0, equity: 0 }
                     };
                 }
+                })());
             }
+            
+            // Wait for all months to complete in parallel
+            const monthResults = await Promise.all(monthPromises);
+            
+            // Process results
+            monthResults.forEach(result => {
+                monthlyData[result.month] = result.data;
+                totalAnnualAssets += result.totals.assets;
+                totalAnnualLiabilities += result.totals.liabilities;
+                totalAnnualEquity += result.totals.equity;
+            });
             
             const result = {
                 monthly: monthlyData,
@@ -1432,9 +1506,16 @@ class FinancialReportsController {
                 }
             };
             
+            // Cache the result for 5 minutes (300000ms)
+            cache.set(cacheKey, result, 300000);
+            if (isDebugMode) {
+                console.log('✅ Balance sheet data cached for 5 minutes');
+            }
+            
             res.json({
                 success: true,
                 data: result,
+                cached: false,
                 message: `Monthly balance sheet breakdown generated for ${period} (${basis} basis)`
             });
             
@@ -1517,6 +1598,26 @@ class FinancialReportsController {
                 });
             }
             
+            // Check cache first
+            const { cache } = require('../utils/cache');
+            const cacheKey = `cashflow-statement:${period}:${basis}:${residence || 'all'}`;
+            const cached = cache.get(cacheKey);
+            if (cached) {
+                const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+                if (isDebugMode) {
+                    console.log('✅ Returning cached cash flow statement data');
+                }
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Cached cash flow statement for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
+                });
+            }
+            
+            // Optimize: Reduce logging in production
+            const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+            
             let cashFlowStatement;
             if (residence) {
                 // Use enhanced cash flow service with residence filtering
@@ -1528,9 +1629,16 @@ class FinancialReportsController {
                 cashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, null);
             }
             
+            // Cache the result for 5 minutes (300000ms)
+            cache.set(cacheKey, cashFlowStatement, 300000);
+            if (isDebugMode) {
+                console.log('✅ Cash flow statement data cached for 5 minutes');
+            }
+            
             res.json({
                 success: true,
                 data: cashFlowStatement,
+                cached: false,
                 message: `Cash flow statement generated for ${period}${residence ? ` (residence: ${residence})` : ''} (${basis} basis)`
             });
             
@@ -1566,12 +1674,39 @@ class FinancialReportsController {
                 });
             }
             
+            // Check cache first
+            const { cache } = require('../utils/cache');
+            const cacheKey = `detailed-cashflow:${period}:${basis}:${residence || 'all'}`;
+            const cached = cache.get(cacheKey);
+            if (cached) {
+                const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+                if (isDebugMode) {
+                    console.log('✅ Returning cached detailed cash flow statement data');
+                }
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Cached detailed cash flow statement for ${period} (${basis} basis)${residence ? ` (residence: ${residence})` : ' (all residences)'}`
+                });
+            }
+            
+            // Optimize: Reduce logging in production
+            const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+            
             // Use EnhancedCashFlowService which properly handles residence filtering at the database level
             const detailedCashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
+            
+            // Cache the result for 5 minutes (300000ms)
+            cache.set(cacheKey, detailedCashFlowStatement, 300000);
+            if (isDebugMode) {
+                console.log('✅ Detailed cash flow statement data cached for 5 minutes');
+            }
             
             res.json({
                 success: true,
                 data: detailedCashFlowStatement,
+                cached: false,
                 message: `Enhanced monthly cash flow with detailed breakdowns generated for ${period} (${basis} basis)${residence ? ` (residence: ${residence})` : ' (all residences)'}`
             });
             
@@ -1607,6 +1742,26 @@ class FinancialReportsController {
                 });
             }
             
+            // Check cache first
+            const { cache } = require('../utils/cache');
+            const cacheKey = `residence-cashflow:${period}:${basis}:${residence}`;
+            const cached = cache.get(cacheKey);
+            if (cached) {
+                const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+                if (isDebugMode) {
+                    console.log('✅ Returning cached residence-filtered cash flow statement data');
+                }
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
+                    message: `Cached residence-filtered cash flow statement for ${period} (${basis} basis) - Residence: ${residence}`
+                });
+            }
+            
+            // Optimize: Reduce logging in production
+            const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+            
             if (!['cash', 'accrual'].includes(basis)) {
                 return res.status(400).json({
                     success: false,
@@ -1618,9 +1773,16 @@ class FinancialReportsController {
             const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
             const cashFlowStatement = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, basis, residence);
             
+            // Cache the result for 5 minutes (300000ms)
+            cache.set(cacheKey, cashFlowStatement, 300000);
+            if (isDebugMode) {
+                console.log('✅ Residence-filtered cash flow statement data cached for 5 minutes');
+            }
+            
             res.json({
                 success: true,
                 data: cashFlowStatement,
+                cached: false,
                 message: `Residence-filtered cash flow statement generated for ${period}, residence: ${residence} (${basis} basis)`
             });
             

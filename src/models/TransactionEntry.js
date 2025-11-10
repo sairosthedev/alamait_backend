@@ -284,4 +284,9 @@ transactionEntrySchema.index({ source: 1, 'metadata.applicationId': 1, status: 1
 transactionEntrySchema.index({ source: 1, 'metadata.userId': 1, status: 1 }); // For finding accruals by userId
 transactionEntrySchema.index({ source: 1, 'entries.accountCode': 1, status: 1 }); // For finding accruals by account code
 
+// Optimize: Compound index for cash flow queries (date range + source + status + residence)
+transactionEntrySchema.index({ date: 1, source: 1, status: 1, residence: 1 });
+transactionEntrySchema.index({ date: 1, 'metadata.isForfeiture': 1, status: 1 });
+transactionEntrySchema.index({ 'entries.accountCode': 1, date: 1, status: 1 }); // For cash balance calculations
+
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 

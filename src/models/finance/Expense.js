@@ -243,6 +243,9 @@ expenseSchema.index({ vendorCode: 1 });
 expenseSchema.index({ itemIndex: 1 });
 expenseSchema.index({ quotationId: 1 });
 
+// Optimize: Compound index for cash flow queries (expenseDate + paymentStatus + residence)
+expenseSchema.index({ expenseDate: 1, paymentStatus: 1, residence: 1 });
+
 // Virtual for total amount from items
 expenseSchema.virtual('totalFromItems').get(function() {
     if (this.items && this.items.length > 0) {
