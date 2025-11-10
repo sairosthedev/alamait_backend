@@ -352,4 +352,9 @@ applicationSchema.index({ student: 1 });
 applicationSchema.index({ isReapplication: 1 });
 applicationSchema.index({ previousDebtorCode: 1 });
 
+// Compound indexes for common query patterns
+applicationSchema.index({ status: 1, endDate: 1 }); // For accrual correction service
+applicationSchema.index({ status: 1, endDate: 1, updatedAt: -1 }); // For finding updated leases
+applicationSchema.index({ student: 1, status: 1 }); // For finding student applications
+
 module.exports = mongoose.model('Application', applicationSchema); 

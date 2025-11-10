@@ -206,7 +206,7 @@ router.post('/templates/:templateId/send-to-finance',
     monthlyRequestController.sendToFinance
 );
 
-// Finance approve monthly request with expense creation
+// Finance approve monthly request (approval only - no expense creation)
 router.patch('/:id/finance-approve', 
     checkRole(['admin', 'finance', 'finance_admin', 'finance_user']), 
     monthlyRequestController.financeApproveMonthlyRequest

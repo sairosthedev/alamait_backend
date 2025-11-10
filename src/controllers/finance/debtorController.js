@@ -217,15 +217,18 @@ exports.getDebtorById = async (req, res) => {
         const { id } = req.params;
 
         // First get the debtor without population to preserve the original user ObjectId
-        const debtorRaw = await Debtor.findById(id);
+        const debtorRaw = await Debtor.findById(id).lean();
         
+        // Optimize: Use lean() and select only needed fields
         const debtor = await Debtor.findById(id)
+            .select('user residence application payments createdBy updatedBy accountCode debtorCode status currentBalance')
             .populate('user', 'firstName lastName email phone')
             .populate('residence', 'name address roomPrice')
             .populate('application', 'startDate endDate roomNumber status')
             .populate('payments', 'date amount rentAmount adminFee deposit status')
             .populate('createdBy', 'firstName lastName email')
-            .populate('updatedBy', 'firstName lastName email');
+            .populate('updatedBy', 'firstName lastName email')
+            .lean();
 
         if (!debtor) {
             return res.status(404).json({
@@ -251,8 +254,12 @@ exports.getDebtorById = async (req, res) => {
             transactionQuery.$or.push({ 'metadata.studentId': debtorRaw.user.toString() });
         }
 
+        // Optimize: Use lean() and limit results, select only needed fields
         const transactions = await TransactionEntry.find(transactionQuery)
-        .sort({ date: -1 });
+            .select('date description entries accountCode accountName debit credit status source')
+            .sort({ date: -1 })
+            .limit(100) // Limit to recent 100 transactions
+            .lean();
 
         // Get recent invoices (only if user exists)
         let invoices = [];
@@ -260,8 +267,10 @@ exports.getDebtorById = async (req, res) => {
             invoices = await Invoice.find({
                 student: debtor.user._id
             })
+            .select('invoiceNumber amount dueDate status createdAt')
             .sort({ createdAt: -1 })
-            .limit(10);
+            .limit(10)
+            .lean();
         } else if (debtorRaw.user && typeof debtorRaw.user === 'object' && debtorRaw.user.toString) {
             // If user is an ObjectId but not populated (expired student), use the ObjectId directly
             invoices = await Invoice.find({

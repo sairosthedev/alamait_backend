@@ -132,7 +132,9 @@ exports.getAllRequests = async (req, res) => {
         
         const skip = (page - 1) * limit;
         
+        // Optimize query: Use lean() for better performance, select only needed fields
         const requests = await Request.find(query)
+            .select('title description type status priority category residence submittedBy student assignedTo quotations items approval createdAt updatedAt')
             .populate('submittedBy', 'firstName lastName email role')
             .populate('student', 'firstName lastName email role')
             .populate('assignedTo._id', 'firstName lastName email role')
@@ -150,8 +152,11 @@ exports.getAllRequests = async (req, res) => {
             .populate('approval.ceo.approvedBy', 'firstName lastName email')
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(parseInt(limit));
+            .limit(parseInt(limit))
+            .lean(); // Use lean() for better performance when we don't need Mongoose documents
         
+        // Use estimatedDocumentCount for faster count (if exact count not critical)
+        // Otherwise use countDocuments with same query
         const total = await Request.countDocuments(query);
         
         // Map statuses for students
@@ -1481,10 +1486,10 @@ exports.updateRequest = async (req, res) => { //n
         }
 
         // Create expenses if financeStatus is being set to 'approved'
-        // IMPORTANT: For financial requests, conversion should ONLY happen after CEO approval
+        // ONLY create expenses for maintenance requests, NOT financial requests
         if (updateData.financeStatus === 'approved' 
             && !request.convertedToExpense 
-            && request.type !== 'financial') {
+            && request.type === 'maintenance') {
             try {
                 console.log('💰 Creating expenses for approved request:', request._id);
                 
@@ -1518,32 +1523,17 @@ exports.updateRequest = async (req, res) => { //n
             }
         }
 
-        // Create expense if CEO approval is present for financial requests (fallback)
-        if (
-            request.type === 'financial' &&
-            !request.convertedToExpense &&
-            ((request.approval && request.approval.ceo && request.approval.ceo.approved === true) || updateData?.approval?.ceo?.approved === true || updateData?.status === 'completed')
-        ) {
-            try {
-                console.log('💰 Creating expense for CEO-approved financial request:', request._id);
-                const approvalDate = request.approval?.ceo?.approvedAt ? new Date(request.approval.ceo.approvedAt) : new Date();
-                await createSimpleExpenseForRequest(request, user, approvalDate);
-                request.convertedToExpense = true;
-                await request.save();
-                console.log('✅ Expense created for CEO-approved financial request:', request._id);
-            } catch (expenseError) {
-                console.error('❌ Error creating expense for CEO-approved financial request:', expenseError);
-            }
-        }
+        // Note: Expenses are NOT created for financial requests
+        // Financial requests should be handled separately through a different process
 
         // Handle ceoStatus field from clients that use it directly
+        // Note: Expenses are NOT created for financial requests
         if (
             request.type === 'financial' &&
-            !request.convertedToExpense &&
             updateData && updateData.ceoStatus === 'approved'
         ) {
             try {
-                console.log('💼 ceoStatus=approved detected. Marking CEO approval and creating expense:', request._id);
+                console.log('💼 ceoStatus=approved detected. Marking CEO approval (no expense creation for financial requests):', request._id);
                 const approvalDate = new Date();
                 request.approval = request.approval || {};
                 request.approval.ceo = request.approval.ceo || {};
@@ -1552,12 +1542,10 @@ exports.updateRequest = async (req, res) => { //n
                 request.approval.ceo.approvedByEmail = user.email;
                 request.approval.ceo.approvedAt = approvalDate;
                 request.status = 'completed';
-                await createSimpleExpenseForRequest(request, user, approvalDate);
-                request.convertedToExpense = true;
                 await request.save();
-                console.log('✅ Expense created via ceoStatus flow:', request._id);
+                console.log('✅ CEO approval marked (no expense created for financial request):', request._id);
             } catch (expenseError) {
-                console.error('❌ Error creating expense via ceoStatus flow:', expenseError);
+                console.error('❌ Error processing CEO approval:', expenseError);
             }
         }
 
@@ -1811,9 +1799,9 @@ exports.financeApproval = async (req, res) => {
         console.log('✅ Request saved with finance approval');
 
         // Create double-entry transaction and itemized expense if approved
-        // Defer for financial requests until CEO approval
+        // ONLY create expenses for maintenance requests, NOT financial requests
         let financialResult = null;
-        if (isApproved && request.type !== 'financial') {
+        if (isApproved && request.type === 'maintenance') {
             try {
                 console.log('💰 Creating expenses and double-entry transactions for approved request...');
                 
@@ -1918,11 +1906,11 @@ exports.financeApproval = async (req, res) => {
                 status: 'created',
                 message: 'Double-entry transactions and expense created successfully'
             } : {
-                status: request.type === 'financial' ? 'deferred' : 'partial',
-                message: request.type === 'financial' 
-                    ? 'Finance approved. Conversion deferred until CEO approval for financial requests.'
-                    : 'Request approved but expense creation failed. Request status updated.',
-                convertedToExpense: request.type === 'financial' ? false : true
+                status: request.type === 'maintenance' ? 'partial' : 'skipped',
+                message: request.type === 'maintenance' 
+                    ? 'Request approved but expense creation failed. Request status updated.'
+                    : 'Request approved. Expenses are not created for non-maintenance requests.',
+                convertedToExpense: request.type === 'maintenance' ? true : false
             }
         };
         
@@ -2261,30 +2249,8 @@ async function createSimpleExpenseForRequest(request, user, approvalDate) {
         const newExpense = new Expense(expenseData);
         await newExpense.save();
         
-        // If financial, also create double-entry transaction for this expense
-        try {
-            if (request.type === 'financial') {
-                const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
-                const tempRequest = {
-                    _id: request._id,
-                    title: request.title,
-                    residence: request.residence,
-                    items: [{ description: request.title || 'Financial Request', totalCost: totalAmount }],
-                    totalEstimatedCost: totalAmount,
-                    isTemplate: false,
-                    skipExpenseCreation: true,
-                    disableDuplicateCheck: true
-                };
-                const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user, approvalDate);
-                if (transactionResult && transactionResult.transaction) {
-                    newExpense.transactionId = transactionResult.transaction._id;
-                    await newExpense.save();
-                    console.log(`✅ Linked financial expense to transaction: ${transactionResult.transaction._id}`);
-                }
-            }
-        } catch (deError) {
-            console.error('❌ Error creating double-entry for financial expense:', deError);
-        }
+        // Note: This function is only called for maintenance requests
+        // Financial requests should not create expenses through this function
 
         console.log(`Simple expense created for request ${request._id}: ${expenseId} (Payment: Cash)`);
         return newExpense;
@@ -2531,29 +2497,12 @@ exports.ceoApproval = async (req, res) => {
                 request.status = 'CEO approved';
                 console.log('✅ Salary request approved by CEO - no expense created');
             } else {
-                // For non-salary financial requests: convert to expense and create entries
+                // For non-salary financial requests: mark as completed (no expense creation)
                 request.status = 'completed';
                 
-                if (request.type === 'financial' && !request.convertedToExpense) {
-                    try {
-                        const approvalDate = dateApproved ? new Date(dateApproved) : new Date();
-                        // Ensure amount is set from best available total before conversion
-                        if (!request.amount || request.amount <= 0) {
-                            if (request.totalEstimatedCost && request.totalEstimatedCost > 0) {
-                                request.amount = request.totalEstimatedCost;
-                            } else if (Array.isArray(request.items) && request.items.length > 0) {
-                                request.amount = request.items.reduce((sum, it) => sum + (Number(it.totalCost) || 0), 0);
-                            }
-                        }
-                        // For financial requests, always create a single expense using total amount
-                        await createSimpleExpenseForRequest(request, user, approvalDate);
-                        request.convertedToExpense = true;
-                        await request.save();
-                        console.log('✅ Non-salary financial request converted to expense');
-                    } catch (err) {
-                        console.error('Error converting financial request at CEO approval:', err);
-                    }
-                }
+                // Note: Expenses are NOT created for financial requests
+                // Financial requests should be handled separately through a different process
+                console.log('✅ Financial request approved by CEO (no expense created)');
             }
         } else {
             request.status = 'rejected';

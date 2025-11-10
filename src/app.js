@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const compression = require('compression');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
@@ -156,6 +157,19 @@ const corsOptions = {
   optionsSuccessStatus: 204
 };
 
+// Enable compression for all responses (gzip)
+app.use(compression({
+    filter: (req, res) => {
+        // Don't compress responses if request has no-transform cache-control
+        if (req.headers['cache-control'] && req.headers['cache-control'].includes('no-transform')) {
+            return false;
+        }
+        // Use compression filter for all other requests
+        return compression.filter(req, res);
+    },
+    level: 6 // Compression level (1-9, 6 is a good balance)
+}));
+
 // Enable CORS for all routes
 app.use(cors(corsOptions));
 
@@ -189,12 +203,13 @@ app.use((req, res, next) => {
 // Handle preflight requests explicitly with the same CORS configuration
 app.options('*', cors(corsOptions));
 
-// Log all incoming requests
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
-  console.log('Headers:', req.headers);
-  next();
-});
+// Log all incoming requests (only in development or with DEBUG flag)
+if (process.env.NODE_ENV === 'development' || process.env.DEBUG === 'true') {
+  app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    next();
+  });
+}
 
 // Parse JSON bodies with increased limits
 app.use(express.json({ limit: '50mb' }));

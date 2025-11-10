@@ -15,7 +15,7 @@ const connectDB = async (retryCount = 0) => {
             serverSelectionTimeoutMS: 30000, // Increased to 30 seconds
             socketTimeoutMS: 45000,
             connectTimeoutMS: 30000, // Added connection timeout
-            maxPoolSize: 10,
+            maxPoolSize: 20, // Increased pool size for better concurrency
             minPoolSize: 5,
             retryWrites: true,
             retryReads: true,

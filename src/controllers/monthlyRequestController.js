@@ -4424,7 +4424,7 @@ exports.sendToFinance = async (req, res) => {
     }
 };
 
-// Finance approve monthly request with expense creation
+// Finance approve monthly request (approval only - no expense creation)
 exports.financeApproveMonthlyRequest = async (req, res) => {
     try {
         // Set longer timeout for this operation
@@ -4433,7 +4433,7 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
         
         const user = req.user;
         const { id } = req.params;
-        const { approved, notes, createExpenses = true, datePaid, dateApproved } = req.body;
+        const { approved, notes, createExpenses = false, datePaid, dateApproved } = req.body; // Default to false - approval only, no expense creation
 
         // Check permissions - allow admin and finance users to approve
         if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
@@ -4535,61 +4535,12 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
                         }
                     }
 
-                    // Handle expense creation based on payment method
+                    // Expense creation is disabled - finance approval only approves the request
+                    // Expenses should be created separately when payments are made or through a separate process
                     if (createExpenses) {
-                        try {
-                            console.log(`💰 Starting background expense conversion for request ${monthlyRequest._id}...`);
-                            
-                            // Check if this is a monthly request that should use installment payments
-                            const isMonthlyRequest = monthlyRequest.isTemplate === false; // Regular monthly requests
-                            const hasInstallmentItems = monthlyRequest.items && monthlyRequest.items.some(item => 
-                                item.estimatedCost > 0 && item.estimatedCost > 100 // Items over $100 might need installments
-                            );
-                            
-                            if (isMonthlyRequest && hasInstallmentItems) {
-                                // For monthly requests with large amounts, set up for installment payments
-                                console.log(`📅 Setting up monthly request ${monthlyRequest._id} for installment payments`);
-                                
-                                monthlyRequest.status = 'approved';
-                                monthlyRequest.requestHistory.push({
-                                    date: dateApproved ? new Date(dateApproved) : new Date(),
-                                    action: 'Approved for installment payments',
-                                    user: user._id,
-                                    changes: ['Request approved but expenses will be created as payments are made']
-                                });
-                                
-                                console.log(`✅ Monthly request ${monthlyRequest._id} set up for installment payments`);
-                            } else {
-                                // For smaller amounts or templates, create expenses immediately
-                                console.log(`💰 Creating expenses immediately for request ${monthlyRequest._id}...`);
-                            const expenseConversionResult = await convertRequestToExpenses(monthlyRequest, user);
-                            
-                            // Update request status to completed after expense creation
-                            monthlyRequest.status = 'completed';
-                            monthlyRequest.datePaid = datePaid ? new Date(datePaid) : (dateApproved ? new Date(dateApproved) : new Date());
-                            monthlyRequest.requestHistory.push({
-                                date: dateApproved ? new Date(dateApproved) : new Date(),
-                                action: 'Converted to expenses with double-entry transactions',
-                                user: user._id,
-                                changes: [`${expenseConversionResult.expenses.length} expenses created`]
-                            });
-                            
-                            console.log(`✅ Background expense conversion completed for request ${monthlyRequest._id}: ${expenseConversionResult.expenses.length} expenses created`);
-                            }
-                            
-                            await monthlyRequest.save();
-                            
-                        } catch (conversionError) {
-                            console.error(`❌ Error in background expense conversion for request ${monthlyRequest._id}:`, conversionError);
-                            // Update request with error status
-                            monthlyRequest.requestHistory.push({
-                                date: new Date(),
-                                action: 'Expense conversion failed',
-                                user: user._id,
-                                changes: [`Error: ${conversionError.message}`]
-                            });
-                            await monthlyRequest.save();
-                        }
+                        console.log(`⚠️ Expense creation requested but disabled by default. Use separate endpoint to create expenses.`);
+                        // Note: Expense creation can be enabled by explicitly passing createExpenses=true
+                        // but it's disabled by default to keep approval and expense creation separate
                     }
                     
                 } catch (backgroundError) {
@@ -4608,12 +4559,12 @@ exports.financeApproveMonthlyRequest = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: `Monthly request ${approved ? 'approved' : 'rejected'} successfully. ${approved && createExpenses ? 'Background processes (email notification, expense conversion) are running and will complete within 2-5 minutes.' : ''}`,
+            message: `Monthly request ${approved ? 'approved' : 'rejected'} successfully. ${approved ? 'Email notification will be sent shortly.' : ''}`,
             monthlyRequest: updatedRequest,
-            backgroundProcessing: approved && createExpenses ? {
+            backgroundProcessing: approved ? {
                 status: 'scheduled',
-                message: 'Email notification and expense conversion will be processed in the background',
-                estimatedCompletion: new Date(Date.now() + 5 * 60 * 1000).toISOString() // 5 minutes from now
+                message: 'Email notification will be processed in the background',
+                estimatedCompletion: new Date(Date.now() + 2 * 60 * 1000).toISOString() // 2 minutes from now
             } : undefined
         });
 

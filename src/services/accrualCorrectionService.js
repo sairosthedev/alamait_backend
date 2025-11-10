@@ -373,6 +373,7 @@ class AccrualCorrectionService {
      */
     static async findStudentsWithIncorrectAccruals(year = null, month = null) {
         try {
+            const startTime = Date.now();
             const checkDate = year && month 
                 ? new Date(year, month - 1, 1)
                 : new Date();
@@ -393,6 +394,159 @@ class AccrualCorrectionService {
             
             console.log(`📋 Found ${applications.length} approved/expired applications with endDate to check`);
             
+            if (applications.length === 0) {
+                return {
+                    success: true,
+                    count: 0,
+                    totalApplicationsChecked: 0,
+                    issues: []
+                };
+            }
+            
+            // OPTIMIZATION: Batch fetch all accruals and reversals in one query instead of N+1 queries
+            const applicationIds = applications.map(app => app._id);
+            const studentIds = applications
+                .map(app => app.student)
+                .filter(id => id)
+                .map(id => new mongoose.Types.ObjectId(id));
+            
+            // Build comprehensive query to get all accruals for all students at once
+            const allAccrualQuery = {
+                source: 'rental_accrual',
+                status: 'posted',
+                $or: [
+                    { sourceId: { $in: applicationIds } },
+                    { sourceId: { $in: studentIds } },
+                    { 'metadata.applicationId': { $in: applicationIds.map(id => id.toString()) } },
+                    { 'metadata.studentId': { $in: [...applicationIds.map(id => id.toString()), ...studentIds.map(id => id.toString())] } },
+                    { 'metadata.userId': { $in: studentIds.map(id => id.toString()) } },
+                    { 'entries.accountCode': { $in: [...applicationIds.map(id => `1100-${id}`), ...studentIds.map(id => `1100-${id}`)] } }
+                ]
+            };
+            
+            // Batch fetch all reversals
+            const allReversalQuery = {
+                source: 'rental_accrual_reversal',
+                status: 'posted',
+                $or: [
+                    { sourceId: { $in: applicationIds } },
+                    { sourceId: { $in: studentIds } },
+                    { 'metadata.applicationId': { $in: applicationIds.map(id => id.toString()) } },
+                    { 'metadata.studentId': { $in: [...applicationIds.map(id => id.toString()), ...studentIds.map(id => id.toString())] } }
+                ]
+            };
+            
+            // Execute both queries in parallel
+            const [allAccruals, allReversals] = await Promise.all([
+                TransactionEntry.find(allAccrualQuery).lean(),
+                TransactionEntry.find(allReversalQuery).lean()
+            ]);
+            
+            console.log(`📊 Batch fetched ${allAccruals.length} accruals and ${allReversals.length} reversals`);
+            
+            // Build a map of reversed accrual IDs for fast lookup
+            const reversedAccrualIds = new Set();
+            allReversals.forEach(reversal => {
+                if (reversal.sourceId) {
+                    reversedAccrualIds.add(reversal.sourceId.toString());
+                }
+                if (reversal.metadata?.originalAccrualId) {
+                    reversedAccrualIds.add(reversal.metadata.originalAccrualId.toString());
+                }
+            });
+            
+            // Build maps for fast lookup: applicationId -> accruals, studentId -> accruals
+            const accrualsByApplicationId = new Map();
+            const accrualsByStudentId = new Map();
+            
+            // Create sets of ID strings for fast lookup
+            const applicationIdStrings = new Set(applicationIds.map(id => id.toString()));
+            const studentIdStrings = new Set(studentIds.map(id => id.toString()));
+            
+            allAccruals.forEach(accrual => {
+                // Map by application ID (from sourceId)
+                if (accrual.sourceId) {
+                    const sourceIdStr = accrual.sourceId.toString();
+                    if (applicationIdStrings.has(sourceIdStr)) {
+                        if (!accrualsByApplicationId.has(sourceIdStr)) {
+                            accrualsByApplicationId.set(sourceIdStr, []);
+                        }
+                        accrualsByApplicationId.get(sourceIdStr).push(accrual);
+                    }
+                }
+                
+                // Map by application ID (from metadata.applicationId)
+                if (accrual.metadata?.applicationId) {
+                    const appId = accrual.metadata.applicationId.toString();
+                    if (applicationIdStrings.has(appId)) {
+                        if (!accrualsByApplicationId.has(appId)) {
+                            accrualsByApplicationId.set(appId, []);
+                        }
+                        accrualsByApplicationId.get(appId).push(accrual);
+                    }
+                }
+                
+                // Map by student ID (from sourceId)
+                if (accrual.sourceId) {
+                    const sourceIdStr = accrual.sourceId.toString();
+                    if (studentIdStrings.has(sourceIdStr)) {
+                        if (!accrualsByStudentId.has(sourceIdStr)) {
+                            accrualsByStudentId.set(sourceIdStr, []);
+                        }
+                        accrualsByStudentId.get(sourceIdStr).push(accrual);
+                    }
+                }
+                
+                // Map by student ID (from metadata.studentId or metadata.userId)
+                if (accrual.metadata?.studentId) {
+                    const studentId = accrual.metadata.studentId.toString();
+                    if (studentIdStrings.has(studentId)) {
+                        if (!accrualsByStudentId.has(studentId)) {
+                            accrualsByStudentId.set(studentId, []);
+                        }
+                        accrualsByStudentId.get(studentId).push(accrual);
+                    }
+                    // Also check if it's an application ID
+                    if (applicationIdStrings.has(studentId)) {
+                        if (!accrualsByApplicationId.has(studentId)) {
+                            accrualsByApplicationId.set(studentId, []);
+                        }
+                        accrualsByApplicationId.get(studentId).push(accrual);
+                    }
+                }
+                
+                if (accrual.metadata?.userId) {
+                    const userId = accrual.metadata.userId.toString();
+                    if (studentIdStrings.has(userId)) {
+                        if (!accrualsByStudentId.has(userId)) {
+                            accrualsByStudentId.set(userId, []);
+                        }
+                        accrualsByStudentId.get(userId).push(accrual);
+                    }
+                }
+                
+                // Map by account code
+                if (accrual.entries) {
+                    accrual.entries.forEach(entry => {
+                        if (entry.accountCode && entry.accountCode.startsWith('1100-')) {
+                            const id = entry.accountCode.replace('1100-', '');
+                            if (applicationIdStrings.has(id)) {
+                                if (!accrualsByApplicationId.has(id)) {
+                                    accrualsByApplicationId.set(id, []);
+                                }
+                                accrualsByApplicationId.get(id).push(accrual);
+                            }
+                            if (studentIdStrings.has(id)) {
+                                if (!accrualsByStudentId.has(id)) {
+                                    accrualsByStudentId.set(id, []);
+                                }
+                                accrualsByStudentId.get(id).push(accrual);
+                            }
+                        }
+                    });
+                }
+            });
+            
             const issues = [];
             
             for (const app of applications) {
@@ -411,102 +565,52 @@ class AccrualCorrectionService {
                 const leaseWasUpdated = updatedAt && createdAt && 
                     (updatedAt.getTime() - createdAt.getTime()) > 60000; // More than 1 minute difference
                 
-                console.log(`\n🔍 Checking application ${app._id} (${app.firstName} ${app.lastName})`);
-                console.log(`   Lease end date: ${appEndDate.toISOString()} (${appEndMonth}/${appEndYear})`);
-                if (leaseWasUpdated) {
-                    console.log(`   ⚠️ Lease was updated: ${updatedAt.toISOString()} (originally created: ${createdAt.toISOString()})`);
+                // Only log in development or for first few applications
+                if (process.env.NODE_ENV === 'development' || issues.length < 3) {
+                    console.log(`\n🔍 Checking application ${app._id} (${app.firstName} ${app.lastName})`);
+                    console.log(`   Lease end date: ${appEndDate.toISOString()} (${appEndMonth}/${appEndYear})`);
+                    if (leaseWasUpdated) {
+                        console.log(`   ⚠️ Lease was updated: ${updatedAt.toISOString()} (originally created: ${createdAt.toISOString()})`);
+                    }
                 }
                 
-                // Find accruals for this student - try multiple ID formats and account codes
+                // OPTIMIZATION: Get accruals from pre-built maps instead of querying
                 const applicationIdString = app._id.toString();
-                const applicationIdObj = new mongoose.Types.ObjectId(app._id);
                 const studentIdString = app.student ? app.student.toString() : null;
-                const studentIdObj = app.student ? new mongoose.Types.ObjectId(app.student) : null;
                 
-                // Build comprehensive query to find accruals - check multiple linking methods
-                const accrualQueryConditions = [
-                    // By sourceId (application ID)
-                    { source: 'rental_accrual', sourceId: applicationIdObj },
-                    // By sourceId (student ID)
-                    ...(studentIdObj ? [{ source: 'rental_accrual', sourceId: studentIdObj }] : []),
-                    // By metadata.applicationId
-                    { source: 'rental_accrual', 'metadata.applicationId': applicationIdString },
-                    // By metadata.studentId (application ID format)
-                    { source: 'rental_accrual', 'metadata.studentId': applicationIdString },
-                    // By metadata.studentId (student ID format)
-                    ...(studentIdString ? [{ source: 'rental_accrual', 'metadata.studentId': studentIdString }] : []),
-                    // By metadata.userId
-                    ...(studentIdString ? [{ source: 'rental_accrual', 'metadata.userId': studentIdString }] : []),
-                    // By account code pattern (1100-{studentId} or 1100-{applicationId})
-                    { source: 'rental_accrual', 'entries.accountCode': `1100-${applicationIdString}` },
-                    ...(studentIdString ? [{ source: 'rental_accrual', 'entries.accountCode': `1100-${studentIdString}` }] : [])
-                ];
+                // Get accruals from maps (deduplicate)
+                const accrualIds = new Set();
+                const accruals = [];
                 
-                const accrualQuery = {
-                    $or: accrualQueryConditions,
-                    status: 'posted'
-                };
+                // Get accruals by application ID
+                const appAccruals = accrualsByApplicationId.get(applicationIdString) || [];
+                appAccruals.forEach(acc => {
+                    if (!accrualIds.has(acc._id.toString())) {
+                        accrualIds.add(acc._id.toString());
+                        accruals.push(acc);
+                    }
+                });
                 
-                console.log(`   Query conditions: ${accrualQueryConditions.length} different ways to find accruals`);
-                
-                let accruals = await TransactionEntry.find(accrualQuery).lean();
-                console.log(`   Found ${accruals.length} accruals via query`);
-                
-                // Fallback: If no accruals found, try finding by account code pattern directly
-                if (accruals.length === 0) {
-                    console.log(`   ⚠️ No accruals found via query, trying account code pattern fallback...`);
-                    const accountCodePatterns = [
-                        `1100-${applicationIdString}`,
-                        ...(studentIdString ? [`1100-${studentIdString}`] : [])
-                    ];
-                    
-                    const fallbackQuery = {
-                        source: 'rental_accrual',
-                        status: 'posted',
-                        $or: accountCodePatterns.map(pattern => ({
-                            'entries.accountCode': pattern
-                        }))
-                    };
-                    
-                    accruals = await TransactionEntry.find(fallbackQuery).lean();
-                    console.log(`   Found ${accruals.length} accruals via account code pattern fallback`);
+                // Get accruals by student ID
+                if (studentIdString) {
+                    const studentAccruals = accrualsByStudentId.get(studentIdString) || [];
+                    studentAccruals.forEach(acc => {
+                        if (!accrualIds.has(acc._id.toString())) {
+                            accrualIds.add(acc._id.toString());
+                            accruals.push(acc);
+                        }
+                    });
                 }
                 
                 // Check for accruals after lease end date
                 const incorrectAccruals = [];
                 
-                // Get all reversal transaction IDs for this student to exclude already-reversed accruals
-                const reversalQuery = {
-                    source: 'rental_accrual_reversal',
-                    status: 'posted',
-                    $or: [
-                        { sourceId: applicationIdObj },
-                        ...(studentIdObj ? [{ sourceId: studentIdObj }] : []),
-                        { 'metadata.studentId': applicationIdString },
-                        ...(studentIdString ? [{ 'metadata.studentId': studentIdString }] : []),
-                        { 'metadata.applicationId': applicationIdString }
-                    ]
-                };
-                
-                const reversals = await TransactionEntry.find(reversalQuery).lean();
-                const reversedAccrualIds = new Set();
-                reversals.forEach(reversal => {
-                    // Get the original accrual ID from the reversal
-                    if (reversal.sourceId) {
-                        reversedAccrualIds.add(reversal.sourceId.toString());
-                    }
-                    if (reversal.metadata?.originalAccrualId) {
-                        reversedAccrualIds.add(reversal.metadata.originalAccrualId.toString());
-                    }
-                });
-                
-                console.log(`   Found ${reversals.length} reversal transactions`);
-                console.log(`   Reversed accrual IDs: ${Array.from(reversedAccrualIds).join(', ') || 'none'}`);
-                
                 for (const accrual of accruals) {
                     // Skip if this accrual has already been reversed
                     if (reversedAccrualIds.has(accrual._id.toString())) {
-                        console.log(`   ⏭️ Skipping accrual ${accrual._id} - already reversed`);
+                        if (process.env.NODE_ENV === 'development') {
+                            console.log(`   ⏭️ Skipping accrual ${accrual._id} - already reversed`);
+                        }
                         continue;
                     }
                     
@@ -539,7 +643,9 @@ class AccrualCorrectionService {
                     
                     // Validate extracted month/year
                     if (!accrualMonth || !accrualYear || accrualMonth < 1 || accrualMonth > 12) {
-                        console.log(`   ⚠️ Skipping accrual ${accrual._id} - invalid month/year: ${accrualMonth}/${accrualYear}`);
+                        if (process.env.NODE_ENV === 'development') {
+                            console.log(`   ⚠️ Skipping accrual ${accrual._id} - invalid month/year: ${accrualMonth}/${accrualYear}`);
+                        }
                         continue;
                     }
                     
@@ -551,7 +657,10 @@ class AccrualCorrectionService {
                     const isLeaseStart = accrual.metadata?.type === 'lease_start' || 
                                         (accrual.description && /lease start/i.test(accrual.description));
                     
-                    console.log(`   📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Is lease start: ${isLeaseStart}`);
+                    // Only log in development
+                    if (process.env.NODE_ENV === 'development') {
+                        console.log(`   📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Is lease start: ${isLeaseStart}`);
+                    }
                     
                     if (isAfterLeaseEnd && !isLeaseStart) {
                         incorrectAccruals.push({
@@ -568,7 +677,9 @@ class AccrualCorrectionService {
                 }
                 
                 if (incorrectAccruals.length > 0) {
-                    console.log(`   ⚠️ Found ${incorrectAccruals.length} incorrect accruals for this application`);
+                    if (process.env.NODE_ENV === 'development') {
+                        console.log(`   ⚠️ Found ${incorrectAccruals.length} incorrect accruals for this application`);
+                    }
                     
                     // Check if accruals were created after the lease end date was updated
                     const accrualsCreatedAfterUpdate = incorrectAccruals.filter(accrual => {
@@ -599,14 +710,17 @@ class AccrualCorrectionService {
                 }
             }
             
-            console.log(`\n📊 Summary:`);
+            const endTime = Date.now();
+            const duration = ((endTime - startTime) / 1000).toFixed(2);
+            
+            console.log(`\n📊 Summary (completed in ${duration}s):`);
             console.log(`   Total applications checked: ${applications.length}`);
             console.log(`   Students with incorrect accruals: ${issues.length}`);
             
-            // Log summary of issues
-            if (issues.length > 0) {
+            // Log summary of issues (only in development or if issues found)
+            if (issues.length > 0 && (process.env.NODE_ENV === 'development' || issues.length <= 10)) {
                 console.log(`\n⚠️ Students with incorrect accruals:`);
-                issues.forEach((issue, idx) => {
+                issues.slice(0, 10).forEach((issue, idx) => {
                     console.log(`   ${idx + 1}. ${issue.studentName} (${issue.email})`);
                     console.log(`      Lease end: ${new Date(issue.leaseEndDate).toISOString().split('T')[0]}`);
                     console.log(`      Incorrect accruals: ${issue.incorrectAccrualsCount}`);
@@ -614,12 +728,16 @@ class AccrualCorrectionService {
                         console.log(`      ⚠️ Lease was updated after creation`);
                     }
                 });
+                if (issues.length > 10) {
+                    console.log(`   ... and ${issues.length - 10} more`);
+                }
             }
             
             return {
                 success: true,
                 count: issues.length,
                 totalApplicationsChecked: applications.length,
+                duration: `${duration}s`,
                 issues
             };
             

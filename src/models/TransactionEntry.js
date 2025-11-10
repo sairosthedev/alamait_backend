@@ -277,4 +277,11 @@ transactionEntrySchema.index({ residence: 1, source: 1, date: -1, status: 1 });
 // Account code + source + date + status (account-specific queries in income statement)
 transactionEntrySchema.index({ 'entries.accountCode': 1, source: 1, date: -1, status: 1 });
 
+// Compound indexes for accrual correction service (critical for performance)
+transactionEntrySchema.index({ source: 1, sourceId: 1, status: 1 }); // For finding accruals by sourceId
+transactionEntrySchema.index({ source: 1, 'metadata.studentId': 1, status: 1 }); // For finding accruals by studentId
+transactionEntrySchema.index({ source: 1, 'metadata.applicationId': 1, status: 1 }); // For finding accruals by applicationId
+transactionEntrySchema.index({ source: 1, 'metadata.userId': 1, status: 1 }); // For finding accruals by userId
+transactionEntrySchema.index({ source: 1, 'entries.accountCode': 1, status: 1 }); // For finding accruals by account code
+
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 

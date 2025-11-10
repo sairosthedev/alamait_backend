@@ -1070,6 +1070,12 @@ debtorSchema.index({ 'paymentHistory.allocatedMonth': 1 });
 debtorSchema.index({ 'monthlyPayments.month': 1 });
 debtorSchema.index({ 'transactionEntries.date': 1 });
 
+// Compound indexes for common query patterns
+debtorSchema.index({ user: 1, status: 1 }); // Find debtor by user and status
+debtorSchema.index({ residence: 1, status: 1 }); // Find debtors by residence and status
+debtorSchema.index({ status: 1, currentBalance: 1 }); // Find debtors by status and balance
+debtorSchema.index({ user: 1, residence: 1 }); // Find debtor by user and residence
+
 // Pre-save middleware to update timestamps
 debtorSchema.pre('save', function(next) {
   this.updatedAt = new Date();
