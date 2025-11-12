@@ -404,6 +404,10 @@ exports.login = async (req, res) => {
                 deviceInfo.deviceIp, // Use real IP
                 userAgent
             );
+            
+            // Also track in UserActivity for comprehensive activity tracking
+            const UserActivityService = require('../services/userActivityService');
+            await UserActivityService.trackLogin(user._id, req, deviceInfo);
         } catch (auditError) {
             console.error('Failed to log audit entry for successful login:', auditError);
             // Don't fail the login if audit logging fails

@@ -4,7 +4,13 @@ const Expense = require('../models/finance/Expense');
 const Account = require('../models/Account');
 const { Residence } = require('../models/Residence');
 const mongoose = require('mongoose');
-const CashFlowValidator = require('./cashFlowValidator');
+let CashFlowValidator;
+try {
+    CashFlowValidator = require('./cashFlowValidator');
+} catch (error) {
+    console.warn('CashFlowValidator not found, validation features will be disabled:', error.message);
+    CashFlowValidator = null;
+}
 
 /**
  * Enhanced Cash Flow Service
@@ -6772,6 +6778,9 @@ class EnhancedCashFlowService {
             }
 
             // Use CashFlowValidator to validate the period
+            if (!CashFlowValidator) {
+                throw new Error('CashFlowValidator is not available. Please ensure cashFlowValidator.js exists.');
+            }
             const validationReport = await CashFlowValidator.validatePeriodCashFlow(
                 startDate, 
                 endDate, 

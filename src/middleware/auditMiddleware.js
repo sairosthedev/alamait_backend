@@ -50,37 +50,44 @@ const auditMiddleware = async (req, res, next) => {
         const duration = endTime - startTime;
         
         // Log the request/response asynchronously (don't block response)
-        // Only log if there's an authenticated user and not a health check
-        // Skip logging for very fast responses (< 50ms) to reduce overhead
-        if (requestData.user && requestData.user.id && duration > 50) {
-            // Use process.nextTick for better performance than setImmediate
-            process.nextTick(async () => {
-                try {
-                    // Only log if response is not too large (prevent memory issues)
-                    const responseData = sanitizeResponseData(data);
-                    const responseSize = JSON.stringify(responseData).length;
-                    
-                    // Skip logging if response is too large (> 100KB)
-                    if (responseSize > 100000) {
-                        return;
-                    }
-                    
-                    await logAPIAudit({
-                        request: requestData,
-                        response: {
-                            statusCode: res.statusCode,
-                            data: responseData,
-                            duration: duration
-                        }
-                    });
-                } catch (error) {
-                    // Silently fail to not impact performance
-                    if (process.env.NODE_ENV === 'development') {
-                    console.error('Failed to log API audit:', error);
-                    }
+        // LOG EVERYTHING - No filters for comprehensive tracking
+        // Use process.nextTick for better performance than setImmediate
+        process.nextTick(async () => {
+            try {
+                const responseData = sanitizeResponseData(data);
+                
+                // For very large responses, just log metadata instead of full data
+                const responseSize = JSON.stringify(responseData).length;
+                let finalResponseData = responseData;
+                
+                if (responseSize > 100000) {
+                    // Log summary instead of full data for large responses
+                    finalResponseData = {
+                        _truncated: true,
+                        _size: responseSize,
+                        _type: typeof responseData === 'object' ? 'object' : 'string',
+                        _preview: typeof responseData === 'object' && responseData !== null 
+                            ? Object.keys(responseData).slice(0, 10) 
+                            : String(responseData).substring(0, 200)
+                    };
                 }
-            });
-        }
+                
+                await logAPIAudit({
+                    request: requestData,
+                    response: {
+                        statusCode: res.statusCode,
+                        data: finalResponseData,
+                        duration: duration,
+                        size: responseSize
+                    }
+                });
+            } catch (error) {
+                // Silently fail to not impact performance
+                if (process.env.NODE_ENV === 'development') {
+                    console.error('Failed to log API audit:', error);
+                }
+            }
+        });
         
         // Call original send
         originalSend.call(this, data);
@@ -123,6 +130,46 @@ async function logAPIAudit({ request, response }) {
             ipAddress: request.ipAddress,
             userAgent: request.userAgent
         });
+        
+        // Also track as user activity if user is authenticated
+        if (request.user && request.user.id) {
+            try {
+                const UserActivityService = require('../services/userActivityService');
+                const page = request.path;
+                const pageTitle = collection || 'API Request';
+                
+                // Track as action for API calls
+                await UserActivityService.trackAction(request.user.id, {
+                    ip: request.ipAddress,
+                    headers: { 'user-agent': request.userAgent },
+                    path: request.path,
+                    method: request.method,
+                    query: request.query
+                }, {
+                    page,
+                    pageTitle,
+                    action: action,
+                    data: {
+                        method: request.method,
+                        path: request.path,
+                        query: request.query,
+                        statusCode: response.statusCode,
+                        duration: response.duration
+                    },
+                    recordId: recordId,
+                    collection: collection,
+                    status: response.statusCode < 400 ? 'success' : 'error',
+                    metadata: {
+                        responseSize: response.size
+                    }
+                });
+            } catch (activityError) {
+                // Don't fail if activity tracking fails
+                if (process.env.NODE_ENV === 'development') {
+                    console.error('Failed to track user activity:', activityError);
+                }
+            }
+        }
     } catch (error) {
         console.error('Error creating API audit log:', error);
     }

@@ -347,6 +347,10 @@ app.get('/api/student/bookingdetails/health', (req, res) => {
 // Auth routes (public)
 app.use('/api/auth', authRoutes);
 
+// User Activity Tracking routes - comprehensive activity logging
+const userActivityRoutes = require('./routes/userActivityRoutes');
+app.use('/api/user-activity', userActivityRoutes);
+
 // Admin routes - more specific routes first
 app.use('/api/admin/expenses', adminExpenseRoutes);
 app.use('/api/admin/income', adminIncomeRoutes);
