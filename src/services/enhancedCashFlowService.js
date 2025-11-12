@@ -4,6 +4,7 @@ const Expense = require('../models/finance/Expense');
 const Account = require('../models/Account');
 const { Residence } = require('../models/Residence');
 const mongoose = require('mongoose');
+const CashFlowValidator = require('./cashFlowValidator');
 
 /**
  * Enhanced Cash Flow Service
@@ -17,6 +18,85 @@ const mongoose = require('mongoose');
  */
 class EnhancedCashFlowService {
     
+    /**
+     * Check if a transaction is an internal cash transfer (cash moving between cash accounts)
+     * @param {Object} entry - Transaction entry
+     * @returns {boolean} True if it's an internal cash transfer
+     */
+    static isInternalCashTransfer(entry) {
+        if (!entry.entries || entry.entries.length < 2) return false;
+
+        let hasCashDebit = false;
+        let hasCashCredit = false;
+        let hasNonCashEntry = false;
+
+        for (const line of entry.entries) {
+            const accountCode = line.accountCode || line.account?.code;
+            const accountName = line.accountName || line.account?.name;
+            const accountType = line.accountType || line.account?.type;
+            
+            // Check if it's a cash account (1000-1099)
+            const isCashAccount = accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101'));
+            
+            if (isCashAccount) {
+                if (line.debit > 0) hasCashDebit = true;
+                if (line.credit > 0) hasCashCredit = true;
+            } else {
+                // Check if it's a non-cash entry (not just a clearing account)
+                // If it's an expense or income account, it's a real transaction, not a transfer
+                if (accountType === 'Expense' || accountType === 'expense' || 
+                    accountType === 'Income' || accountType === 'income' ||
+                    accountType === 'Liability' || accountType === 'liability') {
+                    hasNonCashEntry = true;
+                }
+            }
+        }
+
+        // Internal transfer: Both cash debit and credit exist, and no real expense/income/liability entries
+        // This means cash is just moving between accounts (e.g., Bank to Petty Cash)
+        if (hasCashDebit && hasCashCredit && !hasNonCashEntry) {
+            return true;
+        }
+
+        // Also check description for transfer keywords
+        if (entry.description) {
+            const desc = entry.description.toLowerCase();
+            const transferKeywords = [
+                'petty cash',
+                'cash allocation',
+                'funds to',
+                'funds transfer from',
+                'funds transfer to',
+                'cash to',
+                'transfer from cash',
+                'transfer to',
+                'transfer from',
+                'vault',
+                'move to',
+                'move from',
+                'internal transfer',
+                'transfer between'
+            ];
+            
+            // Check if description contains transfer keywords
+            const hasTransferKeyword = transferKeywords.some(keyword => desc.includes(keyword));
+            
+            // If description suggests transfer, check transaction structure
+            if (hasTransferKeyword) {
+                // If both cash debit and credit exist, it's definitely an internal transfer
+                if (hasCashDebit && hasCashCredit) {
+                    return true;
+                }
+                // Even if structure doesn't show both, if description clearly indicates transfer, exclude it
+                if (desc.includes('transfer from cash') || desc.includes('funds transfer from cash')) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Check if a transaction is a balance sheet adjustment (not actual cash flow)
      * @param {Object} entry - Transaction entry
@@ -425,7 +505,8 @@ class EnhancedCashFlowService {
                 admin_fees: { total: 0, transactions: [] },
                 deposits: { total: 0, transactions: [] },
                 utilities: { total: 0, transactions: [] },
-                advance_payments: { total: 0, transactions: [] }
+                advance_payments: { total: 0, transactions: [] },
+                other_income: { total: 0, transactions: [] }
             },
             by_residence: {},
             by_month: {},
@@ -681,7 +762,14 @@ class EnhancedCashFlowService {
             }
             
             if (entry.entries && entry.entries.length > 0) {
+                // FIRST: Check if this is an internal cash transfer (cash to cash) - EXCLUDE from cash flow
+                if (this.isInternalCashTransfer(entry)) {
+                    console.log(`💰 Internal cash transfer excluded from income: ${entry.transactionId} - Description: ${entry.description}`);
+                    return; // Skip internal transfers - they don't represent actual cash inflow
+                }
+                
                 // Look for Cash/Bank debits (income received) - check both Cash and Bank Account
+                // BUT ONLY if it's NOT from another cash account (not an internal transfer)
                 const cashEntry = entry.entries.find(line => {
                     const accountCode = line.accountCode || line.account?.code;
                     const accountName = line.accountName || line.account?.name;
@@ -1154,7 +1242,11 @@ class EnhancedCashFlowService {
                         }
                     }
                     
-                    // Add to appropriate category
+                    // Add to appropriate category - ensure category exists
+                    if (!incomeBreakdown.by_source[category]) {
+                        console.warn(`⚠️ Unknown income category "${category}" for transaction ${entry.transactionId}, defaulting to "other_income"`);
+                        category = 'other_income';
+                    }
                     incomeBreakdown.by_source[category].total += incomeAmount;
                     const transactionRecord = {
                         transactionId: entry.transactionId,
@@ -1336,24 +1428,42 @@ class EnhancedCashFlowService {
                 }
                 
                 // Also check for traditional Income account types (for completeness)
-                entry.entries.forEach(line => {
-                    const accountCode = line.accountCode;
-                    const accountName = line.accountName;
-                    const accountType = line.accountType;
-                    const credit = line.credit || 0;
-                    
-                    if (accountType === 'Income' || accountType === 'income') {
-                        // Check if this is a late payment fee - exclude from cash flow entirely
-                        const accountNameLower = accountName.toLowerCase();
-                        const isLatePaymentFee = accountNameLower.includes('late') && 
-                                                 (accountNameLower.includes('payment') || accountNameLower.includes('fee'));
+                // BUT ONLY if there's an actual cash payment (cash account debit)
+                // This ensures we only count actual cash income, not accrued income
+                // FIRST: Check if this is an internal cash transfer - EXCLUDE
+                if (this.isInternalCashTransfer(entry)) {
+                    console.log(`💰 Internal cash transfer excluded from income processing: ${entry.transactionId}`);
+                    return; // Skip internal transfers
+                }
+                
+                // SECOND: Check if there's a cash payment in this transaction
+                const hasCashPayment = entry.entries.some(line => {
+                    const accountCode = line.accountCode || line.account?.code;
+                    // Check for cash account debit (actual cash received)
+                    return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.debit > 0;
+                });
+                
+                // ONLY process income accounts if there's a cash payment AND it's not an internal transfer
+                // This excludes accruals (income earned but not yet received) and internal transfers
+                if (hasCashPayment) {
+                    entry.entries.forEach(line => {
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const credit = line.credit || 0;
                         
-                        if (isLatePaymentFee) {
-                            // Late payment fees should be excluded from cash flow income
-                            return; // Skip this entry entirely
-                        }
-                        
-                        incomeBreakdown.total += credit;
+                        if (accountType === 'Income' || accountType === 'income') {
+                            // Check if this is a late payment fee - exclude from cash flow entirely
+                            const accountNameLower = accountName.toLowerCase();
+                            const isLatePaymentFee = accountNameLower.includes('late') && 
+                                                     (accountNameLower.includes('payment') || accountNameLower.includes('fee'));
+                            
+                            if (isLatePaymentFee) {
+                                // Late payment fees should be excluded from cash flow income
+                                return; // Skip this entry entirely
+                            }
+                            
+                            incomeBreakdown.total += credit;
                         
                         // Categorize by account code
                         if (accountCode.startsWith('4001') || accountName.toLowerCase().includes('rent')) {
@@ -1447,8 +1557,11 @@ class EnhancedCashFlowService {
                             incomeBreakdown.by_month[monthKey] = 0;
                         }
                         incomeBreakdown.by_month[monthKey] += credit;
-                    }
-                });
+                        }
+                    });
+                }
+                // If no cash payment, skip this income entry
+                // This ensures accrued income (income earned but not yet received) is excluded
             }
         });
         
@@ -1645,20 +1758,21 @@ class EnhancedCashFlowService {
             // Transactions are already filtered by residence above
             
             if (entry.entries && entry.entries.length > 0) {
+                // FIRST: Check if this is an internal cash transfer (cash to cash) - EXCLUDE from cash flow
+                if (this.isInternalCashTransfer(entry)) {
+                    console.log(`💰 Internal cash transfer excluded from expenses: ${entry.transactionId} - Description: ${entry.description}`);
+                    return; // Skip internal transfers - they don't represent actual cash outflow
+                }
+                
                 // Look for Cash/Bank credits (expenses paid)
+                // BUT ONLY if it's NOT to another cash account (not an internal transfer)
                 const cashEntry = entry.entries.find(line => {
                     const accountCode = line.accountCode || line.account?.code;
                     const accountName = line.accountName || line.account?.name;
                     return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
                 });
                 
-                // Skip petty cash transfers - they are not expenses
-                const isPettyCashTransfer = entry.description && (
-                    entry.description.toLowerCase().includes('petty cash') ||
-                    entry.description.toLowerCase().includes('cash allocation')
-                );
-                
-                if (cashEntry && !isPettyCashTransfer) {
+                if (cashEntry) {
                     // Check if this expense was already processed
                     let expenseId = null;
                     if (entry.reference) {
@@ -1765,137 +1879,158 @@ class EnhancedCashFlowService {
                 }
                 
                 // Also check for traditional Expense account types (for completeness)
+                // BUT ONLY if there's an actual cash payment (cash account credit)
                 // Skip if this transaction was already processed in the Cash credits section
                 if (!processedTransactions.has(entry.transactionId)) {
-                    entry.entries.forEach(line => {
+                    // FIRST: Check if this is an internal cash transfer - EXCLUDE
+                    if (this.isInternalCashTransfer(entry)) {
+                        console.log(`💰 Internal cash transfer excluded from expense processing: ${entry.transactionId}`);
+                        return; // Skip internal transfers
+                    }
+                    
+                    // SECOND: Check if there's a cash payment in this transaction
+                    const hasCashPayment = entry.entries.some(line => {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
-                        const accountType = line.accountType || line.account?.type;
-                        const debit = line.debit || 0;
-                        
-                        if (accountType === 'Expense' || accountType === 'expense') {
-                            // Check if this expense was already processed
-                            let expenseId = null;
-                            if (entry.reference) {
-                                if (entry.reference.startsWith('EXP-')) {
-                                    expenseId = entry.reference;
-                                } else {
-                                    const expenseIdMatch = entry.reference.match(/EXP-[\w-]+/);
-                                    if (expenseIdMatch) {
-                                        expenseId = expenseIdMatch[0];
-                                    } else {
+                        // Check for cash account credit (actual cash payment)
+                        return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.credit > 0;
+                    });
+                    
+                    // ONLY process if there's a cash payment AND it's not an internal transfer
+                    // This ensures we only count actual cash expenses, not accrued expenses or internal transfers
+                    if (hasCashPayment) {
+                        entry.entries.forEach(line => {
+                            const accountCode = line.accountCode || line.account?.code;
+                            const accountName = line.accountName || line.account?.name;
+                            const accountType = line.accountType || line.account?.type;
+                            const debit = line.debit || 0;
+                            
+                            if (accountType === 'Expense' || accountType === 'expense') {
+                                // Check if this expense was already processed
+                                let expenseId = null;
+                                if (entry.reference) {
+                                    if (entry.reference.startsWith('EXP-')) {
                                         expenseId = entry.reference;
+                                    } else {
+                                        const expenseIdMatch = entry.reference.match(/EXP-[\w-]+/);
+                                        if (expenseIdMatch) {
+                                            expenseId = expenseIdMatch[0];
+                                        } else {
+                                            expenseId = entry.reference;
+                                        }
                                     }
                                 }
+                                
+                                // Also check sourceId field
+                                if (entry.sourceId) {
+                                    processedExpenses.add(entry.sourceId);
+                                }
+                                
+                                // Skip if this expense was already processed
+                                if (expenseId && processedExpenses.has(expenseId)) {
+                                    return; // Skip this line
+                                }
+                                
+                                // Mark this transaction as processed
+                                processedTransactions.add(entry.transactionId);
+                                
+                                // Mark the expense as processed
+                                if (expenseId) {
+                                    processedExpenses.add(expenseId);
+                                }
+                                
+                                expenseBreakdown.total += debit;
+                                
+                                // Get residence name using helper function
+                                const residenceName = getResidenceName(entry, expenses);
+                                
+                                // Categorize by account code
+                                if (accountCode.startsWith('5001') || accountName.toLowerCase().includes('maintenance')) {
+                                    expenseBreakdown.by_category.maintenance.total += debit;
+                                    expenseBreakdown.by_category.maintenance.transactions.push({
+                                        transactionId: entry.transactionId,
+                                        date: entry.date,
+                                        amount: debit,
+                                        accountCode,
+                                        accountName,
+                                        residence: residenceName,
+                                        description: entry.description || 'Maintenance Expense'
+                                    });
+                                } else if (accountCode.startsWith('5002') || accountName.toLowerCase().includes('utilit')) {
+                                    expenseBreakdown.by_category.utilities.total += debit;
+                                    expenseBreakdown.by_category.utilities.transactions.push({
+                                        transactionId: entry.transactionId,
+                                        date: entry.date,
+                                        amount: debit,
+                                        accountCode,
+                                        accountName,
+                                        residence: residenceName,
+                                        description: entry.description || 'Utilities Expense'
+                                    });
+                                } else if (accountCode.startsWith('5003') || accountName.toLowerCase().includes('clean')) {
+                                    expenseBreakdown.by_category.cleaning.total += debit;
+                                    expenseBreakdown.by_category.cleaning.transactions.push({
+                                        transactionId: entry.transactionId,
+                                        date: entry.date,
+                                        amount: debit,
+                                        accountCode,
+                                        accountName,
+                                        residence: residenceName,
+                                        description: entry.description || 'Cleaning Expense'
+                                    });
+                                } else if (accountCode.startsWith('5004') || accountName.toLowerCase().includes('security')) {
+                                    expenseBreakdown.by_category.security.total += debit;
+                                    expenseBreakdown.by_category.security.transactions.push({
+                                        transactionId: entry.transactionId,
+                                        date: entry.date,
+                                        amount: debit,
+                                        accountCode,
+                                        accountName,
+                                        residence: residenceName,
+                                        description: entry.description || 'Security Expense'
+                                    });
+                                } else if (accountCode.startsWith('5005') || accountName.toLowerCase().includes('management')) {
+                                    expenseBreakdown.by_category.management.total += debit;
+                                    expenseBreakdown.by_category.management.transactions.push({
+                                        transactionId: entry.transactionId,
+                                        date: entry.date,
+                                        amount: debit,
+                                        accountCode,
+                                        accountName,
+                                        residence: residenceName,
+                                        description: entry.description || 'Management Expense'
+                                    });
+                                } else {
+                                    // Default to maintenance category instead of other_expenses
+                                    expenseBreakdown.by_category.maintenance.total += debit;
+                                    expenseBreakdown.by_category.maintenance.transactions.push({
+                                        transactionId: entry.transactionId,
+                                        date: entry.date,
+                                        amount: debit,
+                                        accountCode,
+                                        accountName,
+                                        residence: residenceName,
+                                        description: entry.description || 'Other Expense'
+                                    });
+                                }
+                                
+                                // Group by residence
+                                if (!expenseBreakdown.by_residence[residenceName]) {
+                                    expenseBreakdown.by_residence[residenceName] = 0;
+                                }
+                                expenseBreakdown.by_residence[residenceName] += debit;
+                                
+                                // Group by month
+                                const monthKey = entry.date.toISOString().slice(0, 7); // YYYY-MM
+                                if (!expenseBreakdown.by_month[monthKey]) {
+                                    expenseBreakdown.by_month[monthKey] = 0;
+                                }
+                                expenseBreakdown.by_month[monthKey] += debit;
                             }
-                            
-                            // Also check sourceId field
-                            if (entry.sourceId) {
-                                processedExpenses.add(entry.sourceId);
-                            }
-                            
-                            // Skip if this expense was already processed
-                            if (expenseId && processedExpenses.has(expenseId)) {
-                                return; // Skip this line
-                            }
-                            
-                            // Mark this transaction as processed
-                            processedTransactions.add(entry.transactionId);
-                            
-                            // Mark the expense as processed
-                            if (expenseId) {
-                                processedExpenses.add(expenseId);
-                            }
-                            
-                            expenseBreakdown.total += debit;
-                        
-                        // Get residence name using helper function
-                        const residenceName = getResidenceName(entry, expenses);
-                        
-                        // Categorize by account code
-                        if (accountCode.startsWith('5001') || accountName.toLowerCase().includes('maintenance')) {
-                            expenseBreakdown.by_category.maintenance.total += debit;
-                            expenseBreakdown.by_category.maintenance.transactions.push({
-                                transactionId: entry.transactionId,
-                                date: entry.date,
-                                amount: debit,
-                                accountCode,
-                                accountName,
-                                residence: residenceName,
-                                description: entry.description || 'Maintenance Expense'
-                            });
-                        } else if (accountCode.startsWith('5002') || accountName.toLowerCase().includes('utilit')) {
-                            expenseBreakdown.by_category.utilities.total += debit;
-                            expenseBreakdown.by_category.utilities.transactions.push({
-                                transactionId: entry.transactionId,
-                                date: entry.date,
-                                amount: debit,
-                                accountCode,
-                                accountName,
-                                residence: residenceName,
-                                description: entry.description || 'Utilities Expense'
-                            });
-                        } else if (accountCode.startsWith('5003') || accountName.toLowerCase().includes('clean')) {
-                            expenseBreakdown.by_category.cleaning.total += debit;
-                            expenseBreakdown.by_category.cleaning.transactions.push({
-                                transactionId: entry.transactionId,
-                                date: entry.date,
-                                amount: debit,
-                                accountCode,
-                                accountName,
-                                residence: residenceName,
-                                description: entry.description || 'Cleaning Expense'
-                            });
-                        } else if (accountCode.startsWith('5004') || accountName.toLowerCase().includes('security')) {
-                            expenseBreakdown.by_category.security.total += debit;
-                            expenseBreakdown.by_category.security.transactions.push({
-                                transactionId: entry.transactionId,
-                                date: entry.date,
-                                amount: debit,
-                                accountCode,
-                                accountName,
-                                residence: residenceName,
-                                description: entry.description || 'Security Expense'
-                            });
-                        } else if (accountCode.startsWith('5005') || accountName.toLowerCase().includes('management')) {
-                            expenseBreakdown.by_category.management.total += debit;
-                            expenseBreakdown.by_category.management.transactions.push({
-                                transactionId: entry.transactionId,
-                                date: entry.date,
-                                amount: debit,
-                                accountCode,
-                                accountName,
-                                residence: residenceName,
-                                description: entry.description || 'Management Expense'
-                            });
-                        } else {
-                            // Default to maintenance category instead of other_expenses
-                            expenseBreakdown.by_category.maintenance.total += debit;
-                            expenseBreakdown.by_category.maintenance.transactions.push({
-                                transactionId: entry.transactionId,
-                                date: entry.date,
-                                amount: debit,
-                                accountCode,
-                                accountName,
-                                residence: residenceName,
-                                description: entry.description || 'Other Expense'
-                            });
-                        }
-                        
-                        // Group by residence
-                        if (!expenseBreakdown.by_residence[residenceName]) {
-                            expenseBreakdown.by_residence[residenceName] = 0;
-                        }
-                        expenseBreakdown.by_residence[residenceName] += debit;
-                        
-                        // Group by month
-                        const monthKey = entry.date.toISOString().slice(0, 7); // YYYY-MM
-                        if (!expenseBreakdown.by_month[monthKey]) {
-                            expenseBreakdown.by_month[monthKey] = 0;
-                        }
-                        expenseBreakdown.by_month[monthKey] += debit;
+                        });
                     }
-                });
+                    // If no cash payment or it's an internal transfer, skip this expense
+                    // This ensures accrued expenses (expenses without cash payments) are excluded
                 }
             }
         });
@@ -2122,19 +2257,14 @@ class EnhancedCashFlowService {
                 });
                 
                 // Skip internal cash transfers and movements between cash accounts
-                const isInternalTransfer = entry.description && (
-                    entry.description.toLowerCase().includes('petty cash') ||
-                    entry.description.toLowerCase().includes('cash allocation') ||
-                    entry.description.toLowerCase().includes('funds to') ||
-                    entry.description.toLowerCase().includes('cash to') ||
-                    entry.description.toLowerCase().includes('vault') ||
-                    entry.description.toLowerCase().includes('transfer to') ||
-                    entry.description.toLowerCase().includes('move to') ||
-                    entry.description.toLowerCase().includes('internal transfer')
-                );
+                // Use the proper isInternalCashTransfer function for consistency
+                if (this.isInternalCashTransfer(entry)) {
+                    console.log(`💰 Internal cash transfer excluded from individual expenses: ${entry.transactionId} - Description: ${entry.description}`);
+                    return; // Skip internal transfers - they don't represent actual cash outflow
+                }
                 
                 // Process each cash credit as a separate expense
-                if (cashEntries.length > 0 && !isInternalTransfer && !processedTransactions.has(entry.transactionId)) {
+                if (cashEntries.length > 0 && !processedTransactions.has(entry.transactionId)) {
                     cashEntries.forEach((cashEntry, index) => {
                         const expenseAmount = cashEntry.credit;
                         const description = cashEntry.description || entry.description || 'Cash Expense';
@@ -4006,6 +4136,12 @@ class EnhancedCashFlowService {
                         return; // Skip this transaction entry
                     }
                     
+                    // Check if this is an internal cash transfer (cash moving between cash accounts)
+                    if (this.isInternalCashTransfer(entry)) {
+                        console.log(`💰 Internal cash transfer excluded from cash inflow in generateReliableMonthlyBreakdown: ${entry.transactionId} - Description: ${entry.description}`);
+                        return; // Skip internal transfers - they don't represent actual cash inflow
+                    }
+                    
                     // This is actual cash inflow
                     monthlyData[monthName].operating_activities.inflows += amount;
                     monthlyData[monthName].income.total += amount;
@@ -4081,8 +4217,34 @@ class EnhancedCashFlowService {
                 }
                 
                 // FALLBACK: Credit to Income accounts (4000 series) - for completeness
+                // BUT ONLY if there's an actual cash receipt (cash account debit) - exclude accruals
                 else if (isCredit && accountCode && accountCode.startsWith('4') && 
                          !processedTransactions.has(entry.transactionId + '_income')) {
+                    
+                    // FIRST: Check if this is an internal cash transfer - EXCLUDE
+                    if (this.isInternalCashTransfer(entry)) {
+                        console.log(`💰 Internal cash transfer excluded from income processing (FALLBACK): ${entry.transactionId}`);
+                        return; // Skip internal transfers
+                    }
+                    
+                    // SECOND: Check if there's a cash receipt in this transaction
+                    // Only process if there's actual cash movement (cash account debit)
+                    const hasCashReceipt = entry.entries && entry.entries.some(line => {
+                        const lineAccountCode = line.accountCode || line.account?.code;
+                        const lineAccountName = line.accountName || line.account?.name;
+                        // Check for cash account debit (actual cash receipt) - must have debit > 0
+                        const isCashAccount = lineAccountCode && (lineAccountCode.startsWith('100') || lineAccountCode.startsWith('101'));
+                        const hasCashDebit = line.debit > 0;
+                        return isCashAccount && hasCashDebit;
+                    });
+                    
+                    // ONLY process if there's a cash receipt AND it's not an internal transfer
+                    // This ensures we only count actual cash income, not accrued income
+                    if (!hasCashReceipt) {
+                        console.log(`💰 Accrual income excluded (no cash receipt): ${entry.transactionId} - Description: ${entry.description}`);
+                        return; // Skip accruals - they don't represent actual cash inflow
+                    }
+                    
                     monthlyData[monthName].operating_activities.inflows += amount;
                     monthlyData[monthName].income.total += amount;
                     processedTransactions.add(entry.transactionId + '_income');
@@ -4142,19 +4304,13 @@ class EnhancedCashFlowService {
                     }
                     
                     // Skip internal cash transfers and movements between cash accounts
-                    const desc = entry.description?.toLowerCase() || '';
-                    const isInternalTransfer = desc.includes('petty cash') || 
-                                             desc.includes('cash allocation') || 
-                                             desc.includes('internal transfer') ||
-                                             desc.includes('balance adjustment') ||
-                                             desc.includes('funds to') ||
-                                             desc.includes('cash to') ||
-                                             desc.includes('vault') ||
-                                             desc.includes('transfer to') ||
-                                             desc.includes('move to');
+                    // Use the proper isInternalCashTransfer function for consistency
+                    if (this.isInternalCashTransfer(entry)) {
+                        console.log(`💰 Internal cash transfer excluded from cash outflow in generateReliableMonthlyBreakdown: ${entry.transactionId} - Description: ${entry.description}`);
+                        return; // Skip internal transfers - they don't represent actual cash outflow
+                    }
                     
-                    
-                    if (!isInternalTransfer && !processedTransactions.has(entry.transactionId + '_expense')) {
+                    if (!processedTransactions.has(entry.transactionId + '_expense')) {
                     monthlyData[monthName].operating_activities.outflows += amount;
                     monthlyData[monthName].expenses.total += amount;
                         processedTransactions.add(entry.transactionId + '_expense');
@@ -4186,8 +4342,34 @@ class EnhancedCashFlowService {
                 }
                 
                 // FALLBACK: Debit to Expense accounts (5000 series) - for completeness
+                // BUT ONLY if there's an actual cash payment (cash account credit) - exclude accruals
                 else if (isDebit && accountCode && accountCode.startsWith('5') && 
                          !processedTransactions.has(entry.transactionId + '_expense')) {
+                    
+                    // FIRST: Check if this is an internal cash transfer - EXCLUDE
+                    if (this.isInternalCashTransfer(entry)) {
+                        console.log(`💰 Internal cash transfer excluded from expense processing (FALLBACK): ${entry.transactionId}`);
+                        return; // Skip internal transfers
+                    }
+                    
+                    // SECOND: Check if there's a cash payment in this transaction
+                    // Only process if there's actual cash movement (cash account credit)
+                    const hasCashPayment = entry.entries && entry.entries.some(line => {
+                        const lineAccountCode = line.accountCode || line.account?.code;
+                        const lineAccountName = line.accountName || line.account?.name;
+                        // Check for cash account credit (actual cash payment) - must have credit > 0
+                        const isCashAccount = lineAccountCode && (lineAccountCode.startsWith('100') || lineAccountCode.startsWith('101'));
+                        const hasCashCredit = line.credit > 0;
+                        return isCashAccount && hasCashCredit;
+                    });
+                    
+                    // ONLY process if there's a cash payment AND it's not an internal transfer
+                    // This ensures we only count actual cash expenses, not accrued expenses
+                    if (!hasCashPayment) {
+                        console.log(`💰 Accrual expense excluded (no cash payment): ${entry.transactionId} - Description: ${entry.description}`);
+                        return; // Skip accruals - they don't represent actual cash outflow
+                    }
+                    
                     monthlyData[monthName].operating_activities.outflows += amount;
                     monthlyData[monthName].expenses.total += amount;
                     processedTransactions.add(entry.transactionId + '_expense');
@@ -5698,18 +5880,18 @@ class EnhancedCashFlowService {
                 
                 const monthKey = effectiveDate.toISOString().slice(0, 7);
                 
+                // FIRST: Check if this is an internal cash transfer (cash to cash) - EXCLUDE from cash flow
+                if (this.isInternalCashTransfer(entry)) {
+                    console.log(`💰 Internal cash transfer excluded from cash breakdown: ${entry.transactionId} - Description: ${entry.description}`);
+                    return; // Skip internal transfers - they don't represent actual cash flow
+                }
+                
                 // Process cash inflows (debits to cash accounts) - include ALL cash accounts (1000-1999)
+                // BUT ONLY if it's NOT from another cash account (not an internal transfer)
                 const cashInflow = entry.entries.find(line => {
                     const accountCode = line.accountCode || line.account?.code;
                     const accountName = line.accountName || line.account?.name;
                     // Include all cash accounts (1000-1999 series)
-                    return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.debit > 0;
-                });
-                
-                // Also check for petty cash account inflows (internal transfers)
-                const pettyCashInflow = entry.entries.find(line => {
-                    const accountCode = line.accountCode || line.account?.code;
-                    const accountName = line.accountName || line.account?.name;
                     return accountCode && (accountCode.startsWith('100') || accountCode.startsWith('101')) && line.debit > 0;
                 });
                 
@@ -5720,47 +5902,8 @@ class EnhancedCashFlowService {
                     
                     console.log(`💰 Cash inflow detected: $${amount} to ${accountCode} (${accountName}) - Transaction: ${entry.transactionId}`);
                     
-                    // Check if this is an internal cash transfer (vault to petty cash, etc.)
-                    // Only count as internal transfer if it's purely moving cash between accounts
-                    // "Gas" transactions are actually cash to petty cash transfers, not expenses
-                    const isInternalTransfer = entry.description && (
-                        entry.description.toLowerCase().includes('petty cash') ||
-                        entry.description.toLowerCase().includes('cash allocation') ||
-                        entry.description.toLowerCase().includes('transfer')
-                    ) || entry.description.toLowerCase().includes('gas'); // "Gas" is actually cash to petty cash transfer
-                    
-                    if (isInternalTransfer) {
-                        // This is an internal cash transfer - don't count as inflow
-                        console.log(`💰 Internal cash transfer detected: $${amount} to ${accountCode} - not counted as inflow`);
-                        
-                        // Track as internal cash transfer
-                        if (!cashBreakdown.internal_cash_transfers) {
-                            cashBreakdown.internal_cash_transfers = {
-                                total: 0,
-                                by_month: {},
-                                transactions: []
-                            };
-                        }
-                        cashBreakdown.internal_cash_transfers.total += amount;
-                        cashBreakdown.internal_cash_transfers.transactions.push({
-                            transactionId: entry.transactionId,
-                            date: effectiveDate,
-                            amount: amount,
-                            to_account: accountName,
-                            description: entry.description
-                        });
-                        
-                        if (cashBreakdown.by_month[monthKey]) {
-                            if (!cashBreakdown.by_month[monthKey].internal_transfers) {
-                                cashBreakdown.by_month[monthKey].internal_transfers = 0;
-                            }
-                            cashBreakdown.by_month[monthKey].internal_transfers += amount;
-                        }
-                        
-                        return; // Skip to next entry - don't count as inflow
-                    }
-                    
-                    // Categorize the inflow based on transaction type first
+                    // Note: Internal transfer check already done above, so this is a real cash inflow
+                    // Categorize the inflow based on transaction type
                     if (entry.description && entry.description.includes('Balance adjustment')) {
                         // This is a balance adjustment (like vault opening balance)
                         cashBreakdown.cash_inflows.total += amount;
@@ -5885,26 +6028,6 @@ class EnhancedCashFlowService {
                     }
                 }
                 
-                // Handle petty cash inflows (internal transfers)
-                if (pettyCashInflow) {
-                    const amount = pettyCashInflow.debit;
-                    
-                    // Check if this is a petty cash allocation (cash transfer, not income)
-                    const isPettyCashTransfer = entry.description && (
-                        entry.description.toLowerCase().includes('petty cash') ||
-                        entry.description.toLowerCase().includes('cash allocation')
-                    );
-                    
-                    if (isPettyCashTransfer) {
-                        // This is an internal cash transfer - don't count as income
-                        // The cash is just moving between accounts (Bank to Petty Cash)
-                        console.log(`💰 Petty cash inflow tracked: ${amount} - internal transfer`);
-                        
-                        // Track the corresponding outflow was already handled above
-                        // This inflow balances the outflow, so net effect is zero
-                    }
-                }
-                
                 // Process cash outflows (credits to cash accounts) - include ALL cash accounts (1000-1999)
                 const cashOutflow = entry.entries.find(line => {
                     const accountCode = line.accountCode || line.account?.code;
@@ -5920,131 +6043,10 @@ class EnhancedCashFlowService {
                     
                     console.log(`💰 Cash outflow detected: $${amount} from ${accountCode} (${accountName}) - Transaction: ${entry.transactionId}`);
                     
-                    // Check if this is an internal cash transfer (vault to petty cash, etc.)
-                    // Only count as internal transfer if it's purely moving cash between accounts
-                    // "Gas" transactions are actually cash to petty cash transfers, not expenses
-                    const isInternalTransferOutflow = entry.description && (
-                        entry.description.toLowerCase().includes('petty cash') ||
-                        entry.description.toLowerCase().includes('cash allocation') ||
-                        entry.description.toLowerCase().includes('transfer')
-                    ) || entry.description.toLowerCase().includes('gas'); // "Gas" is actually cash to petty cash transfer
-                    
-                    if (isInternalTransferOutflow) {
-                        // This is an internal cash transfer - don't count as outflow
-                        console.log(`💰 Internal cash transfer detected: $${amount} from ${accountCode} - not counted as outflow`);
-                        
-                        // Track as internal cash transfer
-                        if (!cashBreakdown.internal_cash_transfers) {
-                            cashBreakdown.internal_cash_transfers = {
-                                total: 0,
-                                by_month: {},
-                                transactions: []
-                            };
-                        }
-                        cashBreakdown.internal_cash_transfers.total += amount;
-                        cashBreakdown.internal_cash_transfers.transactions.push({
-                            transactionId: entry.transactionId,
-                            date: effectiveDate,
-                            amount: amount,
-                            from_account: accountName,
-                            description: entry.description
-                        });
-                        
-                        if (cashBreakdown.by_month[monthKey]) {
-                            if (!cashBreakdown.by_month[monthKey].internal_transfers) {
-                                cashBreakdown.by_month[monthKey].internal_transfers = 0;
-                            }
-                            cashBreakdown.by_month[monthKey].internal_transfers += amount;
-                        }
-                        
-                        return; // Skip to next entry - don't count as outflow
-                    }
-                    
-                    // Check if this is a petty cash allocation (cash transfer, not expense)
-                    const isPettyCashTransfer = entry.description && (
-                        entry.description.toLowerCase().includes('petty cash') ||
-                        entry.description.toLowerCase().includes('cash allocation')
-                    );
-                    
-                    if (isPettyCashTransfer) {
-                        // This is a cash transfer between accounts - track it as internal transfer only
-                        // DO NOT count as cash outflow since it's just moving money between accounts
-                        
-                        // Track as internal cash transfer
-                        if (!cashBreakdown.internal_cash_transfers) {
-                            cashBreakdown.internal_cash_transfers = {
-                                total: 0,
-                                by_month: {},
-                                transactions: []
-                            };
-                        }
-                        cashBreakdown.internal_cash_transfers.total += amount;
-                        cashBreakdown.internal_cash_transfers.transactions.push({
-                            transactionId: entry.transactionId,
-                            date: effectiveDate,
-                            amount: amount,
-                            from_account: 'Bank Account',
-                            to_account: 'Admin Petty Cash',
-                            description: entry.description
-                        });
-                        
-                        if (cashBreakdown.by_month[monthKey]) {
-                            if (!cashBreakdown.by_month[monthKey].internal_transfers) {
-                                cashBreakdown.by_month[monthKey].internal_transfers = 0;
-                            }
-                            cashBreakdown.by_month[monthKey].internal_transfers += amount;
-                        }
-                        
-                        console.log(`💰 Petty cash transfer tracked: ${amount} - internal transfer (not counted as outflow)`);
-                        return; // Skip to next entry - don't count as expense
-                    }
-                    
-                    // Only count actual business expenses as cash outflows
-                    // Don't add to total yet - we'll add it after checking if it's an internal transfer
-                    
-                    // Categorize the outflow based on transaction type
-                    // Check if this is an internal transfer (including "gas" which is actually cash to petty cash)
-                    const isInternalTransfer = entry.description && (
-                        entry.description.toLowerCase().includes('petty cash') ||
-                        entry.description.toLowerCase().includes('cash allocation') ||
-                        entry.description.toLowerCase().includes('transfer') ||
-                        entry.description.toLowerCase().includes('gas') // "Gas" is actually cash to petty cash transfer
-                    );
-                    
-                    if (isInternalTransfer) {
-                        // This is an internal transfer - don't count as expense
-                        console.log(`💰 Internal transfer outflow: $${amount} from ${accountCode} - not counted as expense - Transaction: ${entry.transactionId}`);
-                        
-                        // Track as internal cash transfer
-                        if (!cashBreakdown.internal_cash_transfers) {
-                            cashBreakdown.internal_cash_transfers = {
-                                total: 0,
-                                by_month: {},
-                                transactions: []
-                            };
-                        }
-                        cashBreakdown.internal_cash_transfers.total += amount;
-                        cashBreakdown.internal_cash_transfers.transactions.push({
-                            transactionId: entry.transactionId,
-                            date: effectiveDate,
-                            amount: amount,
-                            from_account: accountName,
-                            description: entry.description
-                        });
-                        
-                        if (cashBreakdown.by_month[monthKey]) {
-                            if (!cashBreakdown.by_month[monthKey].internal_transfers) {
-                                cashBreakdown.by_month[monthKey].internal_transfers = 0;
-                            }
-                            cashBreakdown.by_month[monthKey].internal_transfers += amount;
-                        }
-                        
-                        return; // Skip to next entry - don't count as expense
-                    } else {
-                        // Default to expenses
-                        cashBreakdown.cash_outflows.total += amount;
-                        cashBreakdown.cash_outflows.for_expenses += amount;
-                    }
+                    // Note: Internal transfer check already done above, so this is a real cash outflow
+                    // Count as actual business expense (cash paid out)
+                    cashBreakdown.cash_outflows.total += amount;
+                    cashBreakdown.cash_outflows.for_expenses += amount;
                     
                     if (cashBreakdown.by_month[monthKey]) {
                         cashBreakdown.by_month[monthKey].cash_outflows += amount;
@@ -6741,6 +6743,96 @@ class EnhancedCashFlowService {
         } catch (error) {
             console.error('❌ Error calculating closing cash balance:', error);
             return 0;
+        }
+    }
+
+    /**
+     * Validate cash flow rules for a specific period using CashFlowValidator
+     * @param {string} period - Period string (e.g., "2025-01" or "2025")
+     * @param {string} residenceId - Optional residence ID to filter by
+     * @returns {Promise<Object>} Cash flow validation report
+     */
+    static async validateCashFlowRules(period, residenceId = null) {
+        try {
+            // Determine date range from period string
+            let startDate, endDate;
+            
+            if (period.includes('-') && period.length === 7) {
+                // Monthly period: "2025-01"
+                startDate = new Date(`${period}-01`);
+                endDate = new Date(startDate);
+                endDate.setMonth(endDate.getMonth() + 1);
+                endDate.setDate(0); // Last day of the month
+            } else if (period.length === 4) {
+                // Yearly period: "2025"
+                startDate = new Date(`${period}-01-01`);
+                endDate = new Date(`${period}-12-31`);
+            } else {
+                throw new Error(`Invalid period format: ${period}. Expected "YYYY-MM" or "YYYY"`);
+            }
+
+            // Use CashFlowValidator to validate the period
+            const validationReport = await CashFlowValidator.validatePeriodCashFlow(
+                startDate, 
+                endDate, 
+                residenceId
+            );
+
+            return {
+                success: true,
+                period: period,
+                validationReport: validationReport,
+                message: `Cash flow validation completed for period ${period}`
+            };
+        } catch (error) {
+            console.error('Error validating cash flow rules:', error);
+            return {
+                success: false,
+                period: period,
+                error: error.message,
+                message: `Failed to validate cash flow for period ${period}`
+            };
+        }
+    }
+
+    /**
+     * Get cash flow validation summary for a period
+     * @param {string} period - Period string (e.g., "2025-01" or "2025")
+     * @param {string} residenceId - Optional residence ID to filter by
+     * @returns {Promise<Object>} Validation summary
+     */
+    static async getCashFlowValidationSummary(period, residenceId = null) {
+        try {
+            const validation = await this.validateCashFlowRules(period, residenceId);
+            
+            if (!validation.success) {
+                return validation;
+            }
+
+            const report = validation.validationReport;
+            const summary = {
+                period: period,
+                totalTransactions: report.validationSummary.totalTransactions,
+                includedInCashFlow: report.cashFlowStatement.summary.includedInCashFlow,
+                excludedFromCashFlow: report.cashFlowStatement.summary.excludedFromCashFlow,
+                exclusionBreakdown: report.cashFlowStatement.summary.exclusionBreakdown,
+                cashFlowAccuracy: report.validationSummary.cashFlowAccuracy,
+                netCashFlow: report.cashFlowStatement.operatingActivities.netCashFlow,
+                totalInflows: report.cashFlowStatement.operatingActivities.cashInflows,
+                totalOutflows: report.cashFlowStatement.operatingActivities.cashOutflows,
+                cashAccountsCount: report.validationSummary.cashAccountsCount
+            };
+
+            return {
+                success: true,
+                summary: summary
+            };
+        } catch (error) {
+            console.error('Error getting cash flow validation summary:', error);
+            return {
+                success: false,
+                error: error.message
+            };
         }
     }
 }

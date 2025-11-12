@@ -50,20 +50,34 @@ const auditMiddleware = async (req, res, next) => {
         const duration = endTime - startTime;
         
         // Log the request/response asynchronously (don't block response)
-        // Only log if there's an authenticated user
-        if (requestData.user && requestData.user.id) {
-            setImmediate(async () => {
+        // Only log if there's an authenticated user and not a health check
+        // Skip logging for very fast responses (< 50ms) to reduce overhead
+        if (requestData.user && requestData.user.id && duration > 50) {
+            // Use process.nextTick for better performance than setImmediate
+            process.nextTick(async () => {
                 try {
+                    // Only log if response is not too large (prevent memory issues)
+                    const responseData = sanitizeResponseData(data);
+                    const responseSize = JSON.stringify(responseData).length;
+                    
+                    // Skip logging if response is too large (> 100KB)
+                    if (responseSize > 100000) {
+                        return;
+                    }
+                    
                     await logAPIAudit({
                         request: requestData,
                         response: {
                             statusCode: res.statusCode,
-                            data: sanitizeResponseData(data),
+                            data: responseData,
                             duration: duration
                         }
                     });
                 } catch (error) {
+                    // Silently fail to not impact performance
+                    if (process.env.NODE_ENV === 'development') {
                     console.error('Failed to log API audit:', error);
+                    }
                 }
             });
         }
