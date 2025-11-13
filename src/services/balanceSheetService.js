@@ -241,16 +241,11 @@ class BalanceSheetService {
           tx.entries.forEach(line => {
             if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
               arCredits += Number(line.credit || 0);
-            } else if (line.accountCode && line.accountCode.match(/^100[0-9]/)) {
-              // Cash accounts - only include if monthSettled = current month
-              if (tx.metadata?.monthSettled === monthKey) {
-                cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
-              }
-            } else if (line.accountCode === '1000') {
-              // Main cash account - only include if monthSettled = current month
-              if (tx.metadata?.monthSettled === monthKey) {
-                cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
-              }
+            } else if (line.accountCode && (line.accountCode.match(/^100[0-9]/) || line.accountCode === '1000')) {
+              // 🆕 FIX: REMOVED monthSettled filtering - include ALL cash transactions
+              // This ensures ALL cash transactions are included in the balance sheet
+              cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+              console.log(`💰 Cash transaction INCLUDED: ${tx.transactionId} - ${line.accountCode} - Debit: $${line.debit}, Credit: $${line.credit} - Source: ${tx.source} - Date: ${tx.date}`);
             } else if (line.accountCode && line.accountCode.startsWith('2020')) {
               // Deposit accounts
               depositsTotal += (line.credit || 0) - (line.debit || 0);
@@ -315,10 +310,12 @@ class BalanceSheetService {
             account.creditTotal = 0;
             console.log(`📊 Parent AR account 1100 aggregated from individual accounts: $${totalARBalance}`);
           } else if (account.code && account.code.match(/^100[0-9]/)) {
-            // Override cash accounts with monthSettled calculation
-            account.balance = cashByMonth;
-            account.debitTotal = cashByMonth;
-            account.creditTotal = 0;
+            // 🆕 FIX: DO NOT override cash balance - use the actual calculated balance from all transactions
+            console.log(`💰 Cash account ${account.code} balance: $${account.balance} (from all transactions)`);
+            // Don't override - keep the actual balance calculated from ALL transactions
+            // account.balance = cashByMonth; // REMOVED THIS LINE
+            // account.debitTotal = cashByMonth; // REMOVED THIS LINE
+            // account.creditTotal = 0; // REMOVED THIS LINE
           } else if (account.code && account.code.startsWith('2020')) {
             // Override deposit accounts with monthSettled calculation
             account.balance = depositsTotal;
