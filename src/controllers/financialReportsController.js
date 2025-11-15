@@ -1380,18 +1380,25 @@ class FinancialReportsController {
                 });
             }
             
-            // Check cache first
+            // Check cache first (unless bypassCache is true)
             const { cache } = require('../utils/cache');
             const cacheKey = `balancesheet:${period}:${basis}:${residence || 'all'}`;
-            const cached = cache.get(cacheKey);
-            if (cached) {
-                console.log('✅ Returning cached balance sheet data');
-                return res.json({
-                    success: true,
-                    data: cached,
-                    cached: true,
-                    message: `Cached balance sheet data for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}`
-                });
+            const bypassCache = req.query.bypassCache === 'true' || req.query.bypassCache === '1';
+            
+            if (!bypassCache) {
+                const cached = cache.get(cacheKey);
+                if (cached) {
+                    console.log('✅ Returning cached balance sheet data');
+                    return res.json({
+                        success: true,
+                        data: cached,
+                        cached: true,
+                        message: `Cached balance sheet data for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}. Add ?bypassCache=true to force refresh.`
+                    });
+                }
+            } else {
+                console.log('🔄 Bypassing cache - generating fresh balance sheet data');
+                cache.delete(cacheKey); // Clear the cache
             }
             
             const year = parseInt(period);
@@ -1411,9 +1418,10 @@ class FinancialReportsController {
             for (let month = 1; month <= 12; month++) {
                 monthPromises.push((async () => {
                 try {
-                    // Calculate end of month date
-                    const endOfMonth = new Date(year, month, 0); // Last day of month
-                    const monthEndDateStr = endOfMonth.toISOString().split('T')[0];
+                    // Calculate end of month date using UTC to avoid timezone issues
+                    // Date.UTC(year, month, 0) gives us the last day of the previous month (which is the last day of the target month)
+                    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+                    const monthEndDateStr = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
                     
                     console.log(`🔧 Generating FIXED balance sheet for ${month}/${year} (${monthEndDateStr})`);
                     
@@ -3041,6 +3049,35 @@ class FinancialReportsController {
                         console.log('Could not fetch student name for transaction:', tx.transactionId, error.message);
                     }
                     
+                    // Get account names for all entries
+                    const Account = require('../models/Account');
+                    const entriesWithAccountNames = await Promise.all((tx.entries || []).map(async (entry) => {
+                        let accountName = entry.accountName || entry.account?.name;
+                        let accountType = entry.accountType || entry.account?.type;
+                        
+                        // If account name is not in entry, fetch from Account model
+                        if (!accountName && entry.accountCode) {
+                            try {
+                                const accountDoc = await Account.findOne({ code: entry.accountCode }).select('name type').lean();
+                                if (accountDoc) {
+                                    accountName = accountDoc.name;
+                                    accountType = accountDoc.type;
+                                }
+                            } catch (err) {
+                                // Ignore errors
+                            }
+                        }
+                        
+                        return {
+                            accountCode: entry.accountCode,
+                            accountName: accountName || entry.accountCode,
+                            accountType: accountType || 'Unknown',
+                            debit: entry.debit || 0,
+                            credit: entry.credit || 0,
+                            description: entry.description || tx.description || ''
+                        };
+                    }));
+                    
                     return {
                         id: tx._id,
                         transactionId: tx.transactionId,
@@ -3051,7 +3088,8 @@ class FinancialReportsController {
                         source: tx.source,
                         status: tx.status,
                         studentId: studentId,
-                        studentName: studentName
+                        studentName: studentName,
+                        entries: entriesWithAccountNames // Include all entries for full double-entry view
                     };
                 })),
                 monthlyBreakdown: Object.values(monthlyBreakdown).sort((a, b) => b.month.localeCompare(a.month)),

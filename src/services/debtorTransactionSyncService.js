@@ -31,6 +31,26 @@ class DebtorTransactionSyncService {
                         } else if (transaction.source === 'payment') {
                             // This is payment received - increases total paid
                             totalPaid += entry.credit || 0;
+                        } else if (transaction.source === 'advance_payment') {
+                            // 🆕 CRITICAL: Advance payment transactions - money was received
+                            // Advance payment has: DR Cash, CR AR, DR AR, CR Deferred Income
+                            // The CR to AR shows payment was made (cash received)
+                            // Count the CR to AR as payment (cash was received by the company)
+                            // The DR to AR is just transferring to deferred income - ignore it
+                            if (entry.credit > 0) {
+                                totalPaid += entry.credit;
+                                console.log(`   💳 Advance payment: +$${entry.credit} to totalPaid (cash received)`);
+                            }
+                            // Ignore the DR entry - it's just transferring to deferred income, not reducing the payment
+                        } else if (transaction.source === 'advance_payment_application') {
+                            // 🆕 CRITICAL: Advance payment application - applying already-counted advance to accrual
+                            // This is when an advance payment (already counted above) is applied to an accrual
+                            // DR Deferred Income, CR AR - this credits AR to reduce debt
+                            // We DON'T count this as additional payment because the payment was already counted
+                            // when the advance_payment transaction was created (cash was received then)
+                            // This transaction just moves the payment from deferred income liability to AR credit
+                            // So we don't add to totalPaid here - it's already been counted
+                            console.log(`   💳 Advance payment application: $${entry.credit || 0} applied to accrual (already counted in advance_payment)`);
                         } else if (transaction.source === 'manual') {
                             // Handle manual transactions (negotiations, reversals, etc.)
                             if (transaction.metadata?.type === 'negotiated_payment_adjustment') {

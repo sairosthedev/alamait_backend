@@ -2316,6 +2316,35 @@ exports.getAccountTransactionDetails = async (req, res) => {
                 const isChildAccount = entry.accountCode !== accountCode;
                 const childAccountInfo = childAccounts.find(child => child.code === entry.accountCode);
                 
+                // Get all entries for full double-entry view (like cash flow)
+                const Account = require('../../models/Account');
+                const entriesWithAccountNames = await Promise.all((transaction.entries || []).map(async (txEntry) => {
+                    let txAccountName = txEntry.accountName;
+                    let txAccountType = txEntry.accountType;
+                    
+                    // If account name is not in entry, fetch from Account model
+                    if (!txAccountName && txEntry.accountCode) {
+                        try {
+                            const accountDoc = await Account.findOne({ code: txEntry.accountCode }).select('name type').lean();
+                            if (accountDoc) {
+                                txAccountName = accountDoc.name;
+                                txAccountType = accountDoc.type;
+                            }
+                        } catch (err) {
+                            // Ignore errors
+                        }
+                    }
+                    
+                    return {
+                        accountCode: txEntry.accountCode,
+                        accountName: txAccountName || txEntry.accountCode,
+                        accountType: txAccountType || 'Unknown',
+                        debit: txEntry.debit || 0,
+                        credit: txEntry.credit || 0,
+                        description: txEntry.description || transaction.description || ''
+                    };
+                }));
+                
                 accountTransactions.push({
                     transactionId: transaction.transactionId || transaction._id,
                     date: transaction.date,
@@ -2337,7 +2366,9 @@ exports.getAccountTransactionDetails = async (req, res) => {
                     // Child account information
                     isChildAccount,
                     childAccountName: isChildAccount ? (childAccountInfo?.name || 'Unknown Child Account') : null,
-                    parentAccountCode: isChildAccount ? accountCode : null
+                    parentAccountCode: isChildAccount ? accountCode : null,
+                    // Include all entries for full double-entry view (like cash flow)
+                    entries: entriesWithAccountNames
                 });
             }
         }

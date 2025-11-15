@@ -314,8 +314,38 @@ class EnhancedCashFlowService {
             const netChangeInCash = netOperatingCashFlow + netInvestingCashFlow + netFinancingCashFlow;
             
             // Optimize: Calculate opening/closing balances and account breakdown in parallel
-            const openingDate = new Date(startDate);
-            openingDate.setDate(openingDate.getDate() - 1); // Day before period starts
+            // 🆕 FIX: Use UTC date calculation to avoid timezone issues
+            let openingDate;
+            if (period.includes('-')) {
+                // Monthly period - opening date is day before month starts
+                const [year, month] = period.split('-').map(Number);
+                // Day before month starts: last day of previous month
+                // month is 1-12, so month-1 is 0-11 (0-indexed)
+                // Date.UTC(year, month-1, 0) gives last day of previous month
+                const lastDayOfPrevMonth = new Date(Date.UTC(year, month - 1, 0)).getUTCDate();
+                // month-2 gives us the previous month (0-indexed), e.g., month=1 (Jan) -> month-2=-1 -> wraps to Dec of previous year
+                // Actually, we want month-1-1 = month-2 for the month index, but we need to handle year rollover
+                if (month === 1) {
+                    // January - previous month is December of previous year
+                    openingDate = new Date(Date.UTC(year - 1, 11, 31, 23, 59, 59, 999));
+                } else {
+                    // Other months - previous month is month-1 (1-indexed) = month-2 (0-indexed)
+                    openingDate = new Date(Date.UTC(year, month - 2, lastDayOfPrevMonth, 23, 59, 59, 999));
+                }
+            } else {
+                // Yearly period - opening date is December 31 of previous year
+                const year = parseInt(period, 10);
+                openingDate = new Date(Date.UTC(year - 1, 11, 31, 23, 59, 59, 999)); // Dec 31 of previous year
+            }
+            
+            // Debug log opening date calculation (isDebugMode already declared at line 211)
+            if (isDebugMode) {
+                console.log(`💰 Opening cash balance calculation:`);
+                console.log(`   Period: ${period}`);
+                console.log(`   Opening date: ${openingDate.toISOString()}`);
+                console.log(`   Start date: ${startDate.toISOString()}`);
+                console.log(`   End date: ${endDate.toISOString()}`);
+            }
             
             // Run cash balance calculations in parallel
             const [openingCashBalance, closingCashBalance, cashBalanceByAccount] = await Promise.all([
@@ -325,6 +355,13 @@ class EnhancedCashFlowService {
                 this.getClosingCashBalance(endDate, residenceId),
                 this.getCashBalanceByAccount(endDate, residenceId)
             ]);
+            
+            if (isDebugMode) {
+                console.log(`💰 Cash balance results:`);
+                console.log(`   Opening cash balance: $${openingCashBalance}`);
+                console.log(`   Closing cash balance: $${closingCashBalance}`);
+                console.log(`   Net change: $${closingCashBalance - openingCashBalance}`);
+            }
             
             // Calculate total from account breakdown (optimized)
             const totalFromAccountBreakdown = Object.values(cashBalanceByAccount).reduce(
@@ -357,6 +394,117 @@ class EnhancedCashFlowService {
             
             // Generate tabular monthly breakdown with proper cash balances
             const tabularMonthlyBreakdown = await EnhancedCashFlowService.generateTabularMonthlyBreakdown(oldFormatMonthlyBreakdown, period, openingCashBalance, cashBalanceByAccount);
+            
+            // --- NEW: populate per-month cash balances and attach to monthly and tabular outputs ---
+            try {
+                const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+                const cashBalanceByAccountByMonth = {};
+
+                // For each month compute end-of-month date and fetch balances
+                for (let i = 0; i < monthNames.length; i++) {
+                    const month = monthNames[i];
+                    const year = parseInt(period, 10);
+                    if (isNaN(year)) {
+                        cashBalanceByAccountByMonth[month] = {};
+                        continue;
+                    }
+                    // 🆕 FIX: Use UTC date calculation to match balance sheet (avoid timezone issues)
+                    // For month index i (0-11), get last day of that month
+                    // Date.UTC(year, month+1, 0) gives last day of month (month is 0-indexed)
+                    // i is 0-indexed (0=Jan, 9=Oct), so i+1 gives us the next month, and day 0 gives last day of month i
+                    const lastDay = new Date(Date.UTC(year, i + 1, 0)).getUTCDate();
+                    // Set to end of day (23:59:59.999) in UTC to include all transactions from that day
+                    // Use month i (0-indexed) and the lastDay we calculated
+                    const monthEndDate = new Date(Date.UTC(year, i, lastDay, 23, 59, 59, 999));
+                    
+                    // 🆕 CRITICAL: Check if this month is in the future
+                    const now = new Date();
+                    const currentDateUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+                    const monthStartDate = new Date(Date.UTC(year, i, 1, 0, 0, 0, 0));
+                    
+                    // Determine the appropriate end date for this month
+                    let endDate;
+                    let isFutureMonth = false;
+                    
+                    if (monthStartDate > currentDateUTC) {
+                        // This month hasn't started yet (future month) - show zero balances
+                        isFutureMonth = true;
+                        endDate = monthStartDate; // Use start of month so no transactions are included
+                    } else if (monthEndDate > currentDateUTC) {
+                        // This month has started but not ended yet (current month) - use current date
+                        endDate = currentDateUTC;
+                    } else {
+                        // This month has ended - use end of month date
+                        endDate = monthEndDate;
+                    }
+                    
+                    // Debug log to verify date calculation matches balance sheet
+                    const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
+                    if (isDebugMode) {
+                        console.log(`💰 Cash flow: Calculating balances for ${month} ${year} (month index ${i})`);
+                        console.log(`   Month start: ${monthStartDate.toISOString()}, Month end: ${monthEndDate.toISOString()}, Current: ${currentDateUTC.toISOString()}`);
+                        console.log(`   Using end date: ${endDate.toISOString()}, Is future month: ${isFutureMonth}`);
+                    }
+                    
+                    try {
+                        // For future months, return empty balances (no transactions yet)
+                        let monthlyBalances = {};
+                        if (!isFutureMonth) {
+                            monthlyBalances = await this.getCashBalanceByAccount(endDate, residenceId);
+                        } else {
+                            // Future month - return zero balances
+                            if (isDebugMode) {
+                                console.log(`   ⚠️ ${month} ${year} is a future month - returning zero balances`);
+                            }
+                        }
+                        cashBalanceByAccountByMonth[month] = monthlyBalances || {};
+
+                        // Attach to monthly_breakdown (oldFormatMonthlyBreakdown uses month names)
+                        if (!oldFormatMonthlyBreakdown[month]) {
+                            oldFormatMonthlyBreakdown[month] = this.initializeMonthData(month);
+                        }
+                        
+                        // Format cash accounts to match balance sheet structure
+                        const formattedCashAccounts = this.formatCashAccountsForBalanceSheet(monthlyBalances);
+                        
+                        // Keep both formats for backward compatibility
+                        oldFormatMonthlyBreakdown[month].cash_accounts = oldFormatMonthlyBreakdown[month].cash_accounts || { breakdown: {}, total: 0 };
+                        oldFormatMonthlyBreakdown[month].cash_accounts.breakdown = monthlyBalances || {}; // Original format (by account code)
+                        oldFormatMonthlyBreakdown[month].cash_accounts.total = formattedCashAccounts.total;
+                        
+                        // Add balance sheet format (cashAndBank structure matching balance sheet)
+                        oldFormatMonthlyBreakdown[month].cashAndBank = formattedCashAccounts;
+
+                        // Attach to tabularMonthlyBreakdown (month names)
+                        if (!tabularMonthlyBreakdown[month]) {
+                            tabularMonthlyBreakdown[month] = { net_change_in_cash: 0, cash_at_end_of_period: 0, cash_and_cash_equivalents: {} };
+                        }
+                        tabularMonthlyBreakdown[month].cash_and_cash_equivalents = tabularMonthlyBreakdown[month].cash_and_cash_equivalents || {};
+                        Object.values(monthlyBalances || {}).forEach(account => {
+                            if (!this.isCashAccount(account.accountName, account.accountCode)) return;
+                            tabularMonthlyBreakdown[month].cash_and_cash_equivalents[account.accountName] = {
+                                account_code: account.accountCode,
+                                balance: account.balance,
+                                description: this.getCashAccountDescription(account.accountName)
+                            };
+                        });
+                    } catch (err) {
+                        console.error(`❌ Error fetching cash balances for ${month} ${period}:`, err && err.message ? err.message : err);
+                        cashBalanceByAccountByMonth[month] = {};
+                    }
+                }
+
+                // Expose per-month balances in the response object
+                cashFlowData = {
+                    ...cashFlowData,
+                    cash_balance_by_account_monthly: cashBalanceByAccountByMonth,
+                    monthly_breakdown: oldFormatMonthlyBreakdown,
+                    tabular_monthly_breakdown: tabularMonthlyBreakdown
+                };
+            } catch (populateErr) {
+                console.error('❌ Error populating monthly cash account balances:', populateErr);
+            }
+            // --- END NEW ---
             
             // FINAL VERIFICATION: Ensure all monthly totals are correct from transactions
             // This is the LAST CHANCE to fix any discrepancies before returning
@@ -4455,9 +4603,12 @@ class EnhancedCashFlowService {
                 });
             }
             
-            // Add to monthly cash accounts
+            // Add to monthly cash accounts (original format by account code)
             month.cash_accounts.breakdown = cashAccounts;
             month.cash_accounts.total = totalCash;
+            
+            // Add balance sheet format (cashAndBank structure matching balance sheet)
+            month.cashAndBank = this.formatCashAccountsForBalanceSheet(cashAccounts);
         });
 
         // Final verification: ALWAYS recalculate expenses.total from breakdown items (including deposit returns)
@@ -6417,6 +6568,86 @@ class EnhancedCashFlowService {
         }
         
         return true;
+    }
+
+    /**
+     * Get cash account key for balance sheet structure (matches balance sheet format)
+     * Maps account codes to balance sheet keys like cash, bank, ecocash, etc.
+     */
+    static getCashAccountKey(accountCode) {
+        const cashAccountMap = {
+            '1000': 'cash',
+            '1001': 'bank',
+            '1002': 'ecocash',
+            '1003': 'innbucks',
+            '1004': 'pettyCash',
+            '1005': 'cashOnHand',
+            '1010': 'generalPettyCash',
+            '1011': 'adminPettyCash',
+            '1012': 'financePettyCash',
+            '1013': 'propertyManagerPettyCash',
+            '1014': 'maintenancePettyCash',
+            '10003': 'cbzVault'
+        };
+        return cashAccountMap[accountCode] || null;
+    }
+
+    /**
+     * Format cash accounts breakdown to match balance sheet structure
+     * Transforms account code keyed object to balance sheet format with named keys
+     */
+    static formatCashAccountsForBalanceSheet(monthlyBalances) {
+        if (!monthlyBalances || typeof monthlyBalances !== 'object') {
+            return {
+                cash: { amount: 0, accountCode: '1000', accountName: 'Cash' },
+                bank: { amount: 0, accountCode: '1001', accountName: 'Bank Account' },
+                ecocash: { amount: 0, accountCode: '1002', accountName: 'Ecocash' },
+                innbucks: { amount: 0, accountCode: '1003', accountName: 'Innbucks' },
+                pettyCash: { amount: 0, accountCode: '1004', accountName: 'Petty Cash' },
+                cashOnHand: { amount: 0, accountCode: '1005', accountName: 'Cash on Hand' },
+                generalPettyCash: { amount: 0, accountCode: '1010', accountName: 'General Petty Cash' },
+                adminPettyCash: { amount: 0, accountCode: '1011', accountName: 'Admin Petty Cash' },
+                financePettyCash: { amount: 0, accountCode: '1012', accountName: 'Finance Petty Cash' },
+                propertyManagerPettyCash: { amount: 0, accountCode: '1013', accountName: 'Property Manager Petty Cash' },
+                maintenancePettyCash: { amount: 0, accountCode: '1014', accountName: 'Maintenance Petty Cash' },
+                cbzVault: { amount: 0, accountCode: '10003', accountName: 'Cbz Vault' },
+                total: 0
+            };
+        }
+
+        // Initialize with default structure
+        const formatted = {
+            cash: { amount: 0, accountCode: '1000', accountName: 'Cash' },
+            bank: { amount: 0, accountCode: '1001', accountName: 'Bank Account' },
+            ecocash: { amount: 0, accountCode: '1002', accountName: 'Ecocash' },
+            innbucks: { amount: 0, accountCode: '1003', accountName: 'Innbucks' },
+            pettyCash: { amount: 0, accountCode: '1004', accountName: 'Petty Cash' },
+            cashOnHand: { amount: 0, accountCode: '1005', accountName: 'Cash on Hand' },
+            generalPettyCash: { amount: 0, accountCode: '1010', accountName: 'General Petty Cash' },
+            adminPettyCash: { amount: 0, accountCode: '1011', accountName: 'Admin Petty Cash' },
+            financePettyCash: { amount: 0, accountCode: '1012', accountName: 'Finance Petty Cash' },
+            propertyManagerPettyCash: { amount: 0, accountCode: '1013', accountName: 'Property Manager Petty Cash' },
+            maintenancePettyCash: { amount: 0, accountCode: '1014', accountName: 'Maintenance Petty Cash' },
+            cbzVault: { amount: 0, accountCode: '10003', accountName: 'Cbz Vault' },
+            total: 0
+        };
+
+        // Populate with actual balances
+        Object.values(monthlyBalances).forEach(account => {
+            if (!account || !account.accountCode) return;
+            
+            const accountCode = String(account.accountCode);
+            const key = this.getCashAccountKey(accountCode);
+            
+            if (key && formatted[key]) {
+                formatted[key].amount = account.balance || 0;
+                formatted[key].accountCode = accountCode;
+                formatted[key].accountName = account.accountName || formatted[key].accountName;
+                formatted.total += account.balance || 0;
+            }
+        });
+
+        return formatted;
     }
 
     /**

@@ -937,7 +937,27 @@ class RentalAccrualService {
                 }
             }
 
-            // Check if accrual already exists for this month using improved duplicate detection
+            // 🆕 CRITICAL: Use a more robust duplicate check that queries by exact metadata fields
+            // This prevents race conditions better than the general checkExistingMonthlyAccrual
+            const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+            const studentIdString = student.student.toString();
+            
+            // Check for existing accrual using exact metadata match (most reliable)
+            const existingAccrualExact = await TransactionEntry.findOne({
+                source: 'rental_accrual',
+                'metadata.type': 'monthly_rent_accrual',
+                'metadata.accrualMonth': month,
+                'metadata.accrualYear': year,
+                'metadata.studentId': studentIdString,
+                status: { $ne: 'deleted' }
+            });
+            
+            if (existingAccrualExact) {
+                console.log(`   ⚠️ Monthly accrual already exists for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingAccrualExact._id}, created: ${existingAccrualExact.createdAt})`);
+                return { success: false, error: 'Accrual already exists for this month', existingTransaction: existingAccrualExact._id };
+            }
+            
+            // Also check using the general method as a backup
             const existingAccrual = await this.checkExistingMonthlyAccrual(
                 student.student, 
                 month, 
@@ -947,8 +967,7 @@ class RentalAccrualService {
             );
             
             if (existingAccrual) {
-                const monthKey = `${year}-${String(month).padStart(2, '0')}`;
-                console.log(`   ⚠️ Monthly accrual already exists for ${student.firstName} ${student.lastName} - ${monthKey} (created by ${existingAccrual.createdBy || 'unknown service'})`);
+                console.log(`   ⚠️ Monthly accrual already exists (general check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingAccrual._id})`);
                 return { success: false, error: 'Accrual already exists for this month', existingTransaction: existingAccrual._id };
             }
             
@@ -1026,6 +1045,24 @@ class RentalAccrualService {
                 }
             ];
             
+            // 🆕 FINAL CHECK: One more duplicate check right before creating the transaction entry
+            // This is the last chance to prevent duplicates before database write
+            const finalDuplicateCheck = await TransactionEntry.findOne({
+                source: 'rental_accrual',
+                'metadata.type': 'monthly_rent_accrual',
+                'metadata.accrualMonth': month,
+                'metadata.accrualYear': year,
+                'metadata.studentId': student.student.toString(),
+                status: { $ne: 'deleted' }
+            });
+            
+            if (finalDuplicateCheck) {
+                console.log(`   ⚠️ Final duplicate check: Accrual already exists for ${student.firstName} ${student.lastName} - ${monthKey} - aborting`);
+                // Clean up the transaction we created
+                await Transaction.findByIdAndDelete(transaction._id);
+                return { success: false, error: 'Duplicate accrual detected in final check', existingTransaction: finalDuplicateCheck._id };
+            }
+            
             // Create transaction entry with CORRECT date (1st of the month)
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
@@ -1054,16 +1091,330 @@ class RentalAccrualService {
                 }
             });
             
-            await transactionEntry.save();
+            // 🆕 Use save with error handling to catch duplicate key errors
+            try {
+                await transactionEntry.save();
+            } catch (saveError) {
+                // If save fails due to duplicate, check if another process created it
+                if (saveError.code === 11000 || saveError.message.includes('duplicate')) {
+                    const existingAfterSave = await TransactionEntry.findOne({
+                        source: 'rental_accrual',
+                        'metadata.type': 'monthly_rent_accrual',
+                        'metadata.accrualMonth': month,
+                        'metadata.accrualYear': year,
+                        'metadata.studentId': student.student.toString(),
+                        status: { $ne: 'deleted' }
+                    });
+                    
+                    if (existingAfterSave) {
+                        console.log(`   ⚠️ Duplicate detected during save - another process created the accrual`);
+                        // Clean up the transaction we created
+                        await Transaction.findByIdAndDelete(transaction._id);
+                        return { success: false, error: 'Duplicate accrual detected during save', existingTransaction: existingAfterSave._id };
+                    }
+                }
+                throw saveError; // Re-throw if it's a different error
+            }
             
             // Update transaction with entry reference
             transaction.entries = [transactionEntry._id];
             await transaction.save();
             
+            // 🆕 CRITICAL: Check for advance payments (deferred income) for this month and apply them automatically
+            // monthKey is already declared at the top of the function
+            try {
+                console.log(`🔍 Checking for advance payments for ${monthKey} (student: ${student.student.toString()})`);
+                
+                // Strategy 1: Find advance payment transactions with monthSettled matching this month
+                let advancePayments = await TransactionEntry.find({
+                    source: 'advance_payment',
+                    'metadata.studentId': student.student.toString(),
+                    'metadata.monthSettled': monthKey,
+                    status: 'posted'
+                }).sort({ date: 1 });
+                
+                console.log(`   Strategy 1: Found ${advancePayments.length} advance payment(s) with monthSettled=${monthKey}`);
+                
+                // Strategy 2: If none found, check for advance payments with null monthSettled made before this month
+                if (advancePayments.length === 0) {
+                    advancePayments = await TransactionEntry.find({
+                        source: 'advance_payment',
+                        'metadata.studentId': student.student.toString(),
+                        $or: [
+                            { 'metadata.monthSettled': null },
+                            { 'metadata.monthSettled': { $exists: false } }
+                        ],
+                        status: 'posted',
+                        date: { $lt: monthStart } // Payment was made before the month started
+                    }).sort({ date: 1 });
+                    
+                    console.log(`   Strategy 2: Found ${advancePayments.length} advance payment(s) with null monthSettled made before ${monthStart.toISOString()}`);
+                }
+                
+                // Strategy 3: Also check for advance payments in description (for older transactions)
+                if (advancePayments.length === 0) {
+                    const monthName = new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' });
+                    advancePayments = await TransactionEntry.find({
+                        source: 'advance_payment',
+                        $or: [
+                            { 'metadata.studentId': student.student.toString() },
+                            { 'entries.accountCode': `1100-${student.student.toString()}` }
+                        ],
+                        $or: [
+                            { description: { $regex: new RegExp(monthKey, 'i') } },
+                            { description: { $regex: new RegExp(`${monthName}.*${year}`, 'i') } },
+                            { description: { $regex: new RegExp(`${year}.*${month}`, 'i') } }
+                        ],
+                        status: 'posted',
+                        date: { $lt: monthStart }
+                    }).sort({ date: 1 });
+                    
+                    console.log(`   Strategy 3: Found ${advancePayments.length} advance payment(s) matching description for ${monthKey}`);
+                }
+                
+                // Strategy 4: Find any unallocated advance payments (check if they have account 2200 entry)
+                // Also check for payment transactions that have account 2200 (they might be advance payments)
+                if (advancePayments.length === 0) {
+                    const allAdvancePayments = await TransactionEntry.find({
+                        $or: [
+                            { source: 'advance_payment' },
+                            { 
+                                source: 'payment',
+                                $or: [
+                                    { 'entries.accountCode': '2200' }, // Payment transactions with deferred income
+                                    { description: { $regex: new RegExp(monthKey, 'i') } } // Or description mentions the month
+                                ]
+                            }
+                        ],
+                        $or: [
+                            { 'metadata.studentId': student.student.toString() },
+                            { 'entries.accountCode': `1100-${student.student.toString()}` }
+                        ],
+                        status: 'posted',
+                        date: { $lt: monthStart }
+                    }).sort({ date: 1 });
+                    
+                    // Filter to only those that match this month and haven't been allocated
+                    advancePayments = allAdvancePayments.filter(tx => {
+                        const has2200 = tx.entries && tx.entries.some(e => e.accountCode === '2200');
+                        const notAllocated = !tx.metadata?.monthSettled || tx.metadata.monthSettled === null;
+                        // Check if description mentions the month (for payment transactions without 2200)
+                        const mentionsMonth = tx.description && (
+                            tx.description.includes(monthKey) || 
+                            tx.description.includes(`${month}/${year}`) ||
+                            tx.description.includes(`for ${year}-${String(month).padStart(2, '0')}`)
+                        );
+                        // Include if: (has 2200 and not allocated) OR (mentions month and not allocated and made before month)
+                        return (has2200 && notAllocated) || (mentionsMonth && notAllocated && tx.date < monthStart);
+                    });
+                    
+                    console.log(`   Strategy 4: Found ${advancePayments.length} unallocated advance/payment transaction(s) for ${monthKey}`);
+                }
+                
+                if (advancePayments.length > 0) {
+                    console.log(`💰 Found ${advancePayments.length} advance payment(s) for ${monthKey} - applying automatically`);
+                    
+                    let totalAdvanceAmount = 0;
+                    for (const advancePayment of advancePayments) {
+                        // Get the amount from either:
+                        // 1. Deferred income entry (account 2200) - for proper advance payments
+                        // 2. Student AR credit entry - for payment transactions that were incorrectly created
+                        let advanceAmount = 0;
+                        const deferredEntry = advancePayment.entries.find(e => e.accountCode === '2200');
+                        const studentAREntry = advancePayment.entries.find(e => 
+                            e.accountCode === `1100-${student.student.toString()}` && e.credit > 0
+                        );
+                        
+                        if (deferredEntry) {
+                            advanceAmount = deferredEntry.credit || 0;
+                        } else if (studentAREntry) {
+                            advanceAmount = studentAREntry.credit || 0;
+                            console.log(`   ⚠️ Payment transaction ${advancePayment.transactionId} doesn't have account 2200, using AR credit amount`);
+                        } else {
+                            // Try to get amount from totalCredit
+                            advanceAmount = advancePayment.totalCredit || 0;
+                            console.log(`   ⚠️ Could not find amount in entries, using totalCredit: $${advanceAmount}`);
+                        }
+                        
+                        if (advanceAmount > 0) {
+                            totalAdvanceAmount += advanceAmount;
+                            
+                            console.log(`   📋 Advance payment details:`);
+                            console.log(`      Transaction ID: ${advancePayment.transactionId}`);
+                            console.log(`      Date: ${advancePayment.date}`);
+                            console.log(`      Amount: $${advanceAmount}`);
+                            console.log(`      Description: ${advancePayment.description}`);
+                            console.log(`      monthSettled: ${advancePayment.metadata?.monthSettled || 'null'}`);
+                            console.log(`      Source: ${advancePayment.source}`);
+                            
+                            // 🆕 CRITICAL: Create a transaction to apply deferred income to AR WITHOUT touching cash
+                            // Cash was already received when the advance payment was made
+                            // We just need to: DR Deferred Income (2200), CR AR (1100-studentId)
+                            const Transaction = require('../models/Transaction');
+                            const applyTransaction = new Transaction({
+                                transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
+                                date: transactionEntry.date, // Use accrual date
+                                description: `Apply advance payment to ${monthKey} accrual`,
+                                reference: advancePayment.transactionId,
+                                residence: student.residence,
+                                createdBy: '68b7909295210ad2fa2c5dcf',
+                                metadata: {
+                                    type: 'advance_payment_application',
+                                    originalAdvancePaymentId: advancePayment._id.toString(),
+                                    accrualId: transactionEntry._id.toString(),
+                                    monthSettled: monthKey
+                                }
+                            });
+                            await applyTransaction.save();
+                            
+                            const applyTransactionEntry = new TransactionEntry({
+                                transactionId: applyTransaction.transactionId,
+                                date: transactionEntry.date,
+                                description: `Apply advance payment to ${monthKey} accrual`,
+                                reference: advancePayment.transactionId,
+                                entries: [
+                                    // DR Deferred Income (2200) - reduce the liability
+                                    {
+                                        accountCode: '2200',
+                                        accountName: 'Advance Payment Liability',
+                                        accountType: 'Liability',
+                                        debit: advanceAmount,
+                                        credit: 0,
+                                        description: `Advance payment applied to ${monthKey} accrual`
+                                    },
+                                    // CR Accounts Receivable (1100-studentId) - reduce the receivable
+                                    {
+                                        accountCode: accountsReceivable.code,
+                                        accountName: accountsReceivable.name,
+                                        accountType: accountsReceivable.type,
+                                        debit: 0,
+                                        credit: advanceAmount,
+                                        description: `Advance payment applied to ${monthKey} accrual`
+                                    }
+                                ],
+                                totalDebit: advanceAmount,
+                                totalCredit: advanceAmount,
+                                source: 'advance_payment_application',
+                                sourceId: advancePayment._id,
+                                sourceModel: 'TransactionEntry',
+                                residence: student.residence,
+                                createdBy: '68b7909295210ad2fa2c5dcf',
+                                status: 'posted',
+                                metadata: {
+                                    studentId: student.student.toString(),
+                                    studentName: `${student.firstName} ${student.lastName}`,
+                                    originalAdvancePaymentId: advancePayment._id.toString(),
+                                    accrualId: transactionEntry._id.toString(),
+                                    monthSettled: monthKey,
+                                    amount: advanceAmount
+                                }
+                            });
+                            
+                            // 🆕 Check if this advance payment was already applied to avoid duplicates
+                            const existingApplication = await TransactionEntry.findOne({
+                                source: 'advance_payment_application',
+                                'metadata.originalAdvancePaymentId': advancePayment._id.toString(),
+                                'metadata.accrualId': transactionEntry._id.toString(),
+                                status: 'posted'
+                            });
+                            
+                            if (existingApplication) {
+                                console.log(`   ⚠️ Advance payment ${advancePayment.transactionId} already applied - skipping duplicate application`);
+                                continue; // Skip to next advance payment
+                            }
+                            
+                            await applyTransactionEntry.save();
+                            applyTransaction.entries = [applyTransactionEntry._id];
+                            await applyTransaction.save();
+                            
+                            console.log(`   ✅ Created advance payment application transaction: ${applyTransactionEntry.transactionId}`);
+                            
+                            // Update the advance payment metadata to mark it as allocated
+                            if (!advancePayment.metadata) {
+                                advancePayment.metadata = {};
+                            }
+                            advancePayment.metadata.monthSettled = monthKey;
+                            await advancePayment.save();
+                            
+                            // 🆕 CRITICAL: Update debtor's prepayment record to mark it as allocated
+                            try {
+                                const Debtor = require('../models/Debtor');
+                                const mongoose = require('mongoose');
+                                const paymentId = advancePayment.metadata?.paymentId;
+                                
+                                if (paymentId) {
+                                    // Normalize paymentId to string for comparison
+                                    const paymentIdStr = paymentId.toString();
+                                    
+                                    // Find and update the prepayment record
+                                    const debtor = await Debtor.findOne({ user: student.student.toString() });
+                                    
+                                    if (debtor && debtor.deferredIncome && debtor.deferredIncome.prepayments) {
+                                        // Find prepayment by paymentId (handle both string and ObjectId formats)
+                                        const prepayment = debtor.deferredIncome.prepayments.find(p => {
+                                            if (!p.paymentId) return false;
+                                            // Compare as strings to handle both ObjectId and string formats
+                                            return p.paymentId.toString() === paymentIdStr;
+                                        });
+                                        
+                                        if (prepayment && prepayment.status === 'pending') {
+                                            // Update the prepayment to mark it as allocated
+                                            prepayment.allocatedMonth = monthKey;
+                                            prepayment.status = 'allocated';
+                                            
+                                            // Reduce deferred income total amount
+                                            debtor.deferredIncome.totalAmount = Math.max(0, 
+                                                (debtor.deferredIncome.totalAmount || 0) - advanceAmount
+                                            );
+                                            
+                                            await debtor.save();
+                                            console.log(`   ✅ Updated debtor prepayment record: paymentId=${paymentIdStr}, allocatedMonth=${monthKey}, status=allocated`);
+                                            console.log(`   ✅ Reduced deferred income total by $${advanceAmount} (new total: $${debtor.deferredIncome.totalAmount})`);
+                                        } else if (prepayment) {
+                                            console.log(`   ℹ️ Prepayment ${paymentIdStr} already allocated (status: ${prepayment.status})`);
+                                        } else {
+                                            console.log(`   ⚠️ Prepayment record not found for paymentId ${paymentIdStr} - debtor may need manual update`);
+                                            console.log(`      Available prepayment IDs: ${debtor.deferredIncome.prepayments.map(p => p.paymentId?.toString()).join(', ')}`);
+                                        }
+                                    } else {
+                                        console.log(`   ⚠️ Debtor or deferredIncome not found for student ${student.student.toString()}`);
+                                    }
+                                } else {
+                                    console.log(`   ⚠️ No paymentId found in advance payment metadata - cannot update debtor prepayment`);
+                                    console.log(`      Advance payment metadata:`, JSON.stringify(advancePayment.metadata, null, 2));
+                                }
+                            } catch (debtorUpdateError) {
+                                console.error(`   ❌ Error updating debtor prepayment record: ${debtorUpdateError.message}`);
+                                console.error(`      Stack: ${debtorUpdateError.stack}`);
+                                // Don't fail the accrual creation if debtor update fails
+                            }
+                            
+                            console.log(`   ✅ Applied advance payment of $${advanceAmount} to accrual for ${monthKey}`);
+                            
+                            // Break after applying first advance payment to avoid applying multiple times
+                            break;
+                        } else {
+                            console.log(`   ⚠️ Advance payment ${advancePayment.transactionId} has no valid amount - skipping`);
+                        }
+                    }
+                    
+                    if (totalAdvanceAmount > 0) {
+                        console.log(`✅ Total advance payments applied: $${totalAdvanceAmount} for ${monthKey}`);
+                    } else {
+                        console.log(`⚠️ No valid advance payments found with account 2200 entries`);
+                    }
+                } else {
+                    console.log(`ℹ️ No advance payments found for ${monthKey} - student will show as owing`);
+                }
+            } catch (advanceError) {
+                console.error(`⚠️ Error applying advance payments: ${advanceError.message}`);
+                console.error(`   Stack: ${advanceError.stack}`);
+                // Don't fail the accrual creation if advance payment application fails
+            }
+            
             // 🆕 NEW: Automatically sync to debtor
             try {
                 const DebtorTransactionSyncService = require('./debtorTransactionSyncService');
-                const monthKey = `${year}-${String(month).padStart(2, '0')}`;
                 
                 await DebtorTransactionSyncService.updateDebtorFromAccrual(
                     transactionEntry,

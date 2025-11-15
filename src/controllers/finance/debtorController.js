@@ -165,6 +165,50 @@ exports.getAllDebtors = async (req, res) => {
                 }
             }
             
+            // 🆕 Ensure deferredIncome.prepayments is explicitly included and add summary
+            if (debtorObj.deferredIncome) {
+                // Ensure prepayments array is included (even if empty)
+                debtorObj.deferredIncome.prepayments = debtorObj.deferredIncome.prepayments || [];
+                
+                // Add summary for advance payments visibility
+                const pendingPrepayments = debtorObj.deferredIncome.prepayments.filter(p => p.status === 'pending');
+                const allocatedPrepayments = debtorObj.deferredIncome.prepayments.filter(p => p.status === 'allocated');
+                
+                const pendingAmount = pendingPrepayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+                const allocatedAmount = allocatedPrepayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+                
+                debtorObj.deferredIncome.summary = {
+                    totalAmount: debtorObj.deferredIncome.totalAmount || 0,
+                    pendingAmount: pendingAmount,
+                    allocatedAmount: allocatedAmount,
+                    pendingCount: pendingPrepayments.length,
+                    allocatedCount: allocatedPrepayments.length,
+                    totalCount: debtorObj.deferredIncome.prepayments.length
+                };
+                
+                // 🆕 Add effective balance that accounts for pending advance payments
+                // This shows what the balance would be if pending advance payments were applied
+                const effectiveBalance = Math.max(0, (debtorObj.currentBalance || 0) - pendingAmount);
+                debtorObj.effectiveBalance = effectiveBalance;
+                debtorObj.hasPendingAdvancePayments = pendingAmount > 0;
+            } else {
+                // Initialize if missing
+                debtorObj.deferredIncome = {
+                    totalAmount: 0,
+                    prepayments: [],
+                    summary: {
+                        totalAmount: 0,
+                        pendingAmount: 0,
+                        allocatedAmount: 0,
+                        pendingCount: 0,
+                        allocatedCount: 0,
+                        totalCount: 0
+                    }
+                };
+                debtorObj.effectiveBalance = debtorObj.currentBalance || 0;
+                debtorObj.hasPendingAdvancePayments = false;
+            }
+            
             return debtorObj;
         }));
 
@@ -327,6 +371,69 @@ exports.getDebtorById = async (req, res) => {
                     totalPaid: transactionBasedTotals?.totalPaid,
                     totalOwing: transactionBasedTotals?.totalOwing
                 });
+                
+                // 🆕 CRITICAL: Always sync debtor totals with transaction-based ledger
+                // This ensures debtor totals are always calculated from actual transactions
+                if (transactionBasedTotals && studentId) {
+                    const DebtorTransactionSyncService = require('../../services/debtorTransactionSyncService');
+                    const fullDebtor = await Debtor.findById(id);
+                    
+                    if (fullDebtor) {
+                        const ledgerTotalOwed = transactionBasedTotals.totalExpected || 0;
+                        const ledgerTotalPaid = transactionBasedTotals.totalPaid || 0;
+                        const ledgerCurrentBalance = transactionBasedTotals.totalOwing || 0;
+                        
+                        console.log(`🔍 Comparing debtor totals with ledger:`);
+                        console.log(`   Debtor: Owed=$${fullDebtor.totalOwed}, Paid=$${fullDebtor.totalPaid}, Balance=$${fullDebtor.currentBalance}`);
+                        console.log(`   Ledger: Owed=$${ledgerTotalOwed}, Paid=$${ledgerTotalPaid}, Balance=$${ledgerCurrentBalance}`);
+                        
+                        // Check if debtor totals differ from ledger totals
+                        const totalsDiffer = (
+                            Math.abs((fullDebtor.totalOwed || 0) - ledgerTotalOwed) > 0.01 ||
+                            Math.abs((fullDebtor.totalPaid || 0) - ledgerTotalPaid) > 0.01 ||
+                            Math.abs((fullDebtor.currentBalance || 0) - ledgerCurrentBalance) > 0.01
+                        );
+                        
+                        if (totalsDiffer) {
+                            console.log(`🔄 Syncing debtor totals with transaction-based ledger (difference detected)`);
+                            
+                            // Recalculate from transactions to ensure accuracy (includes advance_payment_application)
+                            const syncResult = await DebtorTransactionSyncService.recalculateDebtorTotalsFromTransactionEntries(
+                                fullDebtor, 
+                                studentId
+                            );
+                            
+                            console.log(`   Recalculated: Owed=$${syncResult.totalOwed}, Paid=$${syncResult.totalPaid}, Balance=$${syncResult.currentBalance}`);
+                            
+                            // Save the updated debtor
+                            await fullDebtor.save();
+                            console.log(`✅ Debtor totals synced and saved successfully`);
+                            
+                            // Reload debtor with ALL fields to ensure complete update
+                            const updatedDebtor = await Debtor.findById(id)
+                                .populate('user', 'firstName lastName email phone')
+                                .populate('residence', 'name address roomPrice')
+                                .populate('application', 'startDate endDate roomNumber status')
+                                .populate('payments', 'date amount rentAmount adminFee deposit status')
+                                .populate('createdBy', 'firstName lastName email')
+                                .populate('updatedBy', 'firstName lastName email')
+                                .lean();
+                            
+                            if (updatedDebtor) {
+                                // Update ALL fields in the debtor object that will be returned
+                                // This ensures the response has the synced values
+                                Object.keys(updatedDebtor).forEach(key => {
+                                    if (key !== '_id' && key !== '__v') {
+                                        debtor[key] = updatedDebtor[key];
+                                    }
+                                });
+                                console.log(`✅ Updated debtor object in response: totalOwed=$${debtor.totalOwed}, totalPaid=$${debtor.totalPaid}, currentBalance=$${debtor.currentBalance}`);
+                            }
+                        } else {
+                            console.log(`✅ Debtor totals already match ledger (no sync needed)`);
+                        }
+                    }
+                }
             } else {
                 console.log(`⚠️ No student ID found for debtor ${id}`);
             }
@@ -383,7 +490,8 @@ exports.getDebtorById = async (req, res) => {
 
         // Enhance debtor with student information (including expired students)
         const { getStudentInfo } = require('../../utils/studentUtils');
-        let enhancedDebtor = debtor.toObject();
+        // debtor is already a plain object from .lean(), so no need to call .toObject()
+        let enhancedDebtor = { ...debtor };
         
         // Get student info (including expired students) if user exists
         let studentId = null;

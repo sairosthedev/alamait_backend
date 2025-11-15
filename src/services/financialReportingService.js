@@ -1912,36 +1912,96 @@ class FinancialReportingService {
                     
                     // Process payment entries (AR credits, cash, deposits, deferred)
                     paymentEntries.forEach(tx => {
+                        const isAdvancePayment = tx.source === 'advance_payment';
+                        let txDate = null;
+                        let txMonthKey = null;
+                        
+                        if (isAdvancePayment) {
+                            txDate = new Date(tx.date);
+                            txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+                        }
+                        
                         tx.entries.forEach(line => {
                             if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
                                 arCredits += Number(line.credit || 0);
                             } else if (line.accountCode && line.accountCode.match(/^100[0-9]/)) {
-                                // Cash accounts - only include if monthSettled = current month
-                                if (tx.metadata?.monthSettled === monthKey) {
+                                // Cash accounts - for advance payments, use transaction date; for others, use monthSettled
+                                if (isAdvancePayment) {
+                                    // For advance payments, use transaction date to determine which month they belong to
+                                    if (txMonthKey === monthKey) {
+                                        cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+                                    }
+                                } else if (tx.metadata?.monthSettled === monthKey) {
                                     cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
                                 }
                             } else if (line.accountCode && line.accountCode.startsWith('2020')) {
                                 // Deposit accounts - include if transaction date is within month
                                 depositsTotal += (line.credit || 0) - (line.debit || 0);
                             } else if (line.accountCode && line.accountCode.startsWith('2200')) {
-                                // Deferred income accounts (Advance Payment Liability) from payments
-                                // Include all transactions up to month end (cumulative)
-                                // For advance payments, we want to show the cumulative balance
-                                deferredTotal += (line.credit || 0) - (line.debit || 0);
+                                // Deferred income accounts (Advance Payment Liability)
+                                // For advance payments, use transaction date; for others, include all up to month end
+                                if (isAdvancePayment) {
+                                    // Only include if transaction month matches current month
+                                    if (txMonthKey === monthKey) {
+                                        deferredTotal += (line.credit || 0) - (line.debit || 0);
+                                    }
+                                } else {
+                                    // For non-advance payments, include all (they're already filtered by date)
+                                    deferredTotal += (line.credit || 0) - (line.debit || 0);
+                                }
                             }
                         });
                     });
                     
                     // Also process other entries (advance_payment source transactions)
+                    // This is where advance payments typically appear (not in paymentEntries)
+                    const advancePaymentsInOther = otherEntries.filter(tx => tx.source === 'advance_payment');
+                    console.log(`💳 Found ${advancePaymentsInOther.length} advance payment transactions in otherEntries for ${monthName} ${period}`);
+                    
                     otherEntries.forEach(tx => {
+                        const isAdvancePayment = tx.source === 'advance_payment';
+                        let txDate = null;
+                        let txMonthKey = null;
+                        
+                        if (isAdvancePayment) {
+                            txDate = new Date(tx.date);
+                            txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+                            console.log(`💳 Processing advance payment: ${tx.transactionId}, date: ${txDate.toISOString()}, txMonthKey: ${txMonthKey}, monthKey: ${monthKey}, match: ${txMonthKey === monthKey}`);
+                        }
+                        
                         tx.entries.forEach(line => {
                             if (line.accountCode && line.accountCode.startsWith('2200')) {
                                 // Deferred income accounts (Advance Payment Liability) from other sources
-                                // Include all transactions up to month end (cumulative)
-                                deferredTotal += (line.credit || 0) - (line.debit || 0);
+                                // For advance payments, use transaction date; for others, include all up to month end
+                                if (isAdvancePayment) {
+                                    // Only include if transaction month matches current month
+                                    if (txMonthKey === monthKey) {
+                                        const amount = (line.credit || 0) - (line.debit || 0);
+                                        deferredTotal += amount;
+                                        console.log(`💳 Adding advance payment deferred income: ${tx.transactionId}, account: ${line.accountCode}, amount: ${amount}, new total: ${deferredTotal}`);
+                                    } else {
+                                        console.log(`💳 Skipping advance payment deferred income: ${tx.transactionId}, account: ${line.accountCode}, txMonthKey: ${txMonthKey}, monthKey: ${monthKey}, no match`);
+                                    }
+                                } else {
+                                    // For non-advance payments, include all (they're already filtered by date)
+                                    deferredTotal += (line.credit || 0) - (line.debit || 0);
+                                }
+                            } else if (line.accountCode && line.accountCode.match(/^100[0-9]/) || line.accountCode === '1000') {
+                                // Cash accounts - for advance payments, use transaction date
+                                if (isAdvancePayment) {
+                                    if (txMonthKey === monthKey) {
+                                        const amount = Number(line.debit || 0) - Number(line.credit || 0);
+                                        cashByMonth += amount;
+                                        console.log(`💳 Adding advance payment cash: ${tx.transactionId}, account: ${line.accountCode}, amount: ${amount}, new total: ${cashByMonth}`);
+                                    } else {
+                                        console.log(`💳 Skipping advance payment cash: ${tx.transactionId}, account: ${line.accountCode}, txMonthKey: ${txMonthKey}, monthKey: ${monthKey}, no match`);
+                                    }
+                                }
                             }
                         });
                     });
+                    
+                    console.log(`💳 Summary for ${monthName} ${period}: deferredTotal=${deferredTotal}, cashByMonth=${cashByMonth}, advancePaymentsFound=${advancePaymentsInOther.length}`);
                     
                     const arByMonthOutstanding = arDebits - arCredits;
                 } catch (error) {
@@ -1979,8 +2039,49 @@ class FinancialReportingService {
                         if (!monthlyBalanceSheet[monthName].liabilities[section][account.accountName]) {
                             monthlyBalanceSheet[monthName].liabilities[section][account.accountName] = 0;
                         }
-                        monthlyBalanceSheet[monthName].liabilities[section][account.accountName] = account.balance;
-                        monthlyBalanceSheet[monthName].liabilities.total += account.balance;
+                        
+                        // 🆕 FIX: Override deferred income accounts (2200) with monthSettled calculation
+                        if (account.code && account.code.startsWith('2200')) {
+                            let finalDeferredTotal = deferredTotal;
+                            
+                            // Safeguard: If deferredTotal is 0 but we found advance payments for this month, recalculate
+                            // This catches cases where the calculation didn't work correctly
+                            if (deferredTotal === 0) {
+                                const advancePaymentsInMonth = otherEntries.filter(tx => {
+                                    if (tx.source !== 'advance_payment') return false;
+                                    const txDate = new Date(tx.date);
+                                    const txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+                                    return txMonthKey === monthKey;
+                                });
+                                
+                                if (advancePaymentsInMonth.length > 0) {
+                                    console.log(`⚠️ WARNING: deferredTotal is 0 but found ${advancePaymentsInMonth.length} advance payments for ${monthName} ${period}. Recalculating...`);
+                                    let recalculated = 0;
+                                    advancePaymentsInMonth.forEach(tx => {
+                                        console.log(`   Checking advance payment: ${tx.transactionId}, date: ${tx.date}`);
+                                        tx.entries.forEach(line => {
+                                            if (line.accountCode && line.accountCode.startsWith('2200')) {
+                                                const amount = (line.credit || 0) - (line.debit || 0);
+                                                recalculated += amount;
+                                                console.log(`     Found 2200 entry: credit=${line.credit}, debit=${line.debit}, amount=${amount}, new total=${recalculated}`);
+                                            }
+                                        });
+                                    });
+                                    if (recalculated > 0) {
+                                        console.log(`💳 Fixing deferred income: using recalculated value ${recalculated} instead of 0`);
+                                        finalDeferredTotal = recalculated;
+                                    } else {
+                                        console.log(`⚠️ Recalculated deferred income is still 0 for ${monthName} ${period}. Check if advance payments have 2200 account entries.`);
+                                    }
+                                }
+                            }
+                            
+                            console.log(`💳 Overriding deferred income (${account.code}) balance: ${finalDeferredTotal} (was: ${account.balance}) for ${monthName} ${period}`);
+                            monthlyBalanceSheet[monthName].liabilities[section][account.accountName] = finalDeferredTotal;
+                        } else {
+                            monthlyBalanceSheet[monthName].liabilities[section][account.accountName] = account.balance;
+                        }
+                        monthlyBalanceSheet[monthName].liabilities.total += monthlyBalanceSheet[monthName].liabilities[section][account.accountName];
                     } else if (account.accountType === 'Equity' || account.accountType === 'equity') {
                         monthlyBalanceSheet[monthName].equity[account.accountName] = account.balance;
                         monthlyBalanceSheet[monthName].equity.total += account.balance;
@@ -2302,9 +2403,17 @@ class FinancialReportingService {
      */
     static async generateBalanceSheet(asOf, basis = 'cash') {
         try {
-            const asOfDate = new Date(asOf);
+            // Parse date string - handle both ISO strings and date strings
+            // If it's just a date string like "2025-10-31", parse it as UTC to avoid timezone issues
+            let asOfDate;
+            if (typeof asOf === 'string' && asOf.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                // Date string without time - parse as UTC midnight
+                asOfDate = new Date(asOf + 'T00:00:00.000Z');
+            } else {
+                asOfDate = new Date(asOf);
+            }
             
-            console.log(`🔧 Generating FIXED balance sheet as of ${asOfDate}`);
+            console.log(`🔧 Generating FIXED balance sheet as of ${asOfDate.toISOString()} (from input: ${asOf})`);
             
             // Get ALL accounts from chart of accounts
             const Account = require('../models/Account');
@@ -2317,7 +2426,45 @@ class FinancialReportingService {
                 status: 'posted'
             });
             
-            console.log(`📋 Found ${entries.length} transaction entries up to ${asOfDate}`);
+            console.log(`📋 Found ${entries.length} transaction entries up to ${asOfDate.toISOString()}`);
+            console.log(`📋 AsOf parameter: ${asOf}, parsed date: ${asOfDate.toISOString()}`);
+            
+            // 🆕 FIX: For monthly balance sheets, determine the month of asOfDate
+            // This allows us to filter advance payments to only show in the month they were paid
+            // Use UTC to avoid timezone issues
+            const asOfMonth = asOfDate.getUTCMonth() + 1; // 1-12
+            const asOfYear = asOfDate.getUTCFullYear();
+            const asOfMonthKey = `${asOfYear}-${String(asOfMonth).padStart(2, '0')}`;
+            // Check if this is the last day of the month (for monthly balance sheets)
+            const lastDayOfMonth = new Date(asOfYear, asOfMonth, 0).getUTCDate(); // Last day of current month
+            const isMonthEnd = asOfDate.getUTCDate() === lastDayOfMonth;
+            
+            console.log(`📅 Balance sheet as of: ${asOfDate.toISOString()}, monthKey (UTC): ${asOfMonthKey}, isMonthEnd: ${isMonthEnd}, lastDayOfMonth: ${lastDayOfMonth}`);
+            
+            // Count advance payments in entries for debugging
+            const advancePaymentsInEntries = entries.filter(e => e.source === 'advance_payment');
+            console.log(`💳 Found ${advancePaymentsInEntries.length} advance payment transactions in entries for ${asOfMonthKey}`);
+            
+            // Debug: Check for the specific transaction
+            const targetTx = entries.find(e => e.transactionId === 'TXN1761821259147EXJND');
+            if (targetTx) {
+                console.log(`✅ STEP 1: Found target transaction TXN1761821259147EXJND in MongoDB query results`);
+                console.log(`   Transaction date: ${targetTx.date}`);
+                console.log(`   Transaction date type: ${typeof targetTx.date}`);
+                console.log(`   Source: ${targetTx.source}`);
+                console.log(`   Status: ${targetTx.status}`);
+                console.log(`   Has entries: ${!!targetTx.entries && targetTx.entries.length > 0}`);
+                if (targetTx.entries) {
+                    console.log(`   Entry count: ${targetTx.entries.length}`);
+                    targetTx.entries.forEach((line, idx) => {
+                        console.log(`   Entry ${idx}: accountCode=${line.accountCode}, debit=${line.debit}, credit=${line.credit}`);
+                    });
+                }
+            } else {
+                console.log(`❌ STEP 1: Target transaction TXN1761821259147EXJND NOT FOUND in MongoDB query results`);
+                console.log(`   Query filter: { date: { $lte: ${asOfDate.toISOString()} }, status: 'posted' }`);
+                console.log(`   This means the transaction was filtered out by the MongoDB query.`);
+            }
             
             // Initialize ALL accounts with zero balances
             const accountBalances = {};
@@ -2337,35 +2484,141 @@ class FinancialReportingService {
             const residences = new Set();
             
             // Process transactions to calculate actual balances
-            entries.forEach(entry => {
+            let advancePayment2200Total = 0; // Track total for account 2200 from advance payments
+            let processedAdvancePayments = 0;
+            
+            entries.forEach((entry, entryIndex) => {
                 if (entry.entries && entry.entries.length > 0) {
-                    entry.entries.forEach(line => {
-                        const accountCode = line.accountCode;
-                        const accountName = line.accountName;
-                        const accountType = line.accountType;
-                        const debit = line.debit || 0;
-                        const credit = line.credit || 0;
+                    // 🆕 FIX: For advance payments, use transaction date (not monthSettled) to determine which month to show
+                    // This ensures advance payments appear in the month they were paid
+                    const isAdvancePayment = entry.source === 'advance_payment';
+                    let shouldInclude = true;
+                    
+                    if (isAdvancePayment) {
+                        processedAdvancePayments++;
+                        // CRITICAL: For advance payments, ALWAYS use the transaction date (entry.date)
+                        // Do NOT use metadata.monthSettled - it may be null or point to a future month
+                        // The transaction date tells us when the cash was actually received
+                        const entryDate = new Date(entry.date);
+                        // Use UTC methods to avoid timezone issues
+                        const entryYear = entryDate.getUTCFullYear();
+                        const entryMonth = entryDate.getUTCMonth() + 1; // 1-12 (October = 10)
+                        const entryMonthKey = `${entryYear}-${String(entryMonth).padStart(2, '0')}`;
                         
-                        const key = `${accountCode} - ${accountName}`;
+                        // Compare with asOfMonthKey (already calculated using UTC at the top)
+                        shouldInclude = (entryMonthKey === asOfMonthKey);
                         
-                        // Find the account by code (not by code + name) to handle name mismatches
-                        const accountKey = Object.keys(accountBalances).find(k => k.startsWith(`${accountCode} -`));
+                        // Special logging for the target transaction
+                        const isTargetTx = entry.transactionId === 'TXN1761821259147EXJND';
+                        if (isTargetTx) {
+                            console.log(`\n🔍 STEP 2: Processing target transaction TXN1761821259147EXJND`);
+                            console.log(`   Entry index: ${entryIndex}`);
+                            console.log(`   Is advance payment: ${isAdvancePayment}`);
+                            console.log(`   Entry date (raw): ${entry.date}`);
+                            console.log(`   Entry date (parsed): ${entryDate.toISOString()}`);
+                            console.log(`   Entry UTC year: ${entryYear}, month: ${entryMonth} (0-indexed: ${entryDate.getUTCMonth()})`);
+                            console.log(`   Entry monthKey (UTC): ${entryMonthKey}`);
+                            console.log(`   AsOf date: ${asOfDate.toISOString()}`);
+                            console.log(`   AsOf UTC year: ${asOfYear}, month: ${asOfMonth} (0-indexed: ${asOfDate.getUTCMonth()})`);
+                            console.log(`   AsOf monthKey (UTC): ${asOfMonthKey}`);
+                            console.log(`   Match: ${entryMonthKey === asOfMonthKey ? 'YES ✅' : 'NO ❌'}`);
+                            console.log(`   Should include: ${shouldInclude ? 'YES ✅' : 'NO ❌'}`);
+                        }
                         
-                        // Update balance if account exists in chart of accounts
-                        if (accountKey && accountBalances[accountKey]) {
-                            accountBalances[accountKey].debit_total += debit;
-                            accountBalances[accountKey].credit_total += credit;
-                            
-                            // Calculate balance based on account type
-                            if (accountType === 'Asset' || accountType === 'Expense') {
-                                accountBalances[accountKey].balance += debit - credit;
-                            } else {
-                                accountBalances[accountKey].balance += credit - debit;
+                        if (shouldInclude) {
+                            if (isTargetTx) {
+                                console.log(`✅ STEP 2: INCLUDING advance payment ${entry.transactionId} from ${entryMonthKey} in balance sheet for ${asOfMonthKey}`);
+                            }
+                        } else {
+                            if (isTargetTx) {
+                                console.log(`❌ STEP 2: EXCLUDING advance payment ${entry.transactionId} from ${entryMonthKey} in balance sheet for ${asOfMonthKey}`);
                             }
                         }
-                    });
+                    } else {
+                        // For non-advance payments, include all transactions up to asOfDate (cumulative)
+                        shouldInclude = true;
+                    }
+                    
+                    if (shouldInclude) {
+                        entry.entries.forEach((line, lineIndex) => {
+                            const accountCode = line.accountCode;
+                            const accountName = line.accountName;
+                            const accountType = line.accountType;
+                            const debit = line.debit || 0;
+                            const credit = line.credit || 0;
+                            
+                            const key = `${accountCode} - ${accountName}`;
+                            
+                            // Find the account by code (not by code + name) to handle name mismatches
+                            const accountKey = Object.keys(accountBalances).find(k => k.startsWith(`${accountCode} -`));
+                            
+                            const isTargetTx = entry.transactionId === 'TXN1761821259147EXJND';
+                            
+                            // 🆕 DEBUG: Log account 2200 transactions
+                            if (accountCode === '2200' && isAdvancePayment) {
+                                if (isTargetTx) {
+                                    console.log(`\n💰 STEP 3: Processing 2200 entry for target transaction ${entry.transactionId}:`);
+                                    console.log(`   Line index: ${lineIndex}`);
+                                    console.log(`   Account code: ${accountCode}, name: ${accountName}`);
+                                    console.log(`   Debit: ${debit}, Credit: ${credit}`);
+                                    console.log(`   Account key found: ${accountKey || 'NOT FOUND'}`);
+                                }
+                                
+                                if (accountKey) {
+                                    const beforeBalance = accountBalances[accountKey].balance;
+                                    if (isTargetTx) {
+                                        console.log(`   Balance before: ${beforeBalance}`);
+                                    }
+                                    
+                                    // Update balance if account exists in chart of accounts
+                                    accountBalances[accountKey].debit_total += debit;
+                                    accountBalances[accountKey].credit_total += credit;
+                                    
+                                    // Calculate balance based on account type
+                                    if (accountType === 'Asset' || accountType === 'Expense') {
+                                        accountBalances[accountKey].balance += debit - credit;
+                                    } else {
+                                        // For liabilities (like 2200), credit increases the balance
+                                        accountBalances[accountKey].balance += credit - debit;
+                                    }
+                                    
+                                    advancePayment2200Total += (credit - debit); // Track total
+                                    
+                                    if (isTargetTx) {
+                                        console.log(`   Balance after: ${accountBalances[accountKey].balance}`);
+                                        console.log(`   Debit total: ${accountBalances[accountKey].debit_total}, Credit total: ${accountBalances[accountKey].credit_total}`);
+                                        console.log(`   Advance payment 2200 total so far: ${advancePayment2200Total}`);
+                                    }
+                                } else {
+                                    if (isTargetTx) {
+                                        console.log(`❌ STEP 3 ERROR: Account 2200 not found in accountBalances!`);
+                                        console.log(`   Available account keys: ${Object.keys(accountBalances).filter(k => k.includes('2200')).join(', ') || 'NONE'}`);
+                                    }
+                                }
+                            } else if (accountKey && accountBalances[accountKey]) {
+                                // Update balance for non-2200 accounts
+                                accountBalances[accountKey].debit_total += debit;
+                                accountBalances[accountKey].credit_total += credit;
+                                
+                                if (accountType === 'Asset' || accountType === 'Expense') {
+                                    accountBalances[accountKey].balance += debit - credit;
+                                } else {
+                                    accountBalances[accountKey].balance += credit - debit;
+                                }
+                            }
+                        });
+                    } else if (isAdvancePayment) {
+                        const isTargetTx = entry.transactionId === 'TXN1761821259147EXJND';
+                        if (isTargetTx) {
+                            console.log(`⚠️ STEP 2: Advance payment ${entry.transactionId} was excluded, so its entries are not being processed`);
+                        }
+                    }
                 }
             });
+            
+            console.log(`\n📊 STEP 4: Summary for ${asOfMonthKey}:`);
+            console.log(`   Total advance payments processed: ${processedAdvancePayments}`);
+            console.log(`   Total account 2200 balance from advance payments: ${advancePayment2200Total}`);
             
             // Group by account type with proper current/non-current asset separation
             const assets = {
@@ -2483,6 +2736,81 @@ class FinancialReportingService {
             Object.entries(liabilities).forEach(([key, account]) => {
                 console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total})`);
             });
+            
+            // 🆕 DEBUG: Specifically check account 2200
+            console.log(`\n🔍 STEP 5: Final check for account 2200 in liabilities object`);
+            const account2200 = Object.values(liabilities).find(acc => acc.code === '2200');
+            if (account2200) {
+                console.log(`✅ STEP 5: Account 2200 found in liabilities object`);
+                console.log(`   Key: ${Object.keys(liabilities).find(k => liabilities[k].code === '2200')}`);
+                console.log(`   Final balance: $${account2200.balance}`);
+                console.log(`   Debit total: $${account2200.debit_total}, Credit total: $${account2200.credit_total}`);
+                console.log(`   Expected from advance payments: $${advancePayment2200Total}`);
+                
+                // 🆕 FIX: Double-check that advance payments for this month are included
+                // Recalculate if balance seems wrong
+                const advancePaymentsForMonth = entries.filter(e => {
+                    if (e.source === 'advance_payment' && e.entries) {
+                        const entryDate = new Date(e.date);
+                        const entryYear = entryDate.getUTCFullYear();
+                        const entryMonth = entryDate.getUTCMonth() + 1;
+                        const entryMonthKey = `${entryYear}-${String(entryMonth).padStart(2, '0')}`;
+                        return entryMonthKey === asOfMonthKey;
+                    }
+                    return false;
+                });
+                
+                if (advancePaymentsForMonth.length > 0) {
+                    let expectedBalance = 0;
+                    advancePaymentsForMonth.forEach(tx => {
+                        tx.entries.forEach(line => {
+                            if (line.accountCode === '2200') {
+                                // For liabilities, credit increases the balance
+                                expectedBalance += (line.credit || 0) - (line.debit || 0);
+                            }
+                        });
+                    });
+                    
+                    console.log(`🔍 STEP 5: Found ${advancePaymentsForMonth.length} advance payment(s) for ${asOfMonthKey}`);
+                    console.log(`   Expected balance from advance payments: $${expectedBalance}`);
+                    console.log(`   Current balance in account 2200: $${account2200.balance}`);
+                    console.log(`   Advance payment 2200 total tracked: $${advancePayment2200Total}`);
+                    
+                    // If there's a mismatch, update the balance
+                    if (Math.abs(account2200.balance - expectedBalance) > 0.01) {
+                        console.log(`⚠️ STEP 5: Balance mismatch detected!`);
+                        console.log(`   Updating account 2200 balance from $${account2200.balance} to $${expectedBalance}`);
+                        account2200.balance = expectedBalance;
+                        account2200.credit_total = expectedBalance; // For liabilities, credit_total should match balance
+                        console.log(`   ✅ Updated account 2200 balance to $${account2200.balance}`);
+                    } else {
+                        console.log(`✅ STEP 5: Balance matches expected value`);
+                    }
+                } else {
+                    console.log(`⚠️ STEP 5: No advance payments found for ${asOfMonthKey} - this might be expected if transaction was excluded`);
+                }
+            } else {
+                console.log(`❌ STEP 5: Account 2200 (Advance Payment Liability) NOT FOUND in liabilities!`);
+                console.log(`   Available liability accounts: ${Object.keys(liabilities).join(', ')}`);
+                // Check if it's in accountBalances
+                const account2200InBalances = Object.values(accountBalances).find(acc => acc.code === '2200');
+                if (account2200InBalances) {
+                    console.log(`   But found in accountBalances with balance: $${account2200InBalances.balance}`);
+                    console.log(`   Debit total: $${account2200InBalances.debit_total}, Credit total: $${account2200InBalances.credit_total}`);
+                    // Add it to liabilities if it exists in accountBalances
+                    const key = `2200 - ${account2200InBalances.name}`;
+                    liabilities[key] = {
+                        balance: account2200InBalances.balance,
+                        debit_total: account2200InBalances.debit_total,
+                        credit_total: account2200InBalances.credit_total,
+                        code: '2200',
+                        name: account2200InBalances.name
+                    };
+                    console.log(`   ✅ Added account 2200 to liabilities with balance: $${account2200InBalances.balance}`);
+                } else {
+                    console.log(`   ❌ Account 2200 also NOT FOUND in accountBalances!`);
+                }
+            }
             
             console.log('EQUITY:');
             Object.entries(equity).forEach(([key, account]) => {

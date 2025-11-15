@@ -135,6 +135,135 @@ const UserActivitySchema = new mongoose.Schema({
   metadata: {
     type: Object,
     default: {}
+  },
+  // Enhanced detail fields
+  url: {
+    type: String,
+    default: null
+  },
+  referrer: {
+    type: String,
+    default: null
+  },
+  screenResolution: {
+    type: String,
+    default: null
+  },
+  viewportSize: {
+    type: Object,
+    default: null
+  },
+  browserInfo: {
+    type: Object,
+    default: {}
+  },
+  operatingSystem: {
+    type: String,
+    default: null
+  },
+  browserName: {
+    type: String,
+    default: null
+  },
+  browserVersion: {
+    type: String,
+    default: null
+  },
+  isMobile: {
+    type: Boolean,
+    default: false
+  },
+  isTablet: {
+    type: Boolean,
+    default: false
+  },
+  isDesktop: {
+    type: Boolean,
+    default: false
+  },
+  language: {
+    type: String,
+    default: null
+  },
+  timezone: {
+    type: String,
+    default: null
+  },
+  // Form-specific details
+  formFields: {
+    type: Array,
+    default: []
+  },
+  formValues: {
+    type: Object,
+    default: {}
+  },
+  // Action-specific details
+  actionContext: {
+    type: Object,
+    default: {}
+  },
+  relatedRecords: {
+    type: Array,
+    default: []
+  },
+  // Performance metrics
+  loadTime: {
+    type: Number,
+    default: null
+  },
+  renderTime: {
+    type: Number,
+    default: null
+  },
+  interactionTime: {
+    type: Number,
+    default: null
+  },
+  // User context
+  userRole: {
+    type: String,
+    default: null
+  },
+  userEmail: {
+    type: String,
+    default: null
+  },
+  // Additional context
+  queryParams: {
+    type: Object,
+    default: {}
+  },
+  routeParams: {
+    type: Object,
+    default: {}
+  },
+  componentName: {
+    type: String,
+    default: null
+  },
+  componentProps: {
+    type: Object,
+    default: {}
+  },
+  // Error details if applicable
+  errorDetails: {
+    type: Object,
+    default: null
+  },
+  // Success/failure details
+  result: {
+    type: Object,
+    default: null
+  },
+  // Network information
+  networkType: {
+    type: String,
+    default: null
+  },
+  connectionSpeed: {
+    type: String,
+    default: null
   }
 }, {
   timestamps: true

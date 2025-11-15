@@ -261,6 +261,34 @@ app.use('/api/requests', (req, res, next) => {
   next();
 });
 
+
+// Add timeout middleware for financial reports routes
+app.use('/api/financial-reports', (req, res, next) => {
+  // Extended timeout for heavy financial calculations
+  // req.path will be the path after the mount point (e.g., '/monthly-breakdown')
+  const fullPath = req.originalUrl || req.url;
+  const heavyEndpoints = [
+    'monthly-breakdown',
+    'monthly-cash-flow',
+    'comprehensive-monthly-cash-flow',
+    'comprehensive-monthly-income',
+    'comprehensive-monthly-balance-sheet',
+    'cash-flow'
+  ];
+  
+  const isHeavyEndpoint = heavyEndpoints.some(endpoint => fullPath.includes(endpoint));
+  
+  if (isHeavyEndpoint) {
+    req.setTimeout(300000); // 5 minutes for heavy financial calculations
+    res.setTimeout(300000);
+    console.log(`🕐 Extended timeout (5min) for financial report: ${fullPath}`);
+  } else {
+    req.setTimeout(120000); // 2 minutes for other financial reports
+    res.setTimeout(120000);
+  }
+  next();
+});
+
 // Add timeout middleware for salary request routes
 app.use('/api/finance/employees', (req, res, next) => {
   // Set longer timeout for salary request creation
@@ -514,6 +542,7 @@ app.use('/api/invoices', invoiceRoutes);
 
 // Request routes
 app.use('/api/requests', requestRoutes);
+app.use('/api/request', requestRoutes); // Alias for frontend compatibility (singular)
 app.use('/api/maintenance-requests', requestRoutes); // Alias for frontend compatibility
 app.use('/api/monthly-requests', monthlyRequestRoutes);
 

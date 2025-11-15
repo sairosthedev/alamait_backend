@@ -257,13 +257,13 @@ class IncomeStatementController {
             const uniqueStudents = new Set();
             const accountBreakdown = {}; // Track transactions by account code
             
-            filteredTransactions.forEach(transaction => {
+            for (const transaction of filteredTransactions) {
                 // Filter entries for all relevant account codes (parent + children)
                 const relevantEntries = transaction.entries.filter(entry => 
                     allAccountCodes.includes(entry.accountCode)
                 );
                 
-                relevantEntries.forEach(entry => {
+                for (const entry of relevantEntries) {
                     const debitAmount = entry.debit || 0;
                     const creditAmount = entry.credit || 0;
                     
@@ -328,6 +328,35 @@ class IncomeStatementController {
                     const isChildAccount = entry.accountCode !== accountCode;
                     const childAccountInfo = childAccounts.find(child => child.code === entry.accountCode);
                     
+                    // Get all entries for full double-entry view (like cash flow)
+                    const Account = require('../../models/Account');
+                    const entriesWithAccountNames = await Promise.all((transaction.entries || []).map(async (txEntry) => {
+                        let txAccountName = txEntry.accountName;
+                        let txAccountType = txEntry.accountType;
+                        
+                        // If account name is not in entry, fetch from Account model
+                        if (!txAccountName && txEntry.accountCode) {
+                            try {
+                                const accountDoc = await Account.findOne({ code: txEntry.accountCode }).select('name type').lean();
+                                if (accountDoc) {
+                                    txAccountName = accountDoc.name;
+                                    txAccountType = accountDoc.type;
+                                }
+                            } catch (err) {
+                                // Ignore errors
+                            }
+                        }
+                        
+                        return {
+                            accountCode: txEntry.accountCode,
+                            accountName: txAccountName || txEntry.accountCode,
+                            accountType: txAccountType || 'Unknown',
+                            debit: txEntry.debit || 0,
+                            credit: txEntry.credit || 0,
+                            description: txEntry.description || transaction.description || ''
+                        };
+                    }));
+                    
                     accountTransactions.push({
                         transactionId: transaction.transactionId || transaction._id,
                         date: transaction.date,
@@ -350,10 +379,12 @@ class IncomeStatementController {
                         parentAccountCode: isChildAccount ? accountCode : null,
                         // Additional metadata
                         residence: transaction.residence?.name || 'N/A',
-                        metadata: transaction.metadata || {}
+                        metadata: transaction.metadata || {},
+                        // Include all entries for full double-entry view (like cash flow)
+                        entries: entriesWithAccountNames
                     });
-                });
-            });
+                }
+            }
             
             // Sort transactions by date (newest first for income statement view)
             accountTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));

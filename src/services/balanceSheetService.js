@@ -31,8 +31,10 @@ class BalanceSheetService {
       const asOfYear = asOf.getFullYear();
       
       // For monthly balance sheets, filter by month to exclude cross-month timezone issues
-      const isMonthlyBalanceSheet = asOfDate.toString().includes('31');
-      console.log(`📅 Month-end balance sheet detected: ${isMonthlyBalanceSheet}`);
+      // Check if this is a month-end date (last day of month)
+      const lastDayOfMonth = new Date(asOfYear, asOfMonth, 0).getDate();
+      const isMonthlyBalanceSheet = asOf.getDate() === lastDayOfMonth || asOfDate.toString().includes('31');
+      console.log(`📅 Month-end balance sheet detected: ${isMonthlyBalanceSheet} (date: ${asOf.toISOString()}, lastDay: ${lastDayOfMonth})`);
       const monthKey = `${asOfYear}-${String(asOfMonth).padStart(2, '0')}`;
       
       // For balance sheet, we need to include:
@@ -94,6 +96,26 @@ class BalanceSheetService {
       ]);
       
       console.log(`🔍 Found ${accrualEntries.length} accrual entries, ${paymentEntries.length} payment entries, ${otherEntries.length} other entries, ${manualEntries.length} manual entries`);
+      
+      // Debug: Check for advance payments in otherEntries
+      const allAdvancePayments = otherEntries.filter(tx => tx.source === 'advance_payment');
+      console.log(`💳 Found ${allAdvancePayments.length} advance payment transactions in otherEntries for monthKey=${monthKey}`);
+      allAdvancePayments.forEach(tx => {
+        const txDate = new Date(tx.date);
+        const txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+        const willMatch = txMonthKey === monthKey;
+        console.log(`   - ${tx.transactionId}: date=${txDate.toISOString()}, txMonthKey=${txMonthKey}, monthKey=${monthKey}, match=${willMatch}`);
+        
+        // Also check what entries this transaction has
+        if (tx.entries && Array.isArray(tx.entries)) {
+          tx.entries.forEach(line => {
+            if (line.accountCode && line.accountCode.startsWith('2200')) {
+              const amount = (line.credit || 0) - (line.debit || 0);
+              console.log(`     → Account ${line.accountCode}: credit=${line.credit}, debit=${line.debit}, amount=${amount}, willInclude=${willMatch}`);
+            }
+          });
+        }
+      });
       
       // Check for specific negotiated payment transaction
       const negotiatedPayment = manualEntries.find(tx => tx.transactionId === 'NEG-1757465405612');
@@ -221,6 +243,9 @@ class BalanceSheetService {
         let depositsTotal = 0;
         let deferredTotal = 0;
         
+        // Count advance payments for this month (for logging)
+        const advancePaymentsInOther = otherEntries.filter(tx => tx.source === 'advance_payment');
+        
         // Process accrual entries (AR debits, deposits)
         accrualEntries.forEach(tx => {
           tx.entries.forEach(line => {
@@ -238,25 +263,55 @@ class BalanceSheetService {
         
         // Process payment entries (AR credits, cash, deposits, deferred)
         paymentEntries.forEach(tx => {
+          // Check if this is an advance payment (shouldn't be in paymentEntries, but handle it just in case)
+          const isAdvancePayment = tx.source === 'advance_payment';
+          let txDate = null;
+          let txMonthKey = null;
+          
+          if (isAdvancePayment) {
+            txDate = new Date(tx.date);
+            txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+          }
+          
           tx.entries.forEach(line => {
             if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
               arCredits += Number(line.credit || 0);
-            } else if (line.accountCode && line.accountCode.match(/^100[0-9]/)) {
-              // Cash accounts - only include if monthSettled = current month
-              if (tx.metadata?.monthSettled === monthKey) {
-                cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
-              }
-            } else if (line.accountCode === '1000') {
-              // Main cash account - only include if monthSettled = current month
-              if (tx.metadata?.monthSettled === monthKey) {
+            } else if (line.accountCode && line.accountCode.match(/^100[0-9]/) || line.accountCode === '1000') {
+              // Cash accounts - for advance payments, ALWAYS use transaction date; for others, use monthSettled
+              if (isAdvancePayment) {
+                // For advance payments, use transaction date to determine which month they belong to
+                if (isMonthlyBalanceSheet) {
+                  // For monthly balance sheets, only include if transaction month matches current month
+                  if (txMonthKey === monthKey) {
+                    cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+                  }
+                } else {
+                  // For single date balance sheets, include all up to asOfDate (already filtered by dateFilter)
+                  cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+                }
+              } else if (tx.metadata?.monthSettled === monthKey) {
+                // For non-advance payments, use monthSettled
                 cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
               }
             } else if (line.accountCode && line.accountCode.startsWith('2020')) {
               // Deposit accounts
               depositsTotal += (line.credit || 0) - (line.debit || 0);
             } else if (line.accountCode && line.accountCode.startsWith('2200')) {
-              // Deferred income accounts
-              deferredTotal += (line.credit || 0) - (line.debit || 0);
+              // Deferred income accounts - for advance payments, ALWAYS use transaction date
+              if (isAdvancePayment) {
+                if (isMonthlyBalanceSheet) {
+                  // For monthly balance sheets, only include if transaction month matches current month
+                  if (txMonthKey === monthKey) {
+                    deferredTotal += (line.credit || 0) - (line.debit || 0);
+                  }
+                } else {
+                  // For single date balance sheets, include all up to asOfDate (already filtered by dateFilter)
+                  deferredTotal += (line.credit || 0) - (line.debit || 0);
+                }
+              } else {
+                // For non-advance payments, include all (they're already filtered by date)
+                deferredTotal += (line.credit || 0) - (line.debit || 0);
+              }
             }
           });
         });
@@ -275,13 +330,91 @@ class BalanceSheetService {
           });
         });
         
-        // 🆕 FIX: Process other entries for A/R adjustments
+        // 🆕 FIX: Process other entries for A/R adjustments, deferred income, and cash
+        // Use the advancePaymentsInOther variable already declared above
+        console.log(`💳 Found ${advancePaymentsInOther.length} advance payment transactions in otherEntries for monthKey=${monthKey}`);
+        
+        // 🆕 ENHANCED DEBUGGING: Log details of all advance payments
+        advancePaymentsInOther.forEach(tx => {
+          const txDate = new Date(tx.date);
+          const txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+          const willMatch = txMonthKey === monthKey;
+          console.log(`   - ${tx.transactionId}: date=${txDate.toISOString()}, txMonthKey=${txMonthKey}, monthKey=${monthKey}, match=${willMatch}, description="${tx.description}"`);
+          
+          // Also check what entries this transaction has
+          if (tx.entries && Array.isArray(tx.entries)) {
+            tx.entries.forEach(line => {
+              if (line.accountCode && (line.accountCode.startsWith('2200') || line.accountCode === '1000')) {
+                const amount = (line.credit || 0) - (line.debit || 0);
+                console.log(`     → Account ${line.accountCode}: credit=${line.credit}, debit=${line.debit}, amount=${amount}, willInclude=${willMatch}`);
+              }
+            });
+          }
+        });
+        
         otherEntries.forEach(tx => {
+          // For advance payments, use transaction date instead of monthSettled
+          // This ensures advance payments appear in the month they were paid, not when they're settled
+          const isAdvancePayment = tx.source === 'advance_payment';
+          const txDate = new Date(tx.date);
+          const txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+          
+          // 🆕 CRITICAL FIX: For advance payments without monthSettled, always use transaction date
+          let shouldIncludeDeferred = true;
+          let shouldIncludeCash = true;
+          
+          if (isAdvancePayment) {
+            // For advance payments, ALWAYS use transaction date instead of monthSettled
+            // This ensures they show up in the month they were paid (e.g., October if paid in October)
+            if (isMonthlyBalanceSheet) {
+              // For monthly balance sheets: only include if transaction month matches current month
+              // This ensures advance payments appear in the month they were paid, not when settled
+              shouldIncludeDeferred = (txMonthKey === monthKey);
+              shouldIncludeCash = (txMonthKey === monthKey);
+              
+              console.log(`💳 Advance payment check: ${tx.transactionId}, date: ${txDate.toISOString()}, txMonthKey: ${txMonthKey}, monthKey: ${monthKey}, match: ${txMonthKey === monthKey}, includeDeferred: ${shouldIncludeDeferred}, includeCash: ${shouldIncludeCash}`);
+            } else {
+              // For single date balance sheets, include all up to asOfDate (already filtered by dateFilter)
+              shouldIncludeDeferred = true;
+              shouldIncludeCash = true;
+            }
+          }
+          
           tx.entries.forEach(line => {
             if (line.accountCode && (line.accountCode.startsWith('1100-') || line.accountCode === '1100')) {
               // Other transactions affect A/R
               arDebits += Number(line.debit || 0);
               arCredits += Number(line.credit || 0);
+            } else if (line.accountCode && line.accountCode.startsWith('2200')) {
+              // Deferred income accounts (Advance Payment Liability) - use transaction date for advance payments
+              if (isAdvancePayment) {
+                if (shouldIncludeDeferred) {
+                  const amount = (line.credit || 0) - (line.debit || 0);
+                  deferredTotal += amount;
+                  console.log(`💳 Adding advance payment deferred income: ${tx.transactionId}, account: ${line.accountCode}, amount: ${amount}, new total: ${deferredTotal}`);
+                } else {
+                  console.log(`💳 Skipping advance payment deferred income: ${tx.transactionId}, account: ${line.accountCode}, txMonthKey: ${txMonthKey}, monthKey: ${monthKey}, shouldInclude: ${shouldIncludeDeferred}`);
+                }
+              } else {
+                // For non-advance payments, include all (they're already filtered by date)
+                deferredTotal += (line.credit || 0) - (line.debit || 0);
+              }
+            } else if (line.accountCode && line.accountCode.match(/^100[0-9]/) || line.accountCode === '1000') {
+              // Cash accounts - for advance payments, use transaction date; for others, use monthSettled
+              if (isAdvancePayment) {
+                if (shouldIncludeCash) {
+                  const amount = Number(line.debit || 0) - Number(line.credit || 0);
+                  cashByMonth += amount;
+                  console.log(`💳 Adding advance payment cash: ${tx.transactionId}, account: ${line.accountCode}, amount: ${amount}, new total: ${cashByMonth}`);
+                } else {
+                  console.log(`💳 Skipping advance payment cash: ${tx.transactionId}, account: ${line.accountCode}, txMonthKey: ${txMonthKey}, monthKey: ${monthKey}, shouldInclude: ${shouldIncludeCash}`);
+                }
+              } else if (tx.metadata?.monthSettled === monthKey) {
+                cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+              }
+            } else if (line.accountCode && line.accountCode.startsWith('2020')) {
+              // Deposit accounts
+              depositsTotal += (line.credit || 0) - (line.debit || 0);
             }
           });
         });
@@ -326,19 +459,89 @@ class BalanceSheetService {
             account.creditTotal = depositsTotal;
           } else if (account.code && account.code.startsWith('2200')) {
             // Override deferred income accounts with monthSettled calculation
-            account.balance = deferredTotal;
-            account.debitTotal = 0;
-            account.creditTotal = deferredTotal;
+            // IMPORTANT: For monthly balance sheets, deferredTotal only includes transactions for that month
+            // For cumulative balance sheets, we need to include all up to asOfDate
+            const previousBalance = account.balance;
+            const previousCreditTotal = account.creditTotal || 0;
+            
+            console.log(`💳 Setting deferred income (${account.code}) balance: ${deferredTotal} (was: ${previousBalance}, creditTotal was: ${previousCreditTotal}, isMonthly: ${isMonthlyBalanceSheet})`);
+            
+            // For monthly balance sheets, we only want transactions that match the current month
+            // But if deferredTotal is 0 and we had a previous balance that includes advance payments,
+            // we need to filter out advance payments from other months
+            if (isMonthlyBalanceSheet) {
+              // For monthly balance sheets, use the monthSettled calculation
+              // This should only include transactions for the current month
+              account.balance = deferredTotal;
+              account.debitTotal = 0;
+              account.creditTotal = deferredTotal;
+              
+              // Debug: If we're setting to 0 but had a previous balance, check if there are advance payments
+              if (deferredTotal === 0 && previousBalance > 0) {
+                // Check if there are advance payments in otherEntries for this month
+                const advancePaymentsInMonth = otherEntries.filter(tx => {
+                  if (tx.source !== 'advance_payment') return false;
+                  const txDate = new Date(tx.date);
+                  const txMonthKey = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+                  return txMonthKey === monthKey;
+                });
+                
+                console.log(`⚠️ Warning: Setting deferred income to 0 for ${monthKey} but previous balance was ${previousBalance}. Found ${advancePaymentsInMonth.length} advance payments in otherEntries for this month.`);
+                
+                // If we found advance payments but deferredTotal is still 0, recalculate it
+                if (advancePaymentsInMonth.length > 0) {
+                  console.log(`⚠️ ERROR: Found ${advancePaymentsInMonth.length} advance payments for ${monthKey} but deferredTotal is 0! Recalculating...`);
+                  let recalculatedDeferred = 0;
+                  advancePaymentsInMonth.forEach(tx => {
+                    tx.entries.forEach(line => {
+                      if (line.accountCode && line.accountCode.startsWith('2200')) {
+                        const amount = (line.credit || 0) - (line.debit || 0);
+                        recalculatedDeferred += amount;
+                        console.log(`💳 Recalculating: ${tx.transactionId}, account: ${line.accountCode}, amount: ${amount}, new total: ${recalculatedDeferred}`);
+                      }
+                    });
+                  });
+                  if (recalculatedDeferred > 0) {
+                    console.log(`💳 Fixing deferred income: using recalculated value ${recalculatedDeferred} instead of 0`);
+                    account.balance = recalculatedDeferred;
+                    account.creditTotal = recalculatedDeferred;
+                    deferredTotal = recalculatedDeferred; // Update for logging
+                  }
+                }
+              }
+            } else {
+              // For single date balance sheets, deferredTotal should include all up to asOfDate
+              // But if deferredTotal is 0 and we had a previous balance, something might be wrong
+              if (deferredTotal > 0 || previousBalance === 0) {
+                account.balance = deferredTotal;
+                account.debitTotal = 0;
+                account.creditTotal = deferredTotal;
+              } else {
+                console.log(`⚠️ Warning: deferredTotal is 0 but previous balance was ${previousBalance}, preserving previous balance`);
+              }
+            }
           }
         });
         
         console.log(`🆕 MonthSettled reclassification for ${monthKey}: AR=${arByMonthOutstanding}, Cash=${cashByMonth}, Deposits=${depositsTotal}, Deferred=${deferredTotal}`);
+        console.log(`💳 Advance payment summary for ${monthKey}: Found ${advancePaymentsInOther.length} advance payments, Deferred Income=${deferredTotal}`);
       } catch (error) {
         console.error('Error reclassifying by monthSettled:', error.message);
       }
       
       // Calculate net balance for each account
       Object.values(accountBalances).forEach(account => {
+        // Skip recalculation for accounts that were already overridden with monthSettled logic
+        // These accounts already have their balance, debitTotal, and creditTotal set correctly
+        if (account.code && (account.code.match(/^100[0-9]/) || account.code === '1000' || 
+            account.code.startsWith('2020') || account.code.startsWith('2200'))) {
+          // These accounts were already processed with monthSettled logic, skip recalculation
+          if (account.code.startsWith('2200')) {
+            console.log(`💳 Preserving deferred income (${account.code}) balance: ${account.balance} (creditTotal: ${account.creditTotal}, debitTotal: ${account.debitTotal})`);
+          }
+          return; // Skip to next account
+        }
+        
         switch (account.type) {
           case 'Asset':
             account.balance = account.debitTotal - account.creditTotal;

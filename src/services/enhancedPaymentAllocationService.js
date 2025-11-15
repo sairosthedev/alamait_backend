@@ -1094,11 +1094,53 @@ class EnhancedPaymentAllocationService {
       console.log(`💳 Creating advance payment transaction for $${amount} ${paymentType}`);
       
       const mongoose = require('mongoose');
+      const Account = require('../models/Account');
+      const User = require('../models/User');
       
       // Convert paymentId to ObjectId if it's a string
       let paymentObjectId = paymentId;
       if (typeof paymentId === 'string' && mongoose.Types.ObjectId.isValid(paymentId)) {
         paymentObjectId = new mongoose.Types.ObjectId(paymentId);
+      }
+      
+      // Get student name for AR account
+      let studentName = 'Student';
+      try {
+        const student = await User.findById(userId).select('firstName lastName').lean();
+        if (student) {
+          studentName = `${student.firstName} ${student.lastName}`;
+        }
+      } catch (error) {
+        console.log('⚠️ Could not fetch student details, using default name');
+      }
+      
+      // Ensure student AR account exists
+      const studentARCode = `1100-${userId}`;
+      let studentARAccount = await Account.findOne({ code: studentARCode });
+      if (!studentARAccount) {
+        const mainAR = await Account.findOne({ code: '1100' });
+        if (!mainAR) {
+          throw new Error('Main AR account (1100) not found');
+        }
+        studentARAccount = new Account({
+          code: studentARCode,
+          name: `Accounts Receivable - ${studentName}`,
+          type: 'Asset',
+          category: 'Current Assets',
+          subcategory: 'Accounts Receivable',
+          description: 'Student-specific AR control account',
+          isActive: true,
+          parentAccount: mainAR._id,
+          level: 2,
+          sortOrder: 0,
+          metadata: new Map([
+            ['parent', '1100'],
+            ['hasParent', 'true'],
+            ['studentId', String(userId)]
+          ])
+        });
+        await studentARAccount.save();
+        console.log(`✅ Created student AR account: ${studentARCode}`);
       }
       
       // Determine liability account based on type
@@ -1124,22 +1166,19 @@ class EnhancedPaymentAllocationService {
         }
       }
 
+      // Create transaction with 4 entries to show advance payment in student AR
+      // 1. DR Cash (money received)
+      // 2. CR Student AR (shows student paid, creating credit/advance balance)
+      // 3. DR Student AR (transfers the credit to deferred income)
+      // 4. CR Deferred Income (liability for future periods)
+      // Net effect: Cash +300, AR 0 (but transaction history shows advance), Deferred Income +300
       const advanceTransaction = new TransactionEntry({
         transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-        date: new Date(),
+        date: paymentData.date ? new Date(paymentData.date) : new Date(),
         description: isDeposit ? 'Deposit received (liability)' : `Advance ${paymentType} payment for future periods`,
         reference: paymentId,
         entries: [
-          // Credit: Advance Payment Liability
-          {
-            accountCode: liabilityAccountCode,
-            accountName: liabilityAccountName,
-            accountType: 'Liability',
-            debit: 0,
-            credit: amount,
-            description: isDeposit ? `Deposit received from ${paymentId}` : `Advance ${paymentType} payment from ${paymentId}`
-          },
-          // Debit: Cash/Bank
+          // Entry 1: Debit Cash (money received)
           {
             accountCode: '1000', // Cash account
             accountName: 'Cash',
@@ -1147,10 +1186,37 @@ class EnhancedPaymentAllocationService {
             debit: amount,
             credit: 0,
             description: isDeposit ? 'Deposit payment received' : `Advance ${paymentType} payment received`
+          },
+          // Entry 2: Credit Student AR (shows student paid, creating credit/advance)
+          {
+            accountCode: studentARCode,
+            accountName: `Accounts Receivable - ${studentName}`,
+            accountType: 'Asset',
+            debit: 0,
+            credit: amount,
+            description: isDeposit ? `Deposit received from ${studentName} (${paymentId})` : `Advance ${paymentType} payment from ${studentName} (${paymentId}) - shows as credit/advance`
+          },
+          // Entry 3: Debit Student AR (transfers credit to deferred income)
+          {
+            accountCode: studentARCode,
+            accountName: `Accounts Receivable - ${studentName}`,
+            accountType: 'Asset',
+            debit: amount,
+            credit: 0,
+            description: isDeposit ? `Transfer deposit to liability account` : `Transfer advance payment to deferred income for future periods`
+          },
+          // Entry 4: Credit Deferred Income (liability for future periods)
+          {
+            accountCode: liabilityAccountCode,
+            accountName: liabilityAccountName,
+            accountType: 'Liability',
+            debit: 0,
+            credit: amount,
+            description: isDeposit ? `Deposit received from ${studentName} (${paymentId})` : `Advance ${paymentType} payment from ${studentName} (${paymentId})`
           }
         ],
-        totalDebit: amount,
-        totalCredit: amount,
+        totalDebit: amount * 2, // Cash debit + AR debit
+        totalCredit: amount * 2, // AR credit + Deferred Income credit
         source: 'advance_payment',
         sourceId: paymentObjectId, // Link to Payment model
         sourceModel: 'Payment',
@@ -1171,6 +1237,30 @@ class EnhancedPaymentAllocationService {
       
       await advanceTransaction.save();
       console.log(`✅ Advance payment transaction created: ${advanceTransaction._id}`);
+      
+      // Log advance payment transaction creation to audit log
+      await logSystemOperation('create', 'TransactionEntry', advanceTransaction._id, {
+        source: 'Enhanced Payment Allocation Service',
+        type: 'advance_payment',
+        paymentId: paymentId,
+        studentId: userId,
+        amount: amount,
+        paymentType: paymentType,
+        isAdvancePayment: true,
+        description: isDeposit ? 'Deposit received (liability)' : `Advance ${paymentType} payment for future periods`
+      });
+      
+      // 🆕 CRITICAL: Update debtor deferred income for advance payments (except deposits)
+      // This ensures advance payments are reflected in the debtor account
+      if (paymentType !== 'deposit' && paymentType !== 'admin') {
+        try {
+          await this.updateDebtorDeferredIncome(userId, paymentId, amount, paymentType);
+          console.log(`✅ Updated debtor deferred income for advance payment: ${userId} - $${amount} ${paymentType}`);
+        } catch (debtorError) {
+          console.error(`❌ Error updating debtor deferred income: ${debtorError.message}`);
+          // Don't fail the transaction if debtor update fails, but log it
+        }
+      }
       
       return advanceTransaction;
       
@@ -1207,14 +1297,164 @@ class EnhancedPaymentAllocationService {
         }
       }
 
-      // Create payment allocation transaction with proper payment date
+      // 🆕 CRITICAL: Check if the month being paid for had an accrual AT THE TIME OF PAYMENT
+      // Use payment date to determine if accrual existed when payment was made
+      // If no accrual existed at payment time, treat as advance payment and route to deferred income
       const paymentDate = paymentData.date ? new Date(paymentData.date) : new Date();
-      const paymentTransaction = new TransactionEntry({
-        transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-        date: paymentDate, // Use actual payment date for accurate cashflow
-        description: `Payment allocation: ${paymentType} for ${monthSettled}`,
-        reference: paymentId,
-        entries: [
+      
+      let hasAccrual = false;
+      if (arTransactionId) {
+        // If arTransactionId is provided, check if it exists AND was created before/on payment date
+        const existingAR = await TransactionEntry.findOne({
+          _id: arTransactionId,
+          date: { $lte: paymentDate }, // Accrual must exist on or before payment date
+          status: 'posted'
+        });
+        hasAccrual = !!existingAR;
+      } else if (monthSettled) {
+        // Check if any accrual exists for this month that was created ON OR BEFORE the payment date
+        // This ensures we check if accrual existed at the time of payment, not now
+        const [year, month] = monthSettled.split('-').map(Number);
+        const monthStart = new Date(year, month - 1, 1, 0, 0, 0, 0);
+        const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
+        
+        // If payment date is before the month starts, it's definitely an advance payment
+        if (paymentDate < monthStart) {
+          console.log(`⚠️ Payment date ${paymentDate.toISOString()} is before month start ${monthStart.toISOString()} - treating as advance payment`);
+          hasAccrual = false;
+        } else {
+          // Check if accrual exists for this month that was created on or before payment date
+          // The accrual date must be within the month AND <= payment date
+          const accrualExists = await TransactionEntry.findOne({
+            source: 'rental_accrual',
+            'metadata.studentId': userId,
+            date: { 
+              $gte: monthStart,
+              $lte: paymentDate < monthEnd ? paymentDate : monthEnd // Use earlier of paymentDate or monthEnd
+            },
+            status: 'posted',
+            $or: [
+              { 'metadata.type': 'monthly_rent_accrual', 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+              { 'metadata.type': 'lease_start' }
+            ]
+          }).sort({ date: -1 }); // Get most recent accrual if multiple exist
+          
+          hasAccrual = !!accrualExists;
+          if (accrualExists) {
+            arTransactionId = accrualExists._id;
+            console.log(`✅ Found accrual created on ${accrualExists.date.toISOString()} (payment date: ${paymentDate.toISOString()})`);
+          } else {
+            console.log(`⚠️ No accrual found for ${monthSettled} that existed on or before payment date ${paymentDate.toISOString()}`);
+          }
+        }
+      }
+
+      // Get student name for AR account
+      const Account = require('../models/Account');
+      const User = require('../models/User');
+      let studentName = paymentData.studentName || 'Student';
+      try {
+        const student = await User.findById(userId).select('firstName lastName').lean();
+        if (student) {
+          studentName = `${student.firstName} ${student.lastName}`;
+        }
+      } catch (error) {
+        console.log('⚠️ Could not fetch student details, using default name');
+      }
+
+      // Ensure student AR account exists
+      const studentARCode = `1100-${userId}`;
+      let studentARAccount = await Account.findOne({ code: studentARCode });
+      if (!studentARAccount) {
+        const mainAR = await Account.findOne({ code: '1100' });
+        if (!mainAR) {
+          throw new Error('Main AR account (1100) not found');
+        }
+        studentARAccount = new Account({
+          code: studentARCode,
+          name: `Accounts Receivable - ${studentName}`,
+          type: 'Asset',
+          category: 'Current Assets',
+          subcategory: 'Accounts Receivable',
+          description: 'Student-specific AR control account',
+          isActive: true,
+          parentAccount: mainAR._id,
+          level: 2,
+          sortOrder: 0,
+          metadata: new Map([
+            ['parent', '1100'],
+            ['hasParent', 'true'],
+            ['studentId', String(userId)]
+          ])
+        });
+        await studentARAccount.save();
+        console.log(`✅ Created student AR account: ${studentARCode}`);
+      }
+
+      // Payment date already set above - use it for transaction
+      let entries = [];
+      let totalDebit = 0;
+      let totalCredit = 0;
+      let description = '';
+      let source = 'payment';
+      
+      if (!hasAccrual) {
+        // 🆕 NO ACCRUAL: Treat as advance payment - route to deferred income
+        // Use same 4-entry structure as advance payments to show in AR transaction history
+        console.log(`⚠️ No accrual found for ${monthSettled} - treating as advance payment`);
+        
+        const deferredIncomeAccountCode = '2200';
+        const deferredIncomeAccountName = 'Advance Payment Liability';
+        
+        entries = [
+          // Entry 1: Debit Cash (money received)
+          {
+            accountCode: cashAccountCode,
+            accountName: cashAccountName,
+            accountType: 'Asset',
+            debit: amount,
+            credit: 0,
+            description: `${paymentType} payment received for ${monthSettled}`
+          },
+          // Entry 2: Credit Student AR (shows student paid, creating credit/advance)
+          {
+            accountCode: studentARCode,
+            accountName: `Accounts Receivable - ${studentName}`,
+            accountType: 'Asset',
+            debit: 0,
+            credit: amount,
+            description: `${paymentType} payment from ${studentName} for ${monthSettled} - shows as credit/advance`
+          },
+          // Entry 3: Debit Student AR (transfers credit to deferred income)
+          {
+            accountCode: studentARCode,
+            accountName: `Accounts Receivable - ${studentName}`,
+            accountType: 'Asset',
+            debit: amount,
+            credit: 0,
+            description: `Transfer advance payment to deferred income for ${monthSettled}`
+          },
+          // Entry 4: Credit Deferred Income (liability for future periods)
+          {
+            accountCode: deferredIncomeAccountCode,
+            accountName: deferredIncomeAccountName,
+            accountType: 'Liability',
+            debit: 0,
+            credit: amount,
+            description: `Advance ${paymentType} payment from ${studentName} for ${monthSettled}`
+          }
+        ];
+        
+        totalDebit = amount * 2;
+        totalCredit = amount * 2;
+        description = `Advance ${paymentType} payment for ${monthSettled} (no accrual yet)`;
+        source = 'advance_payment'; // Mark as advance payment
+        
+      } else {
+        // ✅ ACCRUAL EXISTS: Normal payment allocation - credit AR directly
+        console.log(`✅ Accrual found for ${monthSettled} - normal payment allocation`);
+        
+        entries = [
           // Debit: Cash/Bank (we receive money)
           {
             accountCode: cashAccountCode,
@@ -1226,17 +1466,30 @@ class EnhancedPaymentAllocationService {
           },
           // Credit: Accounts Receivable (reduce student's debt)
           {
-            accountCode: `1100-${userId}`,
-            accountName: `Accounts Receivable - ${paymentData.studentName || userId}`,
+            accountCode: studentARCode,
+            accountName: `Accounts Receivable - ${studentName}`,
             accountType: 'Asset',
             debit: 0,
             credit: amount,
             description: `${paymentType} payment applied to ${monthSettled}`
           }
-        ],
-        totalDebit: amount,
-        totalCredit: amount,
-        source: 'payment',
+        ];
+        
+        totalDebit = amount;
+        totalCredit = amount;
+        description = `Payment allocation: ${paymentType} for ${monthSettled}`;
+        source = 'payment';
+      }
+
+      const paymentTransaction = new TransactionEntry({
+        transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
+        date: paymentDate, // Use actual payment date for accurate cashflow
+        description: description,
+        reference: paymentId,
+        entries: entries,
+        totalDebit: totalDebit,
+        totalCredit: totalCredit,
+        source: source,
         sourceId: null, // Don't set sourceId if it's not a valid ObjectId
         sourceModel: 'Payment',
         residence: paymentData.residence || null, // Handle null residence
@@ -1249,8 +1502,9 @@ class EnhancedPaymentAllocationService {
           paymentType: paymentType,
           monthSettled: monthSettled,
           arTransactionId: arTransactionId,
-          allocationType: 'payment_allocation',
-          description: `${paymentType} payment allocation for ${monthSettled}`
+          allocationType: hasAccrual ? 'payment_allocation' : 'advance_payment',
+          isAdvancePayment: !hasAccrual, // Flag to indicate this is an advance
+          description: description
         }
       });
       
@@ -1259,15 +1513,27 @@ class EnhancedPaymentAllocationService {
       // Log payment allocation transaction creation
       await logSystemOperation('create', 'TransactionEntry', paymentTransaction._id, {
         source: 'Enhanced Payment Allocation Service',
-        type: 'payment_allocation',
+        type: hasAccrual ? 'payment_allocation' : 'advance_payment',
         paymentId: paymentId,
         studentId: userId,
         amount: amount,
         paymentType: paymentType,
-        monthSettled: monthSettled
+        monthSettled: monthSettled,
+        isAdvancePayment: !hasAccrual
       });
       
-      console.log(`✅ Payment allocation transaction created: ${paymentTransaction._id}`);
+      console.log(`✅ ${hasAccrual ? 'Payment allocation' : 'Advance payment'} transaction created: ${paymentTransaction._id}`);
+      
+      // 🆕 NEW: If no accrual (advance payment), update debtor deferred income
+      if (!hasAccrual) {
+        try {
+          await this.updateDebtorDeferredIncome(userId, paymentId, amount, paymentType);
+          console.log(`✅ Updated debtor deferred income for advance payment: ${userId} - $${amount} for ${monthSettled}`);
+        } catch (debtorError) {
+          console.error(`❌ Error updating debtor deferred income: ${debtorError.message}`);
+          // Don't fail the transaction if debtor update fails
+        }
+      }
       
       // 🆕 NEW: Automatically sync to debtor
       try {
@@ -1286,13 +1552,14 @@ class EnhancedPaymentAllocationService {
             paymentType: paymentType,
             monthSettled: monthSettled,
             arTransactionId: arTransactionId,
-            allocationType: 'payment_allocation',
-            description: `${paymentType} payment allocation for ${monthSettled}`,
+            allocationType: hasAccrual ? 'payment_allocation' : 'advance_payment',
+            isAdvancePayment: !hasAccrual,
+            description: description,
             transactionId: paymentTransaction.transactionId
           }
         );
         
-        console.log(`✅ Debtor automatically synced for payment allocation: ${userId} - $${amount} for ${monthSettled}`);
+        console.log(`✅ Debtor automatically synced for ${hasAccrual ? 'payment allocation' : 'advance payment'}: ${userId} - $${amount} for ${monthSettled}`);
         
       } catch (debtorError) {
         console.error(`❌ Error syncing to debtor: ${debtorError.message}`);
@@ -1412,8 +1679,11 @@ class EnhancedPaymentAllocationService {
     try {
       const Debtor = require('../models/Debtor');
       
+      // Convert paymentId to string if it's an ObjectId
+      const paymentIdStr = paymentId?.toString ? paymentId.toString() : String(paymentId);
+      
       const prepayment = {
-        paymentId: paymentId,
+        paymentId: paymentIdStr,
         amount: amount,
         paymentType: paymentType,
         paymentDate: new Date(),
@@ -1421,18 +1691,42 @@ class EnhancedPaymentAllocationService {
         status: 'pending'
       };
       
-      await Debtor.findOneAndUpdate(
+      // Check if debtor exists first
+      const debtor = await Debtor.findOne({ user: userId });
+      if (!debtor) {
+        console.error(`⚠️ Debtor not found for user ${userId} - cannot update deferred income`);
+        console.error(`   Payment ID: ${paymentIdStr}, Amount: $${amount}, Type: ${paymentType}`);
+        return; // Don't throw, just log and return
+      }
+      
+      // Update debtor: increment deferred income AND totalPaid
+      // This ensures the advance payment shows in the debtor account even though there's no debt
+      const updateResult = await Debtor.findOneAndUpdate(
         { user: userId },
         { 
-          $inc: { 'deferredIncome.totalAmount': amount },
-          $push: { 'deferredIncome.prepayments': prepayment }
-        }
+          $inc: { 
+            'deferredIncome.totalAmount': amount,
+            'totalPaid': amount  // Track that payment was made (even if advance)
+          },
+          $push: { 'deferredIncome.prepayments': prepayment },
+          $set: { 'lastPaymentDate': new Date(), 'lastPaymentAmount': amount }
+        },
+        { new: true } // Return updated document
       );
       
-      console.log(`✅ Updated deferred income for user ${userId}: +$${amount} ${paymentType}`);
+      if (updateResult) {
+        console.log(`✅ Updated deferred income for user ${userId} (Debtor: ${debtor.debtorCode || debtor._id}): +$${amount} ${paymentType}`);
+        console.log(`   Payment ID: ${paymentIdStr}`);
+        console.log(`   Also updated totalPaid: +$${amount} (shows as advance payment in debtor account)`);
+        console.log(`   New deferred income total: $${updateResult.deferredIncome?.totalAmount || 0}`);
+      } else {
+        console.error(`⚠️ Failed to update debtor for user ${userId} - update returned null`);
+      }
       
     } catch (error) {
-      console.error(`❌ Error updating deferred income: ${error.message}`);
+      console.error(`❌ Error updating deferred income for user ${userId}: ${error.message}`);
+      console.error(`   Payment ID: ${paymentId}, Amount: $${amount}, Type: ${paymentType}`);
+      console.error(`   Stack: ${error.stack}`);
     }
   }
 
