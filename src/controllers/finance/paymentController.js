@@ -867,6 +867,9 @@ exports.processPayment = async (req, res) => {
         const { paymentId, student: studentIdForPayment, residence: residenceForPayment, room: roomForPayment, roomType, payments, totalAmount: totalAmountForPayment, paymentMonth, date: dateForPayment, method, status, description, rentAmount, adminFee, deposit } = req.body;
         
         // Create payment record
+        // Finance/Admin created payments should have status 'Confirmed', not 'Pending'
+        const paymentStatus = (status && status !== 'Pending') ? status : 'Confirmed';
+        
         const payment = new Payment({
             paymentId,
             user: studentIdForPayment,
@@ -879,7 +882,7 @@ exports.processPayment = async (req, res) => {
             paymentMonth,
             date: dateForPayment,
             method,
-            status: status || 'Confirmed',
+            status: paymentStatus,           // ← Always 'Confirmed' for finance/admin created payments
             description,
             rentAmount: rentAmount || 0,
             adminFee: adminFee || 0,

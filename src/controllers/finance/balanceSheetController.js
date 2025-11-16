@@ -1116,17 +1116,62 @@ exports.getAccountTransactionDetails = async (req, res) => {
             console.log(`🔗 Found parent account ${accountCode}, looking for child accounts...`);
             
             // For account 2000, we want its direct child accounts
-            childAccounts = await Account.find({
+            // First, get explicitly linked child accounts
+            const linkedChildAccounts = await Account.find({
                 parentAccount: mainAccount._id,
                 isActive: true,
                 type: 'Liability'
             }).select('code name type category');
+            
+            // Also include accounts that match the AP pattern (start with 2000 but aren't 2000)
+            // This catches accounts that might not be explicitly linked yet
+            const apPatternAccounts = await Account.find({
+                code: { $regex: /^2000(?!$)/ }, // starts with 2000 but not exactly 2000
+                isActive: true,
+                type: 'Liability',
+                $or: [
+                    { subcategory: 'Accounts Payable' },
+                    { subcategory: { $exists: false } }, // Include accounts without subcategory
+                    { name: { $regex: /Accounts Payable/i } } // Include accounts with "Accounts Payable" in name
+                ]
+            }).select('code name type category parentAccount subcategory');
+            
+            // Merge and remove duplicates by code
+            const allAPChildrenMap = new Map();
+            [...linkedChildAccounts, ...apPatternAccounts].forEach(acc => {
+                allAPChildrenMap.set(acc.code, acc);
+            });
+            childAccounts = Array.from(allAPChildrenMap.values());
             
             // Add child account codes to the search
             allAccountCodes = [accountCode, ...childAccounts.map(child => child.code)];
             
             console.log(`📊 Found ${childAccounts.length} child AP accounts for ${accountCode}:`, 
                 childAccounts.map(c => `${c.code} - ${c.name}`));
+            
+            // Log and auto-fix any accounts that aren't explicitly linked
+            const unlinkedAccounts = childAccounts.filter(acc => 
+                !acc.parentAccount || acc.parentAccount.toString() !== mainAccount._id.toString()
+            );
+            if (unlinkedAccounts.length > 0) {
+                console.log(`⚠️ Found ${unlinkedAccounts.length} AP accounts not explicitly linked to 2000:`, 
+                    unlinkedAccounts.map(c => `${c.code} - ${c.name}`));
+                
+                // Auto-link unlinked accounts to parent account 2000
+                try {
+                    const AccountsPayableLinkingService = require('../../services/accountsPayableLinkingService');
+                    for (const unlinkedAccount of unlinkedAccounts) {
+                        await AccountsPayableLinkingService.ensureAccountsPayableLink(
+                            unlinkedAccount.code,
+                            unlinkedAccount.name
+                        );
+                    }
+                    console.log(`✅ Auto-linked ${unlinkedAccounts.length} AP accounts to parent account 2000`);
+                } catch (linkError) {
+                    console.error('⚠️ Error auto-linking AP accounts:', linkError.message);
+                    // Don't fail the request if linking fails
+                }
+            }
         }
         
         // Build query for cumulative transactions up to the selected month

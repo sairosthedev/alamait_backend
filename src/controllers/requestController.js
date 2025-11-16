@@ -1486,10 +1486,10 @@ exports.updateRequest = async (req, res) => { //n
         }
 
         // Create expenses if financeStatus is being set to 'approved'
-        // ONLY create expenses for maintenance requests, NOT financial requests
+        // Create expenses for maintenance and operational requests, NOT financial requests
         if (updateData.financeStatus === 'approved' 
             && !request.convertedToExpense 
-            && request.type === 'maintenance') {
+            && (request.type === 'maintenance' || request.type === 'operational')) {
             try {
                 console.log('💰 Creating expenses for approved request:', request._id);
                 
@@ -1497,9 +1497,9 @@ exports.updateRequest = async (req, res) => { //n
                 const approvalDate = request.dateApproved ? new Date(request.dateApproved) : 
                                    (request.approval?.finance?.approvedAt ? new Date(request.approval.finance.approvedAt) : new Date());
                 
-                // 🆕 NEW: Handle maintenance requests created from monthly requests
-                if (request.linkedMonthlyRequestId && request.type === 'maintenance') {
-                    console.log('🔧 Creating expense for maintenance request from monthly request:', request._id);
+                // 🆕 NEW: Handle maintenance/operational requests created from monthly requests
+                if (request.linkedMonthlyRequestId && (request.type === 'maintenance' || request.type === 'operational')) {
+                    console.log('🔧 Creating expense for request from monthly request:', request._id);
                     await createExpenseForMonthlyRequestDeduction(request, user, approvalDate);
                 } else {
                     // Check if request has items to process
@@ -1799,9 +1799,9 @@ exports.financeApproval = async (req, res) => {
         console.log('✅ Request saved with finance approval');
 
         // Create double-entry transaction and itemized expense if approved
-        // ONLY create expenses for maintenance requests, NOT financial requests
+        // Create expenses for maintenance and operational requests, NOT financial requests
         let financialResult = null;
-        if (isApproved && request.type === 'maintenance') {
+        if (isApproved && (request.type === 'maintenance' || request.type === 'operational')) {
             try {
                 console.log('💰 Creating expenses and double-entry transactions for approved request...');
                 

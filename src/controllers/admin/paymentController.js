@@ -588,6 +588,9 @@ const createPayment = async (req, res) => {
         }
 
         // 🆕 NEW: Create payment with user ID for proper mapping
+        // Finance/Admin created payments should have status 'Confirmed', not 'Pending'
+        const paymentStatus = (status && status !== 'Pending') ? status : 'Confirmed';
+        
         const payment = new Payment({
             paymentId,
             user: userId,                    // ← ALWAYS include user ID for proper mapping
@@ -600,7 +603,7 @@ const createPayment = async (req, res) => {
             paymentMonth,
             date,
             method,
-            status,
+            status: paymentStatus,           // ← Always 'Confirmed' for finance/admin created payments
             description,
             rentAmount: rent,
             adminFee: admin,
