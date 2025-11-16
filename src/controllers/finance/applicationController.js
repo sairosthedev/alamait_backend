@@ -178,7 +178,9 @@ exports.getApplication = async (req, res) => {
             reason: application.reason,
             allocatedRoom: application.allocatedRoom,
             applicationCode: application.applicationCode,
-            residence: residenceDetails
+            residence: residenceDetails,
+            // Include emergency contact from additionalInfo
+            emergencyContact: application.additionalInfo?.emergencyContact || null
         };
 
         res.json(formattedApplication);

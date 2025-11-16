@@ -186,7 +186,9 @@ exports.getApplicationById = async (req, res) => {
             applicationCode: application.applicationCode,
             priceDifference: priceDifference,
             residence: application.residence,
-            residenceId: application.residence
+            residenceId: application.residence,
+            // Include emergency contact from additionalInfo
+            emergencyContact: application.additionalInfo?.emergencyContact || null
         };
 
         res.json({
@@ -764,7 +766,7 @@ exports.updateApplicationData = async (req, res) => {
         // Update the application with new data
         const allowedFields = [
             'firstName', 'lastName', 'email', 'phone', 
-            'emergencyContact', 'startDate', 'endDate', 
+            'startDate', 'endDate', 
             'roomNumber', 'residenceId', 'monthlyRent'
         ];
 
@@ -781,6 +783,12 @@ exports.updateApplicationData = async (req, res) => {
                 const backendFieldName = fieldMapping[field] || field;
                 updateFields[backendFieldName] = updateData[field];
             }
+        }
+
+        // Handle emergency contact separately - it should be nested in additionalInfo
+        if (updateData.emergencyContact !== undefined) {
+            // Use dot notation to update nested field
+            updateFields['additionalInfo.emergencyContact'] = updateData.emergencyContact;
         }
 
         console.log('📝 Updating fields:', updateFields);
