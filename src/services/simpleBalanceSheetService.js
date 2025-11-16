@@ -51,17 +51,22 @@ class SimpleBalanceSheetService {
         try {
           console.log(`📅 Processing month ${month}/${year}...`);
           
-          // Calculate end of month date
-          const endOfMonth = new Date(year, month, 0); // Last day of month
-          const monthEndDateStr = endOfMonth.toISOString().split('T')[0];
+          // Calculate end of month date in UTC to avoid timezone issues
+          // month is 1-based (1-12), Date.UTC expects 0-based month (0-11)
+          // Last day of month = first day of next month minus 1 day
+          const lastDayOfMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+          const endOfMonthUTC = new Date(Date.UTC(year, month - 1, lastDayOfMonth, 23, 59, 59, 999));
+          const monthEndDateStr = endOfMonthUTC.toISOString().split('T')[0];
           
           // Get balance sheet data for this month
           const monthData = await this.generateBalanceSheetForDate(monthEndDateStr, residence, accountMap);
           
           if (monthData) {
+            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                               'July', 'August', 'September', 'October', 'November', 'December'];
             monthlyData[month] = {
               month: month,
-              monthName: endOfMonth.toLocaleDateString('en-US', { month: 'long' }),
+              monthName: monthNames[month - 1],
               ...monthData
             };
             
@@ -116,7 +121,18 @@ class SimpleBalanceSheetService {
    */
   static async generateBalanceSheetForDate(asOfDate, residence = null, accountMap = null) {
     try {
-      const asOf = new Date(asOfDate);
+      // Parse date as UTC to avoid timezone issues between localhost and production
+      // asOfDate is in format YYYY-MM-DD, we need to parse it as UTC end-of-day
+      const dateParts = asOfDate.split('-');
+      const year = parseInt(dateParts[0]);
+      const month = parseInt(dateParts[1]) - 1; // month is 0-based for Date.UTC
+      const day = parseInt(dateParts[2]);
+      
+      // Create UTC date for end of the specified day (23:59:59.999)
+      const asOf = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
+      
+      // Also calculate the start of next month in UTC to ensure we don't include next month's data
+      const nextMonthStart = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0));
       
       // Get accounts if not provided - include ALL active accounts
       if (!accountMap) {
@@ -145,9 +161,11 @@ class SimpleBalanceSheetService {
         });
       }
       
-      // Get all transactions up to the as-of date
+      // Get all transactions up to the as-of date (using UTC to prevent timezone issues)
+      // Ensure we don't accidentally include next month's data by using the smaller of asOf or nextMonthStart
+      const queryUpperBound = asOf < nextMonthStart ? asOf : nextMonthStart;
       const query = {
-        date: { $lte: asOf },
+        date: { $lte: queryUpperBound },
         status: 'posted',
         voided: { $ne: true }
       };
