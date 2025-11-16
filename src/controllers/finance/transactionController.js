@@ -1291,6 +1291,7 @@ class TransactionController {
             
             // 2. Find linked payments using explicit linking IDs only
             let linkedPaymentIds = new Set();
+            let paymentsFoundViaRef = new Set(); // Track payments found specifically via reference
             
             // Find payments linked via sourceId
             if (transactionEntry.sourceId && transactionEntry.sourceModel === 'Payment') {
@@ -1302,13 +1303,25 @@ class TransactionController {
                 linkedPaymentIds.add(transactionEntry.metadata.paymentId);
             }
             
-            // Find payments linked via reference (exact match only)
+            // 🆕 NEW: Find payments linked via reference field (if reference matches paymentId or _id)
+            // Only these will be auto-deleted (not payments found via other methods)
             if (transactionEntry.reference) {
+                // Try to find payment by paymentId (if reference is a string matching paymentId)
+                const paymentByPaymentId = await Payment.findOne({ paymentId: transactionEntry.reference }).session(session);
+                if (paymentByPaymentId) {
+                    const paymentIdStr = paymentByPaymentId._id.toString();
+                    linkedPaymentIds.add(paymentIdStr);
+                    paymentsFoundViaRef.add(paymentIdStr); // Mark as found via reference
+                }
+                
+                // Try to find payment by _id (if reference is an ObjectId)
                 try {
                     const refAsObjectId = new mongoose.Types.ObjectId(transactionEntry.reference);
                     const payment = await Payment.findById(refAsObjectId).session(session);
                     if (payment) {
-                        linkedPaymentIds.add(transactionEntry.reference);
+                        const paymentIdStr = payment._id.toString();
+                        linkedPaymentIds.add(paymentIdStr);
+                        paymentsFoundViaRef.add(paymentIdStr); // Mark as found via reference
                     }
                 } catch (e) {
                     // Reference is not a valid ObjectId, skip
@@ -1325,13 +1338,24 @@ class TransactionController {
                 if (entry.metadata?.paymentId) {
                     linkedPaymentIds.add(entry.metadata.paymentId);
                 }
-                // Check reference field only if it's a valid ObjectId (exact match)
+                // Check reference field - mark as found via reference
                 if (entry.reference) {
+                    // Try to find payment by paymentId
+                    const paymentByPaymentId = await Payment.findOne({ paymentId: entry.reference }).session(session);
+                    if (paymentByPaymentId) {
+                        const paymentIdStr = paymentByPaymentId._id.toString();
+                        linkedPaymentIds.add(paymentIdStr);
+                        paymentsFoundViaRef.add(paymentIdStr); // Mark as found via reference
+                    }
+                    
+                    // Try to find payment by _id
                     try {
                         const refAsObjectId = new mongoose.Types.ObjectId(entry.reference);
                         const payment = await Payment.findById(refAsObjectId).session(session);
                         if (payment) {
-                            linkedPaymentIds.add(entry.reference);
+                            const paymentIdStr = payment._id.toString();
+                            linkedPaymentIds.add(paymentIdStr);
+                            paymentsFoundViaRef.add(paymentIdStr); // Mark as found via reference
                         }
                     } catch (e) {
                         // Reference is not a valid ObjectId, skip
@@ -1341,11 +1365,20 @@ class TransactionController {
             
             console.log(`   📊 Found ${linkedPaymentIds.size} linked payments`);
             
-            // Log and delete linked payments (if requested via query parameter)
+            // Log and delete linked payments
+            // 🆕 NEW: Automatically delete payments ONLY if they were found via reference matching
+            // This ensures we only delete payments that were created BY this transaction (via reference)
+            // Also support query parameter for explicit deletion requests
             const { deleteLinkedPayments = false, deleteLinkedExpenses = false } = req.query;
             
-            if (deleteLinkedPayments === 'true' || deleteLinkedPayments === true) {
-                for (const paymentId of linkedPaymentIds) {
+            // Auto-delete ONLY payments that were found specifically via reference matching
+            // This is safer - we only delete payments that were created by this transaction
+            const paymentsToDelete = deleteLinkedPayments === 'true' || deleteLinkedPayments === true 
+                ? Array.from(linkedPaymentIds) // If explicitly requested, delete all linked payments
+                : Array.from(paymentsFoundViaRef); // Otherwise, only delete those found via reference
+            
+            if (paymentsToDelete.length > 0) {
+                for (const paymentId of paymentsToDelete) {
                     try {
                         const payment = await Payment.findById(paymentId).session(session);
                         if (payment) {
@@ -1370,12 +1403,14 @@ class TransactionController {
                         console.error(`⚠️ Error deleting linked payment (${paymentId}):`, logError.message);
                     }
                 }
-            } else if (linkedPaymentIds.size > 0) {
-                console.log(`   ℹ️ Found ${linkedPaymentIds.size} linked payments (not deleted - use ?deleteLinkedPayments=true to delete)`);
+            } else if (linkedPaymentIds.size > paymentsToDelete.length) {
+                const remainingCount = linkedPaymentIds.size - paymentsToDelete.length;
+                console.log(`   ℹ️ Found ${remainingCount} linked payments (not deleted - use ?deleteLinkedPayments=true to delete all)`);
             }
             
             // 3. Find linked expenses using explicit linking IDs only
             let linkedExpenseIds = new Set();
+            let expensesFoundViaRef = new Set(); // Track expenses found specifically via reference
             
             // Find expenses linked via sourceId
             if (transactionEntry.sourceId && transactionEntry.sourceModel === 'Expense') {
@@ -1385,6 +1420,31 @@ class TransactionController {
             // Find expenses linked via metadata.expenseId
             if (transactionEntry.metadata?.expenseId) {
                 linkedExpenseIds.add(transactionEntry.metadata.expenseId);
+            }
+            
+            // 🆕 NEW: Find expenses linked via reference field (if reference matches expenseId or transactionId)
+            // Only these will be auto-deleted (not expenses found via other methods)
+            if (transactionEntry.reference) {
+                // Try to find expense by expenseId (if reference is a string matching expenseId)
+                const expenseByExpenseId = await Expense.findOne({ expenseId: transactionEntry.reference }).session(session);
+                if (expenseByExpenseId) {
+                    const expenseIdStr = expenseByExpenseId._id.toString();
+                    linkedExpenseIds.add(expenseIdStr);
+                    expensesFoundViaRef.add(expenseIdStr); // Mark as found via reference
+                }
+                
+                // Try to find expense by transactionId (if reference is an ObjectId)
+                try {
+                    const refAsObjectId = new mongoose.Types.ObjectId(transactionEntry.reference);
+                    const expenseByTransactionId = await Expense.findOne({ transactionId: refAsObjectId }).session(session);
+                    if (expenseByTransactionId) {
+                        const expenseIdStr = expenseByTransactionId._id.toString();
+                        linkedExpenseIds.add(expenseIdStr);
+                        expensesFoundViaRef.add(expenseIdStr); // Mark as found via reference
+                    }
+                } catch (e) {
+                    // Reference is not a valid ObjectId, skip
+                }
             }
             
             // Find expenses linked via related entries (only entries with explicit links)
@@ -1397,13 +1457,30 @@ class TransactionController {
                 if (entry.metadata?.expenseId) {
                     linkedExpenseIds.add(entry.metadata.expenseId);
                 }
-                // Check reference field only if it's a valid ObjectId (exact match)
+                // Check reference field - mark as found via reference
                 if (entry.reference) {
+                    // Try to find expense by expenseId
+                    const expenseByExpenseId = await Expense.findOne({ expenseId: entry.reference }).session(session);
+                    if (expenseByExpenseId) {
+                        const expenseIdStr = expenseByExpenseId._id.toString();
+                        linkedExpenseIds.add(expenseIdStr);
+                        expensesFoundViaRef.add(expenseIdStr); // Mark as found via reference
+                    }
+                    
                     try {
                         const refAsObjectId = new mongoose.Types.ObjectId(entry.reference);
                         const expense = await Expense.findById(refAsObjectId).session(session);
                         if (expense) {
-                            linkedExpenseIds.add(entry.reference);
+                            const expenseIdStr = expense._id.toString();
+                            linkedExpenseIds.add(expenseIdStr);
+                            expensesFoundViaRef.add(expenseIdStr); // Mark as found via reference
+                        }
+                        // Also check transactionId
+                        const expenseByTransactionId = await Expense.findOne({ transactionId: refAsObjectId }).session(session);
+                        if (expenseByTransactionId) {
+                            const expenseIdStr = expenseByTransactionId._id.toString();
+                            linkedExpenseIds.add(expenseIdStr);
+                            expensesFoundViaRef.add(expenseIdStr); // Mark as found via reference
                         }
                     } catch (e) {
                         // Reference is not a valid ObjectId, skip
@@ -1413,9 +1490,18 @@ class TransactionController {
             
             console.log(`   📊 Found ${linkedExpenseIds.size} linked expenses`);
             
-            // Log and delete linked expenses (if requested via query parameter)
-            if (deleteLinkedExpenses === 'true' || deleteLinkedExpenses === true) {
-                for (const expenseId of linkedExpenseIds) {
+            // Log and delete linked expenses
+            // 🆕 NEW: Automatically delete expenses ONLY if they were found via reference matching
+            // This ensures we only delete expenses that were created BY this transaction (via reference)
+            // Also support query parameter for explicit deletion requests
+            // Auto-delete ONLY expenses that were found specifically via reference matching
+            // This is safer - we only delete expenses that were created by this transaction
+            const expensesToDelete = deleteLinkedExpenses === 'true' || deleteLinkedExpenses === true 
+                ? Array.from(linkedExpenseIds) // If explicitly requested, delete all linked expenses
+                : Array.from(expensesFoundViaRef); // Otherwise, only delete those found via reference
+            
+            if (expensesToDelete.length > 0) {
+                for (const expenseId of expensesToDelete) {
                     try {
                         const expense = await Expense.findById(expenseId).session(session);
                         if (expense) {
@@ -1440,8 +1526,9 @@ class TransactionController {
                         console.error(`⚠️ Error deleting linked expense (${expenseId}):`, logError.message);
                     }
                 }
-            } else if (linkedExpenseIds.size > 0) {
-                console.log(`   ℹ️ Found ${linkedExpenseIds.size} linked expenses (not deleted - use ?deleteLinkedExpenses=true to delete)`);
+            } else if (linkedExpenseIds.size > expensesToDelete.length) {
+                const remainingCount = linkedExpenseIds.size - expensesToDelete.length;
+                console.log(`   ℹ️ Found ${remainingCount} linked expenses (not deleted - use ?deleteLinkedExpenses=true to delete all)`);
             }
             
             // 4. Check if any transactions are now empty and delete them

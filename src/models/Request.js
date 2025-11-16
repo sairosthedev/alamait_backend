@@ -811,8 +811,8 @@ requestSchema.pre('validate', function(next) {
         if (this.issue) {
             errors.push('issue: Issue should not be provided for admin requests');
         }
-        // Allow category for student_maintenance and financial types
-        if (this.category && !['student_maintenance', 'financial'].includes(this.type)) {
+        // Allow category for student_maintenance, financial, and operational types
+        if (this.category && !['student_maintenance', 'financial', 'operational'].includes(this.type)) {
             errors.push('category: Category should not be provided for this admin request type');
         }
         
