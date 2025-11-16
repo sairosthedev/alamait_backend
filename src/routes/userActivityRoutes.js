@@ -5,18 +5,18 @@
 
 const express = require('express');
 const router = express.Router();
-const { auth } = require('../middleware/auth');
+const { auth, optionalAuth } = require('../middleware/auth');
 const userActivityController = require('../controllers/userActivityController');
 
-// Track activities - allow without authentication for anonymous tracking
+// Track activities - use optional auth to support both authenticated and anonymous tracking
 // If user is authenticated, their ID will be used; otherwise, track as anonymous
-router.post('/track', userActivityController.track); // Generic tracking endpoint - must be before specific routes
-router.post('/page-view', userActivityController.trackPageView);
-router.post('/navigation', userActivityController.trackNavigation);
-router.post('/action', userActivityController.trackAction);
-router.post('/form-submit', userActivityController.trackFormSubmit);
-router.post('/button-click', userActivityController.trackButtonClick);
-router.post('/data-view', userActivityController.trackDataView);
+router.post('/track', optionalAuth, userActivityController.track); // Generic tracking endpoint - must be before specific routes
+router.post('/page-view', optionalAuth, userActivityController.trackPageView);
+router.post('/navigation', optionalAuth, userActivityController.trackNavigation);
+router.post('/action', optionalAuth, userActivityController.trackAction);
+router.post('/form-submit', optionalAuth, userActivityController.trackFormSubmit);
+router.post('/button-click', optionalAuth, userActivityController.trackButtonClick);
+router.post('/data-view', optionalAuth, userActivityController.trackDataView);
 
 // Get activities - require authentication
 router.use(auth);

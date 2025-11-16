@@ -4744,6 +4744,7 @@ exports.getPendingFinanceApproval = async (req, res) => {
 };
 
 // Get finance pending count (for dashboard widgets)
+// OPTIMIZED: Uses caching and single aggregation query instead of multiple countDocuments
 exports.getFinancePendingCount = async (req, res) => {
     try {
         const user = req.user;
@@ -4756,43 +4757,80 @@ exports.getFinancePendingCount = async (req, res) => {
             });
         }
         
+        const cacheService = require('../services/cacheService');
         const currentDate = new Date();
         const currentMonth = currentDate.getMonth() + 1;
         const currentYear = currentDate.getFullYear();
+        const cacheKey = `finance-pending-count-${currentMonth}-${currentYear}`;
         
-        // Count pending monthly requests
-        const pendingMonthlyRequests = await MonthlyRequest.countDocuments({
-            status: 'pending',
-            isTemplate: false
-        });
-        
-        // Count pending template approvals
-        const pendingTemplateApprovals = await MonthlyRequest.countDocuments({
-            status: 'pending',
-            isTemplate: true,
-            month: currentMonth,
-            year: currentYear
-        });
-        
-        // Count requests with changes needing approval
-        const requestsWithChanges = await MonthlyRequest.countDocuments({
-            status: 'pending',
-            isTemplate: false,
-            'requestHistory': {
-                $elemMatch: {
-                    date: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+        // Try cache first (60 second TTL)
+        const cached = await cacheService.getOrSet(cacheKey, 60, async () => {
+            // OPTIMIZED: Use single aggregation query instead of multiple countDocuments
+            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+            
+            const results = await MonthlyRequest.aggregate([
+                {
+                    $facet: {
+                        // Count pending monthly requests (non-templates)
+                        pendingMonthly: [
+                            {
+                                $match: {
+                                    status: 'pending',
+                                    isTemplate: false
+                                }
+                            },
+                            {
+                                $count: 'count'
+                            }
+                        ],
+                        // Count pending template approvals
+                        pendingTemplates: [
+                            {
+                                $match: {
+                                    status: 'pending',
+                                    isTemplate: true,
+                                    month: currentMonth,
+                                    year: currentYear
+                                }
+                            },
+                            {
+                                $count: 'count'
+                            }
+                        ],
+                        // Count requests with changes needing approval
+                        requestsWithChanges: [
+                            {
+                                $match: {
+                                    status: 'pending',
+                                    isTemplate: false,
+                                    'requestHistory.date': { $gte: thirtyDaysAgo }
+                                }
+                            },
+                            {
+                                $count: 'count'
+                            }
+                        ]
+                    }
                 }
-            }
-        });
-        
-        res.status(200).json({
-            success: true,
-            data: {
+            ]);
+
+            const result = results[0] || {};
+            
+            const pendingMonthlyRequests = result.pendingMonthly?.[0]?.count || 0;
+            const pendingTemplateApprovals = result.pendingTemplates?.[0]?.count || 0;
+            const requestsWithChanges = result.requestsWithChanges?.[0]?.count || 0;
+
+            return {
                 pendingMonthlyRequests,
                 pendingTemplateApprovals,
                 requestsWithChanges,
                 total: pendingMonthlyRequests + pendingTemplateApprovals
-            }
+            };
+        });
+        
+        res.status(200).json({
+            success: true,
+            data: cached
         });
     } catch (error) {
         console.error('Error getting finance pending count:', error);

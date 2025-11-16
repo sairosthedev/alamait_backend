@@ -59,15 +59,66 @@ class TransactionController {
             
             const skip = (parseInt(page) - 1) * parseInt(limit);
             
-            // Get transaction entries with pagination
-            const transactionEntries = await TransactionEntry.find(query)
-                .sort({ date: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .populate('sourceId', 'paymentId student residence room totalAmount method status')
-                .lean();
+            // OPTIMIZED: Use aggregation pipeline for better performance
+            // This avoids populate() which causes N+1 queries
+            const pipeline = [
+                { $match: query },
+                { $sort: { date: -1 } },
+                { $skip: skip },
+                { $limit: parseInt(limit) },
+                {
+                    $lookup: {
+                        from: 'payments',
+                        localField: 'sourceId',
+                        foreignField: '_id',
+                        as: 'paymentData'
+                    }
+                },
+                {
+                    $unwind: {
+                        path: '$paymentData',
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        transactionId: 1,
+                        date: 1,
+                        description: 1,
+                        type: 1,
+                        totalDebit: 1,
+                        totalCredit: 1,
+                        residence: 1,
+                        expenseId: 1,
+                        status: 1,
+                        createdBy: 1,
+                        entries: 1,
+                        sourceId: {
+                            $cond: {
+                                if: { $ne: ['$paymentData', null] },
+                                then: {
+                                    paymentId: '$paymentData.paymentId',
+                                    student: '$paymentData.student',
+                                    residence: '$paymentData.residence',
+                                    room: '$paymentData.room',
+                                    totalAmount: '$paymentData.totalAmount',
+                                    method: '$paymentData.method',
+                                    status: '$paymentData.status'
+                                },
+                                else: null
+                            }
+                        }
+                    }
+                }
+            ];
             
-            const total = await TransactionEntry.countDocuments(query);
+            const [transactionEntries, totalResult] = await Promise.all([
+                TransactionEntry.aggregate(pipeline),
+                TransactionEntry.countDocuments(query)
+            ]);
+            
+            const total = totalResult;
             
             // Transform data for frontend
             const transactions = transactionEntries.map(entry => ({
@@ -1615,6 +1666,9 @@ class TransactionController {
             // Determine transaction source based on account types and description
             const transactionSource = TransactionController.determineTransactionSource(entries, description);
             
+            // Import account name normalizer
+            const { normalizeAccountName } = require('../../utils/accountNameNormalizer');
+            
             // Create transaction entry with all the double-entry details
             const transactionEntry = new TransactionEntry({
                 transactionId,
@@ -1623,9 +1677,11 @@ class TransactionController {
                 reference: reference || transactionId,
                 entries: entries.map(entry => {
                     const accountInfo = accountMap[entry.account];
+                    // Normalize account name (ensures "Cbz Vault" for account code 10003)
+                    const normalizedAccountName = normalizeAccountName(accountInfo.code, accountInfo.name);
                     return {
                         accountCode: accountInfo.code,
-                        accountName: accountInfo.name,
+                        accountName: normalizedAccountName,
                         accountType: accountInfo.type,
                         debit: entry.debit || 0,
                         credit: entry.credit || 0,

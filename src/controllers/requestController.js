@@ -4504,61 +4504,97 @@ exports.markExpenseAsPaid = async (req, res) => {
 };
 
 // Get pending count (for dashboard widgets)
+// OPTIMIZED: Uses caching and single aggregation query instead of multiple countDocuments
 exports.getPendingCount = async (req, res) => {
     try {
-        const user = req.user;
+        const cacheService = require('../services/cacheService');
+        const cacheKey = 'pending-count';
         
-        // Count pending maintenance requests
-        const pendingMaintenanceRequests = await Request.countDocuments({
-            status: 'pending',
-            type: 'maintenance'
+        // Try cache first (60 second TTL)
+        const cached = await cacheService.getOrSet(cacheKey, 60, async () => {
+            // OPTIMIZED: Use single aggregation query instead of multiple countDocuments
+            const results = await Request.aggregate([
+                {
+                    $facet: {
+                        // Count by type
+                        byType: [
+                            {
+                                $match: { status: 'pending' }
+                            },
+                            {
+                                $group: {
+                                    _id: '$type',
+                                    count: { $sum: 1 }
+                                }
+                            }
+                        ],
+                        // Count pending admin approval
+                        pendingAdmin: [
+                            {
+                                $match: {
+                                    'approval.admin.approved': { $ne: true },
+                                    status: 'pending'
+                                }
+                            },
+                            {
+                                $count: 'count'
+                            }
+                        ],
+                        // Count pending finance approval
+                        pendingFinance: [
+                            {
+                                $match: {
+                                    'approval.admin.approved': true,
+                                    'approval.finance.approved': { $ne: true },
+                                    status: 'pending'
+                                }
+                            },
+                            {
+                                $count: 'count'
+                            }
+                        ],
+                        // Count pending CEO approval
+                        pendingCEO: [
+                            {
+                                $match: {
+                                    'approval.admin.approved': true,
+                                    'approval.finance.approved': true,
+                                    'approval.ceo.approved': { $ne: true },
+                                    status: 'pending',
+                                    type: { $in: ['financial', 'operational'] }
+                                }
+                            },
+                            {
+                                $count: 'count'
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+            const result = results[0] || {};
+            const byType = result.byType || [];
+            
+            // Extract counts by type
+            const typeMap = {};
+            byType.forEach(item => {
+                typeMap[item._id] = item.count;
+            });
+
+            return {
+                pendingMaintenanceRequests: typeMap.maintenance || 0,
+                pendingOperationalRequests: typeMap.operational || 0,
+                pendingFinancialRequests: typeMap.financial || 0,
+                pendingAdminApproval: result.pendingAdmin?.[0]?.count || 0,
+                pendingFinanceApproval: result.pendingFinance?.[0]?.count || 0,
+                pendingCEOApproval: result.pendingCEO?.[0]?.count || 0,
+                total: (typeMap.maintenance || 0) + (typeMap.operational || 0) + (typeMap.financial || 0)
+            };
         });
-        
-        // Count pending operational requests
-        const pendingOperationalRequests = await Request.countDocuments({
-            status: 'pending',
-            type: 'operational'
-        });
-        
-        // Count pending financial requests
-        const pendingFinancialRequests = await Request.countDocuments({
-            status: 'pending',
-            type: 'financial'
-        });
-        
-        // Count requests pending admin approval
-        const pendingAdminApproval = await Request.countDocuments({
-            'approval.admin.approved': { $ne: true },
-            status: 'pending'
-        });
-        
-        // Count requests pending finance approval
-        const pendingFinanceApproval = await Request.countDocuments({
-            'approval.admin.approved': true,
-            'approval.finance.approved': { $ne: true },
-            status: 'pending'
-        });
-        
-        // Count requests pending CEO approval
-        const pendingCEOApproval = await Request.countDocuments({
-            'approval.admin.approved': true,
-            'approval.finance.approved': true,
-            'approval.ceo.approved': { $ne: true },
-            status: 'pending',
-            type: { $in: ['financial', 'operational'] }
-        });
-        
+
         res.status(200).json({
             success: true,
-            data: {
-                pendingMaintenanceRequests,
-                pendingOperationalRequests,
-                pendingFinancialRequests,
-                pendingAdminApproval,
-                pendingFinanceApproval,
-                pendingCEOApproval,
-                total: pendingMaintenanceRequests + pendingOperationalRequests + pendingFinancialRequests
-            }
+            data: cached
         });
     } catch (error) {
         console.error('Error getting pending count:', error);

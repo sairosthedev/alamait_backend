@@ -3,41 +3,48 @@ const router = express.Router();
 const { Residence } = require('../models/Residence');
 
 // Get all residences (public route for frontend)
+// OPTIMIZED: Added caching to reduce database load
 router.get('/', async (req, res) => {
     try {
-        const residences = await Residence.find({ status: 'active' })
-            .select('name description address amenities images features rules rooms')
-            .lean();
+        const cacheService = require('../services/cacheService');
+        const cacheKey = 'public-residences-active';
+        
+        // Try cache first (5 minute TTL)
+        const cached = await cacheService.getOrSet(cacheKey, 300, async () => {
+            const residences = await Residence.find({ status: 'active' })
+                .select('name description address amenities images features rules rooms')
+                .lean();
 
-        // Format the response to include only necessary information
-        const formattedResidences = residences.map(residence => ({
-            _id: residence._id,
-            name: residence.name,
-            description: residence.description,
-            address: residence.address,
-            amenities: residence.amenities,
-            features: residence.features,
-            rules: residence.rules,
-            images: residence.images,
-            rooms: residence.rooms.map(room => ({
-                roomNumber: room.roomNumber,
-                type: room.type,
-                capacity: room.capacity,
-                price: room.price,
-                status: room.status,
-                currentOccupancy: room.currentOccupancy,
-                features: room.features,
-                floor: room.floor,
-                area: room.area
-            })),
-            availableRooms: residence.rooms.filter(room => 
-                room.status === 'available' || room.status === 'reserved'
-            ).length
-        }));
+            // Format the response to include only necessary information
+            return residences.map(residence => ({
+                _id: residence._id,
+                name: residence.name,
+                description: residence.description,
+                address: residence.address,
+                amenities: residence.amenities,
+                features: residence.features,
+                rules: residence.rules,
+                images: residence.images,
+                rooms: residence.rooms.map(room => ({
+                    roomNumber: room.roomNumber,
+                    type: room.type,
+                    capacity: room.capacity,
+                    price: room.price,
+                    status: room.status,
+                    currentOccupancy: room.currentOccupancy,
+                    features: room.features,
+                    floor: room.floor,
+                    area: room.area
+                })),
+                availableRooms: residence.rooms.filter(room => 
+                    room.status === 'available' || room.status === 'reserved'
+                ).length
+            }));
+        });
 
         res.json({
             success: true,
-            data: formattedResidences
+            data: cached
         });
     } catch (error) {
         console.error('Error in getResidences:', error);

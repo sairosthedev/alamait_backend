@@ -1034,6 +1034,17 @@ exports.getAccountTransactionDetails = async (req, res) => {
     try {
         const { period, month, accountCode, residenceId, sourceType } = req.query;
         
+        // Check cache first
+        const { cache } = require('../../utils/cache');
+        const cacheKey = `balance-sheet-account-details:${period}:${month}:${accountCode}:${residenceId || 'all'}:${sourceType || 'all'}`;
+        const cached = cache.get(cacheKey);
+        if (cached) {
+            return res.json({
+                ...cached,
+                cached: true
+            });
+        }
+        
         console.log(`📋 Balance Sheet Drill-down Query parameters:`, { period, month, accountCode, residenceId, sourceType });
         
         if (!period || !month || !accountCode) {
@@ -2373,22 +2384,39 @@ exports.getAccountTransactionDetails = async (req, res) => {
             const isChildAccount = primaryAccountCode !== accountCode;
             const childAccountInfo = childAccounts.find(child => child.code === primaryAccountCode);
             
-            // Get all entries for full double-entry view (like cash flow)
+            // OPTIMIZED: Get all entries for full double-entry view (like cash flow)
+            // Batch fetch all unique account codes to avoid N+1 queries
             const Account = require('../../models/Account');
-            const entriesWithAccountNames = await Promise.all((transaction.entries || []).map(async (txEntry) => {
+            const uniqueAccountCodes = new Set();
+            transactions.forEach(tx => {
+                (tx.entries || []).forEach(entry => {
+                    if (entry.accountCode && !entry.accountName) {
+                        uniqueAccountCodes.add(entry.accountCode);
+                    }
+                });
+            });
+            
+            // Fetch all accounts in one query
+            const accountMap = new Map();
+            if (uniqueAccountCodes.size > 0) {
+                const accounts = await Account.find({ code: { $in: Array.from(uniqueAccountCodes) } })
+                    .select('code name type')
+                    .lean();
+                accounts.forEach(acc => {
+                    accountMap.set(acc.code, acc);
+                });
+            }
+            
+            const entriesWithAccountNames = (transaction.entries || []).map((txEntry) => {
                 let txAccountName = txEntry.accountName;
                 let txAccountType = txEntry.accountType;
                 
-                // If account name is not in entry, fetch from Account model
+                // If account name is not in entry, use the map (O(1) lookup)
                 if (!txAccountName && txEntry.accountCode) {
-                    try {
-                        const accountDoc = await Account.findOne({ code: txEntry.accountCode }).select('name type').lean();
-                        if (accountDoc) {
-                            txAccountName = accountDoc.name;
-                            txAccountType = accountDoc.type;
-                        }
-                    } catch (err) {
-                        // Ignore errors
+                    const accountDoc = accountMap.get(txEntry.accountCode);
+                    if (accountDoc) {
+                        txAccountName = accountDoc.name;
+                        txAccountType = accountDoc.type;
                     }
                 }
                 
@@ -2400,7 +2428,7 @@ exports.getAccountTransactionDetails = async (req, res) => {
                     credit: txEntry.credit || 0,
                     description: txEntry.description || transaction.description || ''
                 };
-            }));
+            });
             
             accountTransactions.push({
                 transactionId: transaction.transactionId || transaction._id,
@@ -2483,7 +2511,7 @@ exports.getAccountTransactionDetails = async (req, res) => {
         
         console.log(`📊 Balance Sheet Summary for ${accountCode}:`, summary);
         
-        res.json({
+        const responseData = {
             success: true,
             data: {
                 accountCode,
@@ -2539,7 +2567,12 @@ exports.getAccountTransactionDetails = async (req, res) => {
                     aggregatedBalance: runningBalance
                 } : null
             }
-        });
+        };
+        
+        // Cache the response for 5 minutes
+        cache.set(cacheKey, responseData, 300000);
+        
+        res.json(responseData);
         
     } catch (error) {
         console.error('Error getting balance sheet account transaction details:', error);
@@ -2558,6 +2591,17 @@ exports.getAccountTransactionDetails = async (req, res) => {
 exports.getBalanceSheetWithDrillDown = async (req, res) => {
     try {
         const { period, basis, residenceId, asOf } = req.query;
+        
+        // Check cache first
+        const { cache } = require('../../utils/cache');
+        const cacheKey = `balance-sheet-drilldown:${period || asOf}:${basis}:${residenceId || 'all'}`;
+        const cached = cache.get(cacheKey);
+        if (cached) {
+            return res.json({
+                ...cached,
+                cached: true
+            });
+        }
         
         let balanceSheetData;
         
@@ -2643,10 +2687,15 @@ exports.getBalanceSheetWithDrillDown = async (req, res) => {
             });
         }
         
-        res.json({
+        const responseData = {
             success: true,
             data: balanceSheetData
-        });
+        };
+        
+        // Cache the response for 5 minutes
+        cache.set(cacheKey, responseData, 300000);
+        
+        res.json(responseData);
         
     } catch (error) {
         console.error('Error getting balance sheet with drill-down:', error);

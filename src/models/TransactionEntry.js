@@ -294,4 +294,7 @@ transactionEntrySchema.index({ date: 1, source: 1, 'entries.accountType': 1 }); 
 transactionEntrySchema.index({ date: 1, source: 1, residence: 1, status: 1 }); // For cash received queries
 transactionEntrySchema.index({ 'metadata.residenceId': 1, date: 1, source: 1 }); // For metadata-based residence queries
 
+// Balance sheet account details optimization (date + entries.accountCode + status + residence)
+transactionEntrySchema.index({ date: 1, 'entries.accountCode': 1, status: 1, residence: 1 });
+
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 

@@ -321,8 +321,64 @@ const financeAccess = async (req, res, next) => {
     }
 };
 
+/**
+ * Optional authentication middleware
+ * Tries to authenticate if a token is provided, but doesn't fail if there's no token
+ * Useful for routes that support both authenticated and anonymous access
+ * Minimal logging to avoid log spam from frequent tracking requests
+ */
+const optionalAuth = async (req, res, next) => {
+    try {
+        const token = req.header('Authorization')?.replace('Bearer ', '');
+        
+        if (!token) {
+            // No token provided - allow request to continue without user
+            req.user = null;
+            return next();
+        }
+
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            let userId = decoded.user?.id || decoded.user?._id;
+            
+            if (!userId) {
+                // Invalid token payload - allow request to continue without user
+                req.user = null;
+                return next();
+            }
+
+            // Try both ObjectId and string for user lookup
+            let user = null;
+            if (mongoose.Types.ObjectId.isValid(userId)) {
+                user = await User.findOne({ _id: new mongoose.Types.ObjectId(userId) });
+            }
+            if (!user) {
+                user = await User.findOne({ _id: userId });
+            }
+
+            if (user) {
+                req.token = token;
+                req.user = user;
+            } else {
+                // User not found - allow request to continue without user
+                req.user = null;
+            }
+        } catch (tokenError) {
+            // Invalid token - allow request to continue without user (silently)
+            req.user = null;
+        }
+
+        next();
+    } catch (error) {
+        // Any other error - allow request to continue without user (silently)
+        req.user = null;
+        next();
+    }
+};
+
 module.exports = {
     auth,
+    optionalAuth,
     isAdmin,
     checkRole,
     checkCEORole, // Added checkCEORole to exports

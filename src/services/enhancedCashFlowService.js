@@ -207,6 +207,26 @@ class EnhancedCashFlowService {
      */
     static async generateDetailedCashFlowStatement(period, basis = 'cash', residenceId = null) {
         try {
+            // OPTIMIZED: Use centralized cache service with request deduplication
+            const cacheService = require('./cacheService');
+            const cacheKey = `detailed-cashflow:${period}:${basis}:${residenceId || 'all'}`;
+            
+            // Use getOrSet for automatic caching and request deduplication (10 minute TTL)
+            return await cacheService.getOrSet(cacheKey, 600, async () => {
+                return await this._generateDetailedCashFlowStatementInternal(period, basis, residenceId);
+            });
+        } catch (error) {
+            console.error('Error generating detailed cash flow statement:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Internal method to generate cash flow (called by cached wrapper)
+     */
+    static async _generateDetailedCashFlowStatementInternal(period, basis = 'cash', residenceId = null) {
+        try {
+            
             // Optimize: Reduce logging in production
             const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
             if (isDebugMode) {
@@ -634,12 +654,14 @@ class EnhancedCashFlowService {
                 };
             }
             
-            // Debug: Check the final monthly breakdown data before returning
-            console.log('🔧 Final cashFlowData monthly_breakdown October:', cashFlowData.monthly_breakdown?.october?.operating_activities);
-            console.log('🔧 Final cashFlowData monthly_breakdown October expenses:', cashFlowData.monthly_breakdown?.october?.expenses);
-            console.log('🔧 Final cashFlowData monthly_breakdown keys:', Object.keys(cashFlowData.monthly_breakdown || {}));
-            console.log('🔧 Final cashFlowData monthly_breakdown October full data:', JSON.stringify(cashFlowData.monthly_breakdown?.october, null, 2));
+            // Debug: Check the final monthly breakdown data before returning (only in debug mode)
+            if (isDebugMode) {
+                console.log('🔧 Final cashFlowData monthly_breakdown October:', cashFlowData.monthly_breakdown?.october?.operating_activities);
+                console.log('🔧 Final cashFlowData monthly_breakdown October expenses:', cashFlowData.monthly_breakdown?.october?.expenses);
+                console.log('🔧 Final cashFlowData monthly_breakdown keys:', Object.keys(cashFlowData.monthly_breakdown || {}));
+            }
             
+            // Cache is handled by the wrapper method, just return the data
             return cashFlowData;
             
         } catch (error) {
@@ -4620,8 +4642,8 @@ class EnhancedCashFlowService {
                 
                 // Only include proper cash accounts, exclude clearing accounts
                 if (this.isCashAccount(accountName, accountCode)) {
-                    // Use the most descriptive account name (prefer "Cbz Vault" over "cbz")
-                    const finalAccountName = (accountCode === '10003' && accountName.toLowerCase().includes('cbz')) 
+                    // Always use "Cbz Vault" for account code 10003 to ensure consistency with balance sheet
+                    const finalAccountName = (accountCode === '10003') 
                         ? 'Cbz Vault' 
                         : accountName;
                     
@@ -6943,18 +6965,27 @@ class EnhancedCashFlowService {
                 {
                     $group: {
                         _id: {
-                            accountCode: '$entries.accountCode',
-                            accountName: '$entries.accountName'
+                            accountCode: '$entries.accountCode'
+                            // Group only by accountCode, not accountName, to avoid splitting accounts with different names
                         },
                         totalDebits: { $sum: { $ifNull: ['$entries.debit', 0] } },
-                        totalCredits: { $sum: { $ifNull: ['$entries.credit', 0] } }
+                        totalCredits: { $sum: { $ifNull: ['$entries.credit', 0] } },
+                        // Get the most common account name (prefer "Cbz Vault" over "cbz" for account 10003)
+                        accountNames: { $addToSet: '$entries.accountName' }
                     }
                 },
                 {
                     $project: {
                         _id: 0,
                         accountCode: '$_id.accountCode',
-                        accountName: '$_id.accountName',
+                        // Normalize account name: use "Cbz Vault" for account code 10003, otherwise use first name
+                        accountName: {
+                            $cond: {
+                                if: { $eq: ['$_id.accountCode', '10003'] },
+                                then: 'Cbz Vault',
+                                else: { $arrayElemAt: ['$accountNames', 0] }
+                            }
+                        },
                         balance: { $subtract: ['$totalDebits', '$totalCredits'] }
                     }
                 }
@@ -6962,9 +6993,14 @@ class EnhancedCashFlowService {
             
             const accountBalances = {};
             accountBalancesResult.forEach(account => {
+                // Always use "Cbz Vault" for account code 10003 to ensure consistency with balance sheet
+                const accountName = (account.accountCode === '10003') 
+                    ? 'Cbz Vault' 
+                    : account.accountName;
+                
                 accountBalances[account.accountCode] = {
                     accountCode: account.accountCode,
-                    accountName: account.accountName,
+                    accountName: accountName,
                     balance: account.balance
                 };
             });

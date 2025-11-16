@@ -8,29 +8,11 @@ const EnhancedCashFlowService = require('../../services/enhancedCashFlowService'
 const AccountingService = require('../../services/accountingService');
 const RoomOccupancyUtils = require('../../utils/roomOccupancyUtils');
 
-// Simple in-memory cache for dashboard data (5 minute TTL)
-const dashboardCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+// OPTIMIZED: Use centralized cache service instead of local Map
+const cacheService = require('../../services/cacheService');
 
 function getCacheKey(year, month) {
-    return `dashboard:${year}:${month}`;
-}
-
-function getCachedData(key) {
-    const cached = dashboardCache.get(key);
-    if (!cached) return null;
-    if (Date.now() > cached.expiresAt) {
-        dashboardCache.delete(key);
-        return null;
-    }
-    return cached.data;
-}
-
-function setCachedData(key, data) {
-    dashboardCache.set(key, {
-        data,
-        expiresAt: Date.now() + CACHE_TTL
-    });
+    return `executive-dashboard:${year}:${month}`;
 }
 
 /**
@@ -43,9 +25,9 @@ exports.getExecutiveDashboard = async (req, res) => {
         const yearNum = parseInt(year);
         const monthNum = parseInt(month);
 
-        // Check cache first
+        // Check cache first (5 minute TTL)
         const cacheKey = getCacheKey(yearNum, monthNum);
-        const cached = getCachedData(cacheKey);
+        const cached = cacheService.get(cacheKey);
         if (cached) {
             return res.json(cached);
         }
@@ -77,27 +59,37 @@ exports.getExecutiveDashboard = async (req, res) => {
                 });
         });
 
+        // OPTIMIZED: Cache cash flow data separately (it's expensive and used by multiple functions)
+        const cashFlowCacheKey = `cash-flow:${yearNum}:all`;
+        let cashFlowData = cacheService.get(cashFlowCacheKey);
+        if (!cashFlowData) {
+            cashFlowData = await EnhancedCashFlowService.generateDetailedCashFlowStatement(String(yearNum), 'cash', null).catch(() => ({ monthly_breakdown: {} }));
+            // Cache cash flow for 10 minutes (it's expensive to generate)
+            cacheService.set(cashFlowCacheKey, cashFlowData, 600);
+        }
+
         // Run all independent operations in parallel
         // OPTIMIZED: Removed cashBalanceSummary, occupancyByResidence, transactions, roomPrices
+        // OPTIMIZED: Use cached cash flow data instead of regenerating
+        // NOTE: propertyPerformance must be resolved first before getAlertsAndNotifications can use it
         const [
             monthlyBreakdownResults,
             propertyPerformance,
             recentMaintenances,
-            cashFlowData,
             operationalOverview,
-            alerts,
             applications,
             debtorSummary
         ] = await Promise.all([
             Promise.all(monthlyBreakdownPromises),
             getPropertyPerformance(residences, yearNum, monthNum),
             getRecentMaintenances(10),
-            EnhancedCashFlowService.generateDetailedCashFlowStatement(String(yearNum), 'cash', null).catch(() => ({ monthly_breakdown: {} })),
             getOperationalOverview(residences, yearNum, monthNum),
-            getAlertsAndNotifications(residences),
             getApplications(yearNum, monthNum),
             getDebtorSummary()
         ]);
+
+        // Get alerts after propertyPerformance is resolved (it depends on propertyPerformance)
+        const alerts = await getAlertsAndNotifications(residences, propertyPerformance);
 
         // Build monthly breakdown object
         const monthlyBreakdown = {};
@@ -258,8 +250,8 @@ exports.getExecutiveDashboard = async (req, res) => {
             }
         };
 
-        // Cache the result
-        setCachedData(cacheKey, response);
+        // Cache the result (5 minute TTL)
+        cacheService.set(cacheKey, response, 300);
 
         res.json(response);
 
@@ -390,38 +382,80 @@ async function getOccupancyByResidence(residences) {
 }
 
 /**
- * Get Property Performance (OPTIMIZED: Parallelized)
+ * Get Property Performance (OPTIMIZED: Batch room occupancy queries)
  */
 async function getPropertyPerformance(residences, year, month) {
-    // Parallelize all residence calculations
+    // OPTIMIZED: Batch fetch all room occupancies in a single query instead of per-room queries
+    const residenceIds = residences.map(r => r._id);
+    const now = new Date();
+    
+    // Single aggregation query to get all room occupancies
+    const activeApplications = await Application.find({
+        $or: residences.map(r => ({
+            $or: [
+                { residenceId: r._id },
+                { 'allocatedRoomDetails.residenceId': r._id.toString() },
+                { residence: r._id }
+            ]
+        })),
+        status: { $in: ['approved', 'allocated', 'active', 'enrolled'] },
+        $and: [
+            {
+                $or: [
+                    { endDate: null },
+                    { endDate: { $gte: now } }
+                ]
+            },
+            {
+                $or: [
+                    { startDate: null },
+                    { startDate: { $lte: now } }
+                ]
+            }
+        ]
+    }).select('residenceId allocatedRoomDetails residence allocatedRoom').lean();
+    
+    // Group occupancy by residence and room
+    const occupancyByResidence = {};
+    residences.forEach(residence => {
+        const resId = residence._id.toString();
+        occupancyByResidence[resId] = {
+            occupiedRooms: new Set(),
+            totalOccupants: 0,
+            totalRooms: residence.rooms.length
+        };
+    });
+    
+    activeApplications.forEach(app => {
+        const resId = app.residenceId?.toString() || 
+                     app.allocatedRoomDetails?.residenceId?.toString() ||
+                     app.residence?.toString();
+        if (resId && occupancyByResidence[resId]) {
+            occupancyByResidence[resId].totalOccupants++;
+            if (app.allocatedRoom || app.allocatedRoomDetails?.roomNumber) {
+                occupancyByResidence[resId].occupiedRooms.add(
+                    app.allocatedRoom || app.allocatedRoomDetails?.roomNumber
+                );
+            }
+        }
+    });
+    
+    // Parallelize residence calculations (but use batched occupancy data)
     const performancePromises = residences.map(async (residence) => {
-        // Get revenue for this residence (parallel with occupancy)
-        const [monthData, ...roomOccupancies] = await Promise.all([
-            AccountingService.generateMonthlyIncomeStatement(month, year, residence._id.toString()).catch(() => ({ revenue: { total: 0 }, expenses: { total: 0 } })),
-            ...residence.rooms.map(room =>
-                RoomOccupancyUtils.calculateAccurateRoomOccupancy(
-                    residence._id.toString(),
-                    room.roomNumber
-                ).catch(() => ({ currentOccupancy: 0 }))
-            )
-        ]);
+        const resId = residence._id.toString();
+        const occupancyData = occupancyByResidence[resId] || { occupiedRooms: new Set(), totalOccupants: 0, totalRooms: 0 };
+        
+        // Get revenue for this residence (cached)
+        const monthData = await AccountingService.generateMonthlyIncomeStatement(month, year, resId).catch(() => ({ revenue: { total: 0 }, expenses: { total: 0 } }));
         
         const revenue = monthData?.revenue?.total || 0;
         const expenses = monthData?.expenses?.total || 0;
         const net = revenue - expenses;
 
-        // Calculate occupancy from parallel results
-        let totalRooms = residence.rooms.length;
-        let occupiedRooms = 0;
-        let totalOccupants = 0;
-
-        roomOccupancies.forEach(occupancy => {
-            totalOccupants += occupancy.currentOccupancy || 0;
-            if (occupancy.currentOccupancy > 0) {
-                occupiedRooms++;
-            }
-        });
-
+        // Calculate occupancy from batched data
+        const totalRooms = occupancyData.totalRooms || residence.rooms.length;
+        const occupiedRooms = occupancyData.occupiedRooms.size;
+        const totalOccupants = occupancyData.totalOccupants;
         const occupancyRate = totalRooms > 0 ? (occupiedRooms / totalRooms) * 100 : 0;
 
         return {
@@ -701,8 +735,9 @@ async function getCashReceivedForResidence(residenceId, startDate, endDate) {
 
 /**
  * Get Alerts and Notifications
+ * OPTIMIZED: Accept propertyPerformance to avoid duplicate room occupancy queries
  */
-async function getAlertsAndNotifications(residences) {
+async function getAlertsAndNotifications(residences, propertyPerformance = null) {
     const alerts = [];
 
     try {
@@ -729,34 +764,95 @@ async function getAlertsAndNotifications(residences) {
         }
 
         // 2. Low occupancy alerts
-        for (const residence of residences) {
-            let totalRooms = residence.rooms.length;
-            let occupiedRooms = 0;
+        // OPTIMIZED: Use propertyPerformance if provided to avoid duplicate room queries
+        if (propertyPerformance && propertyPerformance.length > 0) {
+            // Use occupancy data already calculated in getPropertyPerformance
+            propertyPerformance.forEach(property => {
+                const occupancyRate = property.occupancy || 0;
+                const lowOccupancyThreshold = 50; // 50% threshold
 
-            for (const room of residence.rooms) {
-                const occupancy = await RoomOccupancyUtils.calculateAccurateRoomOccupancy(
-                    residence._id.toString(),
-                    room.roomNumber
-                );
-                if (occupancy.currentOccupancy > 0) {
-                    occupiedRooms++;
+                if (occupancyRate < lowOccupancyThreshold) {
+                    alerts.push({
+                        type: 'low_occupancy',
+                        severity: 'medium',
+                        message: `Low occupancy alert at ${property.name}`,
+                        residenceId: property.residenceId,
+                        residenceName: property.name,
+                        occupancyRate: occupancyRate,
+                        threshold: lowOccupancyThreshold
+                    });
                 }
-            }
+            });
+        } else {
+            // Fallback: Calculate occupancy if propertyPerformance not provided
+            // OPTIMIZED: Use single aggregation query instead of per-room queries
+            const residenceIds = residences.map(r => r._id);
+            const now = new Date();
+            
+            const activeApplications = await Application.find({
+                $or: residences.map(r => ({
+                    $or: [
+                        { residenceId: r._id },
+                        { 'allocatedRoomDetails.residenceId': r._id.toString() },
+                        { residence: r._id }
+                    ]
+                })),
+                status: { $in: ['approved', 'allocated', 'active', 'enrolled'] },
+                $and: [
+                    {
+                        $or: [
+                            { endDate: null },
+                            { endDate: { $gte: now } }
+                        ]
+                    },
+                    {
+                        $or: [
+                            { startDate: null },
+                            { startDate: { $lte: now } }
+                        ]
+                    }
+                ]
+            }).select('residenceId allocatedRoomDetails residence allocatedRoom').lean();
+            
+            // Group by residence and calculate occupancy
+            const occupancyByResidence = {};
+            residences.forEach(residence => {
+                const resId = residence._id.toString();
+                occupancyByResidence[resId] = {
+                    occupiedRooms: new Set(),
+                    totalRooms: residence.rooms.length
+                };
+            });
+            
+            activeApplications.forEach(app => {
+                const resId = app.residenceId?.toString() || 
+                             app.allocatedRoomDetails?.residenceId?.toString() ||
+                             app.residence?.toString();
+                if (resId && occupancyByResidence[resId] && app.allocatedRoom) {
+                    occupancyByResidence[resId].occupiedRooms.add(app.allocatedRoom);
+                }
+            });
+            
+            // Generate alerts
+            residences.forEach(residence => {
+                const resId = residence._id.toString();
+                const data = occupancyByResidence[resId] || { occupiedRooms: new Set(), totalRooms: 0 };
+                const occupiedRooms = data.occupiedRooms.size;
+                const occupancyRate = data.totalRooms > 0 ? (occupiedRooms / data.totalRooms) * 100 : 0;
+                const lowOccupancyThreshold = 50;
 
-            const occupancyRate = totalRooms > 0 ? (occupiedRooms / totalRooms) * 100 : 0;
-            const lowOccupancyThreshold = 50; // 50% threshold
-
-            if (occupancyRate < lowOccupancyThreshold) {
-                alerts.push({
-                    type: 'low_occupancy',
-                    severity: 'medium',
-                    message: `Low occupancy alert at ${residence.name}`,
-                    residenceId: residence._id,
-                    residenceName: residence.name,
-                    occupancyRate: Math.round(occupancyRate),
-                    threshold: lowOccupancyThreshold
-                });
-            }
+                if (occupancyRate < lowOccupancyThreshold) {
+                    alerts.push({
+                        type: 'low_occupancy',
+                        severity: 'medium',
+                        message: `Low occupancy alert at ${residence.name}`,
+                        residenceId: residence._id,
+                        residenceName: residence.name,
+                        occupancyRate: Math.round(occupancyRate),
+                        threshold: lowOccupancyThreshold
+                    });
+                }
+            });
         }
 
     } catch (error) {

@@ -8,6 +8,7 @@ const YAML = require('yamljs');
 const path = require('path');
 const { initCronJobs } = require('./utils/cronJobs');
 const { auditMiddleware } = require('./middleware/auditMiddleware');
+const { performanceMonitor } = require('./middleware/performanceMiddleware');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 // Load Swagger document
@@ -218,6 +219,13 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Add audit middleware to log all API requests
 app.use(auditMiddleware);
+
+// Add performance monitoring middleware to track slow requests
+app.use(performanceMonitor);
+
+// Add request deduplication middleware to prevent duplicate concurrent requests
+const requestDeduplication = require('./middleware/requestDeduplication');
+app.use(requestDeduplication);
 
 // Add timeout middleware for file upload routes
 app.use('/api/student/payments', (req, res, next) => {

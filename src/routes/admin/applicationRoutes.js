@@ -24,10 +24,18 @@ const updateStatusValidation = [
 router.get('/', auth, checkAdminOrFinance, getApplications);
 
 // Get pending applications count (must be before /:id route)
+// OPTIMIZED: Added caching to reduce database load
 router.get('/pending-count', auth, checkAdminOrFinance, async (req, res) => {
     try {
         const Application = require('../../models/Application');
-        const count = await Application.countDocuments({ status: 'pending' });
+        const cacheService = require('../../services/cacheService');
+        const cacheKey = 'applications-pending-count';
+        
+        // Try cache first (60 second TTL)
+        const count = await cacheService.getOrSet(cacheKey, 60, async () => {
+            return await Application.countDocuments({ status: 'pending' });
+        });
+        
         res.json({ count });
     } catch (error) {
         console.error('Error getting pending applications count:', error);

@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Transaction = require('../models/Transaction');
 const TransactionEntry = require('../models/TransactionEntry');
 const Account = require('../models/Account');
+const { cache } = require('../utils/cache');
 
 class AccountingService {
     /**
@@ -510,6 +511,13 @@ class AccountingService {
      */
     static async generateMonthlyIncomeStatement(month, year, residenceId = null) {
         try {
+            // Check cache first
+            const cacheKey = `income-statement:${month || 'annual'}:${year}:${residenceId || 'all'}`;
+            const cached = cache.get(cacheKey);
+            if (cached) {
+                return cached;
+            }
+            
             // Handle annual summary (when month is null)
             if (month === null) {
                 console.log(`📊 Generating Annual Income Statement for ${year}${residenceId ? ` - Residence: ${residenceId}` : ''}...`);
@@ -529,7 +537,7 @@ class AccountingService {
                     query['residence'] = residenceId;
                 }
                 
-                const accrualEntries = await TransactionEntry.find(query);
+                const accrualEntries = await TransactionEntry.find(query).lean();
                 
                 console.log(`📊 Found ${accrualEntries.length} accrual entries for ${year}${residenceId ? ` - Residence: ${residenceId}` : ''}`);
                 
@@ -564,7 +572,7 @@ class AccountingService {
                     expenseQuery['residence'] = residenceId;
                 }
                 
-                const expenseEntries = await TransactionEntry.find(expenseQuery);
+                const expenseEntries = await TransactionEntry.find(expenseQuery).lean();
                 
                 for (const entry of expenseEntries) {
                     if (entry.entries && Array.isArray(entry.entries)) {
@@ -582,7 +590,7 @@ class AccountingService {
                 
                 console.log(`📊 Annual Calculated: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total $${totalRevenue}`);
                 
-                return {
+                const result = {
                     month: null,
                     year,
                     period: `${year}`,
@@ -606,6 +614,10 @@ class AccountingService {
                         totalAccrualEntries: accrualEntries.length
                     }
                 };
+                
+                // Cache the result for 5 minutes
+                cache.set(cacheKey, result, 300000);
+                return result;
             }
             
             // Handle monthly summary (existing logic)
@@ -649,7 +661,7 @@ class AccountingService {
                 query['residence'] = residenceId;
             }
             
-            const accrualEntries = await TransactionEntry.find(query);
+            const accrualEntries = await TransactionEntry.find(query).lean();
             
             console.log(`📊 Found ${accrualEntries.length} accrual entries for ${month}/${year}${residenceId ? ` - Residence: ${residenceId}` : ''}`);
             
@@ -687,7 +699,7 @@ class AccountingService {
                 expenseQuery['residence'] = residenceId;
             }
             
-            const expenseEntries = await TransactionEntry.find(expenseQuery);
+            const expenseEntries = await TransactionEntry.find(expenseQuery).lean();
             
             console.log(`📊 Found ${expenseEntries.length} expense entries for ${month}/${year} with date range: ${monthStart.toISOString()} to ${monthEnd.toISOString()}`);
             
@@ -709,7 +721,7 @@ class AccountingService {
             
             console.log(`📊 Calculated: Rental $${totalRentalIncome}, Admin $${totalAdminIncome}, Total Revenue $${totalRevenue}, Net Income $${netIncome.toFixed(2)}`);
             
-            return {
+            const result = {
                 month,
                 year,
                 period: `${month}/${year}`,
@@ -732,6 +744,10 @@ class AccountingService {
                     totalExpenses: totalExpenses
                 }
             };
+            
+            // Cache the result for 5 minutes
+            cache.set(cacheKey, result, 300000);
+            return result;
             
         } catch (error) {
             console.error('❌ Error generating income statement:', error);

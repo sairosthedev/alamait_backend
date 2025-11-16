@@ -4053,6 +4053,14 @@ class FinancialReportingService {
      */
     static async generateComprehensiveMonthlyBalanceSheet(period, basis = 'cash', residence = null) {
         try {
+            // Check cache first
+            const { cache } = require('../utils/cache');
+            const cacheKey = `comprehensive-balance-sheet:${period}:${basis}:${residence || 'all'}`;
+            const cached = cache.get(cacheKey);
+            if (cached) {
+                return cached;
+            }
+            
             const startDate = new Date(`${period}-01-01`);
             const endDate = new Date(`${period}-12-31`);
             
@@ -4101,7 +4109,21 @@ class FinancialReportingService {
                     query.residence = new mongoose.Types.ObjectId(residence);
                 }
                 
-                const entries = await TransactionEntry.find(query).populate('residence');
+                // OPTIMIZED: Use lean() and aggregation instead of populate()
+                const entries = await TransactionEntry.find(query).lean();
+                
+                // OPTIMIZED: Batch fetch residences if needed
+                const residenceIds = [...new Set(entries.map(e => e.residence).filter(Boolean))];
+                const residenceMap = new Map();
+                if (residenceIds.length > 0) {
+                    const Residence = require('../models/Residence');
+                    const residences = await Residence.find({ _id: { $in: residenceIds } })
+                        .select('_id name')
+                        .lean();
+                    residences.forEach(r => {
+                        residenceMap.set(r._id.toString(), r.name || 'Unknown Residence');
+                    });
+                }
                 
                 console.log(`Found ${entries.length} transaction entries up to ${monthNames[monthIndex]}`);
                 
@@ -4110,8 +4132,8 @@ class FinancialReportingService {
                 const residences = new Set();
                 
                 entries.forEach(entry => {
-                    const residence = entry.residence;
-                    const residenceName = residence ? (residence.name || residence.residenceName || 'Unknown Residence') : 'Unknown Residence';
+                    const residenceId = entry.residence?.toString() || entry.residence;
+                    const residenceName = residenceMap.get(residenceId) || 'Unknown Residence';
                     residences.add(residenceName);
                     
                     if (entry.entries && entry.entries.length > 0) {
@@ -4249,7 +4271,7 @@ class FinancialReportingService {
                      monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_equity, 0)))) < 0.01
             };
             
-            return {
+            const result = {
                 period,
                 basis,
                 monthly_breakdown: monthlyBreakdown,
@@ -4264,6 +4286,10 @@ class FinancialReportingService {
                     note: "Shows monthly balance sheet changes (like income statement), not cumulative balances"
                 }
             };
+            
+            // Cache the result for 5 minutes
+            cache.set(cacheKey, result, 300000);
+            return result;
             
         } catch (error) {
             console.error('Error generating comprehensive monthly balance sheet:', error);
