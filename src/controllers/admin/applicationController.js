@@ -10,6 +10,8 @@ const Docxtemplater = require('docxtemplater');
 const { getLeaseTemplateAttachment } = require('../../services/leaseTemplateService');
 const ExpiredStudent = require('../../models/ExpiredStudent');
 const EmailNotificationService = require('../../services/emailNotificationService');
+const Payment = require('../../models/Payment');
+const { getStudentInfo } = require('../../utils/studentUtils');
 
 // Get all applications with room status
 exports.getApplications = async (req, res) => {
@@ -159,6 +161,110 @@ exports.getApplicationById = async (req, res) => {
             priceDifference = requestedRoomDetails.price - currentRoomDetails.price;
         }
         
+        // Get payment history for the student (handles both active and expired students)
+        let payments = [];
+        let studentId = null;
+        
+        // Try to get student ID from application
+        if (application.student) {
+            studentId = application.student.toString();
+        } else {
+            // If no student ID, try to find student by email (including expired students)
+            const studentByEmail = await User.findOne({ email: application.email }).select('_id');
+            if (studentByEmail) {
+                studentId = studentByEmail._id.toString();
+            } else {
+                // Try to find expired student by email using getStudentInfo
+                // We'll search payments by email as fallback
+            }
+        }
+
+        // Build payment query - try multiple ways to find payments
+        const paymentQuery = {
+            $or: [
+                { email: application.email }
+            ]
+        };
+        
+        if (studentId) {
+            paymentQuery.$or.push(
+                { student: studentId },
+                { user: studentId }
+            );
+        }
+
+        // Get payments for the student (works for both active and expired students)
+        payments = await Payment.find(paymentQuery)
+            .populate('residence', 'name')
+            .populate('createdBy', 'firstName lastName')
+            .populate('updatedBy', 'firstName lastName')
+            .populate('proofOfPayment.verifiedBy', 'firstName lastName')
+            .sort({ date: -1 })
+            .lean();
+
+        // Format payments for response
+        const formattedPayments = payments.map(payment => {
+            let paymentType = 'Other';
+            
+            // Determine payment type
+            if (payment.rentAmount > 0 && payment.adminFee === 0 && payment.deposit === 0) {
+                paymentType = 'Rent';
+            } else if (payment.deposit > 0 && payment.rentAmount === 0 && payment.adminFee === 0) {
+                paymentType = 'Deposit';
+            } else if (payment.adminFee > 0 && payment.rentAmount === 0 && payment.deposit === 0) {
+                paymentType = 'Admin Fee';
+            } else if (payment.rentAmount > 0 && payment.adminFee > 0 && payment.deposit === 0) {
+                paymentType = 'Rent + Admin Fee';
+            } else if (payment.rentAmount > 0 && payment.deposit > 0 && payment.adminFee === 0) {
+                paymentType = 'Rent + Deposit';
+            } else if (payment.rentAmount > 0 && payment.adminFee > 0 && payment.deposit > 0) {
+                paymentType = 'Rent + Admin Fee + Deposit';
+            } else if (payment.adminFee > 0 && payment.deposit > 0 && payment.rentAmount === 0) {
+                paymentType = 'Admin Fee + Deposit';
+            }
+            
+            const admin = payment.createdBy ? 
+                `${payment.createdBy.firstName} ${payment.createdBy.lastName}` : 
+                'System';
+            
+            return {
+                id: payment.paymentId,
+                student: `${application.firstName} ${application.lastName}`,
+                admin: admin,
+                residence: payment.residence ? payment.residence.name : 'Unknown',
+                room: payment.room || 'Not Assigned',
+                roomType: payment.roomType || '',
+                paymentMonth: payment.paymentMonth || '',
+                rentAmount: payment.rentAmount || 0,
+                adminFee: payment.adminFee || 0,
+                deposit: payment.deposit || 0,
+                amount: payment.totalAmount || 0,
+                datePaid: payment.date ? payment.date.toISOString().split('T')[0] : null,
+                paymentType: paymentType,
+                status: payment.status,
+                proof: payment.proofOfPayment?.fileUrl || null,
+                method: payment.method || '',
+                description: payment.description || '',
+                studentId: studentId,
+                residenceId: payment.residence ? payment.residence._id : null,
+                applicationStatus: payment.applicationStatus || null,
+                clarificationRequests: payment.clarificationRequests || []
+            };
+        });
+
+        // Calculate payment summary statistics
+        const totalPaid = payments
+            .filter(p => ['Confirmed', 'Verified'].includes(p.status))
+            .reduce((sum, p) => sum + (p.totalAmount || 0), 0);
+        
+        const totalPending = payments
+            .filter(p => p.status === 'Pending')
+            .reduce((sum, p) => sum + (p.totalAmount || 0), 0);
+
+        const totalRejected = payments
+            .filter(p => p.status === 'Rejected')
+            .reduce((sum, p) => sum + (p.totalAmount || 0), 0);
+
         // Transform application to match frontend format
         const transformedApplication = {
             id: application._id,
@@ -188,7 +294,16 @@ exports.getApplicationById = async (req, res) => {
             residence: application.residence,
             residenceId: application.residence,
             // Include emergency contact from additionalInfo
-            emergencyContact: application.additionalInfo?.emergencyContact || null
+            emergencyContact: application.additionalInfo?.emergencyContact || null,
+            // Include payment history
+            payments: formattedPayments,
+            paymentSummary: {
+                totalPayments: payments.length,
+                totalPaid,
+                totalPending,
+                totalRejected,
+                totalAmount: totalPaid + totalPending + totalRejected
+            }
         };
 
         res.json({

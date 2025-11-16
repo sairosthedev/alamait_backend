@@ -22,6 +22,7 @@ const DebtorDataSyncService = require('../../services/debtorDataSyncService');
 const { backfillTransactionsForDebtor } = require('../../services/transactionBackfillService');
 const ExcelJS = require('exceljs');
 const StudentDeletionService = require('../../services/studentDeletionService');
+const { getStudentInfo } = require('../../utils/studentUtils');
 
 // Helper function to safely format dates
 const safeDateFormat = (date) => {
@@ -102,27 +103,6 @@ exports.getAllStudents = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in getAllStudents:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-};
-
-// Get student by ID
-exports.getStudentById = async (req, res) => {
-    try {
-        const { studentId } = req.params;
-        
-        const student = await User.findById(studentId)
-            .select('-password')
-            .populate('residence', 'name address')
-            .populate('currentBooking', 'totalAmount paymentStatus status');
-            
-        if (!student) {
-            return res.status(404).json({ error: 'Student not found' });
-        }
-        
-        res.json({ student });
-    } catch (error) {
-        console.error('Error in getStudentById:', error);
         res.status(500).json({ error: 'Server error' });
     }
 };
@@ -220,19 +200,70 @@ exports.updateStudent = async (req, res) => {
     }
 };
 
-// Get student details by ID
+// Get student details by ID (handles both active and expired students)
 exports.getStudentById = async (req, res) => {
     try {
-        const student = await User.findOne({
-            _id: req.params.studentId,
+        const { studentId } = req.params;
+        
+        // First try to get from active User collection with full details
+        let student = await User.findOne({
+            _id: studentId,
             role: 'student'
-        }).select('-password');
+        })
+        .select('-password')
+        .populate('residence', 'name address')
+        .populate('currentBooking', 'totalAmount paymentStatus status')
+        .lean();
 
-        if (!student) {
-            return res.status(404).json({ error: 'Student not found' });
+        if (student) {
+            // Add flag to indicate student is active
+            student.isExpired = false;
+            student.status = student.status || 'active';
+            return res.json(student);
         }
 
-        res.json(student);
+        // If not found in active users, check expired students
+        const studentInfo = await getStudentInfo(studentId);
+        
+        if (studentInfo) {
+            // Populate residence if it's an ObjectId
+            let residenceData = null;
+            if (studentInfo.residence) {
+                if (typeof studentInfo.residence === 'object' && studentInfo.residence.name) {
+                    residenceData = studentInfo.residence;
+                } else {
+                    try {
+                        residenceData = await Residence.findById(studentInfo.residence)
+                            .select('name address')
+                            .lean();
+                    } catch (err) {
+                        console.error('Error populating residence:', err);
+                    }
+                }
+            }
+
+            // Format expired student data
+            const expiredStudentData = {
+                _id: studentInfo._id,
+                firstName: studentInfo.firstName,
+                lastName: studentInfo.lastName,
+                email: studentInfo.email,
+                phone: studentInfo.phone,
+                role: studentInfo.role,
+                status: 'expired',
+                isExpired: true,
+                roomValidUntil: studentInfo.roomValidUntil,
+                currentRoom: studentInfo.currentRoom,
+                residence: residenceData,
+                expiredAt: studentInfo.expiredAt,
+                expirationReason: studentInfo.expirationReason
+            };
+
+            return res.json(expiredStudentData);
+        }
+
+        // Student not found in either collection
+        return res.status(404).json({ error: 'Student not found' });
     } catch (error) {
         console.error('Error in getStudentById:', error);
         res.status(500).json({ error: 'Server error' });
