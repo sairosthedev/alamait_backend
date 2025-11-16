@@ -1486,11 +1486,39 @@ exports.getAccountTransactionDetails = async (req, res) => {
         const uniqueStudents = new Set();
         const accountBreakdown = {}; // Track transactions by account code
         
+        // AR-related transaction sources that should be included
+        const arRelatedSources = ['rental_accrual', 'payment', 'advance_payment', 'advance_payment_application', 'accounts_receivable_collection'];
+        
         // Process transactions with proper async handling
         for (const transaction of transactions) {
             // Convert aggregation result to Mongoose document-like structure for compatibility
             if (!transaction.entries || !Array.isArray(transaction.entries)) {
                 continue;
+            }
+            
+            // For AR accounts (1100 or 1100-*), only show transactions that are AR-related
+            // This ensures we don't show unrelated transactions that happen to have an AR entry
+            if (accountCode === '1100' || accountCode.startsWith('1100-')) {
+                // Include if source is explicitly AR-related
+                const isARSource = arRelatedSources.includes(transaction.source);
+                
+                // If not an AR source, check if ALL entries are AR-related
+                // AR-related entries: AR (1100-*), Income (4000-*), Cash (1000-*), Deferred Income (2500-*), AP (2000-*)
+                if (!isARSource) {
+                    const allEntriesAreARRelated = transaction.entries.every(entry => {
+                        const code = entry.accountCode || '';
+                        return code.startsWith('1100') || // AR accounts
+                               code.startsWith('4000') || // Income accounts
+                               code.startsWith('1000') || // Cash accounts
+                               code.startsWith('2500') || // Deferred Income
+                               code.startsWith('2000');   // Accounts Payable (for advance payments)
+                    });
+                    
+                    // Skip this transaction if it's not AR-related
+                    if (!allEntriesAreARRelated) {
+                        continue;
+                    }
+                }
             }
             
             // Filter entries for all relevant account codes (parent + children)
@@ -1501,40 +1529,54 @@ exports.getAccountTransactionDetails = async (req, res) => {
                 return allAccountCodes.includes(entry.accountCode);
             });
             
+            // Skip if no relevant entries found
+            if (relevantEntries.length === 0) {
+                continue;
+            }
+            
+            // Calculate totals for all relevant entries in this transaction
+            let transactionDebitTotal = 0;
+            let transactionCreditTotal = 0;
             for (const entry of relevantEntries) {
-                const debitAmount = entry.debit || 0;
-                const creditAmount = entry.credit || 0;
+                transactionDebitTotal += entry.debit || 0;
+                transactionCreditTotal += entry.credit || 0;
+            }
+            
+            // Process once per transaction (not per entry) to avoid duplicates
+            const debitAmount = transactionDebitTotal;
+            const creditAmount = transactionCreditTotal;
+            
+            // Apply sourceType filtering if specified
+            if (sourceType) {
+                const description = transaction.description?.toLowerCase() || '';
+                const sourceTypeLower = sourceType.toLowerCase();
                 
-                // Apply sourceType filtering if specified
-                if (sourceType) {
-                    const description = transaction.description?.toLowerCase() || '';
-                    const sourceTypeLower = sourceType.toLowerCase();
-                    
-                    let shouldInclude = false;
-                    
-                    if (sourceTypeLower === 'deposits' || sourceTypeLower === 'security deposits') {
-                        shouldInclude = description.includes('deposit') || description.includes('security');
-                    } else if (sourceTypeLower === 'payables' || sourceTypeLower === 'accounts payable') {
-                        shouldInclude = description.includes('payable') || description.includes('vendor') || 
-                                      description.includes('supplier') || description.includes('bill') ||
-                                      description.includes('expense');
-                    } else if (sourceTypeLower === 'receivables' || sourceTypeLower === 'accounts receivable') {
-                        shouldInclude = description.includes('receivable') || description.includes('rent') ||
-                                      description.includes('rental') || description.includes('outstanding');
-                    } else if (sourceTypeLower === 'cash') {
-                        shouldInclude = description.includes('payment') || description.includes('receipt') ||
-                                      description.includes('cash') || description.includes('bank');
-                    }
-                    
-                    if (!shouldInclude) {
-                        return; // Skip this transaction if it doesn't match the sourceType filter
-                    }
+                let shouldInclude = false;
+                
+                if (sourceTypeLower === 'deposits' || sourceTypeLower === 'security deposits') {
+                    shouldInclude = description.includes('deposit') || description.includes('security');
+                } else if (sourceTypeLower === 'payables' || sourceTypeLower === 'accounts payable') {
+                    shouldInclude = description.includes('payable') || description.includes('vendor') || 
+                                  description.includes('supplier') || description.includes('bill') ||
+                                  description.includes('expense');
+                } else if (sourceTypeLower === 'receivables' || sourceTypeLower === 'accounts receivable') {
+                    shouldInclude = description.includes('receivable') || description.includes('rent') ||
+                                  description.includes('rental') || description.includes('outstanding');
+                } else if (sourceTypeLower === 'cash') {
+                    shouldInclude = description.includes('payment') || description.includes('receipt') ||
+                                  description.includes('cash') || description.includes('bank');
                 }
                 
-                totalDebits += debitAmount;
-                totalCredits += creditAmount;
-                
-                // Track breakdown by account code
+                if (!shouldInclude) {
+                    continue; // Skip this transaction if it doesn't match the sourceType filter
+                }
+            }
+            
+            totalDebits += debitAmount;
+            totalCredits += creditAmount;
+            
+            // Track breakdown by account code (aggregate across all relevant entries)
+            for (const entry of relevantEntries) {
                 if (!accountBreakdown[entry.accountCode]) {
                     accountBreakdown[entry.accountCode] = {
                         totalDebits: 0,
@@ -1542,67 +1584,80 @@ exports.getAccountTransactionDetails = async (req, res) => {
                         transactionCount: 0
                     };
                 }
-                accountBreakdown[entry.accountCode].totalDebits += debitAmount;
-                accountBreakdown[entry.accountCode].totalCredits += creditAmount;
-                accountBreakdown[entry.accountCode].transactionCount += 1;
-                
-                // Get student/debtor/vendor/expense information from aggregated lookup results
-                let studentName = 'N/A';
-                let debtorName = 'N/A';
-                let vendorName = 'N/A';
-                let expenseName = 'N/A';
-                
-                // Debug: Log transaction details
-                if (transaction.source === 'advance_payment' || transaction.source === 'payment' || transaction.sourceModel === 'Payment') {
-                    console.log(`🔍 Transaction ${transaction.transactionId}:`, {
-                        source: transaction.source,
-                        sourceModel: transaction.sourceModel,
-                        sourceId: transaction.sourceId,
-                        hasMetadata: !!transaction.metadata,
-                        metadataStudentId: transaction.metadata?.studentId,
-                        metadataDebtorId: transaction.metadata?.debtorId,
-                        hasPaymentSource: !!(transaction.paymentSource && transaction.paymentSource.length > 0),
-                        hasAdvancePaymentSource: !!(transaction.advancePaymentSource && transaction.advancePaymentSource.length > 0),
-                        hasMetadataStudent: !!(transaction.metadataStudent && transaction.metadataStudent.length > 0),
-                        hasMetadataDebtor: !!(transaction.metadataDebtor && transaction.metadataDebtor.length > 0)
-                    });
-                }
-                
-                // Extract from aggregated lookup results
-                // Vendor source
-                if (transaction.vendorSource && transaction.vendorSource.length > 0) {
-                    const vendor = transaction.vendorSource[0];
+                accountBreakdown[entry.accountCode].totalDebits += entry.debit || 0;
+                accountBreakdown[entry.accountCode].totalCredits += entry.credit || 0;
+            }
+            // Count transaction once (not per entry) - use first relevant entry's account code
+            const primaryAccountCodeForBreakdown = relevantEntries[0]?.accountCode || accountCode;
+            if (!accountBreakdown[primaryAccountCodeForBreakdown]) {
+                accountBreakdown[primaryAccountCodeForBreakdown] = {
+                    totalDebits: 0,
+                    totalCredits: 0,
+                    transactionCount: 0
+                };
+            }
+            accountBreakdown[primaryAccountCodeForBreakdown].transactionCount += 1;
+            
+            // Store primary account code for later use (will be redeclared below, but that's okay since it's the same value)
+            const primaryAccountCode = primaryAccountCodeForBreakdown;
+            
+            // Get student/debtor/vendor/expense information from aggregated lookup results
+            let studentName = 'N/A';
+            let debtorName = 'N/A';
+            let vendorName = 'N/A';
+            let expenseName = 'N/A';
+            
+            // Debug: Log transaction details
+            if (transaction.source === 'advance_payment' || transaction.source === 'payment' || transaction.sourceModel === 'Payment') {
+                console.log(`🔍 Transaction ${transaction.transactionId}:`, {
+                    source: transaction.source,
+                    sourceModel: transaction.sourceModel,
+                    sourceId: transaction.sourceId,
+                    hasMetadata: !!transaction.metadata,
+                    metadataStudentId: transaction.metadata?.studentId,
+                    metadataDebtorId: transaction.metadata?.debtorId,
+                    hasPaymentSource: !!(transaction.paymentSource && transaction.paymentSource.length > 0),
+                    hasAdvancePaymentSource: !!(transaction.advancePaymentSource && transaction.advancePaymentSource.length > 0),
+                    hasMetadataStudent: !!(transaction.metadataStudent && transaction.metadataStudent.length > 0),
+                    hasMetadataDebtor: !!(transaction.metadataDebtor && transaction.metadataDebtor.length > 0)
+                });
+            }
+            
+            // Extract from aggregated lookup results
+            // Vendor source
+            if (transaction.vendorSource && transaction.vendorSource.length > 0) {
+                const vendor = transaction.vendorSource[0];
+                vendorName = vendor.businessName || vendor.name || vendor.vendorName || 'N/A';
+            }
+            
+            // Expense source
+            if (transaction.expenseSource && transaction.expenseSource.length > 0) {
+                const expense = transaction.expenseSource[0];
+                expenseName = expense.expenseName || expense.name || expense.description || 'N/A';
+                // Check for expense vendor
+                if (transaction.expenseVendor && transaction.expenseVendor.length > 0) {
+                    const vendor = transaction.expenseVendor[0];
                     vendorName = vendor.businessName || vendor.name || vendor.vendorName || 'N/A';
                 }
-                
-                // Expense source
-                if (transaction.expenseSource && transaction.expenseSource.length > 0) {
-                    const expense = transaction.expenseSource[0];
-                    expenseName = expense.expenseName || expense.name || expense.description || 'N/A';
-                    // Check for expense vendor
-                    if (transaction.expenseVendor && transaction.expenseVendor.length > 0) {
-                        const vendor = transaction.expenseVendor[0];
-                        vendorName = vendor.businessName || vendor.name || vendor.vendorName || 'N/A';
-                    }
+            }
+            
+            // Debtor source
+            if (transaction.debtorSource && transaction.debtorSource.length > 0) {
+                const debtor = transaction.debtorSource[0];
+                if (transaction.debtorUser && transaction.debtorUser.length > 0) {
+                    const user = transaction.debtorUser[0];
+                    debtorName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || debtor.debtorCode || 'N/A';
+                } else {
+                    debtorName = debtor.debtorCode || debtor.name || 'N/A';
                 }
-                
-                // Debtor source
-                if (transaction.debtorSource && transaction.debtorSource.length > 0) {
-                    const debtor = transaction.debtorSource[0];
-                    if (transaction.debtorUser && transaction.debtorUser.length > 0) {
-                        const user = transaction.debtorUser[0];
-                        debtorName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || debtor.debtorCode || 'N/A';
-                    } else {
-                        debtorName = debtor.debtorCode || debtor.name || 'N/A';
-                    }
-                    if (debtorName !== 'N/A') {
-                        uniqueStudents.add(debtorName);
-                    }
+                if (debtorName !== 'N/A') {
+                    uniqueStudents.add(debtorName);
                 }
-                
-                // Reference Payment source (for advance_payment where sourceId is null but reference points to Payment)
-                // This should be checked BEFORE paymentSource since it's more specific
-                if ((studentName === 'N/A' && debtorName === 'N/A') && transaction.source === 'advance_payment' && transaction.reference && transaction.referencePaymentSource && transaction.referencePaymentSource.length > 0) {
+            }
+            
+            // Reference Payment source (for advance_payment where sourceId is null but reference points to Payment)
+            // This should be checked BEFORE paymentSource since it's more specific
+            if ((studentName === 'N/A' && debtorName === 'N/A') && transaction.source === 'advance_payment' && transaction.reference && transaction.referencePaymentSource && transaction.referencePaymentSource.length > 0) {
                     const refPayment = transaction.referencePaymentSource[0];
                     console.log(`💳 Reference Payment source found for ${transaction.transactionId}:`, {
                         paymentId: refPayment._id,
@@ -2312,65 +2367,66 @@ exports.getAccountTransactionDetails = async (req, res) => {
                     }
                 }
                 
-                // Determine if this is a child account transaction
-                const isChildAccount = entry.accountCode !== accountCode;
-                const childAccountInfo = childAccounts.find(child => child.code === entry.accountCode);
+            // Determine primary account code (use first relevant entry)
+            const primaryEntry = relevantEntries[0];
+            // primaryAccountCode already declared above, reuse it
+            const isChildAccount = primaryAccountCode !== accountCode;
+            const childAccountInfo = childAccounts.find(child => child.code === primaryAccountCode);
+            
+            // Get all entries for full double-entry view (like cash flow)
+            const Account = require('../../models/Account');
+            const entriesWithAccountNames = await Promise.all((transaction.entries || []).map(async (txEntry) => {
+                let txAccountName = txEntry.accountName;
+                let txAccountType = txEntry.accountType;
                 
-                // Get all entries for full double-entry view (like cash flow)
-                const Account = require('../../models/Account');
-                const entriesWithAccountNames = await Promise.all((transaction.entries || []).map(async (txEntry) => {
-                    let txAccountName = txEntry.accountName;
-                    let txAccountType = txEntry.accountType;
-                    
-                    // If account name is not in entry, fetch from Account model
-                    if (!txAccountName && txEntry.accountCode) {
-                        try {
-                            const accountDoc = await Account.findOne({ code: txEntry.accountCode }).select('name type').lean();
-                            if (accountDoc) {
-                                txAccountName = accountDoc.name;
-                                txAccountType = accountDoc.type;
-                            }
-                        } catch (err) {
-                            // Ignore errors
+                // If account name is not in entry, fetch from Account model
+                if (!txAccountName && txEntry.accountCode) {
+                    try {
+                        const accountDoc = await Account.findOne({ code: txEntry.accountCode }).select('name type').lean();
+                        if (accountDoc) {
+                            txAccountName = accountDoc.name;
+                            txAccountType = accountDoc.type;
                         }
+                    } catch (err) {
+                        // Ignore errors
                     }
-                    
-                    return {
-                        accountCode: txEntry.accountCode,
-                        accountName: txAccountName || txEntry.accountCode,
-                        accountType: txAccountType || 'Unknown',
-                        debit: txEntry.debit || 0,
-                        credit: txEntry.credit || 0,
-                        description: txEntry.description || transaction.description || ''
-                    };
-                }));
+                }
                 
-                accountTransactions.push({
-                    transactionId: transaction.transactionId || transaction._id,
-                    date: transaction.date,
-                    amount: debitAmount || creditAmount,
-                    type: debitAmount > 0 ? 'debit' : 'credit',
-                    description: transaction.description,
-                    accountCode: entry.accountCode,
-                    accountName: entry.accountName,
-                    debtorName,
-                    studentName,
-                    vendorName,
-                    expenseName,
-                    reference: transaction.reference,
-                    source: transaction.source,
-                    // Additional balance sheet specific fields
-                    balance: debitAmount - creditAmount, // Net effect on account
-                    debit: debitAmount,
-                    credit: creditAmount,
-                    // Child account information
-                    isChildAccount,
-                    childAccountName: isChildAccount ? (childAccountInfo?.name || 'Unknown Child Account') : null,
-                    parentAccountCode: isChildAccount ? accountCode : null,
-                    // Include all entries for full double-entry view (like cash flow)
-                    entries: entriesWithAccountNames
-                });
-            }
+                return {
+                    accountCode: txEntry.accountCode,
+                    accountName: txAccountName || txEntry.accountCode,
+                    accountType: txAccountType || 'Unknown',
+                    debit: txEntry.debit || 0,
+                    credit: txEntry.credit || 0,
+                    description: txEntry.description || transaction.description || ''
+                };
+            }));
+            
+            accountTransactions.push({
+                transactionId: transaction.transactionId || transaction._id,
+                date: transaction.date,
+                amount: debitAmount || creditAmount,
+                type: debitAmount > 0 ? 'debit' : 'credit',
+                description: transaction.description,
+                accountCode: primaryAccountCode,
+                accountName: primaryEntry?.accountName || 'Unknown',
+                debtorName,
+                studentName,
+                vendorName,
+                expenseName,
+                reference: transaction.reference,
+                source: transaction.source,
+                // Additional balance sheet specific fields
+                balance: debitAmount - creditAmount, // Net effect on account
+                debit: debitAmount,
+                credit: creditAmount,
+                // Child account information
+                isChildAccount,
+                childAccountName: isChildAccount ? (childAccountInfo?.name || 'Unknown Child Account') : null,
+                parentAccountCode: isChildAccount ? accountCode : null,
+                // Include all entries for full double-entry view (like cash flow)
+                entries: entriesWithAccountNames
+            });
         }
         
         // Sort transactions by date (newest first for balance sheet view)

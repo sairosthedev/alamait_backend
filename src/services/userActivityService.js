@@ -545,6 +545,20 @@ class UserActivityService {
                 // Ignore user fetch errors
             }
             
+            // Validate required fields before creating
+            if (!userId) {
+                console.error('❌ Cannot track activity: userId is required');
+                return null;
+            }
+            if (!sessionId) {
+                console.error('❌ Cannot track activity: sessionId is required');
+                return null;
+            }
+            if (!pagePath) {
+                console.error('❌ Cannot track activity: page is required');
+                return null;
+            }
+
             // Create UserActivity entry with enhanced details
             const activity = await UserActivity.create({
                 user: userId,
@@ -675,9 +689,24 @@ class UserActivityService {
                 errorMessage: errorMessage
             });
             
+            console.log(`✅ UserActivity tracked: ${activity.activityType} - ${activity.action} by user ${userId} on ${pagePath}`);
             return activity;
         } catch (error) {
-            console.error('Error tracking action:', error);
+            console.error('❌ Error tracking action:', error);
+            console.error('   UserId:', userId);
+            console.error('   Page:', pagePath);
+            console.error('   Action:', actionName);
+            console.error('   Error details:', {
+                message: error.message,
+                name: error.name,
+                stack: error.stack?.split('\n').slice(0, 5).join('\n')
+            });
+            
+            // Check if it's a validation error
+            if (error.name === 'ValidationError') {
+                console.error('   Validation errors:', error.errors);
+            }
+            
             return null;
         }
     }

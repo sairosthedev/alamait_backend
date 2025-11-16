@@ -46,6 +46,7 @@ const adminEventRoutes = require('./routes/admin/eventRoutes');
 const adminExpenseRoutes = require('./routes/admin/expenseRoutes');
 const adminIncomeRoutes = require('./routes/admin/incomeRoutes');
 const adminRequestRoutes = require('./routes/admin/requestRoutes');
+const adminDashboardRoutes = require('./routes/admin/dashboardRoutes');
 const financeResidenceRoutes = require('./routes/finance/residenceRoutes');
 const leaseTemplateRoutes = require('./routes/admin/leaseTemplateRoutes');
 const adminLeaseRoutes = require('./routes/admin/leaseRoutes');
@@ -403,6 +404,9 @@ app.use('/api/admin/students', studentStatusRoutes);
 // Payment Allocation routes (FIFO-based payment allocation system)
 const adminPaymentAllocationRoutes = require('./routes/admin/paymentAllocationRoutes');
 app.use('/api/admin/payment-allocation', adminPaymentAllocationRoutes);
+
+// Admin dashboard routes
+app.use('/api/admin/dashboard', adminDashboardRoutes);
 
 // Generic admin routes last
 app.use('/api/admin', adminRoutes);

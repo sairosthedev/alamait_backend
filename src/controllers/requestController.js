@@ -134,7 +134,7 @@ exports.getAllRequests = async (req, res) => {
         
         // Optimize query: Use lean() for better performance, select only needed fields
         const requests = await Request.find(query)
-            .select('title description type status priority category residence submittedBy student assignedTo quotations items approval createdAt updatedAt')
+            .select('title description type status priority category residence submittedBy student assignedTo quotations items approval totalEstimatedCost createdAt updatedAt')
             .populate('submittedBy', 'firstName lastName email role')
             .populate('student', 'firstName lastName email role')
             .populate('assignedTo._id', 'firstName lastName email role')

@@ -223,6 +223,9 @@ maintenanceSchema.index({ category: 1 });
 maintenanceSchema.index({ student: 1 });
 maintenanceSchema.index({ assignedTo: 1 });
 
+// Dashboard optimization indexes
+maintenanceSchema.index({ residence: 1, createdAt: 1 }); // For maintenance by residence by month
+
 // Add compound index for duplicate detection
 // This prevents multiple active requests for the same issue in the same room
 maintenanceSchema.index({ 

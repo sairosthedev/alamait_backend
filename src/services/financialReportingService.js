@@ -1943,7 +1943,7 @@ class FinancialReportingService {
                                 if (isAdvancePayment) {
                                     // Only include if transaction month matches current month
                                     if (txMonthKey === monthKey) {
-                                        deferredTotal += (line.credit || 0) - (line.debit || 0);
+                                deferredTotal += (line.credit || 0) - (line.debit || 0);
                                     }
                                 } else {
                                     // For non-advance payments, include all (they're already filtered by date)
@@ -1984,7 +1984,7 @@ class FinancialReportingService {
                                     }
                                 } else {
                                     // For non-advance payments, include all (they're already filtered by date)
-                                    deferredTotal += (line.credit || 0) - (line.debit || 0);
+                                deferredTotal += (line.credit || 0) - (line.debit || 0);
                                 }
                             } else if (line.accountCode && line.accountCode.match(/^100[0-9]/) || line.accountCode === '1000') {
                                 // Cash accounts - for advance payments, use transaction date
@@ -2079,7 +2079,7 @@ class FinancialReportingService {
                             console.log(`💳 Overriding deferred income (${account.code}) balance: ${finalDeferredTotal} (was: ${account.balance}) for ${monthName} ${period}`);
                             monthlyBalanceSheet[monthName].liabilities[section][account.accountName] = finalDeferredTotal;
                         } else {
-                            monthlyBalanceSheet[monthName].liabilities[section][account.accountName] = account.balance;
+                        monthlyBalanceSheet[monthName].liabilities[section][account.accountName] = account.balance;
                         }
                         monthlyBalanceSheet[monthName].liabilities.total += monthlyBalanceSheet[monthName].liabilities[section][account.accountName];
                     } else if (account.accountType === 'Equity' || account.accountType === 'equity') {
@@ -2541,16 +2541,16 @@ class FinancialReportingService {
                     
                     if (shouldInclude) {
                         entry.entries.forEach((line, lineIndex) => {
-                            const accountCode = line.accountCode;
-                            const accountName = line.accountName;
-                            const accountType = line.accountType;
-                            const debit = line.debit || 0;
-                            const credit = line.credit || 0;
-                            
-                            const key = `${accountCode} - ${accountName}`;
-                            
-                            // Find the account by code (not by code + name) to handle name mismatches
-                            const accountKey = Object.keys(accountBalances).find(k => k.startsWith(`${accountCode} -`));
+                        const accountCode = line.accountCode;
+                        const accountName = line.accountName;
+                        const accountType = line.accountType;
+                        const debit = line.debit || 0;
+                        const credit = line.credit || 0;
+                        
+                        const key = `${accountCode} - ${accountName}`;
+                        
+                        // Find the account by code (not by code + name) to handle name mismatches
+                        const accountKey = Object.keys(accountBalances).find(k => k.startsWith(`${accountCode} -`));
                             
                             const isTargetTx = entry.transactionId === 'TXN1761821259147EXJND';
                             
@@ -2569,15 +2569,15 @@ class FinancialReportingService {
                                     if (isTargetTx) {
                                         console.log(`   Balance before: ${beforeBalance}`);
                                     }
-                                    
-                                    // Update balance if account exists in chart of accounts
-                                    accountBalances[accountKey].debit_total += debit;
-                                    accountBalances[accountKey].credit_total += credit;
-                                    
-                                    // Calculate balance based on account type
-                                    if (accountType === 'Asset' || accountType === 'Expense') {
-                                        accountBalances[accountKey].balance += debit - credit;
-                                    } else {
+                        
+                        // Update balance if account exists in chart of accounts
+                            accountBalances[accountKey].debit_total += debit;
+                            accountBalances[accountKey].credit_total += credit;
+                            
+                            // Calculate balance based on account type
+                            if (accountType === 'Asset' || accountType === 'Expense') {
+                                accountBalances[accountKey].balance += debit - credit;
+                            } else {
                                         // For liabilities (like 2200), credit increases the balance
                                         accountBalances[accountKey].balance += credit - debit;
                                     }
@@ -2603,10 +2603,10 @@ class FinancialReportingService {
                                 if (accountType === 'Asset' || accountType === 'Expense') {
                                     accountBalances[accountKey].balance += debit - credit;
                                 } else {
-                                    accountBalances[accountKey].balance += credit - debit;
-                                }
+                                accountBalances[accountKey].balance += credit - debit;
                             }
-                        });
+                        }
+                    });
                     } else if (isAdvancePayment) {
                         const isTargetTx = entry.transactionId === 'TXN1761821259147EXJND';
                         if (isTargetTx) {

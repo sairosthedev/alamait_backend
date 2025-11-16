@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const MonthlyRequest = require('../models/MonthlyRequest');
 const { Residence } = require('../models/Residence');
 const { uploadToS3 } = require('../utils/fileStorage');
@@ -646,6 +647,15 @@ exports.getMonthlyRequestsWithFiltering = async (req, res) => {
 exports.getMonthlyRequestById = async (req, res) => {
     try {
         const user = req.user;
+        
+        // Validate that the ID is a valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ 
+                message: 'Invalid request ID format',
+                error: `"${req.params.id}" is not a valid ObjectId`
+            });
+        }
+        
         const monthlyRequest = await MonthlyRequest.findById(req.params.id)
             .populate('residence', 'name')
             .populate('submittedBy', 'firstName lastName email')
@@ -1039,6 +1049,15 @@ exports.createMonthlyRequest = async (req, res) => {
 exports.updateMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
+        
+        // Validate that the ID is a valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ 
+                message: 'Invalid request ID format',
+                error: `"${req.params.id}" is not a valid ObjectId`
+            });
+        }
+        
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
 
         if (!monthlyRequest) {
@@ -1124,6 +1143,16 @@ exports.sendToFinance = async (req, res) => {
     try {
         const user = req.user;
         const { month, year } = req.body;
+        
+        // Validate that the ID is a valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Invalid request ID format',
+                error: `"${req.params.id}" is not a valid ObjectId`
+            });
+        }
+        
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
 
         if (!monthlyRequest) {
@@ -1407,6 +1436,15 @@ exports.sendToFinance = async (req, res) => {
 exports.submitMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
+        
+        // Validate that the ID is a valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ 
+                message: 'Invalid request ID format',
+                error: `"${req.params.id}" is not a valid ObjectId`
+            });
+        }
+        
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
 
         if (!monthlyRequest) {
@@ -1456,6 +1494,14 @@ exports.approveMonthlyRequest = async (req, res) => {
         // Check permissions - allow admin and finance users to approve
         if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
             return res.status(403).json({ message: 'Only admin and finance users can approve monthly requests' });
+        }
+
+        // Validate that the ID is a valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ 
+                message: 'Invalid request ID format',
+                error: `"${req.params.id}" is not a valid ObjectId`
+            });
         }
 
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
@@ -1749,6 +1795,16 @@ exports.rejectMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
         const { rejectionReason } = req.body;
+        
+        // Validate that the ID is a valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Invalid request ID format',
+                error: `"${req.params.id}" is not a valid ObjectId`
+            });
+        }
+        
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
 
         if (!monthlyRequest) {
@@ -1892,6 +1948,14 @@ exports.addItemQuotation = async (req, res) => {
             return res.status(403).json({ message: 'Only admins can add quotations' });
         }
 
+        // Validate that the ID is a valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ 
+                message: 'Invalid request ID format',
+                error: `"${req.params.id}" is not a valid ObjectId`
+            });
+        }
+
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
         if (!monthlyRequest) {
             return res.status(404).json({ message: 'Monthly request not found' });
@@ -1955,6 +2019,14 @@ exports.approveItemQuotation = async (req, res) => {
         // Check permissions - only admins and finance users can approve quotations
         if (!['admin', 'finance', 'finance_admin', 'finance_user'].includes(user.role)) {
             return res.status(403).json({ message: 'Only admins and finance users can approve quotations' });
+        }
+
+        // Validate that the ID is a valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ 
+                message: 'Invalid request ID format',
+                error: `"${req.params.id}" is not a valid ObjectId`
+            });
         }
 
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
@@ -2197,6 +2269,15 @@ exports.updateItemQuotation = async (req, res) => {
 exports.deleteMonthlyRequest = async (req, res) => {
     try {
         const user = req.user;
+        
+        // Validate that the ID is a valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ 
+                message: 'Invalid request ID format',
+                error: `"${req.params.id}" is not a valid ObjectId`
+            });
+        }
+        
         const monthlyRequest = await MonthlyRequest.findById(req.params.id);
 
         if (!monthlyRequest) {

@@ -390,7 +390,7 @@ class EnhancedCashFlowService {
                 console.log('🔧 RELIABLE METHOD - Transaction entries count:', transactionEntries.length);
             }
             
-            const oldFormatMonthlyBreakdown = EnhancedCashFlowService.generateReliableMonthlyBreakdown(transactionEntries, period, openingCashBalance, cashBalanceByAccount);
+            const oldFormatMonthlyBreakdown = await EnhancedCashFlowService.generateReliableMonthlyBreakdown(transactionEntries, period, openingCashBalance, cashBalanceByAccount, residenceId);
             
             // Generate tabular monthly breakdown with proper cash balances
             const tabularMonthlyBreakdown = await EnhancedCashFlowService.generateTabularMonthlyBreakdown(oldFormatMonthlyBreakdown, period, openingCashBalance, cashBalanceByAccount);
@@ -2852,8 +2852,9 @@ class EnhancedCashFlowService {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
                         
-                        // Include all cash accounts (1000-1099)
-                        if (accountCode && accountCode.match(/^10[0-9]{2}$/)) {
+                        // Include all cash accounts (1000-1019 and 10003)
+                        // Match 4-digit codes 1000-1019 OR the 5-digit code 10003
+                        if (accountCode && (accountCode.match(/^10[0-1][0-9]$/) || accountCode === '10003')) {
                             if (!months[monthKey].cash_accounts.breakdown[accountCode]) {
                                 months[monthKey].cash_accounts.breakdown[accountCode] = {
                                     account_code: accountCode,
@@ -2905,7 +2906,8 @@ class EnhancedCashFlowService {
                         
                         // Check if this entry debits an asset account (Cash, 10005, etc.) - means cash received
                         if (debit > 0 && accountCode && (
-                            accountCode.match(/^10[0-9]{2}$/) || // Cash accounts (1000-1099)
+                            accountCode.match(/^10[0-1][0-9]$/) || // Cash accounts (1000-1019)
+                            accountCode === '10003' || // Cbz Vault
                             accountCode === '10005' // Opening balance clearing account (also an asset)
                         )) {
                             hasAssetDebit = true;
@@ -2999,7 +3001,7 @@ class EnhancedCashFlowService {
                         const cashDebit = entry.entries.find(line => {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
-                        return accountCode && accountCode.match(/^10[0-9]{2}$/) && line.debit > 0;
+                        return accountCode && (accountCode.match(/^10[0-1][0-9]$/) || accountCode === '10003') && line.debit > 0;
                     });
                     
                     if (cashDebit) {
@@ -3426,7 +3428,7 @@ class EnhancedCashFlowService {
                     // Only process deposits that don't have cash debits (those with cash debits should already be processed)
                     const hasCashDebit = entry.entries.some(line => {
                         const accountCode = String(line.accountCode || line.account?.code || '').trim();
-                        return line.debit > 0 && accountCode.match(/^10[0-9]{2}$/);
+                        return line.debit > 0 && (accountCode.match(/^10[0-1][0-9]$/) || accountCode === '10003');
                     });
                     
                     // Only process deposits here if they DON'T have a cash debit (those with cash debits are processed above)
@@ -3472,11 +3474,11 @@ class EnhancedCashFlowService {
                         }
                     }
                     
-                    // Process Cash/Bank credits (expenses) - include ALL cash accounts (1000-1099)
+                    // Process Cash/Bank credits (expenses) - include ALL cash accounts (1000-1019 and 10003)
                     const cashCredit = entry.entries.find(line => {
                         const accountCode = line.accountCode || line.account?.code;
                         const accountName = line.accountName || line.account?.name;
-                        return accountCode && accountCode.match(/^10[0-9]{2}$/) && line.credit > 0;
+                        return accountCode && (accountCode.match(/^10[0-1][0-9]$/) || accountCode === '10003') && line.credit > 0;
                     });
                     
                     if (cashCredit) {
@@ -3883,7 +3885,7 @@ class EnhancedCashFlowService {
         // Process each transaction
         transactionEntries.forEach(entry => {
             const entryDate = new Date(entry.date);
-            const monthIndex = entryDate.getMonth();
+            const monthIndex = entryDate.getUTCMonth(); // Use UTC to avoid timezone issues
             const monthName = monthNames[monthIndex];
             
             console.log(`🔧 FROM SCRATCH - Transaction ${entry.transactionId}: date=${entry.date}, month=${monthIndex}, monthName=${monthName}, description=${entry.description}`);
@@ -4003,7 +4005,7 @@ class EnhancedCashFlowService {
     /**
      * FIXED: Simple and reliable monthly breakdown
      */
-    static generateReliableMonthlyBreakdown(transactionEntries, period, openingBalance, cashBalanceByAccount = null) {
+    static async generateReliableMonthlyBreakdown(transactionEntries, period, openingBalance, cashBalanceByAccount = null, residenceId = null) {
         const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
                            'july', 'august', 'september', 'october', 'november', 'december'];
         
@@ -4092,7 +4094,7 @@ class EnhancedCashFlowService {
         
         transactionEntries.forEach(entry => {
             const entryDate = new Date(entry.date);
-            const monthIndex = entryDate.getMonth(); // 0-11
+            const monthIndex = entryDate.getUTCMonth(); // 0-11 - Use UTC to avoid timezone issues
             const monthName = monthNames[monthIndex];
             
             if (!monthlyData[monthName]) {
@@ -4149,7 +4151,8 @@ class EnhancedCashFlowService {
                 
                 // Check if this entry debits an asset account (Cash, 10005, etc.) - means cash received
                 if (debit > 0 && accountCode && (
-                    accountCode.match(/^10[0-9]{2}$/) || // Cash accounts (1000-1099)
+                    accountCode.match(/^10[0-1][0-9]$/) || // Cash accounts (1000-1019)
+                    accountCode === '10003' || // Cbz Vault
                     accountCode === '10005' // Opening balance clearing account (also an asset)
                 )) {
                     hasAssetDebit = true;
@@ -4157,7 +4160,8 @@ class EnhancedCashFlowService {
                 
                 // Check if this entry credits Cash (cash outflow for deposit return)
                 if (credit > 0 && accountCode && (
-                    accountCode.match(/^10[0-9]{2}$/) || // Cash accounts (1000-1099)
+                    accountCode.match(/^10[0-1][0-9]$/) || // Cash accounts (1000-1019)
+                    accountCode === '10003' || // Cbz Vault
                     accountCode === '10005' // Opening balance clearing account (also an asset)
                 )) {
                     hasCashCredit = true;
@@ -4564,6 +4568,30 @@ class EnhancedCashFlowService {
         let runningBalance = openingBalance;
         let runningCashAccounts = {}; // Track cash accounts by month
         
+        // Calculate month-end dates for cash balance calculations
+        const monthEndDates = {};
+        monthNames.forEach(monthName => {
+            const monthIndex = monthNames.indexOf(monthName);
+            const year = parseInt(period);
+            const monthEndDate = new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59, 999));
+            monthEndDates[monthName] = monthEndDate;
+        });
+        
+        // Fetch cash balances for each month-end in parallel
+        const monthEndBalancesPromises = monthNames.map(monthName => 
+            this.getCashBalanceByAccount(monthEndDates[monthName], residenceId)
+                .then(balances => ({ monthName, balances }))
+                .catch(err => {
+                    console.error(`Error fetching cash balance for ${monthName}:`, err);
+                    return { monthName, balances: {} };
+                })
+        );
+        const monthEndBalancesResults = await Promise.all(monthEndBalancesPromises);
+        const monthEndBalances = {};
+        monthEndBalancesResults.forEach(({ monthName, balances }) => {
+            monthEndBalances[monthName] = balances;
+        });
+        
         monthNames.forEach(monthName => {
             const month = monthlyData[monthName];
             
@@ -4580,28 +4608,31 @@ class EnhancedCashFlowService {
             month.closing_balance = runningBalance + month.net_cash_flow;
             runningBalance = month.closing_balance;
             
-            // Calculate cash accounts for this month using actual account balances
-            // Use actual account balances from the database
+            // Calculate cash accounts for this month using actual account balances as of month-end
             const cashAccounts = {};
             let totalCash = 0;
             
-            // Get actual cash account balances from the database
-            if (cashBalanceByAccount) {
-                Object.values(cashBalanceByAccount).forEach(account => {
-                    const accountName = account.accountName;
-                    const accountCode = account.accountCode;
+            // Get actual cash account balances from the database for this specific month-end
+            const monthBalances = monthEndBalances[monthName] || {};
+            Object.values(monthBalances).forEach(account => {
+                const accountName = account.accountName;
+                const accountCode = account.accountCode;
+                
+                // Only include proper cash accounts, exclude clearing accounts
+                if (this.isCashAccount(accountName, accountCode)) {
+                    // Use the most descriptive account name (prefer "Cbz Vault" over "cbz")
+                    const finalAccountName = (accountCode === '10003' && accountName.toLowerCase().includes('cbz')) 
+                        ? 'Cbz Vault' 
+                        : accountName;
                     
-                    // Only include proper cash accounts, exclude clearing accounts
-                    if (this.isCashAccount(accountName, accountCode)) {
-                        cashAccounts[accountCode] = {
-                            accountCode: accountCode,
-                            accountName: accountName,
-                            balance: account.balance
-                        };
-                        totalCash += account.balance;
-                    }
-                });
-            }
+                    cashAccounts[accountCode] = {
+                        accountCode: accountCode,
+                        accountName: finalAccountName,
+                        balance: account.balance
+                    };
+                    totalCash += account.balance;
+                }
+            });
             
             // Add to monthly cash accounts (original format by account code)
             month.cash_accounts.breakdown = cashAccounts;
@@ -5043,7 +5074,7 @@ class EnhancedCashFlowService {
         // Process each transaction
         transactionEntries.forEach(entry => {
             const entryDate = new Date(entry.date);
-            const monthIndex = entryDate.getMonth(); // 0-11
+            const monthIndex = entryDate.getUTCMonth(); // 0-11 - Use UTC to avoid timezone issues
             const monthName = monthNames[monthIndex];
             
             console.log(`🔧 PROCESSING TRANSACTIONS - Transaction ${entry.transactionId}: date=${entry.date}, month=${monthIndex}, monthName=${monthName}, description=${entry.description}`);
@@ -5181,7 +5212,8 @@ class EnhancedCashFlowService {
         
         // Process each transaction entry (same pattern as income statement)
         transactionEntries.forEach(entry => {
-            const month = entry.date.getMonth(); // 0-11
+            const entryDate = new Date(entry.date);
+            const month = entryDate.getUTCMonth(); // 0-11 - Use UTC to avoid timezone issues
             const monthName = monthNames[month];
             
             console.log(`🔧 INCOME STATEMENT PATTERN - Transaction ${entry.transactionId}: date=${entry.date}, month=${month}, monthName=${monthName}, description=${entry.description}`);
@@ -5366,7 +5398,7 @@ class EnhancedCashFlowService {
         console.log(`🔧 SIMPLE MAPPING - Transaction entries:`, transactionEntries.map(t => ({ id: t.transactionId, date: t.date, description: t.description })));
         transactionEntries.forEach(entry => {
             const entryDate = new Date(entry.date);
-            const monthKey = monthNames[entryDate.getMonth()];
+            const monthKey = monthNames[entryDate.getUTCMonth()]; // Use UTC to avoid timezone issues
             
             console.log(`🔧 SIMPLE MAPPING - Transaction ${entry.transactionId}: date=${entry.date}, monthKey=${monthKey}, description=${entry.description}`);
             
@@ -5583,14 +5615,14 @@ class EnhancedCashFlowService {
         console.log(`🔧 Old format - Processing ${transactionEntries.length} transaction entries with DIRECT MAPPING...`);
         transactionEntries.forEach(entry => {
             const entryDate = new Date(entry.date);
-            const monthKey = monthNames[entryDate.getMonth()];
+            const monthKey = monthNames[entryDate.getUTCMonth()]; // Use UTC to avoid timezone issues
             
             console.log(`🔧 DIRECT MAPPING - Transaction ${entry.transactionId}: date=${entry.date}, monthKey=${monthKey}, description=${entry.description}`);
             
             // Special debugging for the electricity expense
             if (entry.transactionId === 'TXN176055276167042O1C') {
                 console.log(`🔧 SPECIAL DEBUG - Electricity expense transaction found!`);
-                console.log(`🔧 SPECIAL DEBUG - Date: ${entry.date}, Month: ${entryDate.getMonth()}, MonthKey: ${monthKey}`);
+                console.log(`🔧 SPECIAL DEBUG - Date: ${entry.date}, Month: ${entryDate.getUTCMonth()}, MonthKey: ${monthKey}`);
                 console.log(`🔧 SPECIAL DEBUG - Available months:`, Object.keys(months));
             }
             
@@ -5754,7 +5786,7 @@ class EnhancedCashFlowService {
         // Process payments
         payments.forEach(payment => {
             const paymentDate = new Date(payment.date);
-            const monthKey = monthNames[paymentDate.getMonth()];
+            const monthKey = monthNames[paymentDate.getUTCMonth()]; // Use UTC to avoid timezone issues
             
             if (!months[monthKey]) return;
             
@@ -5766,7 +5798,7 @@ class EnhancedCashFlowService {
         console.log('🔧 Old format - Expenses array:', expenses);
         expenses.forEach(expense => {
             const expenseDate = new Date(expense.expenseDate);
-            const monthKey = monthNames[expenseDate.getMonth()];
+            const monthKey = monthNames[expenseDate.getUTCMonth()]; // Use UTC to avoid timezone issues
             
             console.log(`🔧 Old format - Processing expense: ${expense.description}, amount: ${expense.amount}, category: ${expense.category}`);
             
@@ -6539,9 +6571,9 @@ class EnhancedCashFlowService {
         if (accountCode) {
             const code = accountCode.toString();
             
-            // Only include 1000-1099 series (cash accounts)
+            // Only include 1000-1019 series and 10003 (cash accounts)
             // Exclude 1100+ which are other current assets (like Accounts Receivable)
-            if (!code.match(/^10[0-9]{2}$/)) {
+            if (!code.match(/^10[0-1][0-9]$/) && code !== '10003') {
                 return false;
             }
             
@@ -6642,7 +6674,12 @@ class EnhancedCashFlowService {
             if (key && formatted[key]) {
                 formatted[key].amount = account.balance || 0;
                 formatted[key].accountCode = accountCode;
-                formatted[key].accountName = account.accountName || formatted[key].accountName;
+                // Always use "Cbz Vault" for account code 10003 to ensure consistency
+                if (accountCode === '10003') {
+                    formatted[key].accountName = 'Cbz Vault';
+                } else {
+                    formatted[key].accountName = account.accountName || formatted[key].accountName;
+                }
                 formatted.total += account.balance || 0;
             }
         });
@@ -6862,7 +6899,7 @@ class EnhancedCashFlowService {
             // Optimize: Reduce logging in production
             const isDebugMode = process.env.NODE_ENV === 'development' && process.env.DEBUG === 'true';
             if (isDebugMode) {
-                console.log(`💰 Calculating cash balance by account as of ${asOfDate.toISOString().slice(0, 10)}`);
+                console.log(`💰 Calculating cash balance by account as of ${asOfDate.toISOString().slice(0, 10)}${residenceId ? ` (residence: ${residenceId})` : ''}`);
             }
             
             // Get all transaction entries up to the specified date
@@ -6874,7 +6911,19 @@ class EnhancedCashFlowService {
             };
             
             if (residenceId) {
-                query.residence = new mongoose.Types.ObjectId(residenceId);
+                // When filtering by residence, check both top-level residence and metadata fields
+                // This matches the balance sheet logic for consistency
+                const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId) 
+                    ? new mongoose.Types.ObjectId(residenceId) 
+                    : residenceId;
+                query.$or = [
+                    { residence: residenceObjectId },
+                    { residence: residenceId },
+                    { 'metadata.residenceId': residenceId },
+                    { 'metadata.residenceId': residenceId.toString() },
+                    { 'metadata.residence': residenceId },
+                    { 'metadata.residence': residenceId.toString() }
+                ];
             }
             
             // Optimize: Use aggregation pipeline for much faster cash balance by account calculation
@@ -6883,7 +6932,12 @@ class EnhancedCashFlowService {
                 { $unwind: '$entries' },
                 {
                     $match: {
-                        'entries.accountCode': { $regex: '^(100|101)' }
+                        // Match cash accounts: 1000-1019, but exclude 10000-10099 (those are not cash accounts)
+                        // Account 10003 is a special case - it's a cash account (Cbz Vault)
+                        $or: [
+                            { 'entries.accountCode': { $regex: '^10[0-1][0-9]$' } }, // 1000-1019
+                            { 'entries.accountCode': '10003' } // Explicitly include Cbz Vault
+                        ]
                     }
                 },
                 {

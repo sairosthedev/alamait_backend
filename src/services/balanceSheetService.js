@@ -283,8 +283,8 @@ class BalanceSheetService {
                 if (isMonthlyBalanceSheet) {
                   // For monthly balance sheets, only include if transaction month matches current month
                   if (txMonthKey === monthKey) {
-                    cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
-                  }
+                cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
+              }
                 } else {
                   // For single date balance sheets, include all up to asOfDate (already filtered by dateFilter)
                   cashByMonth += Number(line.debit || 0) - Number(line.credit || 0);
@@ -302,7 +302,7 @@ class BalanceSheetService {
                 if (isMonthlyBalanceSheet) {
                   // For monthly balance sheets, only include if transaction month matches current month
                   if (txMonthKey === monthKey) {
-                    deferredTotal += (line.credit || 0) - (line.debit || 0);
+              deferredTotal += (line.credit || 0) - (line.debit || 0);
                   }
                 } else {
                   // For single date balance sheets, include all up to asOfDate (already filtered by dateFilter)
@@ -472,9 +472,9 @@ class BalanceSheetService {
             if (isMonthlyBalanceSheet) {
               // For monthly balance sheets, use the monthSettled calculation
               // This should only include transactions for the current month
-              account.balance = deferredTotal;
-              account.debitTotal = 0;
-              account.creditTotal = deferredTotal;
+            account.balance = deferredTotal;
+            account.debitTotal = 0;
+            account.creditTotal = deferredTotal;
               
               // Debug: If we're setting to 0 but had a previous balance, check if there are advance payments
               if (deferredTotal === 0 && previousBalance > 0) {

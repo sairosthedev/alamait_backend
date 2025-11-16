@@ -2,18 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { auth, checkRole } = require('../../middleware/auth');
 const { 
-    getDashboardStats, 
-    getStudentAndIncomeStats,
-    getPaymentIncomeStats 
+    getDashboardStats
 } = require('../../controllers/admin/dashboardController');
+const { getExecutiveDashboard } = require('../../controllers/admin/executiveDashboardController');
 
 // Get overall dashboard statistics
 router.get('/stats', auth, checkRole('admin'), getDashboardStats);
 
-// Get student count and total income statistics
-router.get('/student-income-stats', auth, checkRole('admin'), getStudentAndIncomeStats);
-
-// Get detailed payment income statistics
-router.get('/payment-income-stats', auth, checkRole('admin'), getPaymentIncomeStats);
+// Get comprehensive executive dashboard data
+router.get('/executive', auth, checkRole(['admin', 'ceo', 'finance', 'finance_admin']), getExecutiveDashboard);
 
 module.exports = router; 

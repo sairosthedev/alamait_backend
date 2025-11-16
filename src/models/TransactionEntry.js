@@ -289,4 +289,9 @@ transactionEntrySchema.index({ date: 1, source: 1, status: 1, residence: 1 });
 transactionEntrySchema.index({ date: 1, 'metadata.isForfeiture': 1, status: 1 });
 transactionEntrySchema.index({ 'entries.accountCode': 1, date: 1, status: 1 }); // For cash balance calculations
 
+// Dashboard optimization indexes
+transactionEntrySchema.index({ date: 1, source: 1, 'entries.accountType': 1 }); // For expense breakdown
+transactionEntrySchema.index({ date: 1, source: 1, residence: 1, status: 1 }); // For cash received queries
+transactionEntrySchema.index({ 'metadata.residenceId': 1, date: 1, source: 1 }); // For metadata-based residence queries
+
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 

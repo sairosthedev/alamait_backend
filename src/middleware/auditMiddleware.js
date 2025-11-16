@@ -5,6 +5,7 @@
 
 const { createAuditLog } = require('../utils/auditLogger');
 const AuditLog = require('../models/AuditLog');
+const { v4: uuidv4 } = require('uuid');
 
 /**
  * Middleware to log all API requests
@@ -49,6 +50,9 @@ const auditMiddleware = async (req, res, next) => {
         const endTime = Date.now();
         const duration = endTime - startTime;
         
+        // Capture the original req object for activity tracking
+        const originalReq = req;
+        
         // Log the request/response asynchronously (don't block response)
         // LOG EVERYTHING - No filters for comprehensive tracking
         // Use process.nextTick for better performance than setImmediate
@@ -79,7 +83,8 @@ const auditMiddleware = async (req, res, next) => {
                         data: finalResponseData,
                         duration: duration,
                         size: responseSize
-                    }
+                    },
+                    originalReq: originalReq // Pass the original request object
                 });
             } catch (error) {
                 // Silently fail to not impact performance
@@ -99,7 +104,7 @@ const auditMiddleware = async (req, res, next) => {
 /**
  * Log API request/response audit
  */
-async function logAPIAudit({ request, response }) {
+async function logAPIAudit({ request, response, originalReq }) {
     try {
         // Determine action based on HTTP method and path
         const action = determineAction(request.method, request.path);
@@ -138,14 +143,30 @@ async function logAPIAudit({ request, response }) {
                 const page = request.path;
                 const pageTitle = collection || 'API Request';
                 
-                // Track as action for API calls
-                await UserActivityService.trackAction(request.user.id, {
+                // Use the original request object if available, otherwise create a minimal one
+                const reqForTracking = originalReq || {
+                    sessionID: originalReq?.sessionID || uuidv4(), // Generate session ID if not available
+                    requestId: request.requestId || uuidv4(),
                     ip: request.ipAddress,
-                    headers: { 'user-agent': request.userAgent },
+                    connection: { remoteAddress: request.ipAddress },
+                    headers: { 
+                        'user-agent': request.userAgent,
+                        'referer': originalReq?.headers?.['referer'] || null,
+                        'referrer': originalReq?.headers?.['referrer'] || null
+                    },
                     path: request.path,
                     method: request.method,
-                    query: request.query
-                }, {
+                    query: request.query,
+                    url: request.path
+                };
+                
+                // Ensure we have a session ID
+                if (!reqForTracking.sessionID) {
+                    reqForTracking.sessionID = uuidv4();
+                }
+                
+                // Track as action for API calls
+                const activityResult = await UserActivityService.trackAction(request.user.id, reqForTracking, {
                     page,
                     pageTitle,
                     action: action,
@@ -160,14 +181,29 @@ async function logAPIAudit({ request, response }) {
                     collection: collection,
                     status: response.statusCode < 400 ? 'success' : 'error',
                     metadata: {
-                        responseSize: response.size
+                        responseSize: response.size,
+                        apiCall: true
                     }
                 });
-            } catch (activityError) {
-                // Don't fail if activity tracking fails
-                if (process.env.NODE_ENV === 'development') {
-                    console.error('Failed to track user activity:', activityError);
+                
+                if (!activityResult) {
+                    console.warn(`⚠️ UserActivity tracking returned null for user ${request.user.id} on ${request.path}`);
                 }
+            } catch (activityError) {
+                // Log error in all environments to help debug
+                console.error('❌ Failed to track user activity:', activityError.message);
+                console.error('   UserId:', request.user?.id);
+                console.error('   Path:', request.path);
+                console.error('   Action:', action);
+                if (process.env.NODE_ENV === 'development') {
+                    console.error('   Full error:', activityError);
+                    console.error('   Stack:', activityError.stack?.split('\n').slice(0, 10).join('\n'));
+                }
+            }
+        } else {
+            // Log when user is not authenticated (for debugging)
+            if (process.env.NODE_ENV === 'development' && request.path !== '/health' && !request.path.startsWith('/static')) {
+                console.log(`ℹ️ Skipping activity tracking - no authenticated user for ${request.method} ${request.path}`);
             }
         }
     } catch (error) {

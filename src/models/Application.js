@@ -357,4 +357,8 @@ applicationSchema.index({ status: 1, endDate: 1 }); // For accrual correction se
 applicationSchema.index({ status: 1, endDate: 1, updatedAt: -1 }); // For finding updated leases
 applicationSchema.index({ student: 1, status: 1 }); // For finding student applications
 
+// Dashboard optimization indexes
+applicationSchema.index({ residenceId: 1, status: 1, startDate: 1, endDate: 1 }); // For occupancy calculations
+applicationSchema.index({ 'allocatedRoomDetails.residenceId': 1, status: 1 }); // For allocated room queries
+
 module.exports = mongoose.model('Application', applicationSchema); 

@@ -1386,15 +1386,15 @@ class FinancialReportsController {
             const bypassCache = req.query.bypassCache === 'true' || req.query.bypassCache === '1';
             
             if (!bypassCache) {
-                const cached = cache.get(cacheKey);
-                if (cached) {
-                    console.log('✅ Returning cached balance sheet data');
-                    return res.json({
-                        success: true,
-                        data: cached,
-                        cached: true,
+            const cached = cache.get(cacheKey);
+            if (cached) {
+                console.log('✅ Returning cached balance sheet data');
+                return res.json({
+                    success: true,
+                    data: cached,
+                    cached: true,
                         message: `Cached balance sheet data for ${period} (${basis} basis)${residence ? ` for residence: ${residence}` : ' (all residences)'}. Add ?bypassCache=true to force refresh.`
-                    });
+                });
                 }
             } else {
                 console.log('🔄 Bypassing cache - generating fresh balance sheet data');
