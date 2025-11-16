@@ -899,8 +899,9 @@ class RentalAccrualService {
      */
     static async createStudentRentAccrual(student, month, year) {
         try {
-            const monthStart = new Date(year, month - 1, 1);
-            const monthEnd = new Date(year, month, 0);
+            // Use UTC to ensure date is always the 1st of the month, not end of previous month
+            const monthStart = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+            const monthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
             
             // Skip creating a monthly accrual for the lease start month
             // The lease start month is handled by lease_start process, not monthly accrual

@@ -363,7 +363,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 			if (!existingMonthlyAccrual) {
             const monthlyAccrualTransaction = new TransactionEntry({
                 transactionId: `MONTHLY_ACCRUAL_${monthKey}_${applicationCode}_${Date.now()}`,
-					date: new Date(year, month - 1, 1), // This is correct - month is 1-based, Date constructor expects 0-based
+					date: new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0)), // Use UTC to ensure date is always the 1st of the month
 					description: `Monthly rent accrual for ${debtor.user.firstName} ${debtor.user.lastName} - ${monthKey}`,
                 reference: `MONTHLY_ACCRUAL_${monthKey}_${applicationCode}`,
                 entries: [
