@@ -950,7 +950,12 @@ exports.createRequest = async (req, res) => {
         } else {
             // Non-student request
             requestData.department = department;
-            requestData.requestedBy = requestedBy;
+            // Use requestedBy if provided and not empty, otherwise use user's name or email
+            requestData.requestedBy = (requestedBy && requestedBy.trim() !== '') 
+                ? requestedBy.trim() 
+                : (user.firstName && user.lastName 
+                    ? `${user.firstName} ${user.lastName}` 
+                    : user.email || 'Admin');
             requestData.items = parsedItems;
             requestData.proposedVendor = proposedVendor;
             requestData.deliveryLocation = deliveryLocation;
@@ -1335,11 +1340,13 @@ exports.updateRequest = async (req, res) => { //n
         const allowedFields = [
             'status', 'assignedTo', 'adminResponse', 'priority', 
             'category', 'description', 'title', 'selectedQuotation',
-            'estimatedCompletion', 'amount', 'financeStatus', 'dateApproved'
+            'estimatedCompletion', 'amount', 'financeStatus', 'dateApproved',
+            'items', 'requestedBy', 'deliveryLocation', 'proposedVendor'
         ];
 
         const updates = {};
         const changes = [];
+        let itemsUpdated = false;
 
         // Process each field
         for (const [key, value] of Object.entries(updateData)) {
@@ -1375,6 +1382,46 @@ exports.updateRequest = async (req, res) => { //n
                         console.error('Error fetching assigned user:', error);
                         return res.status(400).json({ message: 'Invalid assigned user ID' });
                     }
+                } else if (key === 'items' && Array.isArray(value)) {
+                    // Handle items update - update items and recalculate totalEstimatedCost
+                    request.items = value;
+                    itemsUpdated = true;
+                    
+                    // Recalculate totalCost for each item
+                    request.items.forEach(item => {
+                        // Calculate total cost for this item (unitCost × quantity)
+                        if (item.unitCost && item.quantity) {
+                            item.totalCost = item.unitCost * item.quantity;
+                        } else if (item.estimatedCost) {
+                            item.totalCost = item.estimatedCost;
+                        }
+                    });
+                    
+                    // Recalculate totalEstimatedCost from all items
+                    request.totalEstimatedCost = request.items.reduce((total, item) => {
+                        return total + (item.totalCost || item.estimatedCost || 0);
+                    }, 0);
+                    
+                    // Also update amount to match totalEstimatedCost
+                    request.amount = request.totalEstimatedCost;
+                    
+                    changes.push(`items updated (${value.length} items), totalEstimatedCost recalculated to: ${request.totalEstimatedCost}, amount updated to: ${request.amount}`);
+                } else if (key === 'requestedBy' || key === 'deliveryLocation') {
+                    // For required fields, skip empty strings (don't update if empty)
+                    // This prevents validation errors when the field is accidentally cleared
+                    if (value && value.trim() !== '') {
+                        if (request[key] !== value) {
+                            updates[key] = value.trim();
+                            changes.push(`${key} updated to: ${value.trim()}`);
+                        }
+                    } else if (value === null || value === undefined) {
+                        // Allow null/undefined to clear the field if explicitly set
+                        if (request[key] !== value) {
+                            updates[key] = value;
+                            changes.push(`${key} cleared`);
+                        }
+                    }
+                    // If value is empty string, skip the update (don't change existing value)
                 } else if (request[key] !== value) {
                     updates[key] = value;
                     changes.push(`${key} updated to: ${value}`);
@@ -1433,6 +1480,14 @@ exports.updateRequest = async (req, res) => { //n
             Object.assign(request, updates);
         }
 
+        // If items were updated, mark the request as modified to trigger pre-save hooks
+        if (itemsUpdated) {
+            request.markModified('items');
+            request.markModified('totalEstimatedCost');
+            request.markModified('amount');
+            console.log('📊 Items updated - totalEstimatedCost and amount will be recalculated on save');
+        }
+
         // Add to request history
         if (changes.length > 0) {
             request.requestHistory.push({
@@ -1443,9 +1498,14 @@ exports.updateRequest = async (req, res) => { //n
             });
         }
 
-        console.log('💾 Saving request with assignedTo:', request.assignedTo);
+        console.log('💾 Saving request...');
+        console.log(`   - Items count: ${request.items?.length || 0}`);
+        console.log(`   - Total estimated cost: ${request.totalEstimatedCost || 0}`);
+        console.log(`   - Amount: ${request.amount || 0}`);
         await request.save();
         console.log('✅ Request saved successfully');
+        console.log(`   - Final totalEstimatedCost: ${request.totalEstimatedCost || 0}`);
+        console.log(`   - Final amount: ${request.amount || 0}`);
 
         // Send email notifications for maintenance requests (non-blocking)
         if (request.type === 'maintenance') {
@@ -1809,19 +1869,21 @@ exports.financeApproval = async (req, res) => {
                 if (request.items && request.items.length > 0) {
                     console.log(`📦 Processing ${request.items.length} items for expense creation...`);
                     
-                    // Use the proper DoubleEntryAccountingService for maintenance approval
-                    const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
-                    financialResult = await DoubleEntryAccountingService.recordMaintenanceApproval(request, user, approvalDate);
+                    // Create one expense per item (not a single expense for all items)
+                    const createdExpenses = await createItemizedExpensesForRequest(request, user, approvalDate);
                     
-                    // Update request with expense reference
+                    // Update request with expense reference (use first expense ID for backward compatibility)
                     request.convertedToExpense = true;
-                    request.expenseId = financialResult.expense._id;
+                    if (createdExpenses && createdExpenses.length > 0) {
+                        request.expenseId = createdExpenses[0]._id;
+                    }
                     await request.save();
                     
-                    console.log('✅ Itemized expense and double-entry transactions created successfully');
-                    console.log(`   - Transaction ID: ${financialResult.transaction.transactionId}`);
-                    console.log(`   - Expense ID: ${financialResult.expense.expenseId}`);
-                    console.log(`   - Transaction Entries: ${financialResult.entries.length}`);
+                    console.log('✅ Itemized expenses and double-entry transactions created successfully');
+                    console.log(`   - Created ${createdExpenses.length} expenses (one per item)`);
+                    createdExpenses.forEach((expense, index) => {
+                        console.log(`   - Expense ${index + 1}: ${expense.expenseId} - $${expense.amount}`);
+                    });
                 } else {
                     // Handle simple requests without items (legacy maintenance requests)
                     console.log('📝 Creating simple expense for request without items...');
@@ -2013,6 +2075,7 @@ exports.financeOverrideQuotation = async (req, res) => {
             request.totalEstimatedCost = request.items.reduce((total, reqItem) => {
                 return total + (reqItem.totalCost || 0);
             }, 0);
+            request.amount = request.totalEstimatedCost; // Also update amount to match
         }
         
         // Add to request history
@@ -3247,6 +3310,7 @@ exports.approveItemQuotation = async (req, res) => {
             request.totalEstimatedCost = request.items.reduce((total, item) => {
                 return total + (item.estimatedCost * item.quantity);
             }, 0);
+            request.amount = request.totalEstimatedCost; // Also update amount to match
         }
         
         // Add to request history
@@ -3472,7 +3536,8 @@ exports.updateRequestQuotation = async (req, res) => {
             }
             
             request.totalEstimatedCost = totalEstimatedCost;
-            changes.push(`Total estimated cost recalculated to: $${totalEstimatedCost}`);
+            request.amount = totalEstimatedCost; // Also update amount to match
+            changes.push(`Total estimated cost recalculated to: $${totalEstimatedCost}, amount updated to: $${totalEstimatedCost}`);
         }
 
         // Add to request history
@@ -3714,7 +3779,8 @@ exports.updateItemQuotation = async (req, res) => {
             }
             
             request.totalEstimatedCost = totalEstimatedCost;
-            changes.push(`Total estimated cost recalculated to: $${totalEstimatedCost}`);
+            request.amount = totalEstimatedCost; // Also update amount to match
+            changes.push(`Total estimated cost recalculated to: $${totalEstimatedCost}, amount updated to: $${totalEstimatedCost}`);
         }
 
         // Add to request history
@@ -4143,6 +4209,7 @@ exports.selectItemQuotation = async (req, res) => {
         });
 
         request.totalEstimatedCost = totalEstimatedCost;
+        request.amount = totalEstimatedCost; // Also update amount to match
 
         // Add to request history
         request.requestHistory.push({
@@ -4393,6 +4460,7 @@ exports.overrideQuotationSelection = async (req, res) => {
         });
 
         request.totalEstimatedCost = totalEstimatedCost;
+        request.amount = totalEstimatedCost; // Also update amount to match
 
         // Add to request history
         const historyMessage = overrideMessage || `Finance (${user.email}) selected quotation from ${selectedQuotation.provider}`;

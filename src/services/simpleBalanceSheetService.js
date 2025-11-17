@@ -170,13 +170,179 @@ class SimpleBalanceSheetService {
         voided: { $ne: true }
       };
       
+      let transactions = [];
       if (residence) {
-        query.residence = residence;
+        // Handle residence filter - support both ObjectId and string formats
+        const mongoose = require('mongoose');
+        const Request = require('../models/Request');
+        const Expense = require('../models/Expense');
+        
+        const residenceObjectId = mongoose.Types.ObjectId.isValid(residence) 
+          ? new mongoose.Types.ObjectId(residence) 
+          : residence;
+        
+        // Use $or to match residence in multiple possible formats
+        // Combine with existing query conditions using $and
+        const existingConditions = { ...query };
+        const residenceQuery = {
+          $and: [
+            existingConditions,
+            {
+              $or: [
+                { residence: residenceObjectId },
+                { residence: residence.toString() },
+                { 'metadata.residenceId': residenceObjectId },
+                { 'metadata.residenceId': residence.toString() },
+                { 'metadata.residence': residenceObjectId },
+                { 'metadata.residence': residence.toString() }
+              ]
+            }
+          ]
+        };
+        
+        console.log(`🔍 Filtering transactions by residence: ${residence} (ObjectId: ${residenceObjectId})`);
+        console.log(`📋 Residence filter query:`, JSON.stringify(residenceQuery, null, 2));
+        
+        // First, get transactions that match the residence filter directly
+        transactions = await TransactionEntry.find(residenceQuery).sort({ date: 1 });
+        
+        console.log(`📊 Found ${transactions.length} transactions with direct residence match`);
+        
+        // CRITICAL FIX: For expense_accrual transactions, ALWAYS check related Request/Expense records
+        // Some expense accruals might not have residence set on TransactionEntry but have it in the Request
+        console.log(`🔍 Checking for expense_accrual transactions via Request/Expense references...`);
+        
+        // Get all expense_accrual transactions with AP entries that might be linked to this residence
+        const expenseAccrualQuery = {
+          ...existingConditions,
+          source: 'expense_accrual',
+          'entries.accountCode': '2000' // Accounts Payable entries
+        };
+        
+        const allExpenseAccruals = await TransactionEntry.find(expenseAccrualQuery).sort({ date: 1 });
+        console.log(`📊 Found ${allExpenseAccruals.length} total expense_accrual transactions with AP entries`);
+        
+        // Check each transaction's reference to see if it's linked to a Request/Expense for this residence
+        const matchingTransactions = [];
+        const existingIds = new Set(transactions.map(t => t._id.toString()));
+        
+        for (const txn of allExpenseAccruals) {
+          // Skip if already in transactions list
+          if (existingIds.has(txn._id.toString())) {
+            continue;
+          }
+          
+          let matchesResidence = false;
+          
+          // Check if transaction already has residence set
+          if (txn.residence) {
+            const txnResidence = txn.residence.toString ? txn.residence.toString() : txn.residence;
+            if (txnResidence === residenceObjectId.toString() || txnResidence === residence.toString()) {
+              matchesResidence = true;
+            }
+          }
+          
+          // If not found, check via reference (Request or Expense)
+          if (!matchesResidence && txn.reference) {
+            try {
+              // Check Request
+              const request = await Request.findById(txn.reference).select('residence');
+              if (request && request.residence) {
+                const requestResidence = request.residence.toString ? request.residence.toString() : request.residence;
+                if (requestResidence === residenceObjectId.toString() || requestResidence === residence.toString()) {
+                  matchesResidence = true;
+                  // Update the transaction's residence field for future queries
+                  await TransactionEntry.updateOne(
+                    { _id: txn._id },
+                    { $set: { residence: residenceObjectId } }
+                  );
+                  console.log(`✅ Updated transaction ${txn._id} with residence ${residence}`);
+                }
+              }
+              
+              // Check Expense if not found in Request
+              if (!matchesResidence) {
+                const expense = await Expense.findById(txn.reference).select('residence');
+                if (expense && expense.residence) {
+                  const expenseResidence = expense.residence.toString ? expense.residence.toString() : expense.residence;
+                  if (expenseResidence === residenceObjectId.toString() || expenseResidence === residence.toString()) {
+                    matchesResidence = true;
+                    // Update the transaction's residence field for future queries
+                    await TransactionEntry.updateOne(
+                      { _id: txn._id },
+                      { $set: { residence: residenceObjectId } }
+                    );
+                    console.log(`✅ Updated transaction ${txn._id} with residence ${residence}`);
+                  }
+                }
+              }
+            } catch (err) {
+              console.log(`⚠️ Error checking reference ${txn.reference}:`, err.message);
+            }
+          }
+          
+          if (matchesResidence) {
+            matchingTransactions.push(txn);
+          }
+        }
+        
+        console.log(`📊 Found ${matchingTransactions.length} expense_accrual transactions linked to residence ${residence} via Request/Expense`);
+        
+        // Combine with direct matches (avoid duplicates)
+        matchingTransactions.forEach(txn => {
+          if (!existingIds.has(txn._id.toString())) {
+            transactions.push(txn);
+          }
+        });
+        
+        console.log(`📊 Total transactions after combining: ${transactions.length}`);
+        
+        // CRITICAL: Verify AP transactions are included
+        if (residence) {
+          const finalAPCount = transactions.filter(t => 
+            t.entries && t.entries.some(e => e.accountCode === '2000')
+          ).length;
+          console.log(`✅ Final verification: ${finalAPCount} AP transactions in transactions array`);
+        }
+      } else {
+        transactions = await TransactionEntry.find(query).sort({ date: 1 });
       }
       
-      const transactions = await TransactionEntry.find(query).sort({ date: 1 });
+      console.log(`🔍 Found ${transactions.length} transactions for balance sheet as of ${asOfDate}${residence ? ` (filtered by residence: ${residence})` : ''}`);
       
-      console.log(`🔍 Found ${transactions.length} transactions for balance sheet as of ${asOfDate}`);
+      // Debug: Log sample transactions with AP entries when residence is filtered
+      if (residence && transactions.length > 0) {
+        const apTransactions = transactions.filter(t => 
+          t.entries && t.entries.some(e => e.accountCode === '2000' || e.accountCode?.startsWith('2000'))
+        );
+        console.log(`📊 Found ${apTransactions.length} transactions with Accounts Payable entries for residence ${residence}`);
+        
+        // Calculate total AP credits/debits from these transactions
+        let totalAPCredits = 0;
+        let totalAPDebits = 0;
+        apTransactions.forEach(txn => {
+          txn.entries?.forEach(entry => {
+            if (entry.accountCode === '2000') {
+              totalAPCredits += parseFloat(entry.credit) || 0;
+              totalAPDebits += parseFloat(entry.debit) || 0;
+            }
+          });
+        });
+        console.log(`💰 Total AP Credits: $${totalAPCredits}, Total AP Debits: $${totalAPDebits}, Expected Balance: $${totalAPCredits - totalAPDebits}`);
+        
+        if (apTransactions.length > 0) {
+          console.log(`📋 Sample AP transaction:`, {
+            id: apTransactions[0]._id,
+            date: apTransactions[0].date,
+            residence: apTransactions[0].residence,
+            entries: apTransactions[0].entries?.filter(e => e.accountCode === '2000' || e.accountCode?.startsWith('2000')).map(e => ({
+              accountCode: e.accountCode,
+              debit: e.debit,
+              credit: e.credit
+            }))
+          });
+        }
+      }
       if (transactions.length > 0) {
         console.log(`📋 Sample transaction:`, {
           id: transactions[0]._id,
@@ -256,6 +422,11 @@ class SimpleBalanceSheetService {
             const debit = parseFloat(entry.debit) || 0;
             const credit = parseFloat(entry.credit) || 0;
             
+            // Debug: Log Accounts Payable transactions
+            if (accountCode === '2000' || accountCode.startsWith('2000')) {
+              console.log(`📋 AP Transaction: Date=${transaction.date?.toISOString()?.split('T')[0]}, Account=${accountCode}, Debit=$${debit}, Credit=$${credit}, Source=${transaction.source}, Description=${transaction.description}, Residence=${transaction.residence}`);
+            }
+            
             // Find the account by code (normalize to string)
             let account = accountBalances.get(accountCode);
             
@@ -300,6 +471,19 @@ class SimpleBalanceSheetService {
       
       console.log(`📊 Processed ${transactions.length} transactions for balance sheet as of ${asOfDate}`);
       console.log(`💰 Sample account balances:`, Array.from(accountBalances.entries()).slice(0, 5).map(([code, acc]) => `${code}: $${acc.balance}`));
+      
+// Debug: Check account 2000 specifically
+const apAccount = accountBalances.get('2000');
+if (apAccount) {
+  console.log(`📊 Account 2000 (AP) AFTER processing transactions: Balance = $${apAccount.balance.toFixed(2)}, Debits = $${apAccount.debit.toFixed(2)}, Credits = $${apAccount.credit.toFixed(2)}`);
+  if (residence) {
+    console.log(`   🔍 Filtered by residence: ${residence}`);
+    console.log(`   📋 If balance is 0 but credits > 0, there may be a calculation issue`);
+  }
+} else {
+  console.log(`⚠️ WARNING: Account 2000 (AP) NOT FOUND in accountBalances after processing transactions!`);
+  console.log(`   Available account codes:`, Array.from(accountBalances.keys()).filter(k => k.includes('200') || k === '2000').slice(0, 10));
+}
       
       // Debug: Check deposit accounts specifically - check both string and original format
       const depositAccountCodes = ['2020', '20002', '2002'];
@@ -448,6 +632,8 @@ class SimpleBalanceSheetService {
         // Aggregate ONLY these explicit child accounts into parent
         const parentAccount = aggregatedBalances.get('2000');
         if (parentAccount) {
+          console.log(`📊 AP Parent Account (2000) BEFORE aggregation: Balance = $${parentAccount.balance.toFixed(2)}, Debits = $${parentAccount.debit.toFixed(2)}, Credits = $${parentAccount.credit.toFixed(2)}`);
+          
           let totalChildBalance = 0;
           apChildAccounts.forEach(childAccount => {
             const childCode = String(childAccount.code);
@@ -468,6 +654,9 @@ class SimpleBalanceSheetService {
           console.log(
             `📊 Accounts Payable (2000): Original = $${originalAPBalance.toFixed(2)}, Added from children = $${totalChildBalance.toFixed(2)}, Final = $${parentAccount.balance.toFixed(2)}`
           );
+        } else {
+          console.log(`⚠️ WARNING: AP Parent Account (2000) NOT FOUND in aggregatedBalances!`);
+          console.log(`   Available account codes:`, Array.from(aggregatedBalances.keys()).filter(k => k.includes('200')).slice(0, 10));
         }
       }
       
@@ -676,8 +865,27 @@ class SimpleBalanceSheetService {
     console.log(`   accountBalances.get(String('20002')):`, check20002_2 ? `Found - Balance: $${check20002_2.balance}` : 'NOT FOUND');
     console.log(`   Array.find(([code]) => String(code) === '20002'):`, check20002_3 ? `Found - Balance: $${check20002_3[1].balance}` : 'NOT FOUND');
     
+    // Debug: Check if account 2000 exists BEFORE processing liabilities
+    const apAccountCheck = accountBalances.get('2000');
+    console.log(`🔍 Checking for account 2000 BEFORE liability processing:`, apAccountCheck ? {
+      code: apAccountCheck.code,
+      name: apAccountCheck.name,
+      type: apAccountCheck.type,
+      balance: apAccountCheck.balance,
+      debit: apAccountCheck.debit,
+      credit: apAccountCheck.credit
+    } : 'NOT FOUND');
+    if (!apAccountCheck) {
+      console.log(`   Available account codes:`, Array.from(accountBalances.keys()).filter(k => k.includes('200') || k === '2000').slice(0, 10));
+    }
+    
     accountBalances.forEach((account, code) => {
       const accountCode = String(code); // Normalize to string
+      
+      // Debug: Log account 2000 specifically
+      if (accountCode === '2000') {
+        console.log(`🔍 Processing account 2000: Type = "${account.type}", Category = "${account.category}", Balance = $${account.balance}, Debits = $${account.debit}, Credits = $${account.credit}`);
+      }
       
       // Debug: Log all deposit-related accounts (check both string and original code format)
       if (accountCode === '2020' || accountCode === '20002' || accountCode === '2002' || accountCode === '20001' ||
@@ -750,15 +958,24 @@ class SimpleBalanceSheetService {
           console.log(`📝 Also added deposit account ${accountCode} (${account.name}) to current liabilities with key "${depositKey}": $${Math.max(0, finalDepositBalance)}`);
         } else {
           // Include ALL liability accounts from the Account collection, regardless of balance
-        if (code === '2000') {
+        if (accountCode === '2000') {
           // Main Accounts Payable (with aggregated child accounts)
+          console.log(`📊 Setting Accounts Payable (2000) balance: $${account.balance} (Debits: $${account.debit}, Credits: $${account.credit})`);
+          console.log(`   Account details:`, {
+            code: account.code,
+            name: account.name,
+            type: account.type,
+            balance: account.balance,
+            debit: account.debit,
+            credit: account.credit
+          });
           balanceSheet.liabilities.current.accountsPayable.amount = account.balance;
-          balanceSheet.liabilities.current.accountsPayable.accountCode = code;
+          balanceSheet.liabilities.current.accountsPayable.accountCode = accountCode;
           balanceSheet.liabilities.current.accountsPayable.accountName = account.name;
-        } else if (code === '2200') {
+        } else if (accountCode === '2200') {
           // Deferred Income
           balanceSheet.liabilities.current.deferredIncome.amount = account.balance;
-          balanceSheet.liabilities.current.deferredIncome.accountCode = code;
+          balanceSheet.liabilities.current.deferredIncome.accountCode = accountCode;
           balanceSheet.liabilities.current.deferredIncome.accountName = account.name;
         } else if (!this.isAccountsPayableChildAccount(code, accountMap)) {
           // ALL other liabilities - categorize into current or non-current
@@ -928,6 +1145,25 @@ class SimpleBalanceSheetService {
     // Total assets
     balanceSheet.assets.total = balanceSheet.assets.current.total + balanceSheet.assets.nonCurrent.total;
     
+    // CRITICAL FIX: Ensure Accounts Payable balance is ALWAYS set correctly
+    // accountBalances parameter IS the aggregatedBalances (see function call)
+    const apAccountFromBalances = accountBalances.get('2000');
+    if (apAccountFromBalances) {
+      // ALWAYS set it from accountBalances - this is the source of truth
+      const currentAPAmount = balanceSheet.liabilities.current.accountsPayable.amount || 0;
+      balanceSheet.liabilities.current.accountsPayable.amount = apAccountFromBalances.balance;
+      balanceSheet.liabilities.current.accountsPayable.accountCode = '2000';
+      balanceSheet.liabilities.current.accountsPayable.accountName = apAccountFromBalances.name || 'Accounts Payable';
+      
+      if (Math.abs(apAccountFromBalances.balance - currentAPAmount) > 0.01) {
+        console.log(`⚠️ FIXED: Accounts Payable balance was incorrect!`);
+        console.log(`   Was: $${currentAPAmount}, Now: $${apAccountFromBalances.balance}`);
+      }
+    } else {
+      console.log(`⚠️ WARNING: Account 2000 NOT FOUND in accountBalances when calculating totals!`);
+      console.log(`   Available account codes:`, Array.from(accountBalances.keys()).filter(k => k.includes('200') || k === '2000').slice(0, 10));
+    }
+    
     // Current liabilities total
     const otherCurrentLiabilitiesTotal = Object.values(balanceSheet.liabilities.current.otherCurrentLiabilities || {})
       .reduce((sum, acc) => sum + (acc.amount || 0), 0);
@@ -936,6 +1172,13 @@ class SimpleBalanceSheetService {
       (balanceSheet.liabilities.current.tenantDeposits.amount || 0) +
       (balanceSheet.liabilities.current.deferredIncome.amount || 0) +
       otherCurrentLiabilitiesTotal;
+    
+    console.log(`📊 Final Current Liabilities Breakdown:`);
+    console.log(`   Accounts Payable: $${balanceSheet.liabilities.current.accountsPayable.amount || 0}`);
+    console.log(`   Tenant Deposits: $${balanceSheet.liabilities.current.tenantDeposits.amount || 0}`);
+    console.log(`   Deferred Income: $${balanceSheet.liabilities.current.deferredIncome.amount || 0}`);
+    console.log(`   Other Current Liabilities: $${otherCurrentLiabilitiesTotal}`);
+    console.log(`   Total Current Liabilities: $${balanceSheet.liabilities.current.total}`);
     
     // Non-current liabilities total
     balanceSheet.liabilities.nonCurrent.total = 
@@ -1033,10 +1276,28 @@ class SimpleBalanceSheetService {
         status: 'posted'
       };
       
-      // Add residence filtering if specified
+      // Add residence filtering if specified - handle both ObjectId and string formats
       if (residence) {
-        revenueQuery['residence'] = residence;
-        expenseQuery['residence'] = residence;
+        const mongoose = require('mongoose');
+        const residenceObjectId = mongoose.Types.ObjectId.isValid(residence) 
+          ? new mongoose.Types.ObjectId(residence) 
+          : residence;
+        
+        // Use $or to match residence in multiple possible formats
+        const residenceFilter = {
+          $or: [
+            { residence: residenceObjectId },
+            { residence: residence.toString() },
+            { 'metadata.residenceId': residenceObjectId },
+            { 'metadata.residenceId': residence.toString() },
+            { 'metadata.residence': residenceObjectId },
+            { 'metadata.residence': residence.toString() }
+          ]
+        };
+        
+        // Combine with existing query conditions
+        revenueQuery = { $and: [revenueQuery, residenceFilter] };
+        expenseQuery = { $and: [expenseQuery, residenceFilter] };
       }
       
       const revenueEntries = await TransactionEntry.find(revenueQuery);
@@ -1100,10 +1361,34 @@ class SimpleBalanceSheetService {
       const startOfMonth = new Date(year, month - 1, 1);
       const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999); // End of month
       
-      const transactions = await TransactionEntry.find({
-        date: { $gte: startOfMonth, $lte: endOfMonth },
-        ...(residence && { residence: residence })
-      });
+      const query = {
+        date: { $gte: startOfMonth, $lte: endOfMonth }
+      };
+      
+      // Add residence filtering if specified - handle both ObjectId and string formats
+      if (residence) {
+        const mongoose = require('mongoose');
+        const residenceObjectId = mongoose.Types.ObjectId.isValid(residence) 
+          ? new mongoose.Types.ObjectId(residence) 
+          : residence;
+        
+        const existingConditions = { ...query };
+        query.$and = [
+          existingConditions,
+          {
+            $or: [
+              { residence: residenceObjectId },
+              { residence: residence.toString() },
+              { 'metadata.residenceId': residenceObjectId },
+              { 'metadata.residenceId': residence.toString() },
+              { 'metadata.residence': residenceObjectId },
+              { 'metadata.residence': residence.toString() }
+            ]
+          }
+        ];
+      }
+      
+      const transactions = await TransactionEntry.find(query);
       
       console.log(`🔍 Found ${transactions.length} transactions for ${month}/${year}`);
       
@@ -1165,10 +1450,34 @@ class SimpleBalanceSheetService {
       }
       
       // Get all transactions up to the as-of date
-      const transactions = await TransactionEntry.find({
-        date: { $lte: asOfDate },
-        ...(residence && { residence: residence })
-      });
+      const query = {
+        date: { $lte: asOfDate }
+      };
+      
+      // Add residence filtering if specified - handle both ObjectId and string formats
+      if (residence) {
+        const mongoose = require('mongoose');
+        const residenceObjectId = mongoose.Types.ObjectId.isValid(residence) 
+          ? new mongoose.Types.ObjectId(residence) 
+          : residence;
+        
+        const existingConditions = { ...query };
+        query.$and = [
+          existingConditions,
+          {
+            $or: [
+              { residence: residenceObjectId },
+              { residence: residence.toString() },
+              { 'metadata.residenceId': residenceObjectId },
+              { 'metadata.residenceId': residence.toString() },
+              { 'metadata.residence': residenceObjectId },
+              { 'metadata.residence': residence.toString() }
+            ]
+          }
+        ];
+      }
+      
+      const transactions = await TransactionEntry.find(query);
       
       let totalIncome = 0;
       let totalExpenses = 0;
@@ -1229,10 +1538,34 @@ class SimpleBalanceSheetService {
       const startDate = new Date(year, 0, 1); // January 1st
       const endDate = new Date(year, 11, 31); // December 31st
       
-      const transactions = await TransactionEntry.find({
-        date: { $gte: startDate, $lte: endDate },
-        ...(residence && { residence: residence })
-      });
+      const query = {
+        date: { $gte: startDate, $lte: endDate }
+      };
+      
+      // Add residence filtering if specified - handle both ObjectId and string formats
+      if (residence) {
+        const mongoose = require('mongoose');
+        const residenceObjectId = mongoose.Types.ObjectId.isValid(residence) 
+          ? new mongoose.Types.ObjectId(residence) 
+          : residence;
+        
+        const existingConditions = { ...query };
+        query.$and = [
+          existingConditions,
+          {
+            $or: [
+              { residence: residenceObjectId },
+              { residence: residence.toString() },
+              { 'metadata.residenceId': residenceObjectId },
+              { 'metadata.residenceId': residence.toString() },
+              { 'metadata.residence': residenceObjectId },
+              { 'metadata.residence': residence.toString() }
+            ]
+          }
+        ];
+      }
+      
+      const transactions = await TransactionEntry.find(query);
       
       let totalIncome = 0;
       let totalExpenses = 0;

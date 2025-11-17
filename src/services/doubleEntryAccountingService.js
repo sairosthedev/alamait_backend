@@ -2655,9 +2655,23 @@ class DoubleEntryAccountingService {
                 return '5007'; // Property Maintenance
             }
             
-            // Supplies and materials
+            // Fuel and transportation related
+            if (desc.includes('fuel') || desc.includes('gas') || desc.includes('petrol') || 
+                desc.includes('diesel') || desc.includes('transport') || desc.includes('vehicle')) {
+                return '5011'; // Maintenance Supplies (or could be Transportation if that account exists)
+            }
+            
+            // Food and meals
+            if (desc.includes('food') || desc.includes('meal') || desc.includes('lunch') || 
+                desc.includes('dinner') || desc.includes('breakfast') || desc.includes('catering')) {
+                return '5011'; // Maintenance Supplies (or could be Meals & Entertainment if that account exists)
+            }
+            
+            // Supplies and materials (including twine, oil, etc.)
             if (desc.includes('supply') || desc.includes('material') || desc.includes('part') ||
-                desc.includes('tool') || desc.includes('equipment') || desc.includes('hardware')) {
+                desc.includes('tool') || desc.includes('equipment') || desc.includes('hardware') ||
+                desc.includes('twine') || desc.includes('oil') || desc.includes('lubricant') ||
+                desc.includes('rope') || desc.includes('string') || desc.includes('wire')) {
                 return '5011'; // Maintenance Supplies
             }
             
@@ -2704,13 +2718,42 @@ class DoubleEntryAccountingService {
                 }
             }
             
-            // Strategy 2: Use request type
-            if (request.type) {
+            // Strategy 2: Use intelligent name matching on description (prioritize this for operational requests)
+            // This should run before request type to catch specific items like fuel, food, etc.
+            if (item.description) {
+                const descAccount = await this.resolveExpenseAccountByDescription(item.description);
+                // If description matching found a specific account (not default 5007), use it
+                if (descAccount !== '5007') {
+                    return descAccount;
+                }
+                // For operational requests, even if description returns 5007, continue to check request category
+                // This allows request category to override the default for operational requests
+            }
+            
+            // Strategy 3: Use request category for operational requests (before request type)
+            // This is important because operational requests can have different categories (cleaning, security, etc.)
+            if (request.type === 'operational' && request.category) {
+                const categoryMap = {
+                    'cleaning': '5009',         // Cleaning Services
+                    'security': '5014',         // Security Services
+                    'landscaping': '5012',      // Garden & Landscaping
+                    'maintenance': '5007',      // Property Maintenance
+                    'supplies': '5011',         // Maintenance Supplies
+                    'utilities': '5003',        // Utilities - Electricity
+                    'services': '5062'          // Professional Fees
+                };
+                
+                if (categoryMap[request.category.toLowerCase()]) {
+                    return categoryMap[request.category.toLowerCase()];
+                }
+            }
+            
+            // Strategy 4: Use request type (but not for operational - already handled above)
+            if (request.type && request.type !== 'operational') {
                 const typeMap = {
                     'maintenance': '5007',         // Property Maintenance
                     'student_maintenance': '5007', // Property Maintenance
                     'financial': '5062',           // Professional Fees
-                    'operational': '5007',         // Property Maintenance
                     'administrative': '5062'       // Professional Fees
                 };
                 
@@ -2719,17 +2762,12 @@ class DoubleEntryAccountingService {
                 }
             }
             
-            // Strategy 3: Use intelligent name matching on description
-            if (item.description) {
-                return await this.resolveExpenseAccountByDescription(item.description);
-            }
-            
-            // Strategy 4: Use request title for context
+            // Strategy 5: Use request title for context
             if (request.title) {
                 return await this.resolveExpenseAccountByDescription(request.title);
             }
             
-            // Strategy 5: Fallback to maintenance expense
+            // Strategy 6: Fallback to maintenance expense
             return '5007'; // Property Maintenance
             
         } catch (error) {

@@ -21,11 +21,11 @@ class TransactionController {
      */
     static async getAllTransactions(req, res) {
         try {
-            const { page = 1, limit = 50, type, startDate, endDate, residence, source, userId } = req.query;
+            const { page = 1, limit = 50, type, startDate, endDate, residence, source, userId, studentId } = req.query;
             
             console.log('🔍 Fetching all transactions with filters:', req.query);
             
-            const query = {};
+            let query = {};
             
             // Add filters
             if (type && type !== 'all') {
@@ -55,6 +55,57 @@ class TransactionController {
             
             if (residence) {
                 query.residence = residence;
+            }
+            
+            // Handle studentId - filter by student's AR account and metadata
+            // This must be done AFTER other filters to properly combine conditions
+            if (studentId) {
+                const mongoose = require('mongoose');
+                const studentIdObj = mongoose.Types.ObjectId.isValid(studentId) 
+                    ? new mongoose.Types.ObjectId(studentId) 
+                    : studentId;
+                const studentIdString = studentId.toString();
+                
+                // Also try to get the first 8 characters (some account codes use shortened IDs)
+                const studentIdShort = studentIdString.length >= 8 ? studentIdString.substring(0, 8) : studentIdString;
+                
+                console.log(`🔍 Filtering transactions for studentId: ${studentIdString} (ObjectId: ${studentIdObj})`);
+                
+                // Build comprehensive query for student transactions
+                // This includes rent accruals, payments, and other student-related transactions
+                const studentQuery = {
+                    $or: [
+                        // Match by student's AR account code (format: 1100-{studentId})
+                        // Try both full ID and shortened version
+                        { 'entries.accountCode': { $regex: `^1100-${studentIdString}` } },
+                        { 'entries.accountCode': { $regex: `^1100-${studentIdShort}` } },
+                        // Match by metadata.studentId (for accruals and payments) - try both string and ObjectId
+                        { 'metadata.studentId': studentIdString },
+                        { 'metadata.studentId': studentIdObj },
+                        // Also check if studentId is stored as userId in metadata
+                        { 'metadata.userId': studentIdString },
+                        { 'metadata.userId': studentIdObj },
+                        // Match by sourceId (for payments)
+                        { sourceId: studentIdObj },
+                        { sourceId: studentIdString },
+                        // Match by reference field (for lease start and other transactions)
+                        { reference: { $regex: studentIdString, $options: 'i' } },
+                        // Match transactionId that might contain student ID
+                        { transactionId: { $regex: studentIdString, $options: 'i' } }
+                    ]
+                };
+                
+                // Combine student query with existing query conditions using $and
+                // This ensures all filters (source, type, date, residence) are still applied
+                const existingConditions = { ...query };
+                query = {
+                    $and: [
+                        existingConditions,
+                        studentQuery
+                    ]
+                };
+                
+                console.log(`📋 Final query structure:`, JSON.stringify(query, null, 2));
             }
             
             const skip = (parseInt(page) - 1) * parseInt(limit);
