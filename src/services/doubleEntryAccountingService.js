@@ -625,14 +625,36 @@ class DoubleEntryAccountingService {
                                : (request.year && request.month ? new Date(request.year, request.month - 1, 1)
                                : (request.createdAt ? new Date(request.createdAt) : new Date()))));
             
+            // CRITICAL: Normalize residence to ObjectId BEFORE creating transaction
+            // request.residence could be ObjectId, populated object, string, or null
+            let normalizedResidence = null;
+            if (request.residence) {
+                if (request.residence._id) {
+                    // Populated object - extract _id
+                    normalizedResidence = request.residence._id;
+                } else if (mongoose.Types.ObjectId.isValid(request.residence)) {
+                    // Already an ObjectId or valid string
+                    normalizedResidence = new mongoose.Types.ObjectId(request.residence);
+                } else {
+                    console.warn(`⚠️ Invalid residence format for request ${request._id}:`, request.residence);
+                }
+            }
+            
+            if (!normalizedResidence) {
+                console.error(`❌ ERROR: Request ${request._id} has no valid residence! Cannot create transaction.`);
+                throw new Error(`Request ${request._id} must have a valid residence to create expense accrual transaction`);
+            }
+            
+            console.log(`📍 Setting residence for transaction: ${normalizedResidence} (from request ${request._id})`);
+            
             const transaction = new Transaction({
                 transactionId,
                 date: accrualDate,
                 description: `${request.vendorName || 'Vendor'} maintenance approval`,
                 type: 'approval',
                 reference: request._id.toString(),
-                residence: request.residence,
-                residenceName: request.residence?.name || 'Unknown Residence',
+                residence: normalizedResidence, // CRITICAL: Always use normalized ObjectId
+                residenceName: request.residence?.name || (typeof request.residence === 'object' && request.residence.name) || 'Unknown Residence',
                 createdBy: user._id
             });
 
@@ -669,12 +691,14 @@ class DoubleEntryAccountingService {
                         credit: selectedQuotation.amount,
                         description: `Payable to ${selectedQuotation.provider}`
                     });
-                } else if (request.proposedVendor || item.provider) {
+                } else if (request.proposedVendor || request.vendorName || item.provider) {
                     // ✅ NEW: Items with providers but no quotations
-                    const provider = request.proposedVendor || item.provider;
+                    // Check request-level vendor first, then item-level
+                    const provider = request.proposedVendor || request.vendorName || item.provider;
+                    const vendorId = request.vendorId || null; // Use request-level vendorId if available
                     const amount = item.totalCost || item.estimatedCost || 0;
                     
-                    console.log(`💰 Processing item with provider but no quotation: ${provider} - $${amount}`);
+                    console.log(`💰 Processing item with provider but no quotation: provider="${provider}", vendorId="${vendorId}", amount=$${amount}`);
                     
                     // Debit: Resolved Expense Account
                     entries.push({
@@ -686,15 +710,17 @@ class DoubleEntryAccountingService {
                         description: `${expenseAccountName}: ${item.description}`
                     });
 
-                    // Credit: Accounts Payable: Provider
+                    // Credit: Accounts Payable: Provider (use vendorId if available for better account linking)
+                    const vendorAPAccountCode = await this.getOrCreateVendorPayableAccount(vendorId, provider);
                     entries.push({
-                        accountCode: await this.getOrCreateVendorPayableAccount(null, provider),
+                        accountCode: vendorAPAccountCode,
                         accountName: `Accounts Payable: ${provider}`,
                         accountType: 'Liability',
                         debit: 0,
                         credit: amount,
                         description: `Payable to ${provider}`
                     });
+                    console.log(`✅ Created AP entry for vendor: ${provider} using account ${vendorAPAccountCode}`);
                 } else {
                     // ✅ Items WITHOUT providers (general expenses)
                     const amount = item.totalCost || item.estimatedCost || 0;
@@ -732,7 +758,7 @@ class DoubleEntryAccountingService {
                 }
             }
 
-            // Create transaction entry
+            // Create transaction entry (residence already normalized above)
             const totalAmount = entries.reduce((sum, entry) => sum + entry.debit, 0);
             const transactionEntry = new TransactionEntry({
                 transactionId: transaction.transactionId,
@@ -745,7 +771,7 @@ class DoubleEntryAccountingService {
                 source: 'expense_accrual',
                 sourceId: request._id,
                 sourceModel: 'Request',
-                residence: request.residence, // Add residence reference
+                residence: normalizedResidence, // CRITICAL: Always use normalized ObjectId
                 createdBy: user.email,
                 status: 'posted',
                 metadata: {
@@ -753,6 +779,7 @@ class DoubleEntryAccountingService {
                     vendorName: request.vendorName,
                     itemCount: request.items.length,
                     expenseDate: accrualDate,
+                    residenceId: normalizedResidence.toString(), // Also store as string in metadata for queries
                     ...(request && request.itemIndex !== undefined ? { itemIndex: request.itemIndex } : {})
                 }
             });
@@ -798,7 +825,7 @@ class DoubleEntryAccountingService {
                 expense = new Expense({
                     expenseId: await generateUniqueId('EXP'),
                     requestId: request._id,
-                    residence: request.residence._id || request.residence,
+                    residence: normalizedResidence, // Use normalized residence from above
                     category: 'Maintenance',
                     amount: totalAmount,
                     description: `Maintenance: ${request.title}`,
@@ -953,6 +980,20 @@ class DoubleEntryAccountingService {
         try {
             console.log('📦 Recording supply purchase approval (accrual basis)');
             
+            // CRITICAL: Normalize residence to ObjectId
+            let normalizedResidence = null;
+            if (request.residence) {
+                if (request.residence._id) {
+                    normalizedResidence = request.residence._id;
+                } else if (mongoose.Types.ObjectId.isValid(request.residence)) {
+                    normalizedResidence = new mongoose.Types.ObjectId(request.residence);
+                }
+            }
+            
+            if (!normalizedResidence) {
+                throw new Error(`Request ${request._id} must have a valid residence to create supply purchase transaction`);
+            }
+            
             const transactionId = await this.generateTransactionId();
             const transaction = new Transaction({
                 transactionId,
@@ -960,8 +1001,8 @@ class DoubleEntryAccountingService {
                 description: `Supply purchase approval: ${request.title}`,
                 type: 'approval',
                 reference: request._id.toString(),
-                residence: request.residence,
-                residenceName: request.residence?.name || 'Unknown Residence',
+                residence: normalizedResidence, // CRITICAL: Always use normalized ObjectId
+                residenceName: request.residence?.name || (typeof request.residence === 'object' && request.residence.name) || 'Unknown Residence',
                 createdBy: user._id
             });
 
@@ -1009,8 +1050,12 @@ class DoubleEntryAccountingService {
                 source: 'expense_payment',
                 sourceId: request._id,
                 sourceModel: 'Request',
+                residence: normalizedResidence, // CRITICAL: Always use normalized ObjectId
                 createdBy: user.email,
-                status: 'posted'
+                status: 'posted',
+                metadata: {
+                    residenceId: normalizedResidence.toString() // Also store as string in metadata for queries
+                }
             });
 
             await transactionEntry.save();

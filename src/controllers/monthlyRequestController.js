@@ -2640,7 +2640,13 @@ async function convertRequestToExpenses(request, user) {
                     isTemplate: false,
                     itemIndex: i,
                     skipExpenseCreation: true,
-                    disableDuplicateCheck: true
+                    disableDuplicateCheck: true,
+                    // CRITICAL: Include vendor information from request level
+                    proposedVendor: request.proposedVendor || null,
+                    vendorName: request.vendorName || null,
+                    vendorId: request.vendorId || null,
+                    vendorCode: request.vendorCode || null,
+                    paymentMethod: request.paymentMethod || null
                 };
 
                 const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user, request.approvedAt);

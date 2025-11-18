@@ -2402,7 +2402,13 @@ async function createItemizedExpensesForRequest(request, user, approvalDate) {
                         isTemplate: false,
                         itemIndex: i,
                         skipExpenseCreation: true, // Skip expense creation since we already created it
-                        disableDuplicateCheck: true
+                        disableDuplicateCheck: true,
+                        // CRITICAL: Include vendor information from request level (for items without quotations)
+                        proposedVendor: request.proposedVendor || null,
+                        vendorName: request.vendorName || null,
+                        vendorId: request.vendorId || null,
+                        vendorCode: request.vendorCode || null,
+                        paymentMethod: request.paymentMethod || null
                     };
 
                     const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user, approvalDate);
@@ -2488,7 +2494,13 @@ async function createItemizedExpensesForRequest(request, user, approvalDate) {
                         isTemplate: false,
                         itemIndex: i,
                         skipExpenseCreation: true, // Skip expense creation since we already created it
-                        disableDuplicateCheck: true
+                        disableDuplicateCheck: true,
+                        // CRITICAL: Include vendor information from request level
+                        proposedVendor: request.proposedVendor || null,
+                        vendorName: request.vendorName || null,
+                        vendorId: request.vendorId || null,
+                        vendorCode: request.vendorCode || null,
+                        paymentMethod: request.paymentMethod || null
                     };
 
                     const transactionResult = await DoubleEntryAccountingService.recordMaintenanceApproval(tempRequest, user, approvalDate);
