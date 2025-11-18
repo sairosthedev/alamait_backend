@@ -1,4 +1,4 @@
-
+const mongoose = require('mongoose');
 const FinancialReportingService = require('../services/financialReportingService');
 const EnhancedCashFlowService = require('../services/enhancedCashFlowService');
 const AccountingService = require('../services/accountingService');
@@ -793,23 +793,36 @@ class FinancialReportsController {
                 }, 240000); // 4 minutes timeout (increased to allow parallel processing)
             });
             
-            // Use residence-filtered service when residence is provided, otherwise use original service
-            let balanceSheetPromise;
+            // Always use BalanceSheetService with flexible residence filtering
+            // The service now handles both filtered and unfiltered requests
+            const BalanceSheetService = require('../services/balanceSheetService');
+            const numericPeriod = parseInt(period, 10);
+            
+            // Resolve residence to ObjectId if needed
+            let resolvedResidence = null;
             if (residence) {
-                // Use residence-filtered method when residence is specified
-                console.log(`✅ Using RESIDENCE-FILTERED balance sheet for residence: ${residence}`);
-                console.log(`🔍 Calling generateResidenceFilteredMonthlyBalanceSheet with: period=${period}, residence=${residence}, basis=${basis}`);
-                balanceSheetPromise = FinancialReportingService.generateResidenceFilteredMonthlyBalanceSheet(
-                    period,
-                    residence,
-                    basis
-                );
-            } else {
-                // Use original balance sheet service when no residence filter
-                console.log(`⚠️ Using ORIGINAL balance sheet (no residence filter)`);
-                const BalanceSheetService = require('../services/balanceSheetService');
-                balanceSheetPromise = BalanceSheetService.generateMonthlyBalanceSheet(period, residence, type);
+                if (mongoose.Types.ObjectId.isValid(residence)) {
+                    resolvedResidence = new mongoose.Types.ObjectId(residence);
+                } else {
+                    const Residence = require('../models/Residence');
+                    const residenceDoc = await Residence.findOne({ name: { $regex: new RegExp(residence, 'i') } }).select('_id name');
+                    if (!residenceDoc) {
+                        return res.status(404).json({
+                            success: false,
+                            message: `Residence not found: ${residence}`
+                        });
+                    }
+                    resolvedResidence = residenceDoc._id;
+                    console.log(`🏠 Resolved residence name "${residence}" to id ${resolvedResidence} (${residenceDoc.name})`);
+                }
             }
+            
+            console.log(`✅ Using BalanceSheetService for ${resolvedResidence ? `residence: ${resolvedResidence}` : 'all residences'}`);
+            const balanceSheetPromise = BalanceSheetService.generateMonthlyBalanceSheet(
+                numericPeriod, 
+                resolvedResidence ? resolvedResidence.toString() : null, 
+                type
+            );
             
             const monthlyBalanceSheet = await Promise.race([balanceSheetPromise, timeoutPromise]);
             
@@ -2307,9 +2320,9 @@ class FinancialReportsController {
      */
     static async getCashFlowAccountDetails(req, res) {
         try {
-            const { period, month, accountCode } = req.query;
+            const { period, month, accountCode, residenceId } = req.query;
             
-            console.log(`📊 Getting cash flow account details for account ${accountCode} in ${month} ${period}`);
+            console.log(`📊 Getting cash flow account details for account ${accountCode} in ${month} ${period}${residenceId ? ` (residence: ${residenceId})` : ''}`);
             
             if (!period || !accountCode) {
                 return res.status(400).json({
@@ -2360,11 +2373,12 @@ class FinancialReportsController {
             }
             
             // Generate cash flow data for the specific account
+            // IMPORTANT: Pass residenceId to match the filtered cash flow statement
             let cashFlowData = null;
             let accountData = null;
             
             try {
-                cashFlowData = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, 'cash');
+                cashFlowData = await EnhancedCashFlowService.generateDetailedCashFlowStatement(period, 'cash', residenceId);
                 
                 // Find the account in the cash flow data
                 // Search in income section (check both individual accounts and aggregated data)
@@ -2378,54 +2392,165 @@ class FinancialReportsController {
                     // For income accounts, check if they're part of aggregated income
                     const monthlyBreakdown = cashFlowData.monthly_breakdown;
                     
-                    // Check all months for income data
-                    for (const [monthKey, monthData] of Object.entries(monthlyBreakdown)) {
+                    // If month is specified, get data for that specific month
+                    // Cash flow service uses lowercase month names (e.g., "november"), not "2025-11"
+                    let targetMonthKey = null;
+                    if (month && period) {
+                        targetMonthKey = month.toLowerCase(); // e.g., "november"
+                    }
+                    
+                    // Check the specific month if provided, otherwise check all months
+                    const monthsToCheck = targetMonthKey ? [targetMonthKey] : Object.keys(monthlyBreakdown);
+                    
+                    // Sum across all months if no specific month is requested
+                    let totalRentalIncome = 0;
+                    let totalAdminFees = 0;
+                    let totalDeposits = 0;
+                    
+                    for (const monthKey of monthsToCheck) {
+                        const monthData = monthlyBreakdown[monthKey];
                         if (monthData && monthData.income) {
                             const incomeData = monthData.income;
                             
-                            // Map account codes to income categories
+                            // Sum income across all months
                             if (accountCode === '4001' && incomeData.rental_income) {
-                                // This is the rental income account
-                                accountData = {
-                                    totalCredit: incomeData.rental_income,
-                                    totalDebit: 0,
-                                    netAmount: incomeData.rental_income,
-                                    transactionCount: 0, // Will be calculated from transactions
-                                    type: 'income',
-                                    category: 'income',
-                                    month: monthKey
-                                };
-                                break;
+                                totalRentalIncome += incomeData.rental_income || 0;
                             } else if (accountCode === '4002' && incomeData.admin_fees) {
-                                // Admin fees account
-                                accountData = {
-                                    totalCredit: incomeData.admin_fees,
-                                    totalDebit: 0,
-                                    netAmount: incomeData.admin_fees,
-                                    transactionCount: 0,
-                                    type: 'income',
-                                    category: 'income',
-                                    month: monthKey
-                                };
-                                break;
+                                totalAdminFees += incomeData.admin_fees || 0;
                             } else if (accountCode === '4003' && incomeData.deposits) {
-                                // Deposits account
-                                accountData = {
-                                    totalCredit: incomeData.deposits,
-                                    totalDebit: 0,
-                                    netAmount: incomeData.deposits,
-                                    transactionCount: 0,
-                                    type: 'income',
-                                    category: 'income',
-                                    month: monthKey
-                                };
-                                break;
+                                totalDeposits += incomeData.deposits || 0;
                             }
                         }
                     }
+                    
+                    // Set accountData based on account code (even if total is 0, to match cash flow statement)
+                    if (accountCode === '4001') {
+                        accountData = {
+                            totalCredit: totalRentalIncome,
+                            totalDebit: 0,
+                            netAmount: totalRentalIncome,
+                            transactionCount: 0, // Will be calculated from transactions
+                            type: 'income',
+                            category: 'income'
+                        };
+                    } else if (accountCode === '4002') {
+                        accountData = {
+                            totalCredit: totalAdminFees,
+                            totalDebit: 0,
+                            netAmount: totalAdminFees,
+                            transactionCount: 0,
+                            type: 'income',
+                            category: 'income'
+                        };
+                    } else if (accountCode === '4003') {
+                        accountData = {
+                            totalCredit: totalDeposits,
+                            totalDebit: 0,
+                            netAmount: totalDeposits,
+                            transactionCount: 0,
+                            type: 'income',
+                            category: 'income'
+                        };
+                    }
                 }
                 
-                // Search in expenses section
+                // Search in expenses section - check monthly breakdown for expense categories
+                if (!accountData && account.type === 'Expense' && cashFlowData.monthly_breakdown) {
+                    const monthlyBreakdown = cashFlowData.monthly_breakdown;
+                    
+                    // If month is specified, get data for that specific month
+                    let targetMonthKey = null;
+                    if (month && period) {
+                        targetMonthKey = month.toLowerCase(); // e.g., "november"
+                    }
+                    
+                    // Check the specific month if provided, otherwise check all months
+                    const monthsToCheck = targetMonthKey ? [targetMonthKey] : Object.keys(monthlyBreakdown);
+                    
+                    // Map expense account codes to cash flow service expense categories
+                    const expenseCategoryMap = {
+                        // Map account codes/names to expense categories used by cash flow service
+                        '5001': 'maintenance',
+                        '5002': 'cleaning',
+                        '5003': 'electricity',
+                        '5004': 'water',
+                        '5005': 'gas',
+                        '5006': 'internet',
+                        '5007': 'security',
+                        '5008': 'management',
+                        '5012': 'insurance',
+                        // Add more mappings as needed
+                    };
+                    
+                    // Also check by account name keywords
+                    const accountNameLower = (account.name || '').toLowerCase();
+                    let expenseCategory = null;
+                    
+                    if (accountNameLower.includes('council') || accountNameLower.includes('rates')) {
+                        expenseCategory = 'council_rates';
+                    } else if (accountNameLower.includes('maintenance')) {
+                        expenseCategory = 'maintenance';
+                    } else if (accountNameLower.includes('cleaning')) {
+                        expenseCategory = 'cleaning';
+                    } else if (accountNameLower.includes('electricity')) {
+                        expenseCategory = 'electricity';
+                    } else if (accountNameLower.includes('water')) {
+                        expenseCategory = 'water';
+                    } else if (accountNameLower.includes('gas')) {
+                        expenseCategory = 'gas';
+                    } else if (accountNameLower.includes('internet') || accountNameLower.includes('wifi')) {
+                        expenseCategory = 'internet';
+                    } else if (accountNameLower.includes('security')) {
+                        expenseCategory = 'security';
+                    } else if (accountNameLower.includes('management')) {
+                        expenseCategory = 'management';
+                    } else if (accountNameLower.includes('insurance')) {
+                        expenseCategory = 'insurance';
+                    } else if (accountNameLower.includes('plumbing')) {
+                        expenseCategory = 'plumbing';
+                    } else if (accountNameLower.includes('sanitary')) {
+                        expenseCategory = 'sanitary';
+                    } else if (accountNameLower.includes('solar')) {
+                        expenseCategory = 'solar';
+                    } else {
+                        // Try account code mapping
+                        expenseCategory = expenseCategoryMap[accountCode];
+                    }
+                    
+                    // If we found a category, get the amount from monthly breakdown
+                    // Prioritize operating_activities.breakdown (what cash flow statement uses)
+                    if (expenseCategory) {
+                        let totalExpense = 0;
+                        for (const monthKey of monthsToCheck) {
+                            const monthData = monthlyBreakdown[monthKey];
+                            if (monthData) {
+                                // Check operating_activities.breakdown first (cash flow service uses this for display)
+                                if (monthData.operating_activities && monthData.operating_activities.breakdown) {
+                                    const breakdownValue = monthData.operating_activities.breakdown[expenseCategory];
+                                    if (breakdownValue !== undefined && breakdownValue !== null) {
+                                        totalExpense += breakdownValue || 0;
+                                    }
+                                }
+                                // Fallback to expenses object if breakdown doesn't have it
+                                else if (monthData.expenses && monthData.expenses[expenseCategory] !== undefined) {
+                                    totalExpense += monthData.expenses[expenseCategory] || 0;
+                                }
+                            }
+                        }
+                        
+                        // Always set accountData if we found a category (even if total is 0, to match cash flow statement)
+                        accountData = {
+                            totalDebit: totalExpense,
+                            totalCredit: 0,
+                            netAmount: totalExpense,
+                            transactionCount: 0, // Will be calculated from transactions
+                            type: 'expense',
+                            category: 'expense'
+                        };
+                    }
+                }
+                
+                // Also check direct expenses object (fallback)
                 if (!accountData && cashFlowData.expenses && cashFlowData.expenses[accountCode]) {
                     accountData = {
                         ...cashFlowData.expenses[accountCode],
@@ -2515,16 +2640,31 @@ class FinancialReportsController {
             // 1. Payment transactions (cash received) - these have cash (1000) and AR (1100-...)
             // 2. Accrual transactions (income earned) - these have the income account code (4001) directly
             if (account.type === 'Income') {
-                // Query both payment transactions (cash received) AND accrual transactions (income earned)
+                // For cash flow account details, query payment transactions (cash received)
+                // Match the same sources as the cash flow service uses
                 query = {
                     $or: [
                         {
-                            // Payment transactions: cash received
+                            // Payment transactions: cash received (match cash flow service sources)
                             'entries.accountCode': { $regex: '^1000' }, // Has cash account entry
-                            source: { $in: ['payment', 'accounts_receivable_collection'] }
+                            source: { 
+                                $in: [
+                                    'payment', 
+                                    'expense_payment', 
+                                    'rental_payment', 
+                                    'manual', 
+                                    'payment_collection', 
+                                    'bank_transfer', 
+                                    'advance_payment', 
+                                    'debt_settlement', 
+                                    'current_payment',
+                                    'accounts_receivable_collection'
+                                ] 
+                            }
                         },
                         {
                             // Accrual transactions: income earned (lease start, monthly accruals)
+                            // Note: These will be filtered out later for cash flow, but included here for query completeness
                             'entries.accountCode': accountCode, // Has the income account code directly
                             source: { $in: ['rental_accrual', 'expense_accrual'] }
                         }
@@ -2571,7 +2711,8 @@ class FinancialReportsController {
             };
             }
             
-            // Add date filter if period is specified
+            // Add date filter - use transaction date (same as cash flow service)
+            // For cash flow, we use transaction date, not allocation month
             if (period && period.length === 4) {
                 // Year filter
                 if (month) {
@@ -2579,9 +2720,9 @@ class FinancialReportsController {
                     const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
                     const monthIndex = monthNames.indexOf(month.toLowerCase());
                     if (monthIndex !== -1) {
-                        // Specific month within the year
+                        // Specific month within the year - use transaction date
                         const startDate = new Date(parseInt(period), monthIndex, 1);
-                        const endDate = new Date(parseInt(period), monthIndex + 1, 0); // Last day of the month
+                        const endDate = new Date(parseInt(period), monthIndex + 1, 0, 23, 59, 59, 999); // Last day of the month
                         query.date = { $gte: startDate, $lte: endDate };
                     } else {
                         // Year only
@@ -2598,48 +2739,111 @@ class FinancialReportsController {
             } else if (period && period.includes('-')) {
                 // Month filter (YYYY-MM)
                 const startDate = new Date(`${period}-01`);
-                const endDate = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0);
+                const endDate = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0, 23, 59, 59, 999);
                 query.date = { $gte: startDate, $lte: endDate };
             }
+            
+            // Add residence filtering if specified (same as cash flow service)
+            if (residenceId) {
+                const mongoose = require('mongoose');
+                const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId) 
+                    ? new mongoose.Types.ObjectId(residenceId) 
+                    : residenceId;
+                
+                // Build residence filter (same as cash flow service)
+                const residenceFilter = {
+                    residence: residenceObjectId
+                };
+                
+                // If query has $or, wrap both in $and
+                if (query.$or && Array.isArray(query.$or)) {
+                    query = {
+                        $and: [
+                            { $or: query.$or },
+                            residenceFilter
+                        ]
+                    };
+                } else {
+                    // For simple queries, add residence filter using $and
+                    query = {
+                        $and: [
+                            query,
+                            residenceFilter
+                        ]
+                    };
+                }
+                
+                console.log(`🔍 Filtering transactions by residence: ${residenceId}`);
+            }
+            
+            // Add forfeiture exclusion (same as cash flow service)
+            query['metadata.isForfeiture'] = { $ne: true };
             
             let transactions = await TransactionEntry.find(query)
                 .sort({ date: -1 })
                 .limit(500); // Get more transactions to filter by description
             
-            // For income accounts, include both payment transactions (cash received) and accrual transactions (income earned)
+            // For income accounts in cash flow, ONLY include payment transactions (cash received)
+            // Use the EXACT same categorization logic as the cash flow service
             if (account.type === 'Income') {
+                // First, filter by month metadata if month is specified
+                // Payment allocations use monthSettled metadata to indicate which month they belong to
+                if (month && period) {
+                    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+                    const monthIndex = monthNames.indexOf(month.toLowerCase());
+                    if (monthIndex !== -1) {
+                        const requestedMonth = monthIndex + 1; // 1-based month
+                        const requestedYear = parseInt(period);
+                        const requestedMonthKey = `${requestedYear}-${String(requestedMonth).padStart(2, '0')}`; // e.g., "2025-11"
+                        
+                        transactions = transactions.filter(tx => {
+                            // For cash flow, use ONLY transaction date (when cash was received)
+                            // Do NOT use monthSettled or description parsing - cash flow is about when cash moved
+                            const txDate = new Date(tx.date);
+                            const txYear = txDate.getFullYear();
+                            const txMonth = txDate.getMonth() + 1;
+                            
+                            // Only include if transaction date matches requested month
+                            return txYear === requestedYear && txMonth === requestedMonth;
+                        });
+                        
+                        console.log(`📅 Filtered transactions by month ${requestedMonthKey}: ${transactions.length} transactions remaining`);
+                    }
+                }
+                
                 transactions = transactions.filter(tx => {
-                    // Check if this is an accrual transaction (has the income account code directly)
-                    const incomeEntry = tx.entries.find(e => e.accountCode === accountCode);
-                    if (incomeEntry && (incomeEntry.credit > 0 || incomeEntry.debit > 0)) {
-                        // This is an accrual transaction - include it
-                        // Filter by description to match the income account type
-                        const description = (tx.description || '').toLowerCase();
-                        if (accountCode === '4001') {
-                            // Rent income - look for "rent", "lease", "accrual" in description
-                            return description.includes('rent') || 
-                                   description.includes('lease') || 
-                                   description.includes('accrual') ||
-                                   description.includes('income');
-                        } else if (accountCode === '4002') {
-                            // Admin fees - look for "admin" or "fee" in description
-                            return description.includes('admin') || description.includes('fee');
-                        }
-                        // For other income accounts, include all accrual transactions
-                        return true;
+                    // Exclude accrual transactions - they don't involve cash
+                    if (tx.source === 'rental_accrual' || tx.source === 'expense_accrual') {
+                        return false;
                     }
                     
-                    // Otherwise, check if this is a payment transaction (cash received)
-                    const cashEntry = tx.entries.find(e => e.accountCode.match(/^1000/));
+                    // Exclude transactions with "accrual" in description (unless it's a payment allocation)
+                    const description = (tx.description || '').toLowerCase();
+                    if (description.includes('accrual') && !description.includes('payment allocation')) {
+                        return false;
+                    }
+                    
+                    // Only include payment transactions (cash received)
+                    // Must have cash account entry (1000 series) with debit (cash coming in)
+                    const cashEntry = tx.entries.find(e => {
+                        const code = e.accountCode || '';
+                        return code.match(/^100/) && (e.accountName?.toLowerCase().includes('cash') || e.accountName?.toLowerCase().includes('bank'));
+                    });
+                    
                     if (cashEntry && cashEntry.debit > 0) {
-                        // This is a payment transaction - filter by description
-                        const description = (tx.description || '').toLowerCase();
+                        // This is a payment transaction - categorize using same logic as cash flow service
                         if (accountCode === '4001') {
-                            // Rent income - look for "rent" in description
-                            return description.includes('rent');
+                            // Rental income - match cash flow service logic exactly
+                            // Check for: "rent", "rental", "accommodation", or "payment allocation" in description
+                            return description.includes('rent') || 
+                                   description.includes('rental') || 
+                                   description.includes('accommodation') || 
+                                   description.includes('payment allocation');
                         } else if (accountCode === '4002') {
-                            // Admin fees - look for "admin" or "fee" in description
-                            return description.includes('admin') || description.includes('fee');
+                            // Admin fees - match cash flow service logic
+                            return description.includes('admin') || 
+                                   description.includes('administrative') || 
+                                   description.includes('fee');
                         }
                         // For other income accounts, include all payment transactions
                         return true;
@@ -2648,9 +2852,39 @@ class FinancialReportsController {
                     return false;
                 });
                 
+                // Deduplicate transactions by transaction ID (in case same transaction appears multiple times)
+                const seenTransactionIds = new Set();
+                transactions = transactions.filter(tx => {
+                    const txId = tx._id?.toString() || tx.id?.toString() || tx.transactionId;
+                    if (seenTransactionIds.has(txId)) {
+                        return false; // Skip duplicate
+                    }
+                    seenTransactionIds.add(txId);
+                    return true;
+                });
+                
                 // Limit to 100 after filtering
                 transactions = transactions.slice(0, 100);
             } else if (account.type === 'Expense') {
+                // First, filter by month if month is specified (expenses use transaction date)
+                // For expenses, we use transaction date for month filtering (not monthSettled like payments)
+                if (month && period) {
+                    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+                    const monthIndex = monthNames.indexOf(month.toLowerCase());
+                    if (monthIndex !== -1) {
+                        const requestedMonth = monthIndex + 1; // 1-based month
+                        const requestedYear = parseInt(period);
+                        
+                        transactions = transactions.filter(tx => {
+                            // For expenses, use transaction date (expenses are paid when incurred, not allocated to months)
+                            const txDate = new Date(tx.date);
+                            return txDate.getFullYear() === requestedYear && (txDate.getMonth() + 1) === requestedMonth;
+                        });
+                        
+                        console.log(`📅 Filtered expense transactions by month ${month} ${requestedYear}: ${transactions.length} transactions remaining`);
+                    }
+                }
+                
                 // For expense accounts, filter to include only expense-related transactions
                 transactions = transactions.filter(tx => {
                     // Check if transaction has the expense account code directly
@@ -2681,6 +2915,17 @@ class FinancialReportsController {
                     }
                     
                     return false;
+                });
+                
+                // Deduplicate transactions by transaction ID (in case same transaction appears multiple times)
+                const seenTransactionIds = new Set();
+                transactions = transactions.filter(tx => {
+                    const txId = tx._id?.toString() || tx.id?.toString() || tx.transactionId;
+                    if (seenTransactionIds.has(txId)) {
+                        return false; // Skip duplicate
+                    }
+                    seenTransactionIds.add(txId);
+                    return true;
                 });
                 
                 // Limit to 100 after filtering
@@ -2727,23 +2972,14 @@ class FinancialReportsController {
                 }
                 
                 if (account.type === 'Income') {
-                    // For income accounts, handle both:
-                    // 1. Payment transactions (cash received) - cash debit
-                    // 2. Accrual transactions (income earned) - income account credit
-                    const incomeEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
+                    // For income accounts in cash flow, only handle payment transactions (cash received)
+                    // Accruals are excluded as they don't involve actual cash movement
                     const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
                     
-                    if (incomeEntry && incomeEntry.credit > 0) {
-                        // This is an accrual transaction - use income account credit (income earned)
-                        const incomeAmount = incomeEntry.credit || 0;
-                        monthlyBreakdown[monthKey].totalDebit += incomeEntry.debit || 0;
-                        monthlyBreakdown[monthKey].totalCredit += incomeAmount; // Income earned = credit
-                        monthlyBreakdown[monthKey].netAmount += incomeAmount - (incomeEntry.debit || 0); // Net = credit - debit
-                        monthlyBreakdown[monthKey].transactionCount += 1;
-                    } else if (cashEntry && cashEntry.debit > 0) {
+                    if (cashEntry && cashEntry.debit > 0) {
                         // This is a payment transaction - use cash received amount (cash debit)
                         const cashAmount = cashEntry.debit || 0;
-                        monthlyBreakdown[monthKey].totalDebit += 0; // Income accounts don't have debits
+                        monthlyBreakdown[monthKey].totalDebit += 0; // Income accounts don't have debits in cash flow
                         monthlyBreakdown[monthKey].totalCredit += cashAmount; // Cash received = income credit
                         monthlyBreakdown[monthKey].netAmount += cashAmount; // Net amount = cash received
                         monthlyBreakdown[monthKey].transactionCount += 1;
@@ -2826,13 +3062,128 @@ class FinancialReportsController {
                 cashFlowType = 'deposit'; // Deposits are liability accounts
             }
             
-            const calculatedCashFlowData = {
-                totalCredit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalCredit, 0),
-                totalDebit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalDebit, 0),
-                netAmount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.netAmount, 0),
-                transactionCount: transactions.length,
-                type: cashFlowType
-            };
+            // Use cash flow service data if available (to ensure it matches the cash flow statement)
+            // Otherwise calculate from transactions
+            let finalCashFlowData;
+            let finalMonthlyBreakdown = monthlyBreakdown; // Default to transaction-based breakdown
+            
+            if (accountData && (accountData.totalCredit !== undefined || accountData.totalDebit !== undefined || accountData.netAmount !== undefined)) {
+                // Use the data from cash flow service (ensures it matches the cash flow statement)
+                // This works for both income (totalCredit) and expenses (totalDebit)
+                finalCashFlowData = {
+                    totalCredit: accountData.totalCredit || 0,
+                    totalDebit: accountData.totalDebit || 0,
+                    netAmount: accountData.netAmount !== undefined ? accountData.netAmount : (accountData.totalCredit || 0) - (accountData.totalDebit || 0),
+                    transactionCount: transactions.length,
+                    type: cashFlowType
+                };
+                
+                // Also use cash flow service's monthly breakdown if available
+                if (cashFlowData && cashFlowData.monthly_breakdown) {
+                    const cashFlowMonthlyBreakdown = cashFlowData.monthly_breakdown;
+                    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                                      'july', 'august', 'september', 'october', 'november', 'december'];
+                    
+                    // Build monthly breakdown from cash flow service data
+                    finalMonthlyBreakdown = {};
+                    
+                    // If month is specified, only process that month
+                    let monthsToProcess = monthNames;
+                    if (month && period) {
+                        const targetMonth = month.toLowerCase();
+                        if (monthNames.includes(targetMonth)) {
+                            monthsToProcess = [targetMonth];
+                        }
+                    }
+                    
+                    for (const monthName of monthsToProcess) {
+                        const monthData = cashFlowMonthlyBreakdown[monthName];
+                        if (!monthData) continue;
+                        
+                        let monthTotalCredit = 0;
+                        let monthTotalDebit = 0;
+                        let monthNetAmount = 0;
+                        
+                        if (account.type === 'Income') {
+                            // For income accounts, get from income section
+                            if (accountCode === '4001' && monthData.income?.rental_income) {
+                                monthTotalCredit = monthData.income.rental_income || 0;
+                            } else if (accountCode === '4002' && monthData.income?.admin_fees) {
+                                monthTotalCredit = monthData.income.admin_fees || 0;
+                            } else if (accountCode === '4003' && monthData.income?.deposits) {
+                                monthTotalCredit = monthData.income.deposits || 0;
+                            }
+                            monthNetAmount = monthTotalCredit;
+                        } else if (account.type === 'Expense') {
+                            // For expense accounts, get from operating_activities.breakdown
+                            const accountNameLower = (account.name || '').toLowerCase();
+                            let expenseCategory = null;
+                            
+                            if (accountNameLower.includes('council') || accountNameLower.includes('rates')) {
+                                expenseCategory = 'council_rates';
+                            } else if (accountNameLower.includes('maintenance')) {
+                                expenseCategory = 'maintenance';
+                            } else if (accountNameLower.includes('cleaning')) {
+                                expenseCategory = 'cleaning';
+                            } else if (accountNameLower.includes('electricity')) {
+                                expenseCategory = 'electricity';
+                            } else if (accountNameLower.includes('water')) {
+                                expenseCategory = 'water';
+                            } else if (accountNameLower.includes('gas')) {
+                                expenseCategory = 'gas';
+                            } else if (accountNameLower.includes('internet') || accountNameLower.includes('wifi')) {
+                                expenseCategory = 'internet';
+                            } else if (accountNameLower.includes('security')) {
+                                expenseCategory = 'security';
+                            } else if (accountNameLower.includes('management')) {
+                                expenseCategory = 'management';
+                            } else if (accountNameLower.includes('insurance')) {
+                                expenseCategory = 'insurance';
+                            } else if (accountNameLower.includes('plumbing')) {
+                                expenseCategory = 'plumbing';
+                            } else if (accountNameLower.includes('sanitary')) {
+                                expenseCategory = 'sanitary';
+                            } else if (accountNameLower.includes('solar')) {
+                                expenseCategory = 'solar';
+                            }
+                            
+                            if (expenseCategory && monthData.operating_activities?.breakdown) {
+                                monthTotalDebit = monthData.operating_activities.breakdown[expenseCategory] || 0;
+                            }
+                            monthNetAmount = monthTotalDebit;
+                        }
+                        
+                        if (monthTotalCredit > 0 || monthTotalDebit > 0 || monthNetAmount !== 0) {
+                            finalMonthlyBreakdown[monthName] = {
+                                month: monthName,
+                                totalDebit: monthTotalDebit,
+                                totalCredit: monthTotalCredit,
+                                netAmount: monthNetAmount,
+                                transactionCount: 0 // Will be calculated from transactions
+                            };
+                        }
+                    }
+                    
+                    // Update transaction counts from actual transactions
+                    for (const transaction of transactions) {
+                        const transactionDate = new Date(transaction.date);
+                        const transactionMonth = monthNames[transactionDate.getMonth()];
+                        
+                        if (finalMonthlyBreakdown[transactionMonth]) {
+                            finalMonthlyBreakdown[transactionMonth].transactionCount += 1;
+                        }
+                    }
+                }
+            } else {
+                // Fallback: calculate from transactions
+                finalCashFlowData = {
+                    totalCredit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalCredit, 0),
+                    totalDebit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalDebit, 0),
+                    netAmount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.netAmount, 0),
+                    transactionCount: transactions.length,
+                    type: cashFlowType
+                };
+            }
             
             const response = {
                 success: true,
@@ -2851,7 +3202,7 @@ class FinancialReportsController {
                         category: acc.category
                     }))
                 } : {}),
-                cashFlowData: calculatedCashFlowData,
+                cashFlowData: finalCashFlowData,
                 transactions: await Promise.all(transactions.map(async (tx) => {
                     // For cash flow, we want to show the cash amount that came in
                     // Look for cash account entries (1000 series) in payment transactions
@@ -2862,15 +3213,12 @@ class FinancialReportsController {
                     let type = 'credit';
                     
                     if (account.type === 'Income') {
-                        // For income accounts, cash received is when cash account is debited
-                    if (cashEntry) {
+                        // For income accounts in cash flow, only show cash received (payment transactions)
+                        // Cash received is when cash account is debited
+                        if (cashEntry && cashEntry.debit > 0) {
                             // Cash is debited (money coming in) - this is the cash received amount
-                        amount = cashEntry.debit || 0;
+                            amount = cashEntry.debit || 0;
                             type = 'debit'; // Cash debit means cash received
-                        } else if (accountEntry && accountEntry.credit > 0) {
-                            // Fallback: if no cash entry, use income account credit (income recognized = cash received)
-                            amount = accountEntry.credit || 0;
-                            type = 'credit';
                         }
                     } else if (depositAccountCodes.includes(accountCode)) {
                         // For deposit accounts, show cash received for deposits
@@ -3092,12 +3440,12 @@ class FinancialReportsController {
                         entries: entriesWithAccountNames // Include all entries for full double-entry view
                     };
                 })),
-                monthlyBreakdown: Object.values(monthlyBreakdown).sort((a, b) => b.month.localeCompare(a.month)),
+                monthlyBreakdown: Object.values(finalMonthlyBreakdown).sort((a, b) => b.month.localeCompare(a.month)),
                 summary: {
                     totalTransactions: transactions.length,
-                    totalDebit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalDebit, 0),
-                    totalCredit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalCredit, 0),
-                    netAmount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.netAmount, 0)
+                    totalDebit: finalCashFlowData.totalDebit,
+                    totalCredit: finalCashFlowData.totalCredit,
+                    netAmount: finalCashFlowData.netAmount
                 }
             };
             

@@ -107,11 +107,36 @@ class CashFlowController {
                     ]
                 },
                 // Exclude forfeiture transactions as they don't involve cash movement
-                'metadata.isForfeiture': { $ne: true }
+                'metadata.isForfeiture': { $ne: true },
+                // Add month/date filter to the query
+                date: { $gte: startDate, $lte: endDate }
             };
             
             if (residenceId) {
-                paymentQuery.residence = residenceId;
+                const mongoose = require('mongoose');
+                const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId) 
+                    ? new mongoose.Types.ObjectId(residenceId) 
+                    : residenceId;
+                
+                // Build residence filter
+                const residenceFilter = {
+                    $or: [
+                        { residence: residenceObjectId },
+                        { residence: residenceId },
+                        { 'metadata.residenceId': residenceId },
+                        { 'metadata.residenceId': residenceObjectId },
+                        { 'metadata.residence': residenceId },
+                        { 'metadata.residence': residenceObjectId }
+                    ]
+                };
+                
+                // Combine date filter and residence filter using $and
+                paymentQuery.$and = [
+                    { date: { $gte: startDate, $lte: endDate } },
+                    residenceFilter
+                ];
+                // Remove the direct date property since we're using $and
+                delete paymentQuery.date;
             }
             
             const paymentEntries = await TransactionEntry.find(paymentQuery).populate('entries');
@@ -139,14 +164,53 @@ class CashFlowController {
                 }
             }
             
-            // Filter entries to only include those within the date range
+            // Filter entries to only include those within the date range AND matching the requested month
+            const requestedMonth = monthIndex + 1; // 1-based month
+            const requestedYear = parseInt(period);
+            const requestedMonthKey = `${requestedYear}-${String(requestedMonth).padStart(2, '0')}`; // e.g., "2025-11"
+            
             const filteredEntries = paymentEntries.filter(entry => {
-                return entry.date >= startDate && entry.date <= endDate;
+                // First check date range
+                if (entry.date < startDate || entry.date > endDate) {
+                    return false;
+                }
+                
+                // Then check month metadata/description to ensure it's for the requested month
+                // Check metadata.monthSettled for payment allocations
+                if (entry.metadata?.monthSettled) {
+                    return entry.metadata.monthSettled === requestedMonthKey;
+                }
+                
+                // Check metadata.accrualMonth and accrualYear for accrual transactions
+                if (entry.metadata?.accrualMonth && entry.metadata?.accrualYear) {
+                    return entry.metadata.accrualMonth === requestedMonth && 
+                           entry.metadata.accrualYear === requestedYear;
+                }
+                
+                // Parse description for payment allocations: "Payment allocation: rent for 2025-11"
+                const description = entry.description || '';
+                const monthMatch = description.match(/for\s+(\d{4})-(\d{1,2})/i);
+                if (monthMatch) {
+                    const descYear = parseInt(monthMatch[1]);
+                    const descMonth = parseInt(monthMatch[2]);
+                    return descYear === requestedYear && descMonth === requestedMonth;
+                }
+                
+                // Parse description for accruals: "Monthly rent accrual: Student Name - 11/2025"
+                const accrualMatch = description.match(/-?\s*(\d{1,2})\/(\d{4})/);
+                if (accrualMatch) {
+                    const descMonth = parseInt(accrualMatch[1]);
+                    const descYear = parseInt(accrualMatch[2]);
+                    return descYear === requestedYear && descMonth === requestedMonth;
+                }
+                
+                // If no month metadata found, include it if it's within the date range (fallback)
+                return true;
             });
             
             entries = filteredEntries;
             
-            console.log(`💳 Found ${entries.length} payment transaction entries for the period`);
+            console.log(`💳 Found ${entries.length} payment transaction entries for ${requestedMonthKey} (after month filtering)`);
             
             // Filter for transactions that contain the specific account code
             let transactionEntries = entries.filter(entry => {

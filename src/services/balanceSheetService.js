@@ -6,6 +6,125 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://macdonaldsairos24:
 
 class BalanceSheetService {
   /**
+   * Build flexible residence match filter
+   * Supports multiple residence field formats and backfills from Request/Expense
+   */
+  static buildResidenceMatchFilter(residence, existingConditions = {}) {
+    if (!residence) return null;
+    
+    const residenceObjectId = mongoose.Types.ObjectId.isValid(residence) 
+      ? new mongoose.Types.ObjectId(residence) 
+      : residence;
+    
+    return {
+      $and: [
+        existingConditions,
+        {
+          $or: [
+            { residence: residenceObjectId },
+            { residence: residence.toString() },
+            { 'metadata.residenceId': residenceObjectId },
+            { 'metadata.residenceId': residence.toString() },
+            { 'metadata.residence': residenceObjectId },
+            { 'metadata.residence': residence.toString() }
+          ]
+        }
+      ]
+    };
+  }
+
+  /**
+   * Enrich transactions with residence data from Request/Expense references
+   * This ensures expense_accrual transactions are properly filtered by residence
+   */
+  static async enrichTransactionsWithResidence(transactions, residence, dateFilter = { $lte: new Date() }) {
+    if (!residence || !transactions || transactions.length === 0) {
+      return transactions;
+    }
+    
+    const Request = require('../models/Request');
+    const Expense = require('../models/Expense');
+    const residenceObjectId = mongoose.Types.ObjectId.isValid(residence) 
+      ? new mongoose.Types.ObjectId(residence) 
+      : residence;
+    
+    const enrichedTransactions = [...transactions];
+    const existingIds = new Set(transactions.map(t => t._id.toString()));
+    
+    // Get all expense_accrual transactions that might be linked to this residence
+    const expenseAccrualQuery = {
+      source: 'expense_accrual',
+      date: dateFilter,
+      status: 'posted',
+      voided: { $ne: true }
+    };
+    
+    const allExpenseAccruals = await TransactionEntry.find(expenseAccrualQuery)
+      .sort({ date: 1 })
+      .maxTimeMS(20000);
+    
+    console.log(`🔍 Checking ${allExpenseAccruals.length} expense_accrual transactions for residence ${residence}...`);
+    
+    for (const txn of allExpenseAccruals) {
+      if (existingIds.has(txn._id.toString())) continue;
+      
+      let matchesResidence = false;
+      
+      // Check if transaction already has residence set
+      if (txn.residence) {
+        const txnResidence = txn.residence.toString ? txn.residence.toString() : txn.residence;
+        if (txnResidence === residenceObjectId.toString() || txnResidence === residence.toString()) {
+          matchesResidence = true;
+        }
+      }
+      
+      // If not found, check via reference (Request or Expense)
+      if (!matchesResidence && txn.reference) {
+        try {
+          const request = await Request.findById(txn.reference).select('residence');
+          if (request && request.residence) {
+            const requestResidence = request.residence.toString ? request.residence.toString() : request.residence;
+            if (requestResidence === residenceObjectId.toString() || requestResidence === residence.toString()) {
+              matchesResidence = true;
+              // Update the transaction's residence field for future queries
+              await TransactionEntry.updateOne(
+                { _id: txn._id },
+                { $set: { residence: residenceObjectId } }
+              );
+              console.log(`✅ Updated transaction ${txn._id} with residence ${residence}`);
+            }
+          }
+          
+          if (!matchesResidence) {
+            const expense = await Expense.findById(txn.reference).select('residence');
+            if (expense && expense.residence) {
+              const expenseResidence = expense.residence.toString ? expense.residence.toString() : expense.residence;
+              if (expenseResidence === residenceObjectId.toString() || expenseResidence === residence.toString()) {
+                matchesResidence = true;
+                await TransactionEntry.updateOne(
+                  { _id: txn._id },
+                  { $set: { residence: residenceObjectId } }
+                );
+                console.log(`✅ Updated transaction ${txn._id} with residence ${residence}`);
+              }
+            }
+          }
+        } catch (err) {
+          console.log(`⚠️ Error checking reference ${txn.reference}:`, err.message);
+        }
+      }
+      
+      if (matchesResidence) {
+        enrichedTransactions.push(txn);
+        existingIds.add(txn._id.toString());
+      }
+    }
+    
+    console.log(`📊 Total transactions after enrichment: ${enrichedTransactions.length}`);
+    return enrichedTransactions;
+  }
+
+  /**
    * Generate Balance Sheet for Accrual Basis
    * Assets = Cash + AR + Property + Equipment + Prepaid
    * Liabilities = AP + Loans + Deposits + Accrued Expenses + Taxes
@@ -50,42 +169,50 @@ class BalanceSheetService {
       // Note: Removed strict monthly filtering as it was causing balance sheet discrepancies
       // Balance sheets must include all historical transactions to show accurate cumulative balances
       
-      const accrualQuery = {
+      // Build base query conditions
+      const baseConditions = {
+        date: dateFilter,
+        status: 'posted',
+        voided: { $ne: true }
+      };
+      
+      // Build queries with flexible residence filtering
+      const accrualBaseQuery = {
         source: { $in: ['rental_accrual', 'expense_accrual'] },
-        date: dateFilter,
-        status: 'posted',
-        voided: { $ne: true } // Exclude voided transactions
+        ...baseConditions
       };
       
-      const paymentQuery = {
+      const paymentBaseQuery = {
         source: { $in: ['payment', 'vendor_payment', 'expense_payment'] },
-        date: dateFilter,
-        status: 'posted',
-        voided: { $ne: true } // Exclude voided transactions
+        ...baseConditions
       };
       
-      const otherQuery = {
+      const otherBaseQuery = {
         source: { $nin: ['rental_accrual', 'expense_accrual', 'payment', 'vendor_payment', 'expense_payment'] },
-        date: dateFilter,
-        status: 'posted',
-        voided: { $ne: true } // Exclude voided transactions
+        ...baseConditions
       };
       
-      // Include manual transactions in the "other" category
-      // This includes negotiated payments, refunds, and other manual adjustments
-      const manualQuery = {
+      const manualBaseQuery = {
         source: { $in: ['manual', 'other_income', 'refund', 'negotiated_payment'] },
-        date: dateFilter,
-        status: 'posted',
-        voided: { $ne: true } // Exclude voided transactions
+        ...baseConditions
       };
       
-      if (residence) {
-        accrualQuery.residence = residence;
-        paymentQuery.residence = residence;
-        otherQuery.residence = residence;
-        manualQuery.residence = residence;
-      }
+      // Apply flexible residence filtering if residence is provided
+      const accrualQuery = residence 
+        ? this.buildResidenceMatchFilter(residence, accrualBaseQuery)
+        : accrualBaseQuery;
+      
+      const paymentQuery = residence
+        ? this.buildResidenceMatchFilter(residence, paymentBaseQuery)
+        : paymentBaseQuery;
+      
+      const otherQuery = residence
+        ? this.buildResidenceMatchFilter(residence, otherBaseQuery)
+        : otherBaseQuery;
+      
+      const manualQuery = residence
+        ? this.buildResidenceMatchFilter(residence, manualBaseQuery)
+        : manualBaseQuery;
       
       // Get all relevant transactions with timeout optimization
       const [accrualEntries, paymentEntries, otherEntries, manualEntries] = await Promise.all([
@@ -96,6 +223,15 @@ class BalanceSheetService {
       ]);
       
       console.log(`🔍 Found ${accrualEntries.length} accrual entries, ${paymentEntries.length} payment entries, ${otherEntries.length} other entries, ${manualEntries.length} manual entries`);
+      
+      // Enrich transactions with residence data from Request/Expense references
+      // This ensures expense_accrual transactions are properly included
+      let allEntries = [...accrualEntries, ...paymentEntries, ...otherEntries, ...manualEntries];
+      if (residence) {
+        console.log(`🔍 Enriching transactions with residence data for ${residence}...`);
+        allEntries = await this.enrichTransactionsWithResidence(allEntries, residence, dateFilter);
+        console.log(`📊 Total entries after enrichment: ${allEntries.length}`);
+      }
       
       // Debug: Check for advance payments in otherEntries
       const allAdvancePayments = otherEntries.filter(tx => tx.source === 'advance_payment');
@@ -132,8 +268,6 @@ class BalanceSheetService {
       } else {
         console.log(`❌ Negotiated payment transaction NEG-1757465405612 not found in manual entries`);
       }
-      
-      const allEntries = [...accrualEntries, ...paymentEntries, ...otherEntries, ...manualEntries];
       
       // Initialize balance sheet with proper structure
       const balanceSheet = {
