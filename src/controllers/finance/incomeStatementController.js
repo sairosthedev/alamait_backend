@@ -203,7 +203,8 @@ class IncomeStatementController {
             
             // Find all relevant transactions
             const transactions = await TransactionEntry.find(query)
-                .sort({ date: 1 });
+                .sort({ date: 1 })
+                .lean();
             
             // Filter out transactions with wrong month metadata
             const filteredTransactions = transactions.filter(transaction => {
@@ -248,7 +249,12 @@ class IncomeStatementController {
                 return transactionYear === parseInt(period) && transactionMonth === (monthNumber + 1);
             });
             
-            console.log(`📈 Found ${filteredTransactions.length} transactions for account ${accountCode} in ${month} ${period}`);
+            const processedTransactions = IncomeStatementController.removeReversalsAndCollapseNegotiations(
+                filteredTransactions,
+                accountCode
+            );
+            
+            console.log(`📈 Transactions for account ${accountCode} in ${month} ${period}: ${processedTransactions.length} after removing reversals/negotiations (original ${filteredTransactions.length})`);
             
             // Extract account-specific transactions (including child accounts)
             const accountTransactions = [];
@@ -257,7 +263,7 @@ class IncomeStatementController {
             const uniqueStudents = new Set();
             const accountBreakdown = {}; // Track transactions by account code
             
-            for (const transaction of filteredTransactions) {
+            for (const transaction of processedTransactions) {
                 // Filter entries for all relevant account codes (parent + children)
                 const relevantEntries = transaction.entries.filter(entry => 
                     allAccountCodes.includes(entry.accountCode)
@@ -461,7 +467,7 @@ class IncomeStatementController {
                         let childDebits = 0;
                         let childCredits = 0;
                         
-                        transactions.forEach(transaction => {
+                        processedTransactions.forEach(transaction => {
                             transaction.entries.forEach(entry => {
                                 if (entry.accountCode === child.code) {
                                     const debit = entry.debit || 0;
@@ -502,6 +508,199 @@ class IncomeStatementController {
                 error: error.message
             });
         }
+    }
+
+    /**
+     * Remove accrual reversals and merge negotiated adjustments so only net rent shows
+     */
+    static removeReversalsAndCollapseNegotiations(transactions = [], accountCode) {
+        if (!Array.isArray(transactions) || transactions.length === 0) {
+            return [];
+        }
+
+        const accrualTransactions = new Map(); // accrualId -> accrual transaction
+        const negotiationAdjustments = new Map(); // accrualId -> [adjustments]
+        const reversalAccrualIds = new Set();
+        const remainingTransactions = [];
+
+        transactions.forEach(transaction => {
+            const txId = IncomeStatementController.getTransactionId(transaction);
+            const originalAccrualId = transaction?.metadata?.originalAccrualId
+                ? String(transaction.metadata.originalAccrualId)
+                : null;
+
+            if (IncomeStatementController.isReversalTransaction(transaction)) {
+                if (originalAccrualId) {
+                    reversalAccrualIds.add(originalAccrualId);
+                    console.log(`⛔️ Removing accrual ${originalAccrualId} due to reversal ${txId || transaction.transactionId}`);
+                }
+                return; // Skip reversal entries entirely
+            }
+
+            if (IncomeStatementController.isNegotiationAdjustment(transaction) && originalAccrualId) {
+                if (!negotiationAdjustments.has(originalAccrualId)) {
+                    negotiationAdjustments.set(originalAccrualId, []);
+                }
+                negotiationAdjustments.get(originalAccrualId).push(transaction);
+                console.log(`🤝 Captured negotiation adjustment ${txId} for accrual ${originalAccrualId}`);
+                return;
+            }
+
+            if (IncomeStatementController.isAccrualTransaction(transaction) && txId) {
+                accrualTransactions.set(txId, transaction);
+                return;
+            }
+
+            remainingTransactions.push(transaction);
+        });
+
+        // Process accruals after collecting adjustments and reversals
+        for (const [accrualId, accrualTransaction] of accrualTransactions.entries()) {
+            if (reversalAccrualIds.has(accrualId)) {
+                continue; // Skip accruals that were reversed
+            }
+
+            if (negotiationAdjustments.has(accrualId)) {
+                const merged = IncomeStatementController.mergeNegotiatedAccrual(
+                    accrualTransaction,
+                    negotiationAdjustments.get(accrualId),
+                    accountCode
+                );
+                if (merged) {
+                    remainingTransactions.push(merged);
+                }
+                negotiationAdjustments.delete(accrualId);
+            } else {
+                remainingTransactions.push(accrualTransaction);
+            }
+        }
+
+        // Edge case: negotiation adjustments referencing accruals that weren't in the result set
+        negotiationAdjustments.forEach(adjustments => {
+            adjustments.forEach(adj => remainingTransactions.push(adj));
+        });
+
+        // Preserve chronological order (ascending) before later processing
+        remainingTransactions.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        return remainingTransactions;
+    }
+
+    static getTransactionId(transaction) {
+        if (!transaction) return null;
+        if (transaction._id) return transaction._id.toString();
+        if (transaction.id) return transaction.id.toString();
+        if (transaction.transactionId) return transaction.transactionId;
+        return null;
+    }
+
+    static isAccrualTransaction(transaction = {}) {
+        const source = transaction.source || '';
+        const metadataType = transaction.metadata?.type || '';
+        return source === 'rental_accrual'
+            || metadataType === 'monthly_rent_accrual'
+            || metadataType === 'lease_start';
+    }
+
+    static isReversalTransaction(transaction = {}) {
+        const source = (transaction.source || '').toLowerCase();
+        const metadataType = (transaction.metadata?.type || '').toLowerCase();
+        const transactionType = (transaction.metadata?.transactionType || '').toLowerCase();
+        const description = (transaction.description || '').toLowerCase();
+
+        return source.includes('reversal')
+            || metadataType.includes('reversal')
+            || transactionType.includes('reversal')
+            || description.includes('reversal');
+    }
+
+    static isNegotiationAdjustment(transaction = {}) {
+        const transactionType = (transaction.metadata?.transactionType || '').toLowerCase();
+        const description = (transaction.description || '').toLowerCase();
+        return transactionType === 'negotiated_payment_adjustment'
+            || description.includes('negotiated payment')
+            || description.includes('negotiated rent')
+            || description.includes('negotiated discount');
+    }
+
+    static mergeNegotiatedAccrual(accrualTransaction, adjustmentTransactions = [], accountCode) {
+        if (!accrualTransaction) {
+            return null;
+        }
+
+        const mergedTransaction = {
+            ...accrualTransaction,
+            metadata: {
+                ...accrualTransaction.metadata,
+                negotiatedAdjustmentCount: adjustmentTransactions.length,
+                negotiatedDiscountTotal: 0,
+                negotiatedNetAmount: 0
+            },
+            entries: (accrualTransaction.entries || []).map(entry => ({ ...entry }))
+        };
+
+        const adjustmentTotalsByAccount = new Map();
+
+        adjustmentTransactions.forEach(adj => {
+            (adj.entries || []).forEach(entry => {
+                const key = entry.accountCode;
+                if (!key) return;
+                const netEffect = (entry.debit || 0) - (entry.credit || 0); // Debit positive, credit negative
+                adjustmentTotalsByAccount.set(key, (adjustmentTotalsByAccount.get(key) || 0) + netEffect);
+            });
+        });
+
+        mergedTransaction.entries = mergedTransaction.entries.map(entry => {
+            const adjustment = adjustmentTotalsByAccount.get(entry.accountCode);
+            if (!adjustment) {
+                return entry;
+            }
+
+            const adjustedEntry = { ...entry };
+            adjustedEntry.debit = adjustedEntry.debit || 0;
+            adjustedEntry.credit = adjustedEntry.credit || 0;
+
+            if (adjustment > 0) {
+                // Net debit adjustment reduces credit amounts first
+                if (adjustedEntry.credit >= adjustment) {
+                    adjustedEntry.credit -= adjustment;
+                } else {
+                    const remaining = adjustment - adjustedEntry.credit;
+                    adjustedEntry.credit = 0;
+                    adjustedEntry.debit += remaining;
+                }
+            } else if (adjustment < 0) {
+                // Net credit adjustment reduces debit amounts first
+                const creditAmount = Math.abs(adjustment);
+                if (adjustedEntry.debit >= creditAmount) {
+                    adjustedEntry.debit -= creditAmount;
+                } else {
+                    const remaining = creditAmount - adjustedEntry.debit;
+                    adjustedEntry.debit = 0;
+                    adjustedEntry.credit += remaining;
+                }
+            }
+
+            return adjustedEntry;
+        });
+
+        // Update metadata to show final negotiated amount for the requested account code
+        if (accountCode) {
+            const netEntry = mergedTransaction.entries.find(entry =>
+                entry.accountCode === accountCode || entry.accountCode?.startsWith(`${accountCode}-`)
+            );
+
+            if (netEntry) {
+                mergedTransaction.metadata.negotiatedNetAmount = (netEntry.credit || 0) - (netEntry.debit || 0);
+                mergedTransaction.description = `${mergedTransaction.description || ''} (Negotiated to $${mergedTransaction.metadata.negotiatedNetAmount || 0})`.trim();
+            }
+        }
+
+        mergedTransaction.metadata.negotiatedDiscountTotal = Array.from(adjustmentTotalsByAccount.values())
+            .filter(value => value > 0)
+            .reduce((sum, value) => sum + value, 0);
+
+        return mergedTransaction;
     }
 
     /**
