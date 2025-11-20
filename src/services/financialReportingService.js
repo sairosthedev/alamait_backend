@@ -3,6 +3,7 @@ const Transaction = require('../models/Transaction');
 const Account = require('../models/Account');
 const Maintenance = require('../models/Maintenance');
 const { Residence } = require('../models/Residence');
+const IncomeStatementController = require('../controllers/finance/incomeStatementController');
 const mongoose = require('mongoose');
 
 /**
@@ -52,7 +53,7 @@ class FinancialReportingService {
                     ];
                 }
                 
-                const accrualEntries = await TransactionEntry.find(accrualQuery);
+                let accrualEntries = await TransactionEntry.find(accrualQuery).lean();
                 
                 // For accrual basis, include only expense accruals (and optionally manual adjustments)
                 const expenseQuery = {
@@ -69,9 +70,12 @@ class FinancialReportingService {
                     ];
                 }
                 
-                const expenseEntries = await TransactionEntry.find(expenseQuery);
+                const expenseEntries = await TransactionEntry.find(expenseQuery).lean();
                 
                 console.log(`Found ${accrualEntries.length} rental accrual entries and ${expenseEntries.length} expense entries for accrual basis`);
+                
+                accrualEntries = this.netRentalAccrualEntries(accrualEntries);
+                console.log(`📊 Rental accrual entries after netting reversals/negotiations: ${accrualEntries.length}`);
                 
                 let totalRevenue = 0;
                 const revenueByAccount = {};
@@ -386,6 +390,189 @@ class FinancialReportingService {
             throw error;
         }
     }
+    
+    static netRentalAccrualEntries(entries = []) {
+        if (!Array.isArray(entries) || entries.length === 0) {
+            return [];
+        }
+        
+        const accrualMap = new Map();
+        const negotiationAdjustments = new Map();
+        const reversalAccrualIds = new Set();
+        const passthrough = [];
+        
+        entries.forEach(entry => {
+            const entryId = this.getTransactionEntryId(entry);
+            const originalAccrualId = entry?.metadata?.originalAccrualId
+                ? String(entry.metadata.originalAccrualId)
+                : null;
+            
+            if (this.isAccrualReversal(entry)) {
+                if (originalAccrualId) {
+                    reversalAccrualIds.add(originalAccrualId);
+                }
+                return; // remove reversals entirely
+            }
+            
+            if (this.isNegotiationAdjustmentEntry(entry) && originalAccrualId) {
+                if (!negotiationAdjustments.has(originalAccrualId)) {
+                    negotiationAdjustments.set(originalAccrualId, []);
+                }
+                negotiationAdjustments.get(originalAccrualId).push(entry);
+                return;
+            }
+            
+            if (this.isRentalAccrualEntry(entry) && entryId) {
+                accrualMap.set(entryId, entry);
+                return;
+            }
+            
+            passthrough.push(entry);
+        });
+        
+        const processed = [...passthrough];
+        
+        accrualMap.forEach((accrualEntry, accrualId) => {
+            if (reversalAccrualIds.has(accrualId)) {
+                return;
+            }
+            
+            if (negotiationAdjustments.has(accrualId)) {
+                const merged = this.applyNegotiationAdjustments(accrualEntry, negotiationAdjustments.get(accrualId));
+                processed.push(merged);
+                negotiationAdjustments.delete(accrualId);
+            } else {
+                processed.push(accrualEntry);
+            }
+        });
+        
+        negotiationAdjustments.forEach(adjustments => {
+            processed.push(...adjustments);
+        });
+        
+        processed.sort((a, b) => new Date(a.date) - new Date(b.date));
+        return processed;
+    }
+    
+    static getTransactionEntryId(entry) {
+        if (!entry) return null;
+        if (entry._id) return entry._id.toString();
+        if (entry.id) return entry.id.toString();
+        if (entry.transactionId) return entry.transactionId;
+        return null;
+    }
+    
+    static isRentalAccrualEntry(entry = {}) {
+        const source = entry.source || '';
+        const metadataType = entry.metadata?.type || '';
+        return source === 'rental_accrual' ||
+            metadataType === 'monthly_rent_accrual' ||
+            metadataType === 'lease_start';
+    }
+    
+    static isAccrualReversal(entry = {}) {
+        const source = (entry.source || '').toLowerCase();
+        const metadataType = (entry.metadata?.type || '').toLowerCase();
+        const transactionType = (entry.metadata?.transactionType || '').toLowerCase();
+        const description = (entry.description || '').toLowerCase();
+        return source.includes('reversal') ||
+            metadataType.includes('reversal') ||
+            transactionType.includes('reversal') ||
+            description.includes('reversal');
+    }
+    
+    static isNegotiationAdjustmentEntry(entry = {}) {
+        const transactionType = (entry.metadata?.transactionType || '').toLowerCase();
+        const description = (entry.description || '').toLowerCase();
+        return transactionType === 'negotiated_payment_adjustment' ||
+            description.includes('negotiated payment') ||
+            description.includes('negotiated rent') ||
+            description.includes('negotiated discount');
+    }
+    
+    static applyNegotiationAdjustments(accrualEntry, adjustments = []) {
+        if (!accrualEntry) {
+            return null;
+        }
+        
+        const mergedEntry = JSON.parse(JSON.stringify(accrualEntry));
+        const adjustmentTotals = new Map();
+        
+        adjustments.forEach(adj => {
+            (adj.entries || []).forEach(line => {
+                const key = line.accountCode;
+                if (!key) return;
+                const net = (line.debit || 0) - (line.credit || 0);
+                if (net === 0) return;
+                
+                if (!adjustmentTotals.has(key)) {
+                    adjustmentTotals.set(key, {
+                        net: 0,
+                        accountName: line.accountName,
+                        accountType: line.accountType
+                    });
+                }
+                adjustmentTotals.get(key).net += net;
+            });
+        });
+        
+        mergedEntry.entries = (mergedEntry.entries || []).map(entry => {
+            const adj = adjustmentTotals.get(entry.accountCode);
+            if (!adj) {
+                return entry;
+            }
+            
+            const updated = { ...entry };
+            updated.debit = updated.debit || 0;
+            updated.credit = updated.credit || 0;
+            
+            if (adj.net > 0) {
+                const reduce = adj.net;
+                if (updated.credit >= reduce) {
+                    updated.credit -= reduce;
+                } else {
+                    const remaining = reduce - updated.credit;
+                    updated.credit = 0;
+                    updated.debit += remaining;
+                }
+            } else if (adj.net < 0) {
+                const reduce = Math.abs(adj.net);
+                if (updated.debit >= reduce) {
+                    updated.debit -= reduce;
+                } else {
+                    const remaining = reduce - updated.debit;
+                    updated.debit = 0;
+                    updated.credit += remaining;
+                }
+            }
+            
+            adjustmentTotals.delete(entry.accountCode);
+            return updated;
+        });
+        
+        adjustmentTotals.forEach((adj, accountCode) => {
+            mergedEntry.entries.push({
+                accountCode,
+                accountName: adj.accountName || accountCode,
+                accountType: adj.accountType || 'Income',
+                debit: adj.net > 0 ? adj.net : 0,
+                credit: adj.net < 0 ? Math.abs(adj.net) : 0,
+                description: 'Negotiation adjustment (net effect)'
+            });
+        });
+        
+        mergedEntry.totalDebit = mergedEntry.entries.reduce((sum, line) => sum + (line.debit || 0), 0);
+        mergedEntry.totalCredit = mergedEntry.entries.reduce((sum, line) => sum + (line.credit || 0), 0);
+        mergedEntry.metadata = mergedEntry.metadata || {};
+        mergedEntry.metadata.negotiatedAdjustmentCount = adjustments.length;
+        mergedEntry.metadata.negotiatedDiscountTotal = adjustments.reduce((sum, adj) => {
+            return sum + (adj.entries || []).reduce((inner, line) => {
+                return inner + (line.debit || 0) - (line.credit || 0);
+            }, 0);
+        }, 0);
+        
+        return mergedEntry;
+    }
 
     /**
      * Generate Comprehensive Monthly Income Statement (Profit & Loss by Month)
@@ -403,299 +590,223 @@ class FinancialReportingService {
             if (basis === 'accrual') {
                 console.log('🔵 ACCRUAL BASIS: Including income when earned, expenses when incurred by month');
                 
-                // For accrual basis, get ALL transactions up to end of year (like balance sheet)
-                // This ensures consistency between environments
-                const accrualQuery = {
-                    date: { $lte: endDate }, // Use cumulative filtering like balance sheet
-                    source: { $in: ['rental_accrual', 'manual', 'rental_accrual_reversal'] },
-                    status: 'posted'
-                };
-                
-                // FORCE CONSISTENCY: Sort by transactionId to ensure same processing order
-                console.log('🔧 FORCING CONSISTENT DATA PROCESSING ORDER');
-                
-                // Add residence filter if specified
-                if (residence) {
-                    accrualQuery.residence = new mongoose.Types.ObjectId(residence);
-                    console.log(`🔍 Filtering accrual entries by residence: ${residence}`);
-                }
-                
-                const accrualEntries = await TransactionEntry.find(accrualQuery).sort({ transactionId: 1 });
-                
-                // For accrual basis, also get expense entries (all expense-related sources)
-                const expenseQuery = {
-                    date: { $lte: endDate }, // Use cumulative filtering like balance sheet
-                    source: { $in: ['expense_accrual', 'expense_payment', 'vendor_payment', 'manual'] },
-                    status: 'posted'
-                };
-                
-                // Add residence filter if specified
-                if (residence) {
-                    expenseQuery.residence = new mongoose.Types.ObjectId(residence);
-                }
-                
-                const expenseEntries = await TransactionEntry.find(expenseQuery).sort({ transactionId: 1 });
-                
-                console.log(`Found ${accrualEntries.length} accrual entries and ${expenseEntries.length} expense entries for accrual basis`);
-                
-                // Debug: Log sample accrual entries to understand the data structure
-                if (accrualEntries.length > 0) {
-                    console.log('🔍 Sample accrual entries:');
-                    accrualEntries.slice(0, 3).forEach((entry, index) => {
-                        console.log(`  Entry ${index + 1}:`, {
-                            transactionId: entry.transactionId,
-                            date: entry.date,
-                            description: entry.description,
-                            metadata: entry.metadata,
-                            entries: entry.entries?.map(e => ({
-                                accountType: e.accountType,
-                                accountCode: e.accountCode,
-                                credit: e.credit,
-                                debit: e.debit
-                            }))
-                        });
-                    });
-                }
-                
-                // CONSISTENCY CHECK: Log all transaction IDs to identify differences
-                console.log('🔍 ALL ACCRUAL TRANSACTION IDs (for consistency check):');
-                accrualEntries.forEach((entry, index) => {
-                    console.log(`  ${index + 1}. ${entry.transactionId} - ${entry.description} - $${entry.entries?.reduce((sum, e) => sum + (e.credit || 0) - (e.debit || 0), 0) || 0}`);
-                });
-                
-                // Initialize monthly breakdown
+                // Use EXACT same method as account details - query per month
                 const monthlyBreakdown = {};
                 const monthNames = [
                     'January', 'February', 'March', 'April', 'May', 'June',
                     'July', 'August', 'September', 'October', 'November', 'December'
                 ];
+                const allAccountCodes = ['4001', '4002']; // Rental and Admin income
                 
-                monthNames.forEach((month, index) => {
-                    monthlyBreakdown[index] = {
-                        month,
-                        monthNumber: index + 1,
-                        revenue: {},
-                        expenses: {},
-                        expense_details: [], // Array to store individual expense transactions
-                        total_revenue: 0,
-                        total_expenses: 0,
-                        net_income: 0,
-                        residences: [],
-                        transaction_count: 0
-                    };
-                });
-                
-                // Helper: parse month/year from description like "for July 2025"
-                const parseMonthYearFromDescription = (desc) => {
-                    if (!desc || typeof desc !== 'string') return null;
-                    const monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];
-                    
-                    // Try multiple patterns
-                    const patterns = [
-                        /(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/i,
-                        /for\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/i,
-                        /(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/i,
-                        /(\d{1,2})\/(\d{4})/i, // MM/YYYY format
-                        /(\d{4})-(\d{1,2})/i  // YYYY-MM format
-                    ];
-                    
-                    for (const pattern of patterns) {
-                        const match = desc.match(pattern);
-                        if (match) {
-                            if (pattern === patterns[0] || pattern === patterns[1] || pattern === patterns[2]) {
-                                // Month name format
-                                const monthIndex = monthNames.indexOf(match[1].toLowerCase());
-                                const year = parseInt(match[2], 10);
-                                if (monthIndex >= 0 && !isNaN(year)) {
-                                    return new Date(year, monthIndex, 1);
-                                }
-                            } else if (pattern === patterns[3]) {
-                                // MM/YYYY format
-                                const month = parseInt(match[1], 10) - 1; // Convert to 0-based
-                                const year = parseInt(match[2], 10);
-                                if (month >= 0 && month <= 11 && !isNaN(year)) {
-                                    return new Date(year, month, 1);
-                                }
-                            } else if (pattern === patterns[4]) {
-                                // YYYY-MM format
-                                const year = parseInt(match[1], 10);
-                                const month = parseInt(match[2], 10) - 1; // Convert to 0-based
-                                if (!isNaN(year) && month >= 0 && month <= 11) {
-                                    return new Date(year, month, 1);
-                                }
-                            }
-                        }
-                    }
-                    
-                    return null;
-                };
-                
-                // Process accrual entries by month with CONSISTENT logic
-                accrualEntries.forEach((entry, entryIndex) => {
-                    console.log(`\n🔍 Processing Accrual Entry ${entryIndex + 1}:`);
-                    console.log(`  Description: "${entry.description}"`);
-                    console.log(`  Transaction Date: ${entry.date}`);
-                    console.log(`  Metadata:`, entry.metadata);
-                    
-                    // CONSISTENT MONTH ASSIGNMENT LOGIC (same as balance sheet approach)
-                    let incurredDate = null;
-                    let monthIndex = null;
-                    
-                    // Step 1: Try metadata first (most reliable)
-                    if (entry.metadata && (entry.metadata.accrualDate || entry.metadata.incomeDate)) {
-                        incurredDate = new Date(entry.metadata.accrualDate || entry.metadata.incomeDate);
-                        monthIndex = incurredDate.getMonth();
-                        console.log(`  ✅ Using metadata date: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
-                    }
-                    
-                    // Step 2: Try parsing description with consistent patterns
-                    if (monthIndex === null) {
-                        const parsed = parseMonthYearFromDescription(entry.description);
-                        if (parsed) {
-                            incurredDate = parsed;
-                            monthIndex = incurredDate.getMonth();
-                            console.log(`  ✅ Using parsed description: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
-                        }
-                    }
-                    
-                    // Step 3: Use transaction date (reliable and accurate)
-                    if (monthIndex === null) {
-                        const transactionDate = new Date(entry.date);
-                        monthIndex = transactionDate.getMonth();
-                        incurredDate = new Date(transactionDate.getFullYear(), monthIndex, 1);
-                        console.log(`  ✅ Using transaction date: ${incurredDate.toISOString()} -> Month ${monthIndex + 1}`);
-                    }
-                    
-                    // Ensure month index is valid
-                    if (monthIndex < 0 || monthIndex > 11) {
-                        console.log(`  ❌ Invalid month index: ${monthIndex}, skipping entry`);
-                        return;
-                    }
-                    
+                // Process each month separately (same as account details)
+                for (let month = 1; month <= 12; month++) {
+                    const monthIndex = month - 1; // 0-based
                     const monthName = monthNames[monthIndex];
-                    console.log(`  📅 Final assignment: Month ${monthIndex + 1} (${monthName})`);
+                    const startOfMonth = new Date(Date.UTC(parseInt(period), monthIndex, 1, 0, 0, 0, 0));
+                    const endOfMonth = new Date(Date.UTC(parseInt(period), monthIndex + 1, 0, 23, 59, 59, 999));
                     
-                    // Process the entry
-                    if (entry.entries && Array.isArray(entry.entries)) {
-                        entry.entries.forEach((lineItem, lineIndex) => {
-                            if (lineItem.accountType === 'Income') {
-                                // For income accounts: credits increase revenue, debits decrease revenue
-                                const amount = (lineItem.credit || 0) - (lineItem.debit || 0);
-                                console.log(`    Line ${lineIndex + 1}: $${amount} income (credit: ${lineItem.credit}, debit: ${lineItem.debit})`);
-                                
-                                monthlyBreakdown[monthIndex].total_revenue += amount;
-                                
-                                // Group by account code only to net all transactions for the same account
-                                const key = lineItem.accountCode;
-                                monthlyBreakdown[monthIndex].revenue[key] = 
-                                    (monthlyBreakdown[monthIndex].revenue[key] || 0) + amount;
-                                
-                                console.log(`    💰 Total revenue for ${monthName}: $${monthlyBreakdown[monthIndex].total_revenue}`);
+                    console.log(`\n📅 Processing ${monthName} ${period}...`);
+                    
+                    // Build query EXACTLY like account details
+                    const query = {
+                        $or: [
+                            {
+                                date: { $gte: startOfMonth, $lte: endOfMonth },
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
+                            },
+                            {
+                                'metadata.accrualMonth': month,
+                                'metadata.accrualYear': parseInt(period),
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
+                            },
+                            {
+                                'metadata.monthSettled': `${period}-${String(month).padStart(2, '0')}`,
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
+                            },
+                            {
+                                source: 'rental_accrual',
+                                'metadata.accrualMonth': month,
+                                'metadata.accrualYear': parseInt(period),
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
+                            },
+                            {
+                                source: 'rental_accrual',
+                                'metadata.type': 'lease_start',
+                                'metadata.accrualMonth': month,
+                                'metadata.accrualYear': parseInt(period),
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
+                            },
+                            {
+                                source: 'rental_accrual',
+                                description: { $regex: /lease start/i },
+                                date: { $gte: startOfMonth, $lte: endOfMonth },
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
+                            },
+                            {
+                                source: 'rental_accrual',
+                                'metadata.type': 'monthly_rent_accrual',
+                                'metadata.accrualMonth': month,
+                                'metadata.accrualYear': parseInt(period),
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
+                            },
+                            {
+                                'metadata.month': `${period}-${String(month).padStart(2, '0')}`,
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
+                            },
+                            {
+                                'metadata.originalAccrualId': { $exists: true },
+                                'metadata.accrualMonth': month,
+                                'metadata.accrualYear': parseInt(period),
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
+                            },
+                            {
+                                source: 'manual',
+                                'metadata.accrualMonth': month,
+                                'metadata.accrualYear': parseInt(period),
+                                status: 'posted',
+                                'entries.accountCode': { $in: allAccountCodes }
                             }
-                        });
+                        ]
+                    };
+                    
+                    // Add residence filter if specified (same as account details)
+                    if (residence) {
+                        // Try both ObjectId and string for residence field
+                        const residenceId = mongoose.Types.ObjectId.isValid(residence) 
+                            ? new mongoose.Types.ObjectId(residence) 
+                            : residence;
+                        
+                        query.$or = query.$or.map(condition => ({
+                            $and: [
+                                condition,
+                                {
+                                    $or: [
+                                        { residence: residenceId },
+                                        { residence: residence }, // Also try as string
+                                        { 'metadata.residenceId': residence },
+                                        { 'metadata.residence': residence }
+                                    ]
+                                }
+                            ]
+                        }));
                     }
                     
-                    if (entry.residence) {
-                        monthlyBreakdown[monthIndex].residences.push(entry.residence.toString());
-                    }
+                    // Get transactions for this month
+                    const monthTransactions = await TransactionEntry.find(query).lean();
+                    console.log(`  Found ${monthTransactions.length} raw transactions for ${monthName}`);
                     
-                    monthlyBreakdown[monthIndex].transaction_count++;
-                });
-
-                // Process expense entries by month (use incurred/expense date when available)
-                expenseEntries.forEach(entry => {
-                    let incurredDate = (entry.metadata && (entry.metadata.expenseDate || entry.metadata.dueDate))
-                        ? new Date(entry.metadata.expenseDate || entry.metadata.dueDate)
-                        : null;
-                    if (!incurredDate || isNaN(incurredDate)) {
-                        // Fallback: parse month/year from description (e.g., "for July 2025")
-                        const parsed = parseMonthYearFromDescription(entry.description);
-                        incurredDate = parsed || new Date(entry.date);
-                    }
-                    const monthIndex = incurredDate.getMonth();
+                    // Apply same netting logic as account details
+                    const processedTransactions = IncomeStatementController.removeReversalsAndCollapseNegotiations(
+                        monthTransactions,
+                        '4001'
+                    );
+                    console.log(`  After netting: ${processedTransactions.length} transactions`);
                     
-                    if (entry.entries && Array.isArray(entry.entries)) {
-                        entry.entries.forEach(lineItem => {
-                            if (lineItem.accountType === 'Expense') {
-                                const amount = lineItem.debit || 0;
-                                monthlyBreakdown[monthIndex].total_expenses += amount;
-                                
-                                // Group by account code and name for totals
-                                const key = `${lineItem.accountCode} - ${lineItem.accountName}`;
-                                monthlyBreakdown[monthIndex].expenses[key] = 
-                                    (monthlyBreakdown[monthIndex].expenses[key] || 0) + amount;
-                                
-                                // Add individual expense detail with incurred date
-                                monthlyBreakdown[monthIndex].expense_details.push({
-                                    transactionId: entry.transactionId,
-                                    date: incurredDate,
-                                    description: entry.description,
-                                    accountCode: lineItem.accountCode,
-                                    accountName: lineItem.accountName,
-                                    amount: amount,
-                                    source: entry.source,
-                                    reference: entry.reference,
-                                    lineItemDescription: lineItem.description
-                                });
+                    // Calculate revenue (same as account details)
+                    let totalRentalIncome = 0;
+                    let totalAdminIncome = 0;
+                    const revenueByAccount = {};
+                    
+                    for (const entry of processedTransactions) {
+                        if (entry.entries && Array.isArray(entry.entries)) {
+                            for (const subEntry of entry.entries) {
+                                if (subEntry.accountCode === '4001') {
+                                    const amount = (subEntry.credit || 0) - (subEntry.debit || 0);
+                                    totalRentalIncome += amount;
+                                    revenueByAccount['4001'] = (revenueByAccount['4001'] || 0) + amount;
+                                } else if (subEntry.accountCode === '4002') {
+                                    const amount = (subEntry.credit || 0) - (subEntry.debit || 0);
+                                    totalAdminIncome += amount;
+                                    revenueByAccount['4002'] = (revenueByAccount['4002'] || 0) + amount;
+                                }
                             }
-                        });
+                        }
                     }
                     
-                    if (entry.residence) {
-                        monthlyBreakdown[monthIndex].residences.push(entry.residence.toString());
+                    const totalRevenue = totalRentalIncome + totalAdminIncome;
+                    
+                    // Get expenses for this month
+                    let expenseQuery = {
+                        'entries.accountType': 'Expense',
+                        date: { $gte: startOfMonth, $lte: endOfMonth },
+                        status: 'posted'
+                    };
+                    
+                    if (residence) {
+                        // Try both ObjectId and string for residence field
+                        const residenceId = mongoose.Types.ObjectId.isValid(residence) 
+                            ? new mongoose.Types.ObjectId(residence) 
+                            : residence;
+                        
+                        expenseQuery = {
+                            $and: [
+                                {
+                                    'entries.accountType': 'Expense',
+                                    date: { $gte: startOfMonth, $lte: endOfMonth },
+                                    status: 'posted'
+                                },
+                                {
+                                    $or: [
+                                        { residence: residenceId },
+                                        { residence: residence }, // Also try as string
+                                        { 'metadata.residenceId': residence },
+                                        { 'metadata.residence': residence }
+                                    ]
+                                }
+                            ]
+                        };
                     }
                     
-                    monthlyBreakdown[monthIndex].transaction_count++;
-            });
-            
-
-            // Calculate net income for each month
-                monthNames.forEach((month, index) => {
-                    monthlyBreakdown[index].net_income = monthlyBreakdown[index].total_revenue - monthlyBreakdown[index].total_expenses;
-            });
-            
-            // Debug: Log monthly revenue distribution
-            console.log('📊 Monthly Revenue Distribution (Accrual Basis):');
-            monthNames.forEach((month, index) => {
-                const revenue = monthlyBreakdown[index].total_revenue;
-                if (revenue > 0) {
-                    console.log(`  ${month}: $${revenue.toFixed(2)}`);
+                    const expenseEntries = await TransactionEntry.find(expenseQuery).lean();
+                    let totalExpenses = 0;
+                    const expensesByAccount = {};
+                    
+                    for (const entry of expenseEntries) {
+                        if (entry.entries && Array.isArray(entry.entries)) {
+                            for (const subEntry of entry.entries) {
+                                if (subEntry.accountType === 'Expense' && subEntry.debit > 0) {
+                                    const amount = subEntry.debit;
+                                    totalExpenses += amount;
+                                    const key = `${subEntry.accountCode} - ${subEntry.accountName}`;
+                                    expensesByAccount[key] = (expensesByAccount[key] || 0) + amount;
+                                }
+                            }
+                        }
+                    }
+                    
+                    const netIncome = totalRevenue - totalExpenses;
+                    
+                    monthlyBreakdown[monthIndex] = {
+                        month: monthName,
+                        monthNumber: month,
+                        revenue: revenueByAccount,
+                        expenses: expensesByAccount,
+                        total_revenue: totalRevenue,
+                        total_expenses: totalExpenses,
+                        net_income: netIncome
+                    };
+                    
+                    console.log(`  ✅ ${monthName}: Revenue $${totalRevenue} (Rental: $${totalRentalIncome}, Admin: $${totalAdminIncome}), Expenses $${totalExpenses}, Net $${netIncome}`);
                 }
-            });
             
-            // CONSISTENCY CHECK: Ensure total revenue matches expected amount
-            const totalCalculatedRevenue = monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0);
-            console.log(`\n🔍 CONSISTENCY CHECK:`);
-            console.log(`  Total calculated revenue: $${totalCalculatedRevenue.toFixed(2)}`);
-            console.log(`  Expected total revenue: $${accrualEntries.reduce((sum, entry) => {
-                return sum + (entry.entries?.reduce((entrySum, line) => {
-                    if (line.accountType === 'Income') {
-                        return entrySum + ((line.credit || 0) - (line.debit || 0));
-                    }
-                    return entrySum;
-                }, 0) || 0);
-            }, 0).toFixed(2)}`);
-            
-            if (Math.abs(totalCalculatedRevenue - accrualEntries.reduce((sum, entry) => {
-                return sum + (entry.entries?.reduce((entrySum, line) => {
-                    if (line.accountType === 'Income') {
-                        return entrySum + ((line.credit || 0) - (line.debit || 0));
-                    }
-                    return entrySum;
-                }, 0) || 0);
-            }, 0)) > 0.01) {
-                console.log(`  ⚠️ WARNING: Revenue totals don't match - there may be data inconsistencies`);
-            } else {
-                console.log(`  ✅ Revenue totals match - data is consistent`);
-            }
-            
+
             // Calculate year totals
             const yearTotals = {
-                    total_revenue: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_revenue, 0),
-                    total_expenses: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].total_expenses, 0),
-                    net_income: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].net_income, 0),
-                    total_transactions: monthNames.reduce((sum, month, index) => sum + monthlyBreakdown[index].transaction_count, 0)
-                };
+                total_revenue: monthNames.reduce((sum, month, index) => sum + (monthlyBreakdown[index]?.total_revenue || 0), 0),
+                total_expenses: monthNames.reduce((sum, month, index) => sum + (monthlyBreakdown[index]?.total_expenses || 0), 0),
+                net_income: monthNames.reduce((sum, month, index) => sum + (monthlyBreakdown[index]?.net_income || 0), 0)
+            };
+            
+            console.log(`\n📊 Year Totals: Revenue $${yearTotals.total_revenue}, Expenses $${yearTotals.total_expenses}, Net $${yearTotals.net_income}`);
                 
                 return {
                     period,
@@ -2620,6 +2731,15 @@ class FinancialReportingService {
             console.log(`   Total advance payments processed: ${processedAdvancePayments}`);
             console.log(`   Total account 2200 balance from advance payments: ${advancePayment2200Total}`);
             
+            // CRITICAL: Aggregate parent-child accounts BEFORE building structure
+            // This ensures Accounts Payable (2000) includes balances from child accounts
+            try {
+                accountBalances = await this.aggregateParentChildAccounts(accountBalances, allAccounts);
+            } catch (aggError) {
+                console.error('⚠️ Error in aggregation, continuing with original balances:', aggError.message);
+                // Continue with original balances if aggregation fails
+            }
+            
             // Group by account type with proper current/non-current asset separation
             const assets = {
                 current_assets: {},
@@ -2633,8 +2753,37 @@ class FinancialReportingService {
             // Import BalanceSheetService to use isCurrentAsset function
             const BalanceSheetService = require('./balanceSheetService');
             
+            // CRITICAL: First, explicitly set Accounts Payable from aggregatedBalances to ensure correct balance
+            // This must be done BEFORE the forEach loop to prevent any child account from overwriting it
+            const apAccountKey = Object.keys(accountBalances).find(key => key.startsWith('2000 -'));
+            if (apAccountKey) {
+                const apAccount = accountBalances[apAccountKey];
+                const finalAPBalance = apAccount.balance; // This is the aggregated balance (parent + children)
+                const apKey = `2000 - ${apAccount.name}`;
+                liabilities[apKey] = {
+                    balance: finalAPBalance,
+                    debit_total: apAccount.debit_total,
+                    credit_total: apAccount.credit_total,
+                    code: '2000',
+                    name: apAccount.name
+                };
+                console.log(`✅ PRE-SET Accounts Payable (2000) from aggregatedBalances: $${finalAPBalance}`);
+                console.log(`   Debits: $${apAccount.debit_total}, Credits: $${apAccount.credit_total}`);
+            } else {
+                console.log(`⚠️ WARNING: Account 2000 NOT FOUND in aggregatedBalances at start of liability processing!`);
+            }
+            
             Object.values(accountBalances).forEach(account => {
                 const key = `${account.code} - ${account.name}`;
+                const accountCode = String(account.code);
+                
+                // CRITICAL: Skip child accounts of Accounts Payable (2000) - their balances are already aggregated into parent
+                // Child accounts should NOT appear as separate line items in the balance sheet
+                if (this.isAccountsPayableChildAccount(accountCode, allAccounts)) {
+                    console.log(`⏭️  Skipping AP child account ${accountCode} (${account.name}) - balance already aggregated into parent 2000`);
+                    return; // Skip this account entirely
+                }
+                
                 switch (account.type) {
                     case 'Asset':
                         const accountData = {
@@ -2653,13 +2802,33 @@ class FinancialReportingService {
                         }
                         break;
                     case 'Liability':
-                        liabilities[key] = {
-                            balance: account.balance,
-                            debit_total: account.debit_total,
-                            credit_total: account.credit_total,
-                            code: account.code,
-                            name: account.name
-                        };
+                        // CRITICAL: For account 2000, use the aggregated balance (already set above)
+                        // For other liabilities, add them normally
+                        if (accountCode === '2000') {
+                            // Re-verify and use the FINAL AGGREGATED BALANCE from accountBalances
+                            const apAccountDirect = accountBalances[key];
+                            const finalAPBalance = apAccountDirect ? apAccountDirect.balance : account.balance;
+                            
+                            console.log(`📊 Verifying Accounts Payable (2000) balance during iteration: $${finalAPBalance}`);
+                            
+                            // ALWAYS use the value from accountBalances (aggregated balance) - this is the source of truth
+                            liabilities[key] = {
+                                balance: finalAPBalance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                        } else {
+                            // Other liabilities - add normally
+                            liabilities[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
+                        }
                         break;
                     case 'Equity':
                         equity[key] = {
@@ -2690,6 +2859,41 @@ class FinancialReportingService {
                         break;
                 }
             });
+            
+            // CRITICAL FIX: Ensure Accounts Payable balance is ALWAYS set correctly from aggregatedBalances
+            // Re-verify the aggregated balance after all processing
+            const finalAPAccountKey = Object.keys(accountBalances).find(key => key.startsWith('2000 -'));
+            if (finalAPAccountKey) {
+                const finalAPAccount = accountBalances[finalAPAccountKey];
+                const finalAggregatedBalance = finalAPAccount.balance;
+                const apKey = `2000 - ${finalAPAccount.name}`;
+                
+                // Override with the aggregated balance to ensure correctness
+                if (liabilities[apKey]) {
+                    const currentAPAmount = liabilities[apKey].balance || 0;
+                    liabilities[apKey].balance = finalAggregatedBalance;
+                    
+                    console.log(`✅ Accounts Payable (2000) FINAL AGGREGATED BALANCE: $${finalAggregatedBalance}`);
+                    console.log(`   Debits: $${finalAPAccount.debit_total}, Credits: $${finalAPAccount.credit_total}`);
+                    
+                    if (Math.abs(finalAggregatedBalance - currentAPAmount) > 0.01) {
+                        console.log(`⚠️ FIXED: Accounts Payable balance was incorrect!`);
+                        console.log(`   Was: $${currentAPAmount}, Now: $${finalAggregatedBalance} (aggregated from parent + children)`);
+                    }
+                } else {
+                    // If not found, add it
+                    liabilities[apKey] = {
+                        balance: finalAggregatedBalance,
+                        debit_total: finalAPAccount.debit_total,
+                        credit_total: finalAPAccount.credit_total,
+                        code: '2000',
+                        name: finalAPAccount.name
+                    };
+                    console.log(`✅ Added Accounts Payable (2000) with aggregated balance: $${finalAggregatedBalance}`);
+                }
+            } else {
+                console.log(`⚠️ WARNING: Account 2000 NOT FOUND in accountBalances when calculating totals!`);
+            }
             
             // Calculate totals
             const totalCurrentAssets = Object.values(assets.current_assets).reduce((sum, account) => sum + account.balance, 0);
@@ -4397,7 +4601,7 @@ class FinancialReportingService {
                 console.log(`Found ${entries.length} transaction entries for ${monthNames[monthIndex]} and residence ${residenceId}`);
                 
                 // Calculate account balances for this month
-                const accountBalances = {};
+                let accountBalances = {};
                 
                 entries.forEach(entry => {
                     if (entry.entries && entry.entries.length > 0) {
@@ -4432,13 +4636,57 @@ class FinancialReportingService {
                     }
                 });
                 
+                // CRITICAL: Aggregate parent-child accounts BEFORE building structure
+                // Get all accounts for reference - declare outside try-catch so it's accessible later
+                const Account = require('../models/Account');
+                let allAccountsForMonth = [];
+                try {
+                    allAccountsForMonth = await Account.find({ isActive: true }).sort({ code: 1 });
+                    accountBalances = await this.aggregateParentChildAccounts(accountBalances, allAccountsForMonth);
+                } catch (aggError) {
+                    console.error(`⚠️ Error in aggregation for ${monthNames[monthIndex]}, continuing with original balances:`, aggError.message);
+                    // Continue with original balances if aggregation fails
+                    // If allAccountsForMonth fetch failed, try to get it again
+                    if (allAccountsForMonth.length === 0) {
+                        try {
+                            allAccountsForMonth = await Account.find({ isActive: true }).sort({ code: 1 });
+                        } catch (fetchError) {
+                            console.error(`⚠️ Failed to fetch accounts for ${monthNames[monthIndex]}:`, fetchError.message);
+                        }
+                    }
+                }
+                
                 // Group by account type for this month
                 const assets = {};
                 const liabilities = {};
                 const equity = {};
                 
+                // CRITICAL: First, explicitly set Accounts Payable from aggregatedBalances
+                const apAccountKey = Object.keys(accountBalances).find(key => key.startsWith('2000 -'));
+                if (apAccountKey) {
+                    const apAccount = accountBalances[apAccountKey];
+                    const finalAPBalance = apAccount.balance; // This is the aggregated balance (parent + children)
+                    const apKey = `2000 - ${apAccount.name}`;
+                    liabilities[apKey] = {
+                        balance: finalAPBalance,
+                        debit_total: apAccount.debit_total,
+                        credit_total: apAccount.credit_total,
+                        code: '2000',
+                        name: apAccount.name
+                    };
+                    console.log(`✅ PRE-SET Accounts Payable (2000) for ${monthNames[monthIndex]}: $${finalAPBalance}`);
+                }
+                
                 Object.values(accountBalances).forEach(account => {
                     const key = `${account.code} - ${account.name}`;
+                    const accountCode = String(account.code);
+                    
+                    // CRITICAL: Skip child accounts of Accounts Payable (2000) - their balances are already aggregated into parent
+                    if (allAccountsForMonth && allAccountsForMonth.length > 0 && this.isAccountsPayableChildAccount(accountCode, allAccountsForMonth)) {
+                        console.log(`⏭️  Skipping AP child account ${accountCode} (${account.name}) for ${monthNames[monthIndex]} - balance already aggregated into parent 2000`);
+                        return; // Skip this account entirely
+                    }
+                    
                     switch (account.type) {
                         case 'Asset':
                             assets[key] = {
@@ -4450,13 +4698,27 @@ class FinancialReportingService {
                             };
                             break;
                         case 'Liability':
-                            liabilities[key] = {
-                                balance: account.balance,
-                                debit_total: account.debit_total,
-                                credit_total: account.credit_total,
-                                code: account.code,
-                                name: account.name
-                            };
+                            // CRITICAL: For account 2000, use the aggregated balance (already set above)
+                            if (accountCode === '2000') {
+                                const apAccountDirect = accountBalances[key];
+                                const finalAPBalance = apAccountDirect ? apAccountDirect.balance : account.balance;
+                                liabilities[key] = {
+                                    balance: finalAPBalance,
+                                    debit_total: account.debit_total,
+                                    credit_total: account.credit_total,
+                                    code: account.code,
+                                    name: account.name
+                                };
+                            } else {
+                                // Other liabilities - add normally
+                                liabilities[key] = {
+                                    balance: account.balance,
+                                    debit_total: account.debit_total,
+                                    credit_total: account.credit_total,
+                                    code: account.code,
+                                    name: account.name
+                                };
+                            }
                             break;
                         case 'Equity':
                             equity[key] = {
@@ -4469,6 +4731,27 @@ class FinancialReportingService {
                             break;
                     }
                 });
+                
+                // CRITICAL FIX: Ensure Accounts Payable balance is ALWAYS set correctly from aggregatedBalances
+                const finalAPAccountKey = Object.keys(accountBalances).find(key => key.startsWith('2000 -'));
+                if (finalAPAccountKey) {
+                    const finalAPAccount = accountBalances[finalAPAccountKey];
+                    const finalAggregatedBalance = finalAPAccount.balance;
+                    const apKey = `2000 - ${finalAPAccount.name}`;
+                    
+                    if (liabilities[apKey]) {
+                        liabilities[apKey].balance = finalAggregatedBalance;
+                        console.log(`✅ Accounts Payable (2000) FINAL AGGREGATED BALANCE for ${monthNames[monthIndex]}: $${finalAggregatedBalance}`);
+                    } else {
+                        liabilities[apKey] = {
+                            balance: finalAggregatedBalance,
+                            debit_total: finalAPAccount.debit_total,
+                            credit_total: finalAPAccount.credit_total,
+                            code: '2000',
+                            name: finalAPAccount.name
+                        };
+                    }
+                }
                 
                 // Calculate totals for this month
                 const totalAssets = Object.values(assets).reduce((sum, account) => sum + account.balance, 0);
@@ -4529,6 +4812,136 @@ class FinancialReportingService {
             console.error('Error generating residence-filtered monthly balance sheet:', error);
             throw error;
         }
+    }
+    
+    /**
+     * Aggregate parent-child accounts (similar to simpleBalanceSheetService)
+     * Aggregates child account balances into parent accounts (e.g., 2000 + children)
+     * @param {Object} accountBalances - Object of account balances (key: "code - name", value: account data)
+     * @param {Array} allAccounts - Array of all Account documents from database
+     * @returns {Object} Aggregated account balances
+     */
+    static async aggregateParentChildAccounts(accountBalances, allAccounts) {
+        const aggregatedBalances = { ...accountBalances }; // Copy all accounts
+        
+        try {
+            const Account = require('../models/Account');
+            
+            // --- ACCOUNTS PAYABLE (2000) AGGREGATION ---
+            const apParentAccount = await Account.findOne({ code: '2000' });
+            if (apParentAccount) {
+                console.log(`🔍 Found AP parent account 2000 with _id: ${apParentAccount._id}`);
+                
+                // Get all child accounts that explicitly have parentAccount = apParentAccount._id
+                const apChildAccounts = await Account.find({
+                    parentAccount: apParentAccount._id,
+                    isActive: true
+                });
+                
+                console.log(`🔗 Found ${apChildAccounts.length} explicit child accounts for AP parent 2000`);
+                apChildAccounts.forEach(child => {
+                    console.log(`   ✅ AP Child: ${child.code} - ${child.name} (parentAccount: ${child.parentAccount})`);
+                });
+                
+                // Find the parent account in accountBalances (key format: "2000 - Account Name")
+                const parentAccountKey = Object.keys(aggregatedBalances).find(key => key.startsWith('2000 -'));
+                if (parentAccountKey) {
+                    const parentAccount = aggregatedBalances[parentAccountKey];
+                    console.log(`📊 AP Parent Account (2000) BEFORE aggregation: Balance = $${parentAccount.balance.toFixed(2)}, Debits = $${parentAccount.debit_total.toFixed(2)}, Credits = $${parentAccount.credit_total.toFixed(2)}`);
+                    
+                    let totalChildBalance = 0;
+                    apChildAccounts.forEach(childAccount => {
+                        const childCode = String(childAccount.code);
+                        // Find child account in accountBalances (key format: "code - name")
+                        const childAccountKey = Object.keys(aggregatedBalances).find(key => key.startsWith(`${childCode} -`));
+                        
+                        if (childAccountKey && childCode !== '2000') {
+                            const childBalance = aggregatedBalances[childAccountKey];
+                            totalChildBalance += childBalance.balance;
+                            console.log(`   💰 Aggregating explicit AP child ${childCode} (${childAccount.name}): $${childBalance.balance.toFixed(2)}`);
+                        }
+                    });
+                    
+                    // Add the aggregated child balances to parent
+                    const originalAPBalance = parentAccount.balance;
+                    parentAccount.balance = originalAPBalance + totalChildBalance;
+                    
+                    console.log(`📊 Accounts Payable (2000): Original = $${originalAPBalance.toFixed(2)}, Added from children = $${totalChildBalance.toFixed(2)}, Final = $${parentAccount.balance.toFixed(2)}`);
+                } else {
+                    console.log(`⚠️ WARNING: AP Parent Account (2000) NOT FOUND in accountBalances!`);
+                    console.log(`   Available account keys:`, Object.keys(aggregatedBalances).filter(k => k.includes('2000')).slice(0, 10));
+                }
+            }
+            
+            // --- ACCOUNTS RECEIVABLE (1100) AGGREGATION ---
+            const arParentAccount = await Account.findOne({ code: '1100' });
+            if (arParentAccount) {
+                console.log(`🔍 Found AR parent account 1100 with _id: ${arParentAccount._id}`);
+                
+                const arChildAccounts = await Account.find({
+                    parentAccount: arParentAccount._id,
+                    isActive: true
+                });
+                
+                console.log(`🔗 Found ${arChildAccounts.length} explicit child accounts for AR parent 1100`);
+                arChildAccounts.forEach(child => {
+                    console.log(`   ✅ AR Child: ${child.code} - ${child.name} (parentAccount: ${child.parentAccount})`);
+                });
+                
+                const parentAccountKey = Object.keys(aggregatedBalances).find(key => key.startsWith('1100 -'));
+                if (parentAccountKey) {
+                    const parentAccount = aggregatedBalances[parentAccountKey];
+                    let totalChildBalance = 0;
+                    
+                    arChildAccounts.forEach(childAccount => {
+                        const childCode = String(childAccount.code);
+                        const childAccountKey = Object.keys(aggregatedBalances).find(key => key.startsWith(`${childCode} -`));
+                        
+                        if (childAccountKey && childCode !== '1100') {
+                            const childBalance = aggregatedBalances[childAccountKey];
+                            totalChildBalance += childBalance.balance;
+                            console.log(`   💰 Aggregating explicit AR child ${childCode} (${childAccount.name}): $${childBalance.balance.toFixed(2)}`);
+                        }
+                    });
+                    
+                    const originalARBalance = parentAccount.balance;
+                    parentAccount.balance = originalARBalance + totalChildBalance;
+                    
+                    console.log(`📊 Accounts Receivable (1100): Original = $${originalARBalance.toFixed(2)}, Added from children = $${totalChildBalance.toFixed(2)}, Final = $${parentAccount.balance.toFixed(2)}`);
+                }
+            }
+            
+        } catch (error) {
+            console.error('❌ Error aggregating parent-child accounts:', error);
+            // Don't throw - return the original balances if aggregation fails
+            console.log('⚠️ Returning original balances due to aggregation error');
+        }
+        
+        return aggregatedBalances;
+    }
+    
+    /**
+     * Check if an account code is a child account of Accounts Payable (2000)
+     * @param {string} accountCode - The account code to check
+     * @param {Array} allAccounts - Array of all Account documents
+     * @returns {boolean} True if it's an AP child account
+     */
+    static isAccountsPayableChildAccount(accountCode, allAccounts) {
+        if (!allAccounts || !Array.isArray(allAccounts)) {
+            return false;
+        }
+        
+        const account = allAccounts.find(acc => String(acc.code) === String(accountCode));
+        
+        if (account && account.parentAccount) {
+            // Check if the parent account is 2000
+            const parentAccount = allAccounts.find(acc => String(acc.code) === '2000');
+            if (parentAccount && account.parentAccount.toString() === parentAccount._id.toString()) {
+                return true;
+            }
+        }
+        
+        return false;
     }
 }
 
