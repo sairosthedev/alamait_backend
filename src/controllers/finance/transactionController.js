@@ -6,6 +6,7 @@ const Expense = require('../../models/finance/Expense');
 const Invoice = require('../../models/Invoice');
 const Transaction = require('../../models/Transaction');
 const { createAuditLog } = require('../../utils/auditLogger');
+const { getStudentInfo, getStudentName, isStudentExpired, resolveStudentIdentifier, getLinkedStudentIdentifiers } = require('../../utils/studentUtils');
 const DeletionLogService = require('../../services/deletionLogService');
 
 /**
@@ -61,49 +62,58 @@ class TransactionController {
             // This must be done AFTER other filters to properly combine conditions
             if (studentId) {
                 const mongoose = require('mongoose');
-                const studentIdObj = mongoose.Types.ObjectId.isValid(studentId) 
-                    ? new mongoose.Types.ObjectId(studentId) 
-                    : studentId;
-                const studentIdString = studentId.toString();
                 
-                // Also try to get the first 8 characters (some account codes use shortened IDs)
-                const studentIdShort = studentIdString.length >= 8 ? studentIdString.substring(0, 8) : studentIdString;
+                const canonicalStudentId = await resolveStudentIdentifier(studentId);
+                const identifierVariants = await getLinkedStudentIdentifiers(canonicalStudentId || studentId);
+                const idStrings = Array.from(new Set(
+                    (identifierVariants && identifierVariants.length ? identifierVariants : [studentId])
+                        .map(id => id && id.toString())
+                        .filter(Boolean)
+                ));
+                const idObjects = idStrings
+                    .filter(str => mongoose.Types.ObjectId.isValid(str))
+                    .map(str => new mongoose.Types.ObjectId(str));
                 
-                console.log(`🔍 Filtering transactions for studentId: ${studentIdString} (ObjectId: ${studentIdObj})`);
+                console.log('🔍 Filtering transactions for student identifiers:', idStrings);
                 
-                // Build comprehensive query for student transactions
-                // This includes rent accruals, payments, and other student-related transactions
-                const studentQuery = {
-                    $or: [
-                        // Match by student's AR account code (format: 1100-{studentId})
-                        // Try both full ID and shortened version
-                        { 'entries.accountCode': { $regex: `^1100-${studentIdString}` } },
-                        { 'entries.accountCode': { $regex: `^1100-${studentIdShort}` } },
-                        // Match by metadata.studentId (for accruals and payments) - try both string and ObjectId
-                        { 'metadata.studentId': studentIdString },
-                        { 'metadata.studentId': studentIdObj },
-                        // Also check if studentId is stored as userId in metadata
-                        { 'metadata.userId': studentIdString },
-                        { 'metadata.userId': studentIdObj },
-                        // Match by sourceId (for payments)
-                        { sourceId: studentIdObj },
-                        { sourceId: studentIdString },
-                        // Match by reference field (for lease start and other transactions)
-                        { reference: { $regex: studentIdString, $options: 'i' } },
-                        // Match transactionId that might contain student ID
-                        { transactionId: { $regex: studentIdString, $options: 'i' } }
-                    ]
-                };
+                const orConditions = [];
                 
-                // Combine student query with existing query conditions using $and
-                // This ensures all filters (source, type, date, residence) are still applied
+                idStrings.forEach(idStr => {
+                    const shortId = idStr.length >= 8 ? idStr.substring(0, 8) : idStr;
+                    
+                    // AR account code matches
+                    orConditions.push({ 'entries.accountCode': { $regex: `^1100-${idStr}` } });
+                    if (shortId !== idStr) {
+                        orConditions.push({ 'entries.accountCode': { $regex: `^1100-${shortId}` } });
+                    }
+                    
+                    // Metadata and reference matches (string)
+                    orConditions.push({ 'metadata.studentId': idStr });
+                    orConditions.push({ 'metadata.userId': idStr });
+                    orConditions.push({ sourceId: idStr });
+                    orConditions.push({ reference: { $regex: idStr, $options: 'i' } });
+                    orConditions.push({ transactionId: { $regex: idStr, $options: 'i' } });
+                });
+                
+                idObjects.forEach(objId => {
+                    orConditions.push({ 'metadata.studentId': objId });
+                    orConditions.push({ 'metadata.userId': objId });
+                    orConditions.push({ sourceId: objId });
+                });
+                
+                const studentQuery = { $or: orConditions };
+                
                 const existingConditions = { ...query };
-                query = {
-                    $and: [
-                        existingConditions,
-                        studentQuery
-                    ]
-                };
+                if (Object.keys(existingConditions).length === 0) {
+                    query = studentQuery;
+                } else {
+                    query = {
+                        $and: [
+                            existingConditions,
+                            studentQuery
+                        ]
+                    };
+                }
                 
                 console.log(`📋 Final query structure:`, JSON.stringify(query, null, 2));
             }
@@ -376,7 +386,6 @@ class TransactionController {
             const total = await TransactionEntry.countDocuments(query);
             
             // Transform data for frontend with student information
-            const { getStudentName, isStudentExpired } = require('../../utils/studentUtils');
             const entries = await Promise.all(transactionEntries.map(async (entry) => {
                 const entryObj = {
                     _id: entry._id,
@@ -421,6 +430,223 @@ class TransactionController {
             res.status(500).json({
                 success: false,
                 message: 'Error fetching transaction entries',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Get canonical list of students represented in finance transactions
+     * GET /api/finance/transactions/student-list
+     */
+    static async getTransactionStudents(req, res) {
+        try {
+            console.log('🔍 Fetching student list for transactions');
+
+            const addCandidate = (set, id) => {
+                if (!id) return;
+                if (Array.isArray(id)) {
+                    id.forEach(val => addCandidate(set, val));
+                    return;
+                }
+                if (typeof id === 'object' && id.toString) {
+                    set.add(id.toString());
+                } else {
+                    set.add(String(id));
+                }
+            };
+
+            const candidateIds = new Set();
+
+            const [metadataStudentIds, metadataUserIds, sourceIds, accountCodes] = await Promise.all([
+                TransactionEntry.distinct('metadata.studentId', { 'metadata.studentId': { $exists: true, $ne: null } }),
+                TransactionEntry.distinct('metadata.userId', { 'metadata.userId': { $exists: true, $ne: null } }),
+                TransactionEntry.distinct('sourceId', { sourceId: { $exists: true, $ne: null } }),
+                TransactionEntry.distinct('entries.accountCode', { 'entries.accountCode': { $regex: /^1100-/ } })
+            ]);
+
+            addCandidate(candidateIds, metadataStudentIds);
+            addCandidate(candidateIds, metadataUserIds);
+            addCandidate(candidateIds, sourceIds);
+            accountCodes.forEach(code => {
+                if (typeof code === 'string' && code.startsWith('1100-')) {
+                    const stripped = code.replace(/^1100-/, '');
+                    if (stripped) {
+                        candidateIds.add(stripped);
+                    }
+                }
+            });
+
+            const candidates = Array.from(candidateIds).filter(Boolean);
+
+            const resolutionResults = await Promise.all(candidates.map(async rawId => {
+                const resolvedId = await resolveStudentIdentifier(rawId);
+                return { rawId, resolvedId: resolvedId || rawId };
+            }));
+
+            const grouped = new Map();
+            resolutionResults.forEach(({ rawId, resolvedId }) => {
+                if (!grouped.has(resolvedId)) {
+                    grouped.set(resolvedId, new Set());
+                }
+                grouped.get(resolvedId).add(rawId);
+            });
+
+            const students = await Promise.all(Array.from(grouped.entries()).map(async ([studentId, rawSet]) => {
+                const studentInfo = await getStudentInfo(studentId);
+                const studentName = await getStudentName(studentId);
+                return {
+                    studentId,
+                    studentName,
+                    studentInfo,
+                    linkedStudentIdentifiers: Array.from(rawSet)
+                };
+            }));
+
+            students.sort((a, b) => (a.studentName || '').localeCompare(b.studentName || ''));
+
+            res.json({
+                success: true,
+                data: {
+                    total: students.length,
+                    students
+                }
+            });
+        } catch (error) {
+            console.error('Error fetching transaction students:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error fetching transaction students',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Get monthly accruals for a specific student
+     * GET /api/finance/transactions/student-accruals
+     */
+    static async getStudentAccruals(req, res) {
+        try {
+            const { studentId, month, period } = req.query;
+
+            if (!studentId || !month || !period) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'studentId, month, and period parameters are required'
+                });
+            }
+
+            const canonicalStudentId = await resolveStudentIdentifier(studentId);
+            const effectiveStudentId = canonicalStudentId || studentId;
+            const studentName = await getStudentName(effectiveStudentId);
+            const studentInfo = await getStudentInfo(effectiveStudentId);
+
+            const year = parseInt(period, 10);
+            if (Number.isNaN(year)) {
+                return res.status(400).json({ success: false, message: 'Invalid period format' });
+            }
+
+            const monthNames = [
+                'January','February','March','April','May','June',
+                'July','August','September','October','November','December'
+            ];
+
+            let monthNumber = parseInt(month, 10);
+            if (Number.isNaN(monthNumber)) {
+                const monthIndex = monthNames.findIndex(m => m.toLowerCase() === String(month).toLowerCase());
+                if (monthIndex === -1) {
+                    return res.status(400).json({ success: false, message: 'Invalid month value' });
+                }
+                monthNumber = monthIndex + 1;
+            }
+
+            if (monthNumber < 1 || monthNumber > 12) {
+                return res.status(400).json({ success: false, message: 'Month must be between 1 and 12' });
+            }
+
+            const startDate = new Date(Date.UTC(year, monthNumber - 1, 1));
+            const endDate = new Date(Date.UTC(year, monthNumber, 1));
+
+            const identifierVariants = await getLinkedStudentIdentifiers(effectiveStudentId);
+            const identifiersToMatch = (identifierVariants && identifierVariants.length)
+                ? identifierVariants
+                : [effectiveStudentId.toString()];
+
+            const studentMatchClauses = [];
+            identifiersToMatch.forEach(id => {
+                studentMatchClauses.push({ 'metadata.studentId': id });
+                studentMatchClauses.push({ 'metadata.userId': id });
+                studentMatchClauses.push({ sourceId: id });
+
+                if (mongoose.Types.ObjectId.isValid(id)) {
+                    const objectId = new mongoose.Types.ObjectId(id);
+                    studentMatchClauses.push({ 'metadata.studentId': objectId });
+                    studentMatchClauses.push({ 'metadata.userId': objectId });
+                    studentMatchClauses.push({ sourceId: objectId });
+                }
+
+                studentMatchClauses.push({ reference: { $regex: id, $options: 'i' } });
+                studentMatchClauses.push({ transactionId: { $regex: id, $options: 'i' } });
+                studentMatchClauses.push({ 'entries.accountCode': { $regex: `^1100-${id}` } });
+            });
+
+            const accrualQuery = {
+                status: 'posted',
+                date: { $gte: startDate, $lt: endDate },
+                source: { $in: ['rental_accrual', 'rental_accrual_reversal', 'manual'] },
+                $or: studentMatchClauses
+            };
+
+            const accrualEntries = await TransactionEntry.find(accrualQuery)
+                .sort({ date: 1 })
+                .lean();
+
+            let totalAccrualAmount = 0;
+            const detailedEntries = accrualEntries.map(entry => {
+                let entryAccrualAmount = 0;
+                (entry.entries || []).forEach(line => {
+                    if (line.accountType === 'Income') {
+                        entryAccrualAmount += (line.credit || 0) - (line.debit || 0);
+                    }
+                });
+                totalAccrualAmount += entryAccrualAmount;
+                return {
+                    _id: entry._id,
+                    transactionId: entry.transactionId,
+                    date: entry.date,
+                    description: entry.description,
+                    source: entry.source,
+                    status: entry.status,
+                    entries: entry.entries,
+                    accrualAmount: entryAccrualAmount
+                };
+            });
+
+            res.json({
+                success: true,
+                data: {
+                    studentId: effectiveStudentId,
+                    studentName,
+                    studentInfo,
+                    period: year,
+                    month: monthNumber,
+                    monthName: monthNames[monthNumber - 1],
+                    dateRange: {
+                        start: startDate.toISOString(),
+                        end: new Date(endDate.getTime() - 1).toISOString()
+                    },
+                    linkedStudentIdentifiers: identifiersToMatch,
+                    totalAccrualAmount,
+                    entryCount: detailedEntries.length,
+                    entries: detailedEntries
+                }
+            });
+        } catch (error) {
+            console.error('Error fetching student accruals:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error fetching student accruals',
                 error: error.message
             });
         }

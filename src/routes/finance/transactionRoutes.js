@@ -21,6 +21,18 @@ router.use(financeAccess);
 router.get('/', TransactionController.getAllTransactions);
 
 /**
+ * Get transaction student list
+ * GET /api/finance/transactions/student-list
+ */
+router.get('/student-list', TransactionController.getTransactionStudents);
+
+/**
+ * Get student accruals by month
+ * GET /api/finance/transactions/student-accruals
+ */
+router.get('/student-accruals', TransactionController.getStudentAccruals);
+
+/**
  * Get transaction summary
  * GET /api/finance/transactions/summary
  */

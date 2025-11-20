@@ -3,7 +3,9 @@ const TransactionEntry = require('../models/TransactionEntry');
 const Debtor = require('../models/Debtor');
 const Account = require('../models/Account');
 const { createAuditLog } = require('../utils/auditLogger');
-const { getStudentInfo, getStudentName } = require('../utils/studentUtils');
+const { getStudentInfo, getStudentName, resolveStudentIdentifier } = require('../utils/studentUtils');
+const User = require('../models/User');
+const ExpiredStudent = require('../models/ExpiredStudent');
 
 class SecurityDepositReversalService {
     /**
@@ -356,21 +358,74 @@ class SecurityDepositReversalService {
         try {
             console.log('🔍 Getting all students for security deposit management');
 
-            // Get all unique student IDs from lease start transactions
+            // Get all unique student IDs from multiple sources to ensure we include every student
             const leaseStartTransactions = await TransactionEntry.find({
                 'metadata.type': 'lease_start',
                 status: 'posted'
             }).select('metadata.studentId metadata.studentName');
 
-            // Extract unique student IDs
-            const studentIds = [...new Set(leaseStartTransactions.map(tx => tx.metadata.studentId))];
-            
-            console.log(`📊 Found ${studentIds.length} unique students with lease start transactions`);
+            const activeStudents = await User.find({ role: 'student' }).select('_id');
+            const expiredStudents = await ExpiredStudent.find({})
+                .select('student studentId application.student');
+
+            const studentIdSet = new Set();
+            const normalizeId = (value) => {
+                if (!value) return null;
+                if (typeof value === 'string') return value;
+                if (value._id) return value._id.toString();
+                if (value.toString) return value.toString();
+                return null;
+            };
+
+            leaseStartTransactions.forEach(tx => {
+                const id = normalizeId(tx.metadata?.studentId);
+                if (id) studentIdSet.add(id);
+            });
+
+            activeStudents.forEach(student => {
+                const id = normalizeId(student?._id);
+                if (id) studentIdSet.add(id);
+            });
+
+            expiredStudents.forEach(record => {
+                const possibleIds = [
+                    normalizeId(record.student?._id || record.student),
+                    normalizeId(record.studentId),
+                    normalizeId(record.application?.student?._id)
+                ];
+                possibleIds.forEach(id => {
+                    if (id) studentIdSet.add(id);
+                });
+            });
+
+            const preliminaryStudentIds = Array.from(studentIdSet);
+            console.log(`📊 Aggregated ${preliminaryStudentIds.length} unique students (lease start + active + expired)`);
+
+            // Resolve each student identifier to the actual student/user _id used in transactions
+            const resolvedEntries = await Promise.all(
+                preliminaryStudentIds.map(async (rawId) => {
+                    const resolvedId = await resolveStudentIdentifier(rawId);
+                    return { rawId, resolvedId: resolvedId || rawId };
+                })
+            );
+
+            const studentIdMap = new Map(); // resolvedId -> Set(originalIds)
+            resolvedEntries.forEach(({ rawId, resolvedId }) => {
+                if (!resolvedId) return;
+                if (!studentIdMap.has(resolvedId)) {
+                    studentIdMap.set(resolvedId, new Set());
+                }
+                studentIdMap.get(resolvedId).add(rawId);
+            });
+
+            const studentIds = Array.from(studentIdMap.keys());
+            console.log(`📊 Resolved to ${studentIds.length} unique student identifiers used for transactions`);
 
             // Get student information and deposit status for each student
             const studentsWithDepositInfo = await Promise.all(
                 studentIds.map(async (studentId) => {
                     try {
+                        const linkedIdentifiers = Array.from(studentIdMap.get(studentId) || []);
                         const studentInfo = await getStudentInfo(studentId);
                         const studentName = await getStudentName(studentId);
                         const depositStatus = await this.getSecurityDepositStatus(studentId);
@@ -385,7 +440,8 @@ class SecurityDepositReversalService {
                                 paidAmount: depositStatus.paidAmount,
                                 outstandingAmount: depositStatus.outstandingAmount,
                                 canReverse: depositStatus.status === 'unpaid' && depositStatus.outstandingAmount > 0
-                            }
+                            },
+                            linkedStudentIdentifiers: linkedIdentifiers
                         };
                     } catch (error) {
                         console.error(`❌ Error getting info for student ${studentId}:`, error);

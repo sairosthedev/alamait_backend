@@ -1,6 +1,72 @@
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const ExpiredStudent = require('../models/ExpiredStudent');
+const TransactionEntry = require('../models/TransactionEntry');
+
+let identifierMapCache = null;
+let identifierMapCacheTime = 0;
+const IDENTIFIER_MAP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function buildStudentIdentifierMap() {
+    const addCandidate = (set, id) => {
+        if (!id) return;
+        if (Array.isArray(id)) {
+            id.forEach(item => addCandidate(set, item));
+            return;
+        }
+        if (typeof id === 'object' && id.toString) {
+            set.add(id.toString());
+        } else {
+            set.add(String(id));
+        }
+    };
+
+    const candidateIds = new Set();
+    const [metadataStudentIds, metadataUserIds, sourceIds, accountCodes] = await Promise.all([
+        TransactionEntry.distinct('metadata.studentId', { 'metadata.studentId': { $exists: true, $ne: null } }),
+        TransactionEntry.distinct('metadata.userId', { 'metadata.userId': { $exists: true, $ne: null } }),
+        TransactionEntry.distinct('sourceId', { sourceId: { $exists: true, $ne: null } }),
+        TransactionEntry.distinct('entries.accountCode', { 'entries.accountCode': { $regex: /^1100-/ } })
+    ]);
+
+    addCandidate(candidateIds, metadataStudentIds);
+    addCandidate(candidateIds, metadataUserIds);
+    addCandidate(candidateIds, sourceIds);
+    accountCodes.forEach(code => {
+        if (typeof code === 'string' && code.startsWith('1100-')) {
+            const stripped = code.replace(/^1100-/, '');
+            if (stripped) candidateIds.add(stripped);
+        }
+    });
+
+    const candidates = Array.from(candidateIds).filter(Boolean);
+    const resolutionResults = await Promise.all(
+        candidates.map(async rawId => {
+            const resolvedId = await resolveStudentIdentifier(rawId);
+            return { rawId, resolvedId: resolvedId || rawId };
+        })
+    );
+
+    const map = new Map();
+    resolutionResults.forEach(({ rawId, resolvedId }) => {
+        if (!resolvedId) return;
+        if (!map.has(resolvedId)) {
+            map.set(resolvedId, new Set());
+        }
+        map.get(resolvedId).add(rawId);
+    });
+
+    return map;
+}
+
+async function getStudentIdentifierMap() {
+    if (identifierMapCache && (Date.now() - identifierMapCacheTime) < IDENTIFIER_MAP_TTL_MS) {
+        return identifierMapCache;
+    }
+    identifierMapCache = await buildStudentIdentifierMap();
+    identifierMapCacheTime = Date.now();
+    return identifierMapCache;
+}
 
 /**
  * Get student information from either active users or expired students
@@ -195,9 +261,128 @@ async function isStudentExpired(studentId) {
     }
 }
 
+/**
+ * Resolve any student identifier (active user ID, expired student record ID, application student ID)
+ * to the canonical student/user ID used in transaction metadata.
+ * @param {string|mongoose.Types.ObjectId} studentId
+ * @returns {Promise<string>} resolved student ID
+ */
+async function resolveStudentIdentifier(studentId) {
+    if (!studentId) return null;
+    const idString = studentId.toString();
+
+    // If this is a valid ObjectId and matches an active user, return it immediately
+    if (mongoose.Types.ObjectId.isValid(idString)) {
+        const user = await User.findById(idString).select('_id');
+        if (user) {
+            return user._id.toString();
+        }
+    }
+
+    // Build OR conditions to find matching expired student records
+    const orConditions = [
+        { _id: idString },
+        { 'student._id': idString },
+        { 'application.student._id': idString },
+        { studentId: idString }
+    ];
+
+    if (mongoose.Types.ObjectId.isValid(idString)) {
+        const objectId = new mongoose.Types.ObjectId(idString);
+        orConditions.push({ _id: objectId });
+        orConditions.push({ 'student._id': objectId });
+        orConditions.push({ 'application.student._id': objectId });
+        orConditions.push({ student: objectId });
+    }
+
+    const expiredStudent = await ExpiredStudent.findOne({ $or: orConditions }).lean();
+
+    if (expiredStudent) {
+        const possibleIds = [];
+
+        if (expiredStudent.student && expiredStudent.student._id) {
+            possibleIds.push(expiredStudent.student._id.toString());
+        }
+        if (expiredStudent.application && expiredStudent.application.student && expiredStudent.application.student._id) {
+            possibleIds.push(expiredStudent.application.student._id.toString());
+        }
+        if (typeof expiredStudent.student === 'string') {
+            possibleIds.push(expiredStudent.student);
+        } else if (expiredStudent.student && expiredStudent.student.constructor && expiredStudent.student.constructor.name === 'ObjectId') {
+            possibleIds.push(expiredStudent.student.toString());
+        }
+        if (expiredStudent.studentId) {
+            possibleIds.push(expiredStudent.studentId.toString());
+        }
+
+        for (const possibleId of possibleIds) {
+            if (possibleId) {
+                return possibleId;
+            }
+        }
+    }
+
+    // Fallback to the provided identifier
+    // Try to infer from transaction history (metadata or AR account codes)
+    try {
+        const transactionMatch = await TransactionEntry.findOne({
+            $or: [
+                { 'metadata.studentId': idString },
+                { 'metadata.userId': idString },
+                { sourceId: idString },
+                { reference: { $regex: idString, $options: 'i' } },
+                { transactionId: { $regex: idString, $options: 'i' } },
+                { 'entries.accountCode': { $regex: idString } }
+            ]
+        }).select('metadata.studentId entries.accountCode').lean();
+
+        if (transactionMatch) {
+            if (transactionMatch.metadata && transactionMatch.metadata.studentId) {
+                return transactionMatch.metadata.studentId.toString();
+            }
+
+            const arEntry = transactionMatch.entries?.find(entry => 
+                entry.accountCode && entry.accountCode.startsWith('1100-')
+            );
+            if (arEntry) {
+                const potentialId = arEntry.accountCode.replace(/^1100-/, '');
+                if (potentialId) {
+                    return potentialId;
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('resolveStudentIdentifier transaction lookup failed:', err.message);
+    }
+
+    return idString;
+}
+
+/**
+ * Get all raw identifiers that resolve to the same canonical student ID.
+ * Uses cached mapping built from transaction activity to align with transaction endpoints.
+ * @param {string|mongoose.Types.ObjectId} studentId
+ * @returns {Promise<string[]>}
+ */
+async function getLinkedStudentIdentifiers(studentId) {
+    if (!studentId) return [];
+    const canonicalId = await resolveStudentIdentifier(studentId);
+    const canonicalString = (canonicalId || studentId).toString();
+    const identifierMap = await getStudentIdentifierMap();
+    const linkedSet = identifierMap.get(canonicalString) || new Set();
+    const variants = new Set([canonicalString, ...linkedSet]);
+
+    // If the original provided ID is different, include it as well for completeness
+    variants.add(studentId.toString());
+
+    return Array.from(variants).filter(Boolean);
+}
+
 module.exports = {
     getStudentInfo,
     getMultipleStudentInfo,
     getStudentName,
-    isStudentExpired
+    isStudentExpired,
+    resolveStudentIdentifier,
+    getLinkedStudentIdentifiers
 };

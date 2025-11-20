@@ -219,7 +219,14 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             throw new Error('User not found');
         }
         
-        const existingDebtor = await Debtor.findOne({ user: actualUser._id });
+        // Check for existing debtor - use multiple queries to catch all cases
+        let existingDebtor = await Debtor.findOne({ user: actualUser._id });
+        
+        // Also check by account code if user ID check didn't find one (for edge cases)
+        if (!existingDebtor) {
+            const arAccountCode = `1100-${actualUser._id.toString()}`;
+            existingDebtor = await Debtor.findOne({ accountCode: arAccountCode });
+        }
 
         // Ensure student AR account exists asap
         try {
@@ -596,9 +603,30 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         console.log(`   Start Date: ${startDate}`);
         console.log(`   End Date: ${endDate}`);
 
+        // Final check before creating - prevent race conditions
+        // Double-check that no debtor was created between our initial check and now
+        const finalCheck = await Debtor.findOne({ user: actualUser._id });
+        if (finalCheck) {
+            console.log(`⚠️  Debtor was created by another process, returning existing debtor: ${finalCheck.debtorCode}`);
+            return finalCheck;
+        }
+
         // Create the debtor
         const debtor = new Debtor(debtorData);
+        try {
         await debtor.save();
+        } catch (saveError) {
+            // If duplicate key error (race condition), find and return existing debtor
+            if (saveError.code === 11000 || saveError.message.includes('duplicate key')) {
+                console.log(`⚠️  Duplicate key error detected, fetching existing debtor...`);
+                const existingDebtor = await Debtor.findOne({ user: actualUser._id });
+                if (existingDebtor) {
+                    console.log(`✅ Found existing debtor: ${existingDebtor.debtorCode}`);
+                    return existingDebtor;
+                }
+            }
+            throw saveError; // Re-throw if it's not a duplicate key error
+        }
 
         console.log(`\n✅ Debtor account created for student ${actualUser.email}: ${debtorCode}`);
         console.log(`   Room Price: $${roomPrice}`);
