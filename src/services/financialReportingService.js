@@ -2731,15 +2731,6 @@ class FinancialReportingService {
             console.log(`   Total advance payments processed: ${processedAdvancePayments}`);
             console.log(`   Total account 2200 balance from advance payments: ${advancePayment2200Total}`);
             
-            // CRITICAL: Aggregate parent-child accounts BEFORE building structure
-            // This ensures Accounts Payable (2000) includes balances from child accounts
-            try {
-                accountBalances = await this.aggregateParentChildAccounts(accountBalances, allAccounts);
-            } catch (aggError) {
-                console.error('⚠️ Error in aggregation, continuing with original balances:', aggError.message);
-                // Continue with original balances if aggregation fails
-            }
-            
             // Group by account type with proper current/non-current asset separation
             const assets = {
                 current_assets: {},
@@ -2753,36 +2744,8 @@ class FinancialReportingService {
             // Import BalanceSheetService to use isCurrentAsset function
             const BalanceSheetService = require('./balanceSheetService');
             
-            // CRITICAL: First, explicitly set Accounts Payable from aggregatedBalances to ensure correct balance
-            // This must be done BEFORE the forEach loop to prevent any child account from overwriting it
-            const apAccountKey = Object.keys(accountBalances).find(key => key.startsWith('2000 -'));
-            if (apAccountKey) {
-                const apAccount = accountBalances[apAccountKey];
-                const finalAPBalance = apAccount.balance; // This is the aggregated balance (parent + children)
-                const apKey = `2000 - ${apAccount.name}`;
-                liabilities[apKey] = {
-                    balance: finalAPBalance,
-                    debit_total: apAccount.debit_total,
-                    credit_total: apAccount.credit_total,
-                    code: '2000',
-                    name: apAccount.name
-                };
-                console.log(`✅ PRE-SET Accounts Payable (2000) from aggregatedBalances: $${finalAPBalance}`);
-                console.log(`   Debits: $${apAccount.debit_total}, Credits: $${apAccount.credit_total}`);
-            } else {
-                console.log(`⚠️ WARNING: Account 2000 NOT FOUND in aggregatedBalances at start of liability processing!`);
-            }
-            
             Object.values(accountBalances).forEach(account => {
                 const key = `${account.code} - ${account.name}`;
-                const accountCode = String(account.code);
-                
-                // CRITICAL: Skip child accounts of Accounts Payable (2000) - their balances are already aggregated into parent
-                // Child accounts should NOT appear as separate line items in the balance sheet
-                if (this.isAccountsPayableChildAccount(accountCode, allAccounts)) {
-                    console.log(`⏭️  Skipping AP child account ${accountCode} (${account.name}) - balance already aggregated into parent 2000`);
-                    return; // Skip this account entirely
-                }
                 
                 switch (account.type) {
                     case 'Asset':
@@ -2802,33 +2765,13 @@ class FinancialReportingService {
                         }
                         break;
                     case 'Liability':
-                        // CRITICAL: For account 2000, use the aggregated balance (already set above)
-                        // For other liabilities, add them normally
-                        if (accountCode === '2000') {
-                            // Re-verify and use the FINAL AGGREGATED BALANCE from accountBalances
-                            const apAccountDirect = accountBalances[key];
-                            const finalAPBalance = apAccountDirect ? apAccountDirect.balance : account.balance;
-                            
-                            console.log(`📊 Verifying Accounts Payable (2000) balance during iteration: $${finalAPBalance}`);
-                            
-                            // ALWAYS use the value from accountBalances (aggregated balance) - this is the source of truth
-                            liabilities[key] = {
-                                balance: finalAPBalance,
-                                debit_total: account.debit_total,
-                                credit_total: account.credit_total,
-                                code: account.code,
-                                name: account.name
-                            };
-                        } else {
-                            // Other liabilities - add normally
-                            liabilities[key] = {
-                                balance: account.balance,
-                                debit_total: account.debit_total,
-                                credit_total: account.credit_total,
-                                code: account.code,
-                                name: account.name
-                            };
-                        }
+                        liabilities[key] = {
+                            balance: account.balance,
+                            debit_total: account.debit_total,
+                            credit_total: account.credit_total,
+                            code: account.code,
+                            name: account.name
+                        };
                         break;
                     case 'Equity':
                         equity[key] = {
@@ -2859,41 +2802,6 @@ class FinancialReportingService {
                         break;
                 }
             });
-            
-            // CRITICAL FIX: Ensure Accounts Payable balance is ALWAYS set correctly from aggregatedBalances
-            // Re-verify the aggregated balance after all processing
-            const finalAPAccountKey = Object.keys(accountBalances).find(key => key.startsWith('2000 -'));
-            if (finalAPAccountKey) {
-                const finalAPAccount = accountBalances[finalAPAccountKey];
-                const finalAggregatedBalance = finalAPAccount.balance;
-                const apKey = `2000 - ${finalAPAccount.name}`;
-                
-                // Override with the aggregated balance to ensure correctness
-                if (liabilities[apKey]) {
-                    const currentAPAmount = liabilities[apKey].balance || 0;
-                    liabilities[apKey].balance = finalAggregatedBalance;
-                    
-                    console.log(`✅ Accounts Payable (2000) FINAL AGGREGATED BALANCE: $${finalAggregatedBalance}`);
-                    console.log(`   Debits: $${finalAPAccount.debit_total}, Credits: $${finalAPAccount.credit_total}`);
-                    
-                    if (Math.abs(finalAggregatedBalance - currentAPAmount) > 0.01) {
-                        console.log(`⚠️ FIXED: Accounts Payable balance was incorrect!`);
-                        console.log(`   Was: $${currentAPAmount}, Now: $${finalAggregatedBalance} (aggregated from parent + children)`);
-                    }
-                } else {
-                    // If not found, add it
-                    liabilities[apKey] = {
-                        balance: finalAggregatedBalance,
-                        debit_total: finalAPAccount.debit_total,
-                        credit_total: finalAPAccount.credit_total,
-                        code: '2000',
-                        name: finalAPAccount.name
-                    };
-                    console.log(`✅ Added Accounts Payable (2000) with aggregated balance: $${finalAggregatedBalance}`);
-                }
-            } else {
-                console.log(`⚠️ WARNING: Account 2000 NOT FOUND in accountBalances when calculating totals!`);
-            }
             
             // Calculate totals
             const totalCurrentAssets = Object.values(assets.current_assets).reduce((sum, account) => sum + account.balance, 0);
