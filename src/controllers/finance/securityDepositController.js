@@ -128,7 +128,15 @@ class SecurityDepositController {
         try {
             console.log('🔍 Getting all students for security deposit management');
 
-            const students = await SecurityDepositReversalService.getAllStudentsForDepositManagement();
+            const allStudents = await SecurityDepositReversalService.getAllStudentsForDepositManagement();
+
+            // Filter to only include active and expired students (exclude null/invalid studentInfo)
+            const students = allStudents.filter(student => {
+                // Include if studentInfo exists and is either active (isExpired === false) or expired (isExpired === true)
+                return student.studentInfo && 
+                       student.studentInfo.isExpired !== undefined &&
+                       (student.studentInfo.isExpired === false || student.studentInfo.isExpired === true);
+            });
 
             res.json({
                 success: true,

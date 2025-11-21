@@ -89,16 +89,33 @@ function transformFixedBalanceSheetToMonthly(balanceSheetData, month, year) {
         }
     });
     
-    // Build liabilities with child aggregation
-    const accountsPayableAccount = Object.values(liabilities).find(acc => acc.code === '2000');
-    let totalAccountsPayable = accountsPayableAccount?.balance || 0;
+    // Build liabilities - use balance from service (already aggregated, DO NOT re-aggregate)
+    // CRITICAL: The service already aggregated parent + children, so we should NOT re-aggregate
+    // Find the parent account (2000) - it should have the aggregated balance already
+    let accountsPayableAccount = Object.values(liabilities).find(acc => String(acc.code) === '2000');
     
-    // Aggregate child accounts payable into parent
-    Object.entries(liabilities || {}).forEach(([key, account]) => {
-        if (isChildAccount(account.code, '2000')) {
-            totalAccountsPayable += account.balance || 0;
+    // If not found, try finding by key that starts with "2000 -"
+    if (!accountsPayableAccount) {
+        const apKey = Object.keys(liabilities).find(key => key.startsWith('2000 -'));
+        if (apKey) {
+            accountsPayableAccount = liabilities[apKey];
         }
-    });
+    }
+    
+    // Use the balance directly - it's already aggregated by the service (parent + children)
+    // DO NOT add child accounts again - that would double-count!
+    const totalAccountsPayable = accountsPayableAccount?.balance || 0;
+    
+    console.log(`🔧 Accounts Payable (2000) balance from service (already aggregated): $${totalAccountsPayable}`);
+    if (accountsPayableAccount) {
+        console.log(`   Found AP account: code=${accountsPayableAccount.code}, name=${accountsPayableAccount.name}, balance=$${totalAccountsPayable}`);
+    } else {
+        console.log(`   ⚠️ WARNING: Accounts Payable (2000) not found in liabilities object!`);
+        console.log(`   Available liability keys:`, Object.keys(liabilities).slice(0, 10));
+    }
+    
+    // NOTE: We do NOT re-aggregate child accounts here because the service already did it
+    // The service's aggregateParentChildAccounts method already combined parent + children
     
     const tenantDepositsAccount = Object.values(liabilities).find(acc => acc.code === '2020');
     const deferredIncomeAccount = Object.values(liabilities).find(acc => acc.code === '2200');
@@ -1456,7 +1473,25 @@ class FinancialReportsController {
                         }
                     } else {
                         // Use the original fixed balance sheet service
+                        try {
                         monthData = await FinancialReportingService.generateBalanceSheet(monthEndDateStr, basis);
+                            if (!monthData) {
+                                console.log(`⚠️ generateBalanceSheet returned null/undefined for ${monthEndDateStr}`);
+                            } else {
+                                console.log(`✅ generateBalanceSheet returned data for ${monthEndDateStr}:`, {
+                                    hasAssets: !!monthData.assets,
+                                    hasLiabilities: !!monthData.liabilities,
+                                    hasEquity: !!monthData.equity,
+                                    totalAssets: monthData.assets?.total_assets,
+                                    totalLiabilities: monthData.liabilities?.total_liabilities,
+                                    totalEquity: monthData.equity?.total_equity
+                                });
+                            }
+                        } catch (balanceSheetError) {
+                            console.error(`❌ Error generating balance sheet for ${monthEndDateStr}:`, balanceSheetError);
+                            console.error(`   Stack:`, balanceSheetError.stack);
+                            monthData = null;
+                        }
                     }
                     
                     if (monthData) {
@@ -2425,30 +2460,30 @@ class FinancialReportsController {
                     
                     // Set accountData based on account code (even if total is 0, to match cash flow statement)
                     if (accountCode === '4001') {
-                        accountData = {
+                                accountData = {
                             totalCredit: totalRentalIncome,
-                            totalDebit: 0,
+                                    totalDebit: 0,
                             netAmount: totalRentalIncome,
-                            transactionCount: 0, // Will be calculated from transactions
-                            type: 'income',
+                                    transactionCount: 0, // Will be calculated from transactions
+                                    type: 'income',
                             category: 'income'
-                        };
+                                };
                     } else if (accountCode === '4002') {
-                        accountData = {
+                                accountData = {
                             totalCredit: totalAdminFees,
-                            totalDebit: 0,
+                                    totalDebit: 0,
                             netAmount: totalAdminFees,
-                            transactionCount: 0,
-                            type: 'income',
+                                    transactionCount: 0,
+                                    type: 'income',
                             category: 'income'
-                        };
+                                };
                     } else if (accountCode === '4003') {
-                        accountData = {
+                                accountData = {
                             totalCredit: totalDeposits,
-                            totalDebit: 0,
+                                    totalDebit: 0,
                             netAmount: totalDeposits,
-                            transactionCount: 0,
-                            type: 'income',
+                                    transactionCount: 0,
+                                    type: 'income',
                             category: 'income'
                         };
                     }
@@ -2674,13 +2709,13 @@ class FinancialReportsController {
             } else if (account.type === 'Expense') {
                 // For expense accounts, show transactions where cash was paid out (expense transactions)
                 // Expense transactions can have the expense account code directly OR have cash entries (cash paid out)
-                // First, try to find transactions with the expense account code directly
+                // Include all expense-related sources: expense_payment, vendor_payment, petty_cash_payment, petty_cash_expense, etc.
                 query = {
                     $or: [
                         { 'entries.accountCode': accountCode }, // Direct expense account entries (primary)
                         {
                             'entries.accountCode': { $regex: '^1000' }, // Cash transactions (cash paid out)
-                            source: { $in: ['expense', 'manual'] }
+                            source: { $in: ['expense', 'expense_payment', 'vendor_payment', 'petty_cash_payment', 'petty_cash_expense', 'manual'] }
                         }
                     ],
                     status: { $nin: ['reversed', 'draft'] }
@@ -2796,7 +2831,7 @@ class FinancialReportsController {
                         const requestedYear = parseInt(period);
                         const requestedMonthKey = `${requestedYear}-${String(requestedMonth).padStart(2, '0')}`; // e.g., "2025-11"
                         
-                        transactions = transactions.filter(tx => {
+                transactions = transactions.filter(tx => {
                             // For cash flow, use ONLY transaction date (when cash was received)
                             // Do NOT use monthSettled or description parsing - cash flow is about when cash moved
                             const txDate = new Date(tx.date);
@@ -2818,7 +2853,7 @@ class FinancialReportsController {
                     }
                     
                     // Exclude transactions with "accrual" in description (unless it's a payment allocation)
-                    const description = (tx.description || '').toLowerCase();
+                        const description = (tx.description || '').toLowerCase();
                     if (description.includes('accrual') && !description.includes('payment allocation')) {
                         return false;
                     }
@@ -3177,12 +3212,12 @@ class FinancialReportsController {
             } else {
                 // Fallback: calculate from transactions
                 finalCashFlowData = {
-                    totalCredit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalCredit, 0),
-                    totalDebit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalDebit, 0),
-                    netAmount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.netAmount, 0),
-                    transactionCount: transactions.length,
-                    type: cashFlowType
-                };
+                totalCredit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalCredit, 0),
+                totalDebit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalDebit, 0),
+                netAmount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.netAmount, 0),
+                transactionCount: transactions.length,
+                type: cashFlowType
+            };
             }
             
             const response = {
@@ -3217,7 +3252,7 @@ class FinancialReportsController {
                         // Cash received is when cash account is debited
                         if (cashEntry && cashEntry.debit > 0) {
                             // Cash is debited (money coming in) - this is the cash received amount
-                            amount = cashEntry.debit || 0;
+                        amount = cashEntry.debit || 0;
                             type = 'debit'; // Cash debit means cash received
                         }
                     } else if (depositAccountCodes.includes(accountCode)) {
@@ -3508,20 +3543,85 @@ function transformResidenceFilteredToFixed(monthBreakdown, month, year) {
             }
         });
         
-        // Calculate individual liability balances
+        // Helper to check if account is a child of AP (2000) - matches isChildAccount logic
+        const isAPChildAccount = (accountCode) => {
+            if (!accountCode) return false;
+            const codeStr = String(accountCode);
+            // Child accounts of 2000: codes that start with '2000' but are not exactly '2000'
+            // This matches the pattern: 200001, 200002, 2000-xxx, etc.
+            return codeStr.startsWith('2000') && codeStr !== '2000';
+        };
+        
+        // Calculate individual liability balances - include all accounts
         const liabilityAccounts = {};
         Object.entries(liabilities).forEach(([key, account]) => {
             liabilityAccounts[key] = { balance: account.balance || 0, code: account.code, name: account.name };
         });
+        
+        // CRITICAL: Find Accounts Payable (2000) - use balance from service (already aggregated)
+        // Find by exact code match (parent account should be exactly "2000")
+        let apAccount = null;
+        let apAccountKey = null;
+        
+        // First, try to find account with exact code "2000" (parent)
+        for (const [key, account] of Object.entries(liabilities)) {
+            if (account && String(account.code) === '2000') {
+                apAccount = account;
+                apAccountKey = key;
+                break;
+            }
+        }
+        
+        // If not found, try by key pattern
+        if (!apAccount) {
+            apAccountKey = Object.keys(liabilities).find(key => key.startsWith('2000 -'));
+            if (apAccountKey) {
+                apAccount = liabilities[apAccountKey];
+            }
+        }
+        
+        // Use the balance directly from service - it's already aggregated (parent + children)
+        // DO NOT re-aggregate child accounts - that would double-count!
+        let apBalance = apAccount ? apAccount.balance : 0;
+        
+        // VERIFICATION: Check if AP balance matches expected based on total liabilities
+        // This is a sanity check in case the service didn't aggregate correctly
+        const otherLiabilities = Object.entries(liabilities).reduce((sum, [key, account]) => {
+            if (account && String(account.code) !== '2000' && !isAPChildAccount(account.code)) {
+                return sum + (account.balance || 0);
+            }
+            return sum;
+        }, 0);
+        
+        const expectedAP = totalLiabilities - otherLiabilities;
+        
+        console.log(`🔧 Accounts Payable (2000) balance from service (already aggregated): $${apBalance}`);
+        console.log(`   Total liabilities: $${totalLiabilities}, Other liabilities: $${otherLiabilities}, Expected AP: $${expectedAP}`);
+        
+        if (apAccount) {
+            console.log(`   Parent AP account: key="${apAccountKey}", code=${apAccount.code}, name="${apAccount.name}", balance=$${apAccount.balance || 0}`);
+        } else {
+            console.log(`   ⚠️ WARNING: Parent AP account not found! Available liability keys:`, Object.keys(liabilities).filter(k => k.includes('2000')));
+        }
+        
+        // Only use expected AP if there's a significant mismatch AND the service balance seems wrong
+        // This handles edge cases where the service might not have aggregated correctly
+        if (Math.abs(apBalance - expectedAP) > 0.01 && expectedAP > 0 && Math.abs(expectedAP - totalLiabilities) < 0.01) {
+            console.log(`   ⚠️ AP balance mismatch detected! Service shows $${apBalance} but expected $${expectedAP} based on total liabilities`);
+            console.log(`   Using expected AP balance: $${expectedAP}`);
+            apBalance = expectedAP;
+        } else if (Math.abs(apBalance - expectedAP) > 0.01) {
+            console.log(`   ⚠️ AP balance ($${apBalance}) doesn't match expected ($${expectedAP}), but expected doesn't match total liabilities - keeping service balance`);
+        }
+        
+        console.log(`🔧 Account totals: Cash: $${totalCash}, Bank: $${totalBank}, AR: $${totalAR}, Petty: $${totalPettyCash}, Vault: $${totalVault}, Clearing: $${totalClearing}`);
+        console.log(`🔧 Liability totals: $${totalLiabilities}, Equity totals: $${totalEquity}`);
         
         // Calculate individual equity balances
         const equityAccounts = {};
         Object.entries(equity).forEach(([key, account]) => {
             equityAccounts[key] = { balance: account.balance || 0, code: account.code, name: account.name };
         });
-        
-        console.log(`🔧 Account totals: Cash: $${totalCash}, Bank: $${totalBank}, AR: $${totalAR}, Petty: $${totalPettyCash}, Vault: $${totalVault}, Clearing: $${totalClearing}`);
-        console.log(`🔧 Liability totals: $${totalLiabilities}, Equity totals: $${totalEquity}`);
         
         // Transform to match the EXACT structure expected by transformFixedBalanceSheetToMonthly
         return {
@@ -3554,12 +3654,28 @@ function transformResidenceFilteredToFixed(monthBreakdown, month, year) {
                 total_liabilities: totalLiabilities,
                 // Include actual liability accounts from residence-filtered data
                 ...liabilityAccounts,
-                // Add standard liability accounts with $0 if not present
-                '2000 - Accounts Payable': { balance: 0, code: '2000', name: 'Accounts Payable' },
-                '2020 - Tenant Deposits': { balance: 0, code: '2020', name: 'Tenant Deposits' },
-                '2100 - Other Current Liabilities': { balance: 0, code: '2100', name: 'Other Current Liabilities' },
-                '2500 - Long Term Debt': { balance: 0, code: '2500', name: 'Long Term Debt' },
-                '2600 - Other Non-Current Liabilities': { balance: 0, code: '2600', name: 'Other Non-Current Liabilities' }
+                // CRITICAL: Overwrite any AP entry with the aggregated balance (parent + children)
+                // Use the exact key format from the service, or create a standard one
+                [apAccountKey || '2000 - Accounts Payable']: { 
+                    balance: apBalance, 
+                    code: '2000', 
+                    name: apAccount?.name || 'Accounts Payable',
+                    debit_total: apAccount?.debit_total || 0,
+                    credit_total: apAccount?.credit_total || 0
+                },
+                // Also ensure standard key exists with correct balance (in case key format differs)
+                '2000 - Accounts Payable': { 
+                    balance: apBalance, 
+                    code: '2000', 
+                    name: apAccount?.name || 'Accounts Payable',
+                    debit_total: apAccount?.debit_total || 0,
+                    credit_total: apAccount?.credit_total || 0
+                },
+                // Add standard liability accounts with $0 if not present (but don't overwrite if they exist)
+                '2020 - Tenant Deposits': liabilityAccounts[Object.keys(liabilityAccounts).find(k => k.includes('2020'))] || { balance: 0, code: '2020', name: 'Tenant Deposits' },
+                '2100 - Other Current Liabilities': liabilityAccounts[Object.keys(liabilityAccounts).find(k => k.includes('2100'))] || { balance: 0, code: '2100', name: 'Other Current Liabilities' },
+                '2500 - Long Term Debt': liabilityAccounts[Object.keys(liabilityAccounts).find(k => k.includes('2500'))] || { balance: 0, code: '2500', name: 'Long Term Debt' },
+                '2600 - Other Non-Current Liabilities': liabilityAccounts[Object.keys(liabilityAccounts).find(k => k.includes('2600'))] || { balance: 0, code: '2600', name: 'Other Non-Current Liabilities' }
             },
             equity: {
                 total_equity: totalEquity,

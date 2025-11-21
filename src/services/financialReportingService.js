@@ -390,7 +390,7 @@ class FinancialReportingService {
             throw error;
         }
     }
-    
+
     static netRentalAccrualEntries(entries = []) {
         if (!Array.isArray(entries) || entries.length === 0) {
             return [];
@@ -492,7 +492,7 @@ class FinancialReportingService {
     
     static applyNegotiationAdjustments(accrualEntry, adjustments = []) {
         if (!accrualEntry) {
-            return null;
+                    return null;
         }
         
         const mergedEntry = JSON.parse(JSON.stringify(accrualEntry));
@@ -798,7 +798,7 @@ class FinancialReportingService {
                     console.log(`  ✅ ${monthName}: Revenue $${totalRevenue} (Rental: $${totalRentalIncome}, Admin: $${totalAdminIncome}), Expenses $${totalExpenses}, Net $${netIncome}`);
                 }
             
-
+            
             // Calculate year totals
             const yearTotals = {
                 total_revenue: monthNames.reduce((sum, month, index) => sum + (monthlyBreakdown[index]?.total_revenue || 0), 0),
@@ -2532,126 +2532,21 @@ class FinancialReportingService {
             console.log(`📋 Found ${allAccounts.length} active accounts in chart of accounts`);
             
             // Get all transaction entries up to the specified date
+            // Use same simple logic as filtered version - no special filtering
             const entries = await TransactionEntry.find({
                 date: { $lte: asOfDate },
-                status: 'posted'
+                status: 'posted',
+                voided: { $ne: true }
             });
             
             console.log(`📋 Found ${entries.length} transaction entries up to ${asOfDate.toISOString()}`);
-            console.log(`📋 AsOf parameter: ${asOf}, parsed date: ${asOfDate.toISOString()}`);
             
-            // 🆕 FIX: For monthly balance sheets, determine the month of asOfDate
-            // This allows us to filter advance payments to only show in the month they were paid
-            // Use UTC to avoid timezone issues
-            const asOfMonth = asOfDate.getUTCMonth() + 1; // 1-12
-            const asOfYear = asOfDate.getUTCFullYear();
-            const asOfMonthKey = `${asOfYear}-${String(asOfMonth).padStart(2, '0')}`;
-            // Check if this is the last day of the month (for monthly balance sheets)
-            const lastDayOfMonth = new Date(asOfYear, asOfMonth, 0).getUTCDate(); // Last day of current month
-            const isMonthEnd = asOfDate.getUTCDate() === lastDayOfMonth;
+            // Calculate account balances (same logic as filtered version - was working correctly)
+            let accountBalances = {};
             
-            console.log(`📅 Balance sheet as of: ${asOfDate.toISOString()}, monthKey (UTC): ${asOfMonthKey}, isMonthEnd: ${isMonthEnd}, lastDayOfMonth: ${lastDayOfMonth}`);
-            
-            // Count advance payments in entries for debugging
-            const advancePaymentsInEntries = entries.filter(e => e.source === 'advance_payment');
-            console.log(`💳 Found ${advancePaymentsInEntries.length} advance payment transactions in entries for ${asOfMonthKey}`);
-            
-            // Debug: Check for the specific transaction
-            const targetTx = entries.find(e => e.transactionId === 'TXN1761821259147EXJND');
-            if (targetTx) {
-                console.log(`✅ STEP 1: Found target transaction TXN1761821259147EXJND in MongoDB query results`);
-                console.log(`   Transaction date: ${targetTx.date}`);
-                console.log(`   Transaction date type: ${typeof targetTx.date}`);
-                console.log(`   Source: ${targetTx.source}`);
-                console.log(`   Status: ${targetTx.status}`);
-                console.log(`   Has entries: ${!!targetTx.entries && targetTx.entries.length > 0}`);
-                if (targetTx.entries) {
-                    console.log(`   Entry count: ${targetTx.entries.length}`);
-                    targetTx.entries.forEach((line, idx) => {
-                        console.log(`   Entry ${idx}: accountCode=${line.accountCode}, debit=${line.debit}, credit=${line.credit}`);
-                    });
-                }
-            } else {
-                console.log(`❌ STEP 1: Target transaction TXN1761821259147EXJND NOT FOUND in MongoDB query results`);
-                console.log(`   Query filter: { date: { $lte: ${asOfDate.toISOString()} }, status: 'posted' }`);
-                console.log(`   This means the transaction was filtered out by the MongoDB query.`);
-            }
-            
-            // Initialize ALL accounts with zero balances
-            const accountBalances = {};
-            allAccounts.forEach(account => {
-                const key = `${account.code} - ${account.name}`;
-                accountBalances[key] = {
-                    code: account.code,
-                    name: account.name,
-                    type: account.type,
-                    category: account.category,
-                    balance: 0,
-                    debit_total: 0,
-                    credit_total: 0
-                };
-            });
-            
-            const residences = new Set();
-            
-            // Process transactions to calculate actual balances
-            let advancePayment2200Total = 0; // Track total for account 2200 from advance payments
-            let processedAdvancePayments = 0;
-            
-            entries.forEach((entry, entryIndex) => {
+            entries.forEach(entry => {
                 if (entry.entries && entry.entries.length > 0) {
-                    // 🆕 FIX: For advance payments, use transaction date (not monthSettled) to determine which month to show
-                    // This ensures advance payments appear in the month they were paid
-                    const isAdvancePayment = entry.source === 'advance_payment';
-                    let shouldInclude = true;
-                    
-                    if (isAdvancePayment) {
-                        processedAdvancePayments++;
-                        // CRITICAL: For advance payments, ALWAYS use the transaction date (entry.date)
-                        // Do NOT use metadata.monthSettled - it may be null or point to a future month
-                        // The transaction date tells us when the cash was actually received
-                        const entryDate = new Date(entry.date);
-                        // Use UTC methods to avoid timezone issues
-                        const entryYear = entryDate.getUTCFullYear();
-                        const entryMonth = entryDate.getUTCMonth() + 1; // 1-12 (October = 10)
-                        const entryMonthKey = `${entryYear}-${String(entryMonth).padStart(2, '0')}`;
-                        
-                        // Compare with asOfMonthKey (already calculated using UTC at the top)
-                        shouldInclude = (entryMonthKey === asOfMonthKey);
-                        
-                        // Special logging for the target transaction
-                        const isTargetTx = entry.transactionId === 'TXN1761821259147EXJND';
-                        if (isTargetTx) {
-                            console.log(`\n🔍 STEP 2: Processing target transaction TXN1761821259147EXJND`);
-                            console.log(`   Entry index: ${entryIndex}`);
-                            console.log(`   Is advance payment: ${isAdvancePayment}`);
-                            console.log(`   Entry date (raw): ${entry.date}`);
-                            console.log(`   Entry date (parsed): ${entryDate.toISOString()}`);
-                            console.log(`   Entry UTC year: ${entryYear}, month: ${entryMonth} (0-indexed: ${entryDate.getUTCMonth()})`);
-                            console.log(`   Entry monthKey (UTC): ${entryMonthKey}`);
-                            console.log(`   AsOf date: ${asOfDate.toISOString()}`);
-                            console.log(`   AsOf UTC year: ${asOfYear}, month: ${asOfMonth} (0-indexed: ${asOfDate.getUTCMonth()})`);
-                            console.log(`   AsOf monthKey (UTC): ${asOfMonthKey}`);
-                            console.log(`   Match: ${entryMonthKey === asOfMonthKey ? 'YES ✅' : 'NO ❌'}`);
-                            console.log(`   Should include: ${shouldInclude ? 'YES ✅' : 'NO ❌'}`);
-                        }
-                        
-                        if (shouldInclude) {
-                            if (isTargetTx) {
-                                console.log(`✅ STEP 2: INCLUDING advance payment ${entry.transactionId} from ${entryMonthKey} in balance sheet for ${asOfMonthKey}`);
-                            }
-                        } else {
-                            if (isTargetTx) {
-                                console.log(`❌ STEP 2: EXCLUDING advance payment ${entry.transactionId} from ${entryMonthKey} in balance sheet for ${asOfMonthKey}`);
-                            }
-                        }
-                    } else {
-                        // For non-advance payments, include all transactions up to asOfDate (cumulative)
-                        shouldInclude = true;
-                    }
-                    
-                    if (shouldInclude) {
-                        entry.entries.forEach((line, lineIndex) => {
+                    entry.entries.forEach(line => {
                         const accountCode = line.accountCode;
                         const accountName = line.accountName;
                         const accountType = line.accountType;
@@ -2659,77 +2554,36 @@ class FinancialReportingService {
                         const credit = line.credit || 0;
                         
                         const key = `${accountCode} - ${accountName}`;
+                        if (!accountBalances[key]) {
+                            accountBalances[key] = {
+                                code: accountCode,
+                                name: accountName,
+                                type: accountType,
+                                balance: 0,
+                                debit_total: 0,
+                                credit_total: 0
+                            };
+                        }
                         
-                        // Find the account by code (not by code + name) to handle name mismatches
-                        const accountKey = Object.keys(accountBalances).find(k => k.startsWith(`${accountCode} -`));
-                            
-                            const isTargetTx = entry.transactionId === 'TXN1761821259147EXJND';
-                            
-                            // 🆕 DEBUG: Log account 2200 transactions
-                            if (accountCode === '2200' && isAdvancePayment) {
-                                if (isTargetTx) {
-                                    console.log(`\n💰 STEP 3: Processing 2200 entry for target transaction ${entry.transactionId}:`);
-                                    console.log(`   Line index: ${lineIndex}`);
-                                    console.log(`   Account code: ${accountCode}, name: ${accountName}`);
-                                    console.log(`   Debit: ${debit}, Credit: ${credit}`);
-                                    console.log(`   Account key found: ${accountKey || 'NOT FOUND'}`);
-                                }
-                                
-                                if (accountKey) {
-                                    const beforeBalance = accountBalances[accountKey].balance;
-                                    if (isTargetTx) {
-                                        console.log(`   Balance before: ${beforeBalance}`);
-                                    }
+                        accountBalances[key].debit_total += debit;
+                        accountBalances[key].credit_total += credit;
                         
-                        // Update balance if account exists in chart of accounts
-                            accountBalances[accountKey].debit_total += debit;
-                            accountBalances[accountKey].credit_total += credit;
-                            
-                            // Calculate balance based on account type
                             if (accountType === 'Asset' || accountType === 'Expense') {
-                                accountBalances[accountKey].balance += debit - credit;
+                            accountBalances[key].balance += debit - credit;
                             } else {
-                                        // For liabilities (like 2200), credit increases the balance
-                                        accountBalances[accountKey].balance += credit - debit;
-                                    }
-                                    
-                                    advancePayment2200Total += (credit - debit); // Track total
-                                    
-                                    if (isTargetTx) {
-                                        console.log(`   Balance after: ${accountBalances[accountKey].balance}`);
-                                        console.log(`   Debit total: ${accountBalances[accountKey].debit_total}, Credit total: ${accountBalances[accountKey].credit_total}`);
-                                        console.log(`   Advance payment 2200 total so far: ${advancePayment2200Total}`);
-                                    }
-                                } else {
-                                    if (isTargetTx) {
-                                        console.log(`❌ STEP 3 ERROR: Account 2200 not found in accountBalances!`);
-                                        console.log(`   Available account keys: ${Object.keys(accountBalances).filter(k => k.includes('2200')).join(', ') || 'NONE'}`);
-                                    }
-                                }
-                            } else if (accountKey && accountBalances[accountKey]) {
-                                // Update balance for non-2200 accounts
-                                accountBalances[accountKey].debit_total += debit;
-                                accountBalances[accountKey].credit_total += credit;
-                                
-                                if (accountType === 'Asset' || accountType === 'Expense') {
-                                    accountBalances[accountKey].balance += debit - credit;
-                                } else {
-                                accountBalances[accountKey].balance += credit - debit;
-                            }
+                            accountBalances[key].balance += credit - debit;
                         }
                     });
-                    } else if (isAdvancePayment) {
-                        const isTargetTx = entry.transactionId === 'TXN1761821259147EXJND';
-                        if (isTargetTx) {
-                            console.log(`⚠️ STEP 2: Advance payment ${entry.transactionId} was excluded, so its entries are not being processed`);
-                        }
-                    }
                 }
             });
             
-            console.log(`\n📊 STEP 4: Summary for ${asOfMonthKey}:`);
-            console.log(`   Total advance payments processed: ${processedAdvancePayments}`);
-            console.log(`   Total account 2200 balance from advance payments: ${advancePayment2200Total}`);
+            // Aggregate parent-child accounts (specifically to ensure AP uses children totals)
+            try {
+                accountBalances = await this.aggregateParentChildAccounts(accountBalances, allAccounts);
+                console.log('✅ Aggregated parent-child accounts for unfiltered balance sheet');
+            } catch (aggError) {
+                console.error('⚠️ Error aggregating parent-child accounts for unfiltered balance sheet:', aggError.message);
+            }
             
             // Group by account type with proper current/non-current asset separation
             const assets = {
@@ -2744,8 +2598,29 @@ class FinancialReportingService {
             // Import BalanceSheetService to use isCurrentAsset function
             const BalanceSheetService = require('./balanceSheetService');
             
+            // Pre-set aggregated Accounts Payable (2000) before looping to avoid overwrites
+            const apAggregatedKey = Object.keys(accountBalances).find(key => key.startsWith('2000 -'));
+            if (apAggregatedKey) {
+                const apAggregatedAccount = accountBalances[apAggregatedKey];
+                liabilities[apAggregatedKey] = {
+                    balance: apAggregatedAccount.balance,
+                    debit_total: apAggregatedAccount.debit_total,
+                    credit_total: apAggregatedAccount.credit_total,
+                    code: '2000',
+                    name: apAggregatedAccount.name
+                };
+                console.log(`✅ Pre-set aggregated Accounts Payable (2000): $${apAggregatedAccount.balance}`);
+            }
+            
             Object.values(accountBalances).forEach(account => {
                 const key = `${account.code} - ${account.name}`;
+                const accountCode = String(account.code);
+                
+                // Skip AP child accounts - their balances are already included in parent 2000
+                if (this.isAccountsPayableChildAccount(accountCode, allAccounts)) {
+                    console.log(`⏭️ Skipping AP child account ${accountCode} (${account.name}) in unfiltered balance sheet`);
+                    return;
+                }
                 
                 switch (account.type) {
                     case 'Asset':
@@ -2765,6 +2640,23 @@ class FinancialReportingService {
                         }
                         break;
                     case 'Liability':
+                        if (accountCode === '2000') {
+                            const apKey = apAggregatedKey || key;
+                            const finalBalance = apAggregatedKey ? accountBalances[apAggregatedKey].balance : account.balance;
+                            
+                            if (!liabilities[apKey]) {
+                                liabilities[apKey] = {
+                                    balance: finalBalance,
+                                    debit_total: account.debit_total,
+                                    credit_total: account.credit_total,
+                                    code: account.code,
+                                    name: account.name
+                                };
+                            } else if (Math.abs(liabilities[apKey].balance - finalBalance) > 0.01) {
+                                console.log(`⚠️ Adjusting AP aggregated balance from $${liabilities[apKey].balance} to $${finalBalance}`);
+                                liabilities[apKey].balance = finalBalance;
+                            }
+                        } else {
                         liabilities[key] = {
                             balance: account.balance,
                             debit_total: account.debit_total,
@@ -2772,6 +2664,7 @@ class FinancialReportingService {
                             code: account.code,
                             name: account.name
                         };
+                        }
                         break;
                     case 'Equity':
                         equity[key] = {
@@ -2828,7 +2721,6 @@ class FinancialReportingService {
             console.log(`  Total Liabilities: $${totalLiabilities}`);
             console.log(`  Total Equity: $${totalEquity + retainedEarnings}`);
             console.log(`  Retained Earnings: $${retainedEarnings}`);
-            console.log(`  Residences included: ${Array.from(residences).join(', ')}`);
             
             // Show detailed account breakdown
             console.log('\n📊 Detailed Account Breakdown:');
@@ -2848,81 +2740,6 @@ class FinancialReportingService {
             Object.entries(liabilities).forEach(([key, account]) => {
                 console.log(`  ${key}: $${account.balance} (Dr: $${account.debit_total}, Cr: $${account.credit_total})`);
             });
-            
-            // 🆕 DEBUG: Specifically check account 2200
-            console.log(`\n🔍 STEP 5: Final check for account 2200 in liabilities object`);
-            const account2200 = Object.values(liabilities).find(acc => acc.code === '2200');
-            if (account2200) {
-                console.log(`✅ STEP 5: Account 2200 found in liabilities object`);
-                console.log(`   Key: ${Object.keys(liabilities).find(k => liabilities[k].code === '2200')}`);
-                console.log(`   Final balance: $${account2200.balance}`);
-                console.log(`   Debit total: $${account2200.debit_total}, Credit total: $${account2200.credit_total}`);
-                console.log(`   Expected from advance payments: $${advancePayment2200Total}`);
-                
-                // 🆕 FIX: Double-check that advance payments for this month are included
-                // Recalculate if balance seems wrong
-                const advancePaymentsForMonth = entries.filter(e => {
-                    if (e.source === 'advance_payment' && e.entries) {
-                        const entryDate = new Date(e.date);
-                        const entryYear = entryDate.getUTCFullYear();
-                        const entryMonth = entryDate.getUTCMonth() + 1;
-                        const entryMonthKey = `${entryYear}-${String(entryMonth).padStart(2, '0')}`;
-                        return entryMonthKey === asOfMonthKey;
-                    }
-                    return false;
-                });
-                
-                if (advancePaymentsForMonth.length > 0) {
-                    let expectedBalance = 0;
-                    advancePaymentsForMonth.forEach(tx => {
-                        tx.entries.forEach(line => {
-                            if (line.accountCode === '2200') {
-                                // For liabilities, credit increases the balance
-                                expectedBalance += (line.credit || 0) - (line.debit || 0);
-                            }
-                        });
-                    });
-                    
-                    console.log(`🔍 STEP 5: Found ${advancePaymentsForMonth.length} advance payment(s) for ${asOfMonthKey}`);
-                    console.log(`   Expected balance from advance payments: $${expectedBalance}`);
-                    console.log(`   Current balance in account 2200: $${account2200.balance}`);
-                    console.log(`   Advance payment 2200 total tracked: $${advancePayment2200Total}`);
-                    
-                    // If there's a mismatch, update the balance
-                    if (Math.abs(account2200.balance - expectedBalance) > 0.01) {
-                        console.log(`⚠️ STEP 5: Balance mismatch detected!`);
-                        console.log(`   Updating account 2200 balance from $${account2200.balance} to $${expectedBalance}`);
-                        account2200.balance = expectedBalance;
-                        account2200.credit_total = expectedBalance; // For liabilities, credit_total should match balance
-                        console.log(`   ✅ Updated account 2200 balance to $${account2200.balance}`);
-                    } else {
-                        console.log(`✅ STEP 5: Balance matches expected value`);
-                    }
-                } else {
-                    console.log(`⚠️ STEP 5: No advance payments found for ${asOfMonthKey} - this might be expected if transaction was excluded`);
-                }
-            } else {
-                console.log(`❌ STEP 5: Account 2200 (Advance Payment Liability) NOT FOUND in liabilities!`);
-                console.log(`   Available liability accounts: ${Object.keys(liabilities).join(', ')}`);
-                // Check if it's in accountBalances
-                const account2200InBalances = Object.values(accountBalances).find(acc => acc.code === '2200');
-                if (account2200InBalances) {
-                    console.log(`   But found in accountBalances with balance: $${account2200InBalances.balance}`);
-                    console.log(`   Debit total: $${account2200InBalances.debit_total}, Credit total: $${account2200InBalances.credit_total}`);
-                    // Add it to liabilities if it exists in accountBalances
-                    const key = `2200 - ${account2200InBalances.name}`;
-                    liabilities[key] = {
-                        balance: account2200InBalances.balance,
-                        debit_total: account2200InBalances.debit_total,
-                        credit_total: account2200InBalances.credit_total,
-                        code: '2200',
-                        name: account2200InBalances.name
-                    };
-                    console.log(`   ✅ Added account 2200 to liabilities with balance: $${account2200InBalances.balance}`);
-                } else {
-                    console.log(`   ❌ Account 2200 also NOT FOUND in accountBalances!`);
-                }
-            }
             
             console.log('EQUITY:');
             Object.entries(equity).forEach(([key, account]) => {
@@ -2976,8 +2793,6 @@ class FinancialReportingService {
                     equity: totalEquity + retainedEarnings,
                     balanced: Math.abs((totalAssets - (totalLiabilities + totalEquity + retainedEarnings))) < 0.01
                 },
-                residences_included: true,
-                residences_processed: Array.from(residences),
                 transaction_count: entries.length,
                 account_details: accountBalances
             };
@@ -3752,15 +3567,24 @@ class FinancialReportingService {
             }
             
             // Get transaction entries for the specific residence up to the date
+            // Check both residence field and metadata fields (like income statement does)
             const entries = await TransactionEntry.find({
                 date: { $lte: asOfDate },
-                residence: actualResidenceId
+                $or: [
+                    { residence: actualResidenceId },
+                    { 'metadata.residenceId': actualResidenceId.toString() },
+                    { 'metadata.residence': actualResidenceId.toString() }
+                ]
             }).populate('residence');
             
             console.log(`Found ${entries.length} transaction entries for residence ${residenceId}`);
             
-            // Calculate account balances (same logic as regular balance sheet)
-            const accountBalances = {};
+            // Get all accounts for aggregation
+            const Account = require('../models/Account');
+            const allAccounts = await Account.find({ isActive: true }).sort({ code: 1 });
+            
+            // Calculate account balances (original filtered version logic - was working correctly)
+            let accountBalances = {};
             
             entries.forEach(entry => {
                 if (entry.entries && entry.entries.length > 0) {
@@ -3795,6 +3619,14 @@ class FinancialReportingService {
                 }
             });
             
+            // CRITICAL: Aggregate parent-child accounts BEFORE building structure
+            try {
+                accountBalances = await this.aggregateParentChildAccounts(accountBalances, allAccounts);
+                console.log(`✅ Aggregated parent-child accounts for residence-filtered balance sheet`);
+            } catch (aggError) {
+                console.error('⚠️ Error in aggregation, continuing with original balances:', aggError.message);
+            }
+            
             // Group by account type and calculate totals
             const assets = {};
             const liabilities = {};
@@ -3802,8 +3634,32 @@ class FinancialReportingService {
             const income = {};
             const expenses = {};
             
+            // CRITICAL: First, explicitly set Accounts Payable from aggregatedBalances
+            const apAccountKey = Object.keys(accountBalances).find(key => key.startsWith('2000 -'));
+            if (apAccountKey) {
+                const apAccount = accountBalances[apAccountKey];
+                const finalAPBalance = apAccount.balance; // This is the aggregated balance (parent + children)
+                const apKey = `2000 - ${apAccount.name}`;
+                liabilities[apKey] = {
+                    balance: finalAPBalance,
+                    debit_total: apAccount.debit_total,
+                    credit_total: apAccount.credit_total,
+                    code: '2000',
+                    name: apAccount.name
+                };
+                console.log(`✅ PRE-SET Accounts Payable (2000) from aggregatedBalances: $${finalAPBalance}`);
+            }
+            
             Object.values(accountBalances).forEach(account => {
                 const key = `${account.code} - ${account.name}`;
+                const accountCode = String(account.code);
+                
+                // CRITICAL: Skip child accounts of Accounts Payable (2000) - their balances are already aggregated into parent
+                if (this.isAccountsPayableChildAccount(accountCode, allAccounts)) {
+                    console.log(`⏭️  Skipping AP child account ${accountCode} (${account.name}) - balance already aggregated into parent 2000`);
+                    return; // Skip this account entirely
+                }
+                
                 switch (account.type) {
                     case 'Asset':
                         assets[key] = {
@@ -3815,6 +3671,32 @@ class FinancialReportingService {
                         };
                         break;
                     case 'Liability':
+                        // CRITICAL: For account 2000, skip if already pre-set (to avoid overwriting aggregated balance)
+                        if (accountCode === '2000') {
+                            const apKey = `2000 - ${account.name}`;
+                            if (!liabilities[apKey]) {
+                                // If not pre-set, use aggregated balance from accountBalances
+                                const apAccountDirect = accountBalances[key];
+                                const finalAPBalance = apAccountDirect ? apAccountDirect.balance : account.balance;
+                                liabilities[apKey] = {
+                                    balance: finalAPBalance,
+                                    debit_total: account.debit_total,
+                                    credit_total: account.credit_total,
+                                    code: account.code,
+                                    name: account.name
+                                };
+                                console.log(`✅ Set Accounts Payable (2000) in loop: $${finalAPBalance}`);
+                            } else {
+                                // Already pre-set, verify it has the correct aggregated balance
+                                const apAccountDirect = accountBalances[key];
+                                const finalAPBalance = apAccountDirect ? apAccountDirect.balance : account.balance;
+                                if (Math.abs(liabilities[apKey].balance - finalAPBalance) > 0.01) {
+                                    console.log(`⚠️ Fixing AP balance mismatch: was $${liabilities[apKey].balance}, should be $${finalAPBalance}`);
+                                    liabilities[apKey].balance = finalAPBalance;
+                                }
+                            }
+                        } else {
+                            // Other liabilities - add normally
                         liabilities[key] = {
                             balance: account.balance,
                             debit_total: account.debit_total,
@@ -3822,6 +3704,7 @@ class FinancialReportingService {
                             code: account.code,
                             name: account.name
                         };
+                        }
                         break;
                     case 'Equity':
                         equity[key] = {
@@ -3852,6 +3735,40 @@ class FinancialReportingService {
                         break;
                 }
             });
+            
+            // CRITICAL FIX: Ensure Accounts Payable balance is ALWAYS set correctly from aggregatedBalances
+            const finalAPAccountKeys = Object.keys(accountBalances).filter(key => key.startsWith('2000 -'));
+            if (finalAPAccountKeys.length > 0) {
+                const finalAPAccountKey = finalAPAccountKeys[0];
+                const finalAPAccount = accountBalances[finalAPAccountKey];
+                const finalAggregatedBalance = finalAPAccount.balance;
+                
+                // Find the AP entry in liabilities (might have different name format)
+                const apKeyInLiabilities = Object.keys(liabilities).find(key => key.startsWith('2000 -'));
+                
+                if (apKeyInLiabilities) {
+                    // Update existing entry with aggregated balance
+                    const oldBalance = liabilities[apKeyInLiabilities].balance;
+                    liabilities[apKeyInLiabilities].balance = finalAggregatedBalance;
+                    console.log(`✅ Accounts Payable (2000) FINAL AGGREGATED BALANCE: $${finalAggregatedBalance} (was $${oldBalance})`);
+                    
+                    if (Math.abs(oldBalance - finalAggregatedBalance) > 0.01) {
+                        console.log(`⚠️ FIXED: AP balance was incorrect! Updated from $${oldBalance} to $${finalAggregatedBalance}`);
+                    }
+                } else {
+                    // Not found, add it using the key from accountBalances
+                    liabilities[finalAPAccountKey] = {
+                        balance: finalAggregatedBalance,
+                        debit_total: finalAPAccount.debit_total,
+                        credit_total: finalAPAccount.credit_total,
+                        code: '2000',
+                        name: finalAPAccount.name
+                    };
+                    console.log(`✅ Added Accounts Payable (2000) with aggregated balance: $${finalAggregatedBalance}`);
+                }
+            } else {
+                console.log(`⚠️ WARNING: Account 2000 NOT FOUND in accountBalances when doing final verification!`);
+            }
             
             const totalAssets = Object.values(assets).reduce((sum, account) => sum + account.balance, 0);
             const totalLiabilities = Object.values(liabilities).reduce((sum, account) => sum + account.balance, 0);
@@ -4493,22 +4410,28 @@ class FinancialReportingService {
                 const monthStartDate = new Date(period, monthIndex, 1);
                 const monthEndDate = new Date(period, monthIndex + 1, 0);
                 
-                console.log(`Processing balance sheet for ${monthNames[monthIndex]} (${monthStartDate.toLocaleDateString()} to ${monthEndDate.toLocaleDateString()})`);
+                console.log(`Processing balance sheet for ${monthNames[monthIndex]} (cumulative up to ${monthEndDate.toLocaleDateString()})`);
                 
-                // Get transaction entries for THIS MONTH ONLY, filtered by residence
+                // Get ALL transaction entries up to month end (CUMULATIVE) for balance sheet
+                // Balance sheet shows balances as of month end, which requires all transactions from beginning
+                // Check both residence field and metadata fields (like income statement does)
                 const query = {
                     date: { 
-                        $gte: new Date(period, monthIndex, 1, 0, 0, 0, 0),
-                        $lt: new Date(period, monthIndex + 1, 1, 0, 0, 0, 0)
+                        $lte: monthEndDate  // All transactions up to and including month end (cumulative)
                     },
-                    residence: actualResidenceId
+                    status: 'posted',  // Only include posted transactions
+                    $or: [
+                        { residence: actualResidenceId },
+                        { 'metadata.residenceId': actualResidenceId.toString() },
+                        { 'metadata.residence': actualResidenceId.toString() }
+                    ]
                 };
                 
                 const entries = await TransactionEntry.find(query).populate('residence');
                 
-                console.log(`Found ${entries.length} transaction entries for ${monthNames[monthIndex]} and residence ${residenceId}`);
+                console.log(`Found ${entries.length} cumulative transaction entries up to ${monthNames[monthIndex]} end for residence ${residenceId}`);
                 
-                // Calculate account balances for this month
+                // Calculate account balances for this month (cumulative up to month end)
                 let accountBalances = {};
                 
                 entries.forEach(entry => {
@@ -4543,6 +4466,19 @@ class FinancialReportingService {
                         });
                     }
                 });
+                
+                // Debug: Log CBZ/Bank account balances for October
+                if (monthIndex === 9) { // October is month 9 (0-indexed)
+                    const cbzAccounts = Object.keys(accountBalances).filter(key => 
+                        key.includes('1001') || key.includes('10003') || 
+                        key.toLowerCase().includes('cbz') || key.toLowerCase().includes('bank')
+                    );
+                    console.log(`🔍 CBZ/Bank accounts for October (cumulative up to ${monthEndDate.toLocaleDateString()}):`);
+                    cbzAccounts.forEach(key => {
+                        const acc = accountBalances[key];
+                        console.log(`   ${key}: Balance = $${acc.balance.toFixed(2)}, Debits = $${acc.debit_total.toFixed(2)}, Credits = $${acc.credit_total.toFixed(2)}`);
+                    });
+                }
                 
                 // CRITICAL: Aggregate parent-child accounts BEFORE building structure
                 // Get all accounts for reference - declare outside try-catch so it's accessible later
@@ -4606,26 +4542,40 @@ class FinancialReportingService {
                             };
                             break;
                         case 'Liability':
-                            // CRITICAL: For account 2000, use the aggregated balance (already set above)
+                            // CRITICAL: For account 2000, skip if already pre-set (to avoid overwriting aggregated balance)
                             if (accountCode === '2000') {
-                                const apAccountDirect = accountBalances[key];
-                                const finalAPBalance = apAccountDirect ? apAccountDirect.balance : account.balance;
-                                liabilities[key] = {
-                                    balance: finalAPBalance,
-                                    debit_total: account.debit_total,
-                                    credit_total: account.credit_total,
-                                    code: account.code,
-                                    name: account.name
-                                };
+                                // Check if AP was already set in pre-set step
+                                const apKey = `2000 - ${account.name}`;
+                                if (!liabilities[apKey]) {
+                                    // If not pre-set, use aggregated balance from accountBalances
+                                    const apAccountDirect = accountBalances[key];
+                                    const finalAPBalance = apAccountDirect ? apAccountDirect.balance : account.balance;
+                                    liabilities[apKey] = {
+                                        balance: finalAPBalance,
+                                        debit_total: account.debit_total,
+                                        credit_total: account.credit_total,
+                                        code: account.code,
+                                        name: account.name
+                                    };
+                                    console.log(`✅ Set Accounts Payable (2000) in loop for ${monthNames[monthIndex]}: $${finalAPBalance}`);
+                                } else {
+                                    // Already pre-set, just verify it has the correct aggregated balance
+                                    const apAccountDirect = accountBalances[key];
+                                    const finalAPBalance = apAccountDirect ? apAccountDirect.balance : account.balance;
+                                    if (Math.abs(liabilities[apKey].balance - finalAPBalance) > 0.01) {
+                                        console.log(`⚠️ Fixing AP balance mismatch for ${monthNames[monthIndex]}: was $${liabilities[apKey].balance}, should be $${finalAPBalance}`);
+                                        liabilities[apKey].balance = finalAPBalance;
+                                    }
+                                }
                             } else {
                                 // Other liabilities - add normally
-                                liabilities[key] = {
-                                    balance: account.balance,
-                                    debit_total: account.debit_total,
-                                    credit_total: account.credit_total,
-                                    code: account.code,
-                                    name: account.name
-                                };
+                            liabilities[key] = {
+                                balance: account.balance,
+                                debit_total: account.debit_total,
+                                credit_total: account.credit_total,
+                                code: account.code,
+                                name: account.name
+                            };
                             }
                             break;
                         case 'Equity':
@@ -4641,24 +4591,39 @@ class FinancialReportingService {
                 });
                 
                 // CRITICAL FIX: Ensure Accounts Payable balance is ALWAYS set correctly from aggregatedBalances
-                const finalAPAccountKey = Object.keys(accountBalances).find(key => key.startsWith('2000 -'));
-                if (finalAPAccountKey) {
+                // Find ALL keys that start with "2000 -" in case there are multiple (shouldn't be, but just in case)
+                const finalAPAccountKeys = Object.keys(accountBalances).filter(key => key.startsWith('2000 -'));
+                if (finalAPAccountKeys.length > 0) {
+                    // Use the first one (should only be one)
+                    const finalAPAccountKey = finalAPAccountKeys[0];
                     const finalAPAccount = accountBalances[finalAPAccountKey];
                     const finalAggregatedBalance = finalAPAccount.balance;
-                    const apKey = `2000 - ${finalAPAccount.name}`;
                     
-                    if (liabilities[apKey]) {
-                        liabilities[apKey].balance = finalAggregatedBalance;
-                        console.log(`✅ Accounts Payable (2000) FINAL AGGREGATED BALANCE for ${monthNames[monthIndex]}: $${finalAggregatedBalance}`);
+                    // Find the AP entry in liabilities (might have different name format)
+                    const apKeyInLiabilities = Object.keys(liabilities).find(key => key.startsWith('2000 -'));
+                    
+                    if (apKeyInLiabilities) {
+                        // Update existing entry with aggregated balance
+                        const oldBalance = liabilities[apKeyInLiabilities].balance;
+                        liabilities[apKeyInLiabilities].balance = finalAggregatedBalance;
+                        console.log(`✅ Accounts Payable (2000) FINAL AGGREGATED BALANCE for ${monthNames[monthIndex]}: $${finalAggregatedBalance} (was $${oldBalance})`);
+                        
+                        if (Math.abs(oldBalance - finalAggregatedBalance) > 0.01) {
+                            console.log(`⚠️ FIXED: AP balance was incorrect! Updated from $${oldBalance} to $${finalAggregatedBalance}`);
+                        }
                     } else {
-                        liabilities[apKey] = {
+                        // Not found, add it using the key from accountBalances
+                        liabilities[finalAPAccountKey] = {
                             balance: finalAggregatedBalance,
                             debit_total: finalAPAccount.debit_total,
                             credit_total: finalAPAccount.credit_total,
                             code: '2000',
                             name: finalAPAccount.name
                         };
+                        console.log(`✅ Added Accounts Payable (2000) with aggregated balance for ${monthNames[monthIndex]}: $${finalAggregatedBalance}`);
                     }
+                } else {
+                    console.log(`⚠️ WARNING: Account 2000 NOT FOUND in accountBalances for ${monthNames[monthIndex]} when doing final verification!`);
                 }
                 
                 // Calculate totals for this month

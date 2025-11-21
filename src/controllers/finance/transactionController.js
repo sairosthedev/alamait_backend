@@ -107,12 +107,12 @@ class TransactionController {
                 if (Object.keys(existingConditions).length === 0) {
                     query = studentQuery;
                 } else {
-                    query = {
-                        $and: [
-                            existingConditions,
-                            studentQuery
-                        ]
-                    };
+                query = {
+                    $and: [
+                        existingConditions,
+                        studentQuery
+                    ]
+                };
                 }
                 
                 console.log(`📋 Final query structure:`, JSON.stringify(query, null, 2));
@@ -503,13 +503,29 @@ class TransactionController {
                 };
             }));
 
-            students.sort((a, b) => (a.studentName || '').localeCompare(b.studentName || ''));
+            // Filter to only include active and expired students (exclude null/invalid studentInfo)
+            const filteredStudents = students.filter(student => {
+                // Include if studentInfo exists and is either active (isExpired === false) or expired (isExpired === true)
+                return student.studentInfo && 
+                       student.studentInfo.isExpired !== undefined &&
+                       (student.studentInfo.isExpired === false || student.studentInfo.isExpired === true);
+            });
+
+            filteredStudents.sort((a, b) => (a.studentName || '').localeCompare(b.studentName || ''));
+
+            // Calculate summary statistics
+            const summary = {
+                total: filteredStudents.length,
+                active: filteredStudents.filter(s => s.studentInfo && s.studentInfo.isExpired === false).length,
+                expired: filteredStudents.filter(s => s.studentInfo && s.studentInfo.isExpired === true).length
+            };
 
             res.json({
                 success: true,
                 data: {
-                    total: students.length,
-                    students
+                    total: filteredStudents.length,
+                    students: filteredStudents,
+                    summary
                 }
             });
         } catch (error) {

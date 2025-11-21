@@ -1082,11 +1082,13 @@ exports.getAccountTransactionDetails = async (req, res) => {
             });
         }
         
-        // For balance sheet, we need cumulative data up to the end of the selected month
-        // This shows the balance as of that month-end date
-        const asOfDate = new Date(parseInt(period), monthNumber + 1, 0, 23, 59, 59, 999); // Last day of the month
+        // For account details, show ALL transactions up to the selected month end (cumulative)
+        // This helps track where the balance comes from: e.g., if AP is 120, show all transactions that make up that 120
+        const monthStartDate = new Date(parseInt(period), monthNumber, 1, 0, 0, 0, 0); // First day of the month
+        const monthEndDate = new Date(parseInt(period), monthNumber + 1, 0, 23, 59, 59, 999); // Last day of the month
+        const asOfDate = monthEndDate; // Keep for balance calculation
         
-        console.log(`🔍 Searching for transactions for account ${accountCode} as of ${asOfDate.toLocaleDateString()}`);
+        console.log(`🔍 Searching for cumulative transactions for account ${accountCode} up to ${month} ${period} end (up to ${monthEndDate.toLocaleDateString()})`);
         
         // Check if this is a parent account that should include child accounts
         const mainAccount = await Account.findOne({ code: accountCode });
@@ -1174,9 +1176,14 @@ exports.getAccountTransactionDetails = async (req, res) => {
             }
         }
         
-        // Build query for cumulative transactions up to the selected month
+        // Build query for ALL transactions up to month end (cumulative)
+        // This matches the balance sheet which shows cumulative balances
+        // Example: If balance sheet shows 418 for petty cash (including October), 
+        // account details should show all transactions up to November end that make up that 418
         const query = {
-            date: { $lte: asOfDate },
+            date: { 
+                $lte: monthEndDate  // All transactions up to month end (cumulative)
+            },
             status: 'posted'
         };
         
@@ -1536,7 +1543,7 @@ exports.getAccountTransactionDetails = async (req, res) => {
         console.log(`📈 Found ${transactions.length} transactions for account ${accountCode} and ${childAccounts.length} child accounts`);
         
         // Extract account-specific transactions (including child accounts)
-        const accountTransactions = [];
+        let accountTransactions = [];
         let totalDebits = 0;
         let totalCredits = 0;
         const uniqueStudents = new Set();
@@ -2507,7 +2514,8 @@ exports.getAccountTransactionDetails = async (req, res) => {
         
         // Calculate running balance for balance sheet accounts
         let runningBalance = 0;
-        const isAssetOrExpense = accountCode.startsWith('1') || accountCode.startsWith('5');
+        const accountType = account?.type || 'Asset'; // Default to Asset if not found
+        const isAssetOrExpense = accountType === 'Asset' || accountType === 'Expense';
         
         // For balance sheet, calculate the final balance based on account type
         accountTransactions.reverse(); // Reverse to calculate from oldest to newest
@@ -2523,6 +2531,325 @@ exports.getAccountTransactionDetails = async (req, res) => {
         });
         accountTransactions.reverse(); // Reverse back to newest first for display
         
+        // Show ALL transactions that affect the account (both increases and decreases)
+        // For AP: Show both accruals (what we owe) and payments (what we paid)
+        // This helps track the full flow: e.g., Accrued 273, Paid 153, Balance 120
+        const originalCount = accountTransactions.length;
+        // This helps track the flow: e.g., Cash received 250, used 30, balance 230
+        // Similar to income statement which shows both income and expenses
+        accountTransactions = accountTransactions.filter(tx => {
+            // Check the transaction entries to see if there's a debit or credit to this account
+            let hasDebitToAccount = false;
+            let hasCreditToAccount = false;
+            
+            // Check all entries in the transaction
+            if (tx.entries && Array.isArray(tx.entries)) {
+                for (const entry of tx.entries) {
+                    const entryAccountCode = entry.accountCode || '';
+                    // Check if this entry is for our account (parent or child)
+                    if (entryAccountCode === accountCode || 
+                        allAccountCodes.includes(entryAccountCode)) {
+                        if ((entry.debit || 0) > 0) {
+                            hasDebitToAccount = true;
+                        }
+                        if ((entry.credit || 0) > 0) {
+                            hasCreditToAccount = true;
+                        }
+                    }
+                }
+            }
+            
+            // Show ALL transactions that affect this account (both increases and decreases)
+            // This allows tracking: received X, used Y, balance Z
+            // For AP: Show both accruals (what we owe) and payments (what we paid)
+            if (!hasDebitToAccount && !hasCreditToAccount) {
+                console.log(`⏭️ Filtering out transaction ${tx.transactionId} - no entry for ${accountCode}`);
+                return false; // Don't show transactions that don't affect this account
+            }
+            
+            // Don't filter out paid expenses - show ALL transactions to see full AP activity
+            // This shows both what we owe (accruals) and what we paid (payments)
+            
+            // Add transaction type label for clarity
+            if (isAssetOrExpense) {
+                // For Assets/Expenses: Debits increase, Credits decrease
+                if (hasDebitToAccount && !hasCreditToAccount) {
+                    tx.transactionType = 'increase'; // Money received, expense incurred, etc.
+                } else if (hasCreditToAccount && !hasDebitToAccount) {
+                    tx.transactionType = 'decrease'; // Money paid, expense reversed, etc.
+                } else {
+                    tx.transactionType = 'mixed'; // Both increase and decrease
+                }
+            } else {
+                // For Liabilities/Equity: Credits increase, Debits decrease
+                if (hasCreditToAccount && !hasDebitToAccount) {
+                    tx.transactionType = 'increase'; // Liability accrued, equity increased, etc.
+                } else if (hasDebitToAccount && !hasCreditToAccount) {
+                    tx.transactionType = 'decrease'; // Liability paid, equity decreased, etc.
+                } else {
+                    tx.transactionType = 'mixed'; // Both increase and decrease
+                }
+            }
+            
+            return true; // Show this transaction (affects account balance)
+        });
+        
+        // For AR accounts (1100), filter to show only tenants with outstanding balances (they owe us)
+        if (accountCode === '1100' || accountCode.startsWith('1100-')) {
+            // Calculate outstanding balance per tenant/student
+            const tenantBalances = new Map(); // studentId/tenantId -> balance
+            
+            // First, get ALL transactions up to month end to calculate cumulative balances
+            const cumulativeQuery = {
+                date: { $lte: monthEndDate },
+                status: 'posted'
+            };
+            
+            if (useRegexForAR && accountCode === '1100') {
+                cumulativeQuery['entries.accountCode'] = { $regex: '^1100(-.*)?$' };
+            } else {
+                cumulativeQuery['entries.accountCode'] = { $in: allAccountCodes };
+            }
+            
+            if (residenceId) {
+                const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId) 
+                    ? new mongoose.Types.ObjectId(residenceId) 
+                    : residenceId;
+                cumulativeQuery.$or = [
+                    { residence: residenceObjectId },
+                    { residence: residenceId },
+                    { 'metadata.residenceId': residenceId },
+                    { 'metadata.residence': residenceId },
+                    { 'metadata.residence': residenceObjectId }
+                ];
+            }
+            
+            const allTransactions = await TransactionEntry.find(cumulativeQuery).lean();
+            
+            // Calculate cumulative balance per tenant
+            allTransactions.forEach(tx => {
+                if (tx.entries && Array.isArray(tx.entries)) {
+                    tx.entries.forEach(entry => {
+                        const entryAccountCode = entry.accountCode || '';
+                        if (entryAccountCode === accountCode || allAccountCodes.includes(entryAccountCode)) {
+                            // Extract tenant/student ID from account code (e.g., "1100-691acb588f0547c11d66760e")
+                            let tenantId = null;
+                            if (entryAccountCode.includes('-')) {
+                                tenantId = entryAccountCode.split('-')[1];
+                            } else if (tx.metadata?.studentId) {
+                                tenantId = tx.metadata.studentId.toString();
+                            } else if (tx.metadata?.userId) {
+                                tenantId = tx.metadata.userId.toString();
+                            }
+                            
+                            if (tenantId) {
+                                if (!tenantBalances.has(tenantId)) {
+                                    tenantBalances.set(tenantId, 0);
+                                }
+                                // For AR (Asset), debits increase balance, credits decrease
+                                const balanceChange = (entry.debit || 0) - (entry.credit || 0);
+                                tenantBalances.set(tenantId, tenantBalances.get(tenantId) + balanceChange);
+                            }
+                        }
+                    });
+                }
+            });
+            
+            // Filter transactions to only show those for tenants with outstanding balances (positive balance)
+            const tenantsWithOutstandingBalance = new Set();
+            tenantBalances.forEach((balance, tenantId) => {
+                if (balance > 0) {
+                    tenantsWithOutstandingBalance.add(tenantId);
+                }
+            });
+            
+            console.log(`📊 AR: Found ${tenantsWithOutstandingBalance.size} tenants with outstanding balances out of ${tenantBalances.size} total tenants`);
+            
+            // Filter accountTransactions to only include transactions for tenants with outstanding balances
+            // Show ALL transactions (both charges and payments) for tenants who owe, so we can see the full history
+            const beforeARFilter = accountTransactions.length;
+            accountTransactions = accountTransactions.filter(tx => {
+                // Check if this transaction is for a tenant with outstanding balance
+                let isForOutstandingTenant = false;
+                let hasAREntry = false;
+                
+                if (tx.entries && Array.isArray(tx.entries)) {
+                    for (const entry of tx.entries) {
+                        const entryAccountCode = entry.accountCode || '';
+                        if (entryAccountCode === accountCode || allAccountCodes.includes(entryAccountCode)) {
+                            hasAREntry = true;
+                            
+                            // Extract tenant ID
+                            let tenantId = null;
+                            if (entryAccountCode.includes('-')) {
+                                tenantId = entryAccountCode.split('-')[1];
+                            } else if (tx.metadata?.studentId) {
+                                tenantId = tx.metadata.studentId?.toString();
+                            } else if (tx.metadata?.userId) {
+                                tenantId = tx.metadata.userId?.toString();
+                            }
+                            
+                            if (tenantId && tenantsWithOutstandingBalance.has(tenantId)) {
+                                isForOutstandingTenant = true;
+                                break; // Found a match, no need to continue
+                            }
+                        }
+                    }
+                }
+                
+                // Show all transactions (charges and payments) for tenants who owe
+                // This shows the full transaction history that led to their current balance
+                return isForOutstandingTenant && hasAREntry;
+            });
+            
+            console.log(`📊 AR: Filtered to ${accountTransactions.length} transactions (charges and payments) for tenants with outstanding balances (from ${beforeARFilter} total)`);
+        }
+        
+        console.log(`📊 Filtered ${originalCount - accountTransactions.length} transactions from display. Showing ${accountTransactions.length} cumulative transactions up to ${month} ${period} end.`);
+        
+        // Calculate opening balance (balance at start of month) from transactions before month start
+        let openingBalance = 0;
+        try {
+            const openingBalanceQuery = {
+                date: { $lt: monthStartDate }, // All transactions before month start
+                status: 'posted'
+            };
+            
+            if (useRegexForAR && accountCode === '1100') {
+                openingBalanceQuery['entries.accountCode'] = { $regex: '^1100(-.*)?$' };
+            } else {
+                openingBalanceQuery['entries.accountCode'] = { $in: allAccountCodes };
+            }
+            
+            if (residenceId) {
+                const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId) 
+                    ? new mongoose.Types.ObjectId(residenceId) 
+                    : residenceId;
+                openingBalanceQuery.$or = [
+                    { residence: residenceObjectId },
+                    { residence: residenceId },
+                    { 'metadata.residenceId': residenceId },
+                    { 'metadata.residence': residenceId },
+                    { 'metadata.residence': residenceObjectId }
+                ];
+            }
+            
+            const openingTransactions = await TransactionEntry.find(openingBalanceQuery).lean();
+            openingTransactions.forEach(tx => {
+                if (tx.entries && Array.isArray(tx.entries)) {
+                    tx.entries.forEach(entry => {
+                        const entryAccountCode = entry.accountCode || '';
+                        if (entryAccountCode === accountCode || allAccountCodes.includes(entryAccountCode)) {
+                            if (isAssetOrExpense) {
+                                openingBalance += (entry.debit || 0) - (entry.credit || 0);
+                            } else {
+                                openingBalance += (entry.credit || 0) - (entry.debit || 0);
+                            }
+                        }
+                    });
+                }
+            });
+            
+            // For parent accounts with children, aggregate opening balance
+            if (childAccounts.length > 0 && (accountCode === '2000' || accountCode === '1100')) {
+                const FinancialReportingService = require('../../services/financialReportingService');
+                const Account = require('../../models/Account');
+                const allAccounts = await Account.find({ isActive: true }).sort({ code: 1 });
+                
+                let openingAccountBalancesMap = {};
+                openingTransactions.forEach(tx => {
+                    if (tx.entries && Array.isArray(tx.entries)) {
+                        tx.entries.forEach(entry => {
+                            const entryAccountCode = entry.accountCode || '';
+                            if (entryAccountCode === accountCode || allAccountCodes.includes(entryAccountCode)) {
+                                const key = `${entryAccountCode} - ${entry.accountName || 'Unknown'}`;
+                                
+                                if (!openingAccountBalancesMap[key]) {
+                                    openingAccountBalancesMap[key] = {
+                                        code: entryAccountCode,
+                                        name: entry.accountName || 'Unknown',
+                                        type: entry.accountType || (isAssetOrExpense ? 'Asset' : 'Liability'),
+                                        balance: 0
+                                    };
+                                }
+                                
+                                if (isAssetOrExpense) {
+                                    openingAccountBalancesMap[key].balance += (entry.debit || 0) - (entry.credit || 0);
+                                } else {
+                                    openingAccountBalancesMap[key].balance += (entry.credit || 0) - (entry.debit || 0);
+                                }
+                            }
+                        });
+                    }
+                });
+                
+                openingAccountBalancesMap = await FinancialReportingService.aggregateParentChildAccounts(openingAccountBalancesMap, allAccounts);
+                const openingAggregatedBalanceKey = Object.keys(openingAccountBalancesMap).find(key => key.startsWith(`${accountCode} -`));
+                if (openingAggregatedBalanceKey) {
+                    openingBalance = openingAccountBalancesMap[openingAggregatedBalanceKey].balance;
+                }
+            }
+            
+            console.log(`📊 Opening balance at start of ${month} ${period}: $${openingBalance}`);
+        } catch (openingError) {
+            console.error('⚠️ Error calculating opening balance, using 0:', openingError.message);
+            openingBalance = 0;
+        }
+        
+        // Recalculate running balance for filtered transactions (for display only)
+        // Sort by date (oldest first) to calculate running balance
+        accountTransactions.sort((a, b) => new Date(a.date) - new Date(b.date));
+        let displayRunningBalance = openingBalance; // Start from opening balance
+        accountTransactions.forEach(tx => {
+            if (isAssetOrExpense) {
+                // Assets and Expenses: Debit increases, Credit decreases
+                displayRunningBalance += (tx.debit || 0) - (tx.credit || 0);
+            } else {
+                // Liabilities, Equity, Revenue: Credit increases, Debit decreases
+                displayRunningBalance += (tx.credit || 0) - (tx.debit || 0);
+            }
+            tx.runningBalance = displayRunningBalance;
+        });
+        // Sort back to newest first for display
+        accountTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        // Calculate cumulative totals from displayed transactions (all transactions up to month end)
+        // This matches the balance sheet which shows cumulative balances
+        let cumulativeDebits = 0;
+        let cumulativeCredits = 0;
+        accountTransactions.forEach(tx => {
+            cumulativeDebits += (tx.debit || 0);
+            cumulativeCredits += (tx.credit || 0);
+        });
+        
+        // Calculate increases and decreases based on account type (from cumulative transactions)
+        let totalIncreases = 0;
+        let totalDecreases = 0;
+        let displayDebits = 0;
+        let displayCredits = 0;
+        
+        if (isAssetOrExpense) {
+            // For Assets/Expenses: Debits increase, Credits decrease
+            totalIncreases = cumulativeDebits;
+            totalDecreases = cumulativeCredits;
+            displayDebits = cumulativeDebits;
+            displayCredits = cumulativeCredits;
+        } else {
+            // For Liabilities/Equity: Credits increase, Debits decrease
+            totalIncreases = cumulativeCredits;
+            totalDecreases = cumulativeDebits;
+            displayDebits = cumulativeDebits;
+            displayCredits = cumulativeCredits;
+        }
+        
+        // Calculate net change (cumulative from beginning up to month end)
+        // This is the total change that leads to the closing balance
+        const netChange = totalIncreases - totalDecreases;
+        
+        // Update totals for display
+        totalDebits = displayDebits;
+        totalCredits = displayCredits;
+        
         // Calculate child account summary
         const childAccountSummary = childAccounts.map(child => {
             const breakdown = accountBreakdown[child.code] || { totalDebits: 0, totalCredits: 0, transactionCount: 0 };
@@ -2536,16 +2863,196 @@ exports.getAccountTransactionDetails = async (req, res) => {
             };
         });
         
+        // For parent accounts with children, get balance directly from balance sheet service
+        // This ensures 100% accuracy - the balance matches exactly what's shown in the balance sheet
+        let finalAggregatedBalance = runningBalance;
+        if (childAccounts.length > 0 && (accountCode === '2000' || accountCode === '1100')) {
+            try {
+                const FinancialReportingService = require('../../services/financialReportingService');
+                
+                // Get balance directly from balance sheet service for this month
+                // This ensures it matches exactly what the balance sheet shows
+                let balanceSheetData = null;
+                if (residenceId) {
+                    // Get residence-filtered balance sheet
+                    balanceSheetData = await FinancialReportingService.generateResidenceFilteredMonthlyBalanceSheet(period, residenceId, 'cash');
+                } else {
+                    // Get unfiltered balance sheet
+                    balanceSheetData = await FinancialReportingService.generateMonthlyBalanceSheet(period, 'cash');
+                }
+                
+                // Extract the balance for this account from the balance sheet data
+                // The balance sheet service returns data in monthly_breakdown structure
+                if (balanceSheetData && balanceSheetData.monthly_breakdown) {
+                    const monthData = balanceSheetData.monthly_breakdown[monthNumber];
+                    if (monthData) {
+                        // Find the account in the balance sheet structure
+                        // Accounts are stored as "code - name" keys
+                        if (accountCode === '1100') {
+                            // AR is in assets, look for key starting with "1100 -"
+                            const arKey = Object.keys(monthData.assets || {}).find(key => key.startsWith('1100 -'));
+                            if (arKey && monthData.assets[arKey]) {
+                                finalAggregatedBalance = monthData.assets[arKey].balance || 0;
+                                console.log(`📊 Account Details - Found AR balance from balance sheet: $${finalAggregatedBalance} (key: ${arKey})`);
+                            }
+                        } else if (accountCode === '2000') {
+                            // AP is in liabilities, look for key starting with "2000 -"
+                            const apKey = Object.keys(monthData.liabilities || {}).find(key => key.startsWith('2000 -'));
+                            if (apKey && monthData.liabilities[apKey]) {
+                                finalAggregatedBalance = monthData.liabilities[apKey].balance || 0;
+                                console.log(`📊 Account Details - Found AP balance from balance sheet: $${finalAggregatedBalance} (key: ${apKey})`);
+                            }
+                        }
+                    }
+                } else if (balanceSheetData && balanceSheetData.monthly) {
+                    // Fallback: Try the transformed structure
+                    const monthData = balanceSheetData.monthly[monthNumber];
+                    if (monthData) {
+                        if (accountCode === '1100') {
+                            if (monthData.assets && monthData.assets.current && monthData.assets.current.accountsReceivable) {
+                                const arData = monthData.assets.current.accountsReceivable;
+                                if (typeof arData === 'object' && arData['1100']) {
+                                    finalAggregatedBalance = arData['1100'].amount || 0;
+                                } else if (typeof arData === 'object' && arData.amount !== undefined) {
+                                    finalAggregatedBalance = arData.amount || 0;
+                                } else if (typeof arData === 'number') {
+                                    finalAggregatedBalance = arData;
+                                }
+                            }
+                        } else if (accountCode === '2000') {
+                            if (monthData.liabilities && monthData.liabilities.current && monthData.liabilities.current.accountsPayable) {
+                                const apData = monthData.liabilities.current.accountsPayable;
+                                if (typeof apData === 'object' && apData['2000']) {
+                                    finalAggregatedBalance = apData['2000'].amount || 0;
+                                } else if (typeof apData === 'object' && apData.amount !== undefined) {
+                                    finalAggregatedBalance = apData.amount || 0;
+                                } else if (typeof apData === 'number') {
+                                    finalAggregatedBalance = apData;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (finalAggregatedBalance !== runningBalance) {
+                    console.log(`📊 Account Details - Using balance from balance sheet service: $${finalAggregatedBalance} for ${accountCode} in ${month} ${period}`);
+                }
+                
+                // Fallback: If we couldn't get it from balance sheet, calculate it
+                if (finalAggregatedBalance === runningBalance) {
+                    console.log(`⚠️ Could not get balance from balance sheet service, calculating manually...`);
+                    const Account = require('../../models/Account');
+                    const allAccounts = await Account.find({ isActive: true }).sort({ code: 1 });
+                    
+                    const cumulativeBalanceQuery = {
+                        date: { $lte: monthEndDate },
+                        status: 'posted'
+                    };
+                    
+                    if (residenceId) {
+                        const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId) 
+                            ? new mongoose.Types.ObjectId(residenceId) 
+                            : residenceId;
+                        cumulativeBalanceQuery.$or = [
+                            { residence: residenceObjectId },
+                            { residence: residenceId },
+                            { 'metadata.residenceId': residenceId },
+                            { 'metadata.residence': residenceId },
+                            { 'metadata.residence': residenceObjectId }
+                        ];
+                    }
+                    
+                    const cumulativeTransactions = await TransactionEntry.aggregate([
+                        { $match: cumulativeBalanceQuery },
+                        { $unwind: '$entries' },
+                        {
+                            $match: useRegexForAR && accountCode === '1100' 
+                                ? { 'entries.accountCode': { $regex: '^1100(-.*)?$' } }
+                                : { 'entries.accountCode': { $in: allAccountCodes } }
+                        },
+                        {
+                            $project: {
+                                accountCode: '$entries.accountCode',
+                                accountName: '$entries.accountName',
+                                accountType: '$entries.accountType',
+                                debit: '$entries.debit',
+                                credit: '$entries.credit'
+                            }
+                        }
+                    ]);
+                    
+                    let accountBalancesMap = {};
+                    cumulativeTransactions.forEach(tx => {
+                        const entryAccountCode = tx.accountCode || '';
+                        if (entryAccountCode === accountCode || allAccountCodes.includes(entryAccountCode)) {
+                            const key = `${entryAccountCode} - ${tx.accountName || 'Unknown'}`;
+                            
+                            if (!accountBalancesMap[key]) {
+                                accountBalancesMap[key] = {
+                                    code: entryAccountCode,
+                                    name: tx.accountName || 'Unknown',
+                                    type: tx.accountType || (isAssetOrExpense ? 'Asset' : 'Liability'),
+                                    balance: 0
+                                };
+                            }
+                            
+                            if (isAssetOrExpense) {
+                                accountBalancesMap[key].balance += (tx.debit || 0) - (tx.credit || 0);
+                            } else {
+                                accountBalancesMap[key].balance += (tx.credit || 0) - (tx.debit || 0);
+                            }
+                        }
+                    });
+                    
+                    accountBalancesMap = await FinancialReportingService.aggregateParentChildAccounts(accountBalancesMap, allAccounts);
+                    const aggregatedBalanceKey = Object.keys(accountBalancesMap).find(key => key.startsWith(`${accountCode} -`));
+                    if (aggregatedBalanceKey) {
+                        finalAggregatedBalance = accountBalancesMap[aggregatedBalanceKey].balance;
+                        console.log(`📊 Account Details - Calculated aggregated balance (fallback): $${finalAggregatedBalance}`);
+                    }
+                }
+            } catch (aggError) {
+                console.error('⚠️ Error getting balance from balance sheet service, using runningBalance:', aggError.message);
+            }
+        }
+        
+        // Calculate closing balance (cumulative up to month end)
+        // Opening balance (at month start) + Net change (from all cumulative transactions) = Closing balance
+        // This should match the balance sheet's cumulative balance
+        const closingBalance = openingBalance + netChange;
+        
+        // Determine labels based on account type for display
+        let increaseLabel = 'Increases';
+        let decreaseLabel = 'Decreases';
+        if (accountCode === '1000' || accountCode.startsWith('1000') || accountCode === '1011') {
+            increaseLabel = 'Received';
+            decreaseLabel = 'Used';
+        } else if (accountCode === '2000' || accountCode.startsWith('2000')) {
+            increaseLabel = 'Accrued';
+            decreaseLabel = 'Paid';
+        } else if (accountCode === '1100' || accountCode.startsWith('1100')) {
+            increaseLabel = 'Charged';
+            decreaseLabel = 'Collected';
+        }
+        
         const summary = {
             totalTransactions: accountTransactions.length,
             totalAmount: Math.abs(totalDebits - totalCredits),
             totalDebits,
             totalCredits,
-            finalBalance: runningBalance,
+            // Show flow clearly: increases, decreases, net change
+            totalIncreases: totalIncreases,
+            totalDecreases: totalDecreases,
+            increaseLabel: increaseLabel, // For UI display
+            decreaseLabel: decreaseLabel, // For UI display
+            netChange: netChange,
+            openingBalance: openingBalance,
+            closingBalance: closingBalance,
+            finalBalance: finalAggregatedBalance, // Use aggregated balance for parent accounts (matches balance sheet)
             uniqueStudents: uniqueStudents.size,
             dateRange: {
-                start: period + '-01-01',
-                end: asOfDate.toISOString().split('T')[0]
+                start: new Date(parseInt(period), 0, 1).toISOString().split('T')[0], // Start of period (cumulative from beginning of year)
+                end: monthEndDate.toISOString().split('T')[0] // End of selected month (cumulative up to this point)
             },
             // Child account information
             hasChildAccounts: childAccounts.length > 0,
@@ -2566,7 +3073,7 @@ exports.getAccountTransactionDetails = async (req, res) => {
                 asOfDate: asOfDate.toISOString().split('T')[0],
                 sourceType: sourceType || null,
                 summary,
-                transactions: accountTransactions,
+                transactions: accountTransactions, // All transactions that contribute to the balance
                 // Additional child account information with balances
                 childAccounts: childAccounts.map(child => {
                     // Calculate balance for this child account
@@ -2609,7 +3116,7 @@ exports.getAccountTransactionDetails = async (req, res) => {
                     code: accountCode,
                     name: getAccountDisplayName(accountCode),
                     totalChildAccounts: childAccounts.length,
-                    aggregatedBalance: runningBalance
+                    aggregatedBalance: finalAggregatedBalance // Use calculated aggregated balance
                 } : null
             }
         };

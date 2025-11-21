@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const DoubleEntryAccountingService = require('../services/doubleEntryAccountingService');
 const Request = require('../models/Request');
 const Expense = require('../models/finance/Expense');
@@ -697,7 +698,7 @@ class FinanceController {
      */
     static async recordPettyCashExpense(req, res) {
         try {
-            const { userId, amount, description, expenseCategory, residence, expenseId, date } = req.body;
+            const { userId, amount, description, expenseCategory, residence, expenseId, date, requestId } = req.body;
             console.log('💸 Recording petty cash expense for user:', userId, 'amount:', amount, 'residence:', residence, 'expenseId:', expenseId, 'date:', date);
 
             // Validate input
@@ -738,35 +739,39 @@ class FinanceController {
                 });
             }
 
-            // Update expense status to "Paid" if expenseId is provided
-            let expenseUpdateResult = null;
-            if (expenseId) {
-                try {
-                    const Expense = require('../models/finance/Expense');
-                    const expense = await Expense.findById(expenseId);
-                    
-                    if (expense) {
-                        console.log(`📝 Updating expense ${expenseId} status to "Paid"`);
-                        
-                        // Update expense status and payment information
-                        expense.paymentStatus = 'Paid';
-                        expense.paymentMethod = 'Petty Cash';
-                        expense.paidDate = date ? new Date(date) : new Date();
-                        expense.paymentReference = `PC-${Date.now()}`;
-                        const paymentDate = date ? new Date(date) : new Date();
-                        expense.notes = expense.notes ? `${expense.notes} | Paid with petty cash on ${paymentDate.toLocaleDateString()}` : `Paid with petty cash on ${paymentDate.toLocaleDateString()}`;
-                        
-                        await expense.save();
-                        expenseUpdateResult = expense;
-                        
-                        console.log(`✅ Expense ${expenseId} status updated to "Paid"`);
-                    } else {
-                        console.log(`⚠️ Expense ${expenseId} not found, proceeding without expense update`);
-                    }
-                } catch (expenseError) {
-                    console.error('⚠️ Error updating expense status:', expenseError);
-                    // Continue with petty cash transaction even if expense update fails
+            // Resolve linked expense either directly or via maintenance request reference
+            let resolvedExpense = null;
+            let resolvedExpenseId = expenseId;
+            let linkedRequestId = requestId;
+
+            if (resolvedExpenseId) {
+                resolvedExpense = await Expense.findById(resolvedExpenseId);
+                if (!resolvedExpense) {
+                    console.log(`⚠️ Expense ${resolvedExpenseId} not found by ID – will try other matching strategies`);
+                    resolvedExpenseId = null;
                 }
+            }
+
+            if (!resolvedExpense && requestId) {
+                const requestCriteria = [{ requestId }];
+                if (mongoose.Types.ObjectId.isValid(requestId)) {
+                    requestCriteria.push({ requestId: new mongoose.Types.ObjectId(requestId) });
+                }
+
+                resolvedExpense = await Expense.findOne({ $or: requestCriteria }).sort({ createdAt: -1 });
+                if (resolvedExpense) {
+                    resolvedExpenseId = resolvedExpense._id.toString();
+                    linkedRequestId = resolvedExpense.requestId?.toString() || requestId;
+                    console.log(`🔗 Matched request ${linkedRequestId} to expense ${resolvedExpense.expenseId || resolvedExpense._id}`);
+                }
+            }
+
+            // Don't update expense status yet - let the service validate it first
+            // We'll update it after the service successfully creates the transaction
+            if (resolvedExpense && resolvedExpense.paymentStatus === 'Paid') {
+                return res.status(400).json({
+                    error: `Expense ${resolvedExpense.expenseId || resolvedExpense._id} is already marked as Paid and cannot be paid again.`
+                });
             }
 
             // Record petty cash expense
@@ -777,9 +782,68 @@ class FinanceController {
                 expenseCategory,
                 req.user,
                 residence, // Pass validated residence to the service
-                expenseId, // Pass expenseId to link the transaction
-                date // Pass the date from request body
+                resolvedExpenseId, // Link to resolved expense (if any)
+                date, // Pass the date from request body
+                linkedRequestId
             );
+
+            // ✅ Now update expense status to "Paid" after successful transaction creation
+            let expenseUpdateResult = null;
+            if (result.expenseId) {
+                try {
+                    const expenseToUpdate = await Expense.findById(result.expenseId);
+                    if (expenseToUpdate && expenseToUpdate.paymentStatus !== 'Paid') {
+                        console.log(`📝 Updating expense ${expenseToUpdate._id} status to "Paid"`);
+                        
+                        expenseToUpdate.paymentStatus = 'Paid';
+                        expenseToUpdate.paymentMethod = 'Petty Cash';
+                        expenseToUpdate.paidDate = date ? new Date(date) : new Date();
+                        expenseToUpdate.paymentReference = `PC-${Date.now()}`;
+                        const paymentDate = date ? new Date(date) : new Date();
+                        expenseToUpdate.notes = expenseToUpdate.notes ? 
+                            `${expenseToUpdate.notes} | Paid with petty cash on ${paymentDate.toLocaleDateString()}` : 
+                            `Paid with petty cash on ${paymentDate.toLocaleDateString()}`;
+                        
+                        await expenseToUpdate.save();
+                        expenseUpdateResult = expenseToUpdate;
+                        
+                        console.log(`✅ Expense ${expenseToUpdate._id} status updated to "Paid"`);
+                    } else if (expenseToUpdate && expenseToUpdate.paymentStatus === 'Paid') {
+                        console.log(`ℹ️ Expense ${expenseToUpdate._id} was already marked as Paid`);
+                        expenseUpdateResult = expenseToUpdate;
+                    }
+                } catch (expenseError) {
+                    console.error('⚠️ Error updating expense status:', expenseError);
+                }
+            } else if (expenseId) {
+                console.log(`⚠️ Expense ${expenseId} not found; petty cash was recorded without linking to an accrual`);
+            }
+
+            // ✅ If service auto-detected a match that we didn't find, update the expense status
+            if (result.expenseId && !expenseUpdateResult && result.wasAccrued) {
+                try {
+                    const autoDetectedExpense = await Expense.findById(result.expenseId);
+                    if (autoDetectedExpense && autoDetectedExpense.paymentStatus !== 'Paid') {
+                        console.log(`📝 Updating auto-detected expense ${autoDetectedExpense._id} status to "Paid"`);
+                        
+                        autoDetectedExpense.paymentStatus = 'Paid';
+                        autoDetectedExpense.paymentMethod = 'Petty Cash';
+                        autoDetectedExpense.paidDate = date ? new Date(date) : new Date();
+                        autoDetectedExpense.paymentReference = `PC-${Date.now()}`;
+                        const paymentDate = date ? new Date(date) : new Date();
+                        autoDetectedExpense.notes = autoDetectedExpense.notes ? 
+                            `${autoDetectedExpense.notes} | Paid with petty cash on ${paymentDate.toLocaleDateString()}` : 
+                            `Paid with petty cash on ${paymentDate.toLocaleDateString()}`;
+                        
+                        await autoDetectedExpense.save();
+                        expenseUpdateResult = autoDetectedExpense;
+                        
+                        console.log(`✅ Auto-detected expense ${autoDetectedExpense._id} status updated to "Paid"`);
+                    }
+                } catch (expenseError) {
+                    console.error('⚠️ Error updating auto-detected expense status:', expenseError);
+                }
+            }
 
             console.log('✅ Petty cash expense recorded successfully');
             res.json({
@@ -798,7 +862,8 @@ class FinanceController {
                         name: result.transaction?.residenceName
                     },
                     expenseUpdated: !!expenseUpdateResult,
-                    expenseId: expenseId || null,
+                    expenseId: resolvedExpenseId || null,
+                    requestId: linkedRequestId || null,
                     paymentMethod: 'Petty Cash',
                     paymentReference: expenseUpdateResult?.paymentReference || `PC-${Date.now()}`
                 }

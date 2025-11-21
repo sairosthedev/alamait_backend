@@ -162,7 +162,7 @@ class DoubleEntryAccountingService {
      * Residence is REQUIRED for proper financial tracking
      * Links to original expense if expenseId provided
      */
-    static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy, residence = null, expenseId = null, date = null) {
+    static async recordPettyCashExpense(userId, amount, description, expenseCategory, approvedBy, residence = null, expenseId = null, date = null, linkedRequestId = null) {
         try {
             console.log('💸 Recording petty cash expense:', amount, 'by user:', userId, 'residence:', residence, 'expenseId:', expenseId, 'date:', date);
             
@@ -216,16 +216,393 @@ class DoubleEntryAccountingService {
                 return { transaction: null, transactionEntry: existingTransaction };
             }
 
-            // ✅ NEW: Check if this expense was previously accrued
+            // ✅ NEW: Check if this expense was previously accrued (link via expenseId or requestId)
             let wasAccrued = false;
-            let originalExpense = null;
-            
-            if (expenseId) {
-                const Expense = require('../models/finance/Expense');
-                originalExpense = await Expense.findById(expenseId);
-                if (originalExpense && originalExpense.transactionId) {
+            let resolvedExpense = null;
+            let resolvedExpenseId = expenseId;
+            let effectiveRequestId = linkedRequestId;
+            let foundAccrualTransactionEntry = null; // Store the accrual transaction entry if found via fallback
+
+            if (resolvedExpenseId) {
+                console.log(`🔍 Looking up expense with ID: ${resolvedExpenseId}`);
+                
+                // Try finding by _id first (MongoDB ObjectId)
+                resolvedExpense = await Expense.findById(resolvedExpenseId).lean();
+                
+                // If not found by _id, try finding by expenseId field (string like "EXP123")
+                if (!resolvedExpense) {
+                    console.log(`   - Not found by _id, trying expenseId field...`);
+                    resolvedExpense = await Expense.findOne({ expenseId: resolvedExpenseId }).lean();
+                }
+                
+                if (!resolvedExpense) {
+                    console.log(`❌ Expense ${resolvedExpenseId} not found by _id or expenseId when recording petty cash expense`);
+                    console.log(`   - This means the expense doesn't exist or the ID is incorrect`);
+                    resolvedExpenseId = null;
+                } else {
+                    // Update resolvedExpenseId to the actual _id for consistency
+                    resolvedExpenseId = resolvedExpense._id.toString();
+                    console.log(`✅ Found expense: ${resolvedExpenseId}`);
+                    console.log(`   - Expense ID: ${resolvedExpense.expenseId || resolvedExpense._id}`);
+                    console.log(`   - Description: ${resolvedExpense.description}`);
+                    console.log(`   - Amount: $${resolvedExpense.amount}`);
+                    console.log(`   - Payment Status: ${resolvedExpense.paymentStatus || 'undefined'}`);
+                    console.log(`   - TransactionId field exists: ${resolvedExpense.transactionId !== undefined && resolvedExpense.transactionId !== null}`);
+                    console.log(`   - TransactionId value: ${resolvedExpense.transactionId || 'null/undefined'}`);
+                    console.log(`   - TransactionId type: ${typeof resolvedExpense.transactionId}`);
+                    
+                    if (resolvedExpense.transactionId) {
+                        console.log(`   ✅ TransactionId found: ${resolvedExpense.transactionId}`);
+                        console.log(`   ✅ This expense WAS accrued and should settle liability`);
+                    } else {
+                        console.log(`   ⚠️ TransactionId is missing - expense was NOT accrued`);
+                        console.log(`   ⚠️ This will be recorded as a new expense (Dr. Expense, Cr. Petty Cash)`);
+                    }
+                }
+            }
+
+            if (!resolvedExpense && linkedRequestId) {
+                const requestCriteria = [{ requestId: linkedRequestId }];
+                if (mongoose.Types.ObjectId.isValid(linkedRequestId)) {
+                    requestCriteria.push({ requestId: new mongoose.Types.ObjectId(linkedRequestId) });
+                }
+
+                resolvedExpense = await Expense.findOne({ $or: requestCriteria }).sort({ createdAt: -1 });
+                if (resolvedExpense) {
+                    resolvedExpenseId = resolvedExpense._id.toString();
+                    effectiveRequestId = resolvedExpense.requestId?.toString() || linkedRequestId;
+                    console.log(`🔗 Matched request ${effectiveRequestId} to expense ${resolvedExpense.expenseId || resolvedExpenseId}`);
+                }
+            }
+
+            // ✅ AUTO-DETECT: If description suggests paying an existing expense (e.g., "Paid: ...")
+            // Try to match by description keywords, amount, residence, and date proximity
+            if (!resolvedExpense && description && (description.toLowerCase().startsWith('paid:') || description.toLowerCase().includes('paid:'))) {
+                console.log(`🔍 Auto-detecting accrued expense from description: "${description}"`);
+                
+                // Extract keywords from description (remove "Petty cash expense: Paid:", common words, get meaningful terms)
+                const cleanDesc = description
+                    .replace(/^petty\s+cash\s+(expense|payment):\s*/i, '')
+                    .replace(/^paid:\s*/i, '')
+                    .replace(/\s*-\s*(other|maintenance|supplies|services)\s*$/gi, '')
+                    .trim();
+                
+                // Try to extract residence/vendor name (usually first part after "Paid:")
+                const parts = cleanDesc.split(/\s*-\s*/);
+                const locationOrVendor = parts[0]?.trim();
+                const itemDescription = parts.slice(1).join(' - ').trim();
+                
+                console.log(`   - Clean description: "${cleanDesc}"`);
+                console.log(`   - Location/Vendor: "${locationOrVendor}"`);
+                console.log(`   - Item: "${itemDescription}"`);
+                console.log(`   - Amount: $${amount}`);
+                console.log(`   - Residence: ${residence}`);
+                
+                // Strategy 1: Try exact amount match first (most reliable)
+                // Handle residence as both ObjectId and string
+                const residenceMatch = mongoose.Types.ObjectId.isValid(residence) 
+                    ? { $in: [residence, new mongoose.Types.ObjectId(residence), residence.toString()] }
+                    : residence;
+                
+                // Match expenses that were accrued (have transactionId) - ONLY match 'Pending' expenses
+                // Do NOT match expenses that are already 'Paid'
+                let baseCriteria = {
+                    residence: residenceMatch,
+                    transactionId: { $exists: true, $ne: null }, // Must have been accrued
+                    amount: amount,
+                    expenseDate: { 
+                        $gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+                    },
+                    $or: [
+                        { paymentStatus: 'Pending' },
+                        { paymentStatus: { $exists: false } } // Handle old expenses without paymentStatus
+                    ]
+                    // Note: This $or already excludes 'Paid' expenses since we only match 'Pending' or missing
+                };
+                
+                // Add description matching if we have keywords
+                const orConditions = [];
+                if (itemDescription) {
+                    const keywords = itemDescription.split(/\s+/).filter(w => w.length > 2);
+                    if (keywords.length > 0) {
+                        const keywordRegex = keywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+                        orConditions.push({ description: { $regex: keywordRegex, $options: 'i' } });
+                        orConditions.push({ 'items.description': { $regex: keywordRegex, $options: 'i' } });
+                    }
+                }
+                
+                if (locationOrVendor) {
+                    const locationWords = locationOrVendor.split(/\s+/).filter(w => w.length > 2);
+                    if (locationWords.length > 0) {
+                        const locationRegex = locationWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+                        orConditions.push({ vendorName: { $regex: locationRegex, $options: 'i' } });
+                        orConditions.push({ description: { $regex: locationRegex, $options: 'i' } });
+                    }
+                }
+                
+                // If we have OR conditions, combine them with paymentStatus $or using $and
+                let searchCriteria = { ...baseCriteria };
+                if (orConditions.length > 0) {
+                    // Use $and to combine paymentStatus $or with description $or
+                    searchCriteria.$and = [
+                        { $or: baseCriteria.$or }, // PaymentStatus: 'Pending' or missing
+                        { $or: orConditions } // Description/vendor matching
+                    ];
+                    delete searchCriteria.$or; // Remove the old $or since we're using $and now
+                }
+                
+                console.log(`   - Strategy 1: Searching with exact amount + description match...`);
+                console.log(`   - Criteria:`, JSON.stringify(searchCriteria, null, 2));
+                
+                // Sort to prefer Pending expenses, then by date
+                let matchedExpenses = await Expense.find(searchCriteria)
+                    .lean()
+                    .limit(20);
+                
+                // Filter out any 'Paid' expenses (safety check)
+                matchedExpenses = matchedExpenses.filter(e => e.paymentStatus !== 'Paid');
+                
+                // Manual sort: Pending first, then by date
+                matchedExpenses.sort((a, b) => {
+                    const aPending = a.paymentStatus === 'Pending' ? 0 : 1;
+                    const bPending = b.paymentStatus === 'Pending' ? 0 : 1;
+                    if (aPending !== bPending) return aPending - bPending;
+                    return new Date(b.expenseDate) - new Date(a.expenseDate);
+                });
+                
+                matchedExpenses = matchedExpenses.slice(0, 10);
+                
+                console.log(`   - Found ${matchedExpenses.length} potential matches`);
+                
+                // Strategy 2: If no matches, try with amount range (±$2) and same criteria
+                if (matchedExpenses.length === 0) {
+                    console.log(`   - Strategy 2: Trying with amount range (±$2)...`);
+                    const rangeCriteria = {
+                        ...baseCriteria,
+                        amount: { $gte: amount - 2, $lte: amount + 2 }
+                    };
+                    // Merge description $or with paymentStatus $or using $and
+                    if (orConditions.length > 0) {
+                        rangeCriteria.$and = [
+                            { $or: baseCriteria.$or }, // Keep paymentStatus conditions
+                            { $or: orConditions } // Add description conditions
+                        ];
+                        delete rangeCriteria.$or; // Remove the old $or since we're using $and now
+                    }
+                    
+                    // Sort to prefer Pending expenses
+                    matchedExpenses = await Expense.find(rangeCriteria)
+                        .lean()
+                        .limit(20);
+                    
+                    // Filter out any 'Paid' expenses (safety check)
+                    matchedExpenses = matchedExpenses.filter(e => e.paymentStatus !== 'Paid');
+                    
+                    matchedExpenses.sort((a, b) => {
+                        const aPending = a.paymentStatus === 'Pending' ? 0 : 1;
+                        const bPending = b.paymentStatus === 'Pending' ? 0 : 1;
+                        if (aPending !== bPending) return aPending - bPending;
+                        return new Date(b.expenseDate) - new Date(a.expenseDate);
+                    });
+                    
+                    matchedExpenses = matchedExpenses.slice(0, 10);
+                    
+                    console.log(`   - Found ${matchedExpenses.length} potential matches with amount range`);
+                }
+                
+                // Strategy 3: If still no matches, try by amount and residence only (no description match)
+                if (matchedExpenses.length === 0) {
+                    console.log(`   - Strategy 3: Trying by amount and residence only...`);
+                    // Sort to prefer Pending expenses
+                    matchedExpenses = await Expense.find({
+                        residence: residence,
+                        transactionId: { $exists: true, $ne: null },
+                        amount: { $gte: amount - 2, $lte: amount + 2 },
+                        expenseDate: { 
+                            $gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+                        },
+                        $or: [
+                            { paymentStatus: 'Pending' },
+                            { paymentStatus: { $exists: false } }
+                        ]
+                    })
+                    .lean()
+                    .limit(10);
+                    
+                    // Filter out any 'Paid' expenses (safety check)
+                    matchedExpenses = matchedExpenses.filter(e => e.paymentStatus !== 'Paid');
+                    
+                    matchedExpenses.sort((a, b) => {
+                        const aPending = a.paymentStatus === 'Pending' ? 0 : 1;
+                        const bPending = b.paymentStatus === 'Pending' ? 0 : 1;
+                        if (aPending !== bPending) return aPending - bPending;
+                        return new Date(b.expenseDate) - new Date(a.expenseDate);
+                    });
+                    
+                    matchedExpenses = matchedExpenses.slice(0, 5);
+                    
+                    console.log(`   - Found ${matchedExpenses.length} potential matches by amount/residence only`);
+                }
+                
+                if (matchedExpenses.length > 0) {
+                    // Prefer: 1) Exact amount match, 2) Pending status, 3) Closest by date
+                    const exactAmountMatch = matchedExpenses.find(e => e.amount === amount);
+                    const pendingMatch = (exactAmountMatch || matchedExpenses).find(e => e.paymentStatus === 'Pending');
+                    resolvedExpense = pendingMatch || exactAmountMatch || matchedExpenses[0];
+                    resolvedExpenseId = resolvedExpense._id.toString();
+                    effectiveRequestId = resolvedExpense.requestId?.toString();
+                    
+                    console.log(`✅ Auto-matched expense: ${resolvedExpense.expenseId || resolvedExpenseId}`);
+                    console.log(`   - Description: ${resolvedExpense.description}`);
+                    console.log(`   - Amount: $${resolvedExpense.amount} (requested: $${amount})`);
+                    console.log(`   - Date: ${resolvedExpense.expenseDate}`);
+                    console.log(`   - Payment Status: ${resolvedExpense.paymentStatus || 'undefined'}`);
+                    console.log(`   - Has TransactionId: ${!!resolvedExpense.transactionId}`);
+                } else {
+                    console.log(`⚠️ No matching accrued expense found for "${description}"`);
+                    console.log(`   - Searched for: amount=$${amount}, residence=${residence}, has transactionId`);
+                }
+            }
+
+            // Check if the resolved expense was accrued and can be paid
+            if (resolvedExpense) {
+                // ✅ CRITICAL: Reject if expense is already paid
+                if (resolvedExpense.paymentStatus === 'Paid') {
+                    throw new Error(`Cannot pay expense ${resolvedExpense.expenseId || resolvedExpense._id}: Expense is already marked as Paid. Payment status: ${resolvedExpense.paymentStatus}`);
+                }
+                
+                // Check if expense was accrued (has transactionId)
+                if (resolvedExpense.transactionId) {
                     wasAccrued = true;
-                    console.log(`🔍 Found accrued expense: ${expenseId} with transaction: ${originalExpense.transactionId}`);
+                    console.log(`✅ Expense was accrued - will settle liability: ${resolvedExpense._id} with transaction: ${resolvedExpense.transactionId}`);
+                } else {
+                    // Fallback: Try to find if there's an accrual transaction for this expense
+                    console.log(`⚠️ Expense ${resolvedExpense._id} does not have transactionId in expense record`);
+                    console.log(`   - Trying to find accrual transaction by expense _id or requestId...`);
+                    
+                    // Build search criteria - try both expense._id and requestId
+                    // Since multiple transactions can have the same sourceId (requestId), we need to match by amount too
+                    const baseSearchCriteria = {
+                        source: 'expense_accrual',
+                        status: 'posted',
+                        $or: [
+                            { sourceId: resolvedExpense._id }
+                        ]
+                    };
+                    
+                    // Also try by requestId if available
+                    if (resolvedExpense.requestId) {
+                        baseSearchCriteria.$or.push({ sourceId: resolvedExpense.requestId });
+                        if (mongoose.Types.ObjectId.isValid(resolvedExpense.requestId)) {
+                            baseSearchCriteria.$or.push({ sourceId: new mongoose.Types.ObjectId(resolvedExpense.requestId) });
+                        }
+                    }
+                    
+                    console.log(`   - Base search criteria:`, {
+                        source: baseSearchCriteria.source,
+                        status: baseSearchCriteria.status,
+                        $or: baseSearchCriteria.$or.map(condition => ({
+                            sourceId: condition.sourceId?.toString ? condition.sourceId.toString() : condition.sourceId
+                        }))
+                    });
+                    
+                    // Strategy 1: Try to find transaction with exact amount match
+                    console.log(`   - Strategy 1: Searching for transaction with exact amount match: $${resolvedExpense.amount}`);
+                    let accrualTransactions = await TransactionEntry.find({
+                        ...baseSearchCriteria,
+                        totalCredit: resolvedExpense.amount
+                    })
+                    .sort({ createdAt: -1 })
+                    .lean();
+                    
+                    let accrualTransaction = accrualTransactions.length > 0 ? accrualTransactions[0] : null;
+                    
+                    // Strategy 2: If multiple transactions with same amount, try to match by description
+                    if (accrualTransactions.length > 1) {
+                        console.log(`   - Found ${accrualTransactions.length} transactions with matching amount, trying to match by description...`);
+                        if (resolvedExpense.description) {
+                            const descKeywords = resolvedExpense.description
+                                .split(/\s+/)
+                                .filter(w => w.length > 3)
+                                .slice(0, 3);
+                            
+                            if (descKeywords.length > 0) {
+                                // Try to find transaction with matching description
+                                const matched = accrualTransactions.find(tx => {
+                                    const txDesc = (tx.description || '').toLowerCase();
+                                    const entryDescs = (tx.entries || []).map(e => (e.description || '').toLowerCase()).join(' ');
+                                    const searchText = txDesc + ' ' + entryDescs;
+                                    return descKeywords.some(keyword => searchText.includes(keyword.toLowerCase()));
+                                });
+                                
+                                if (matched) {
+                                    accrualTransaction = matched;
+                                    console.log(`   ✅ Matched transaction by description: ${matched.transactionId}`);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Strategy 3: If no exact amount match, try with amount range (±$1)
+                    if (!accrualTransaction) {
+                        console.log(`   - Strategy 2: No exact amount match, trying with amount range (±$1)...`);
+                        accrualTransactions = await TransactionEntry.find({
+                            ...baseSearchCriteria,
+                            totalCredit: { $gte: resolvedExpense.amount - 1, $lte: resolvedExpense.amount + 1 }
+                        })
+                        .sort({ createdAt: -1 })
+                        .limit(10)
+                        .lean();
+                        
+                        if (accrualTransactions.length > 0) {
+                            // Prefer exact match if available
+                            const exactMatch = accrualTransactions.find(tx => tx.totalCredit === resolvedExpense.amount);
+                            accrualTransaction = exactMatch || accrualTransactions[0];
+                        }
+                    }
+                    
+                    // Strategy 4: If still no match, just get any transaction with matching sourceId (fallback)
+                    if (!accrualTransaction) {
+                        console.log(`   - Strategy 3: No amount match, using any transaction with matching sourceId...`);
+                        accrualTransaction = await TransactionEntry.findOne(baseSearchCriteria)
+                            .sort({ createdAt: -1 })
+                            .lean();
+                    }
+                    
+                    if (accrualTransaction) {
+                        console.log(`✅ Found accrual transaction: ${accrualTransaction.transactionId}`);
+                        console.log(`   - Transaction amount: $${accrualTransaction.totalCredit || accrualTransaction.totalDebit || 0}`);
+                        console.log(`   - Expense amount: $${resolvedExpense.amount}`);
+                        if (Math.abs((accrualTransaction.totalCredit || 0) - resolvedExpense.amount) > 0.01) {
+                            console.log(`   ⚠️ Amount mismatch - transaction: $${accrualTransaction.totalCredit}, expense: $${resolvedExpense.amount}`);
+                            console.log(`   ⚠️ This might be a different item from the same request`);
+                        }
+                        console.log(`   - This expense WAS accrued, will settle liability`);
+                        wasAccrued = true;
+                        foundAccrualTransactionEntry = accrualTransaction; // Store for AP account lookup
+                        
+                        // Also update the expense record with Transaction document _id (not transactionId string)
+                        // expense.transactionId stores the Transaction document _id, not the transactionId string
+                        try {
+                            const transactionDoc = await Transaction.findOne({ 
+                                transactionId: accrualTransaction.transactionId 
+                            }).select('_id').lean();
+                            
+                            if (transactionDoc) {
+                                await Expense.findByIdAndUpdate(resolvedExpense._id, {
+                                    transactionId: transactionDoc._id
+                                });
+                                console.log(`   ✅ Updated expense record with Transaction _id: ${transactionDoc._id} for future reference`);
+                            } else {
+                                console.log(`   ⚠️ Could not find Transaction document for transactionId: ${accrualTransaction.transactionId}`);
+                            }
+                        } catch (updateError) {
+                            console.log(`   ⚠️ Could not update expense record with transactionId: ${updateError.message}`);
+                        }
+                    } else {
+                        console.log(`ℹ️ No accrual transaction found - expense was NOT accrued`);
+                        console.log(`   - Will record as new expense (Dr. Expense, Cr. Petty Cash)`);
+                    }
                 }
             }
 
@@ -256,41 +633,103 @@ class DoubleEntryAccountingService {
 
             if (wasAccrued) {
                 // ✅ SETTLE ACCRUED LIABILITY: Dr. Accounts Payable, Cr. Petty Cash
-                console.log(`💰 Settling accrued liability for expense: ${expenseId}`);
+                console.log(`💰 Settling accrued liability for expense: ${resolvedExpenseId}`);
                 
-                // Find the original expense to get the vendor-specific account used during accrual
+                // ✅ CRITICAL: Look up the original transaction entry to find the exact AP account that was credited
                 let apAccount = null;
-                const Expense = require('../models/finance/Expense');
-                const originalExpense = await Expense.findById(expenseId);
+                let apAccountCode = null;
+                let apAccountName = null;
                 
-                if (originalExpense && originalExpense.vendorSpecificAccount) {
-                    // Use the same vendor-specific account that was used during accrual
-                    apAccount = await Account.findOne({ code: originalExpense.vendorSpecificAccount, type: 'Liability' });
-                    console.log(`[Petty Cash] Using vendor-specific account: ${originalExpense.vendorSpecificAccount} for expense: ${originalExpense.description}`);
-                } else if (originalExpense && originalExpense.vendorId) {
-                    // Look up vendor to get their account code
-                    const Vendor = require('../models/Vendor');
-                    const vendor = await Vendor.findById(originalExpense.vendorId);
-                    if (vendor && vendor.chartOfAccountsCode) {
-                        apAccount = await Account.findOne({ code: vendor.chartOfAccountsCode, type: 'Liability' });
-                        console.log(`[Petty Cash] Using vendor account from lookup: ${vendor.chartOfAccountsCode} for vendor: ${vendor.businessName}`);
+                // Use the stored accrual transaction entry if we found it via fallback, otherwise look it up
+                let originalTransactionEntry = foundAccrualTransactionEntry;
+                
+                if (!originalTransactionEntry && resolvedExpense && resolvedExpense.transactionId) {
+                    // expense.transactionId is the Transaction document _id, not the transactionId string
+                    // We need to get the Transaction to find its transactionId string, then find the TransactionEntry
+                    const originalTransaction = await Transaction.findById(resolvedExpense.transactionId).lean();
+                    
+                    if (!originalTransaction || !originalTransaction.transactionId) {
+                        console.log(`⚠️ Original transaction not found for expense.transactionId: ${resolvedExpense.transactionId}, will try fallback`);
+                    } else {
+                        // Find the original transaction entry that was created during accrual
+                        originalTransactionEntry = await TransactionEntry.findOne({
+                            transactionId: originalTransaction.transactionId,
+                            source: 'expense_accrual'
+                        }).lean();
                     }
                 }
                 
-                // Fallback to general AP if vendor-specific account not found
+                // Now use the originalTransactionEntry (whether found via fallback or lookup) to find AP account
+                if (originalTransactionEntry && originalTransactionEntry.entries) {
+                    // Find the credit entry (AP account) - it should be a Liability account with credit > 0
+                    // Look for any Liability account that was credited (this covers vendor-specific AP accounts too)
+                    const apEntry = originalTransactionEntry.entries.find(entry => 
+                        entry.accountType === 'Liability' && 
+                        entry.credit > 0
+                    );
+                    
+                    if (apEntry) {
+                        apAccountCode = apEntry.accountCode;
+                        apAccountName = apEntry.accountName;
+                        console.log(`✅ Found original AP account from transaction entry: ${apAccountCode} - ${apAccountName}`);
+                        
+                        // Verify the account exists
+                        apAccount = await Account.findOne({ code: apAccountCode, type: 'Liability' });
+                        if (apAccount) {
+                            console.log(`[Petty Cash] Using exact AP account from accrual transaction: ${apAccountCode} - ${apAccountName}`);
+                        } else {
+                            console.log(`⚠️ AP account ${apAccountCode} from transaction not found in chart of accounts, will try fallback`);
+                            apAccountCode = null;
+                            apAccountName = null;
+                        }
+                    } else {
+                        console.log(`⚠️ No AP credit entry found in original transaction entry, will try fallback`);
+                    }
+                } else {
+                    console.log(`⚠️ Original transaction entry not found or has no entries, will try fallback`);
+                }
+                
+                // Fallback 1: Try vendor-specific account from expense record
+                if (!apAccount && resolvedExpense && resolvedExpense.vendorSpecificAccount) {
+                    apAccountCode = resolvedExpense.vendorSpecificAccount;
+                    apAccount = await Account.findOne({ code: apAccountCode, type: 'Liability' });
+                    if (apAccount) {
+                        apAccountName = apAccount.name;
+                        console.log(`[Petty Cash] Using vendor-specific account from expense: ${apAccountCode} - ${apAccountName}`);
+                    }
+                }
+                
+                // Fallback 2: Try vendor lookup
+                if (!apAccount && resolvedExpense && resolvedExpense.vendorId) {
+                    const vendor = await Vendor.findById(resolvedExpense.vendorId);
+                    if (vendor && vendor.chartOfAccountsCode) {
+                        apAccountCode = vendor.chartOfAccountsCode;
+                        apAccount = await Account.findOne({ code: apAccountCode, type: 'Liability' });
+                        if (apAccount) {
+                            apAccountName = apAccount.name;
+                            console.log(`[Petty Cash] Using vendor account from lookup: ${apAccountCode} - ${apAccountName}`);
+                        }
+                    }
+                }
+                
+                // Fallback 3: Use general AP account (2000)
                 if (!apAccount) {
-                    apAccount = await Account.findOne({ code: '2000', type: 'Liability' });
-                    console.log(`[Petty Cash] Using general AP account (2000) as fallback`);
+                    apAccountCode = '2000';
+                    apAccount = await Account.findOne({ code: apAccountCode, type: 'Liability' });
+                    if (apAccount) {
+                        apAccountName = apAccount.name;
+                        console.log(`[Petty Cash] Using general AP account (2000) as final fallback`);
+                    }
                 }
                 
                 if (!apAccount) {
                     throw new Error('Accounts Payable account not found for settling accrued liability');
                 }
                 
-                // Debit: Accounts Payable (reduce liability)
+                // Debit: Accounts Payable (reduce liability) - use the exact account from accrual
                 entries.push({
-                    accountCode: apAccount.code,
-                    accountName: apAccount.name,
+                    accountCode: apAccountCode || apAccount.code,
+                    accountName: apAccountName || apAccount.name,
                     accountType: apAccount.type,
                     debit: amount,
                     credit: 0,
@@ -368,11 +807,12 @@ class DoubleEntryAccountingService {
                     transactionType: wasAccrued ? 'petty_cash_payment' : 'petty_cash_expense',
                     residenceId: residence,
                     residenceName: residenceDoc.name,
-                    expenseId: expenseId, // Link to original expense
+                    expenseId: resolvedExpenseId,
+                    requestId: effectiveRequestId,
                     paymentMethod: 'Petty Cash',
                     paymentReference: `PC-${Date.now()}`,
                     wasAccrued: wasAccrued, // Track if this was settling an accrued liability
-                    originalTransactionId: wasAccrued ? originalExpense.transactionId : null
+                    originalTransactionId: wasAccrued ? resolvedExpense.transactionId : null
                 }
             });
 
@@ -382,10 +822,10 @@ class DoubleEntryAccountingService {
             await transaction.save();
 
             console.log(`✅ Petty cash ${wasAccrued ? 'payment' : 'expense'} recorded successfully for ${user.firstName} ${user.lastName} (${user.role}) at residence: ${residenceDoc.name}`);
-            if (expenseId) {
-                console.log(`🔗 Linked to expense: ${expenseId}${wasAccrued ? ' (settling accrued liability)' : ''}`);
+            if (resolvedExpenseId) {
+                console.log(`🔗 Linked to expense: ${resolvedExpenseId}${wasAccrued ? ' (settling accrued liability)' : ''}`);
             }
-            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc, expenseId, wasAccrued };
+            return { transaction, transactionEntry, user, pettyCashAccount, residence: residenceDoc, expenseId: resolvedExpenseId, wasAccrued };
 
         } catch (error) {
             console.error('❌ Error recording petty cash expense:', error);
