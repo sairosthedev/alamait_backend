@@ -988,26 +988,54 @@ class AccountingService {
             }
 
             // Get all child accounts linked to 2000
-            const childAccounts = await Account.find({ 
+            const explicitlyLinkedChildren = await Account.find({ 
                 parentAccount: mainAPAccount._id,
                 isActive: true
             });
 
+            // Also include accounts that start with 2000 but aren't exactly 2000 (like 20001, 2000-001, etc.)
+            const apSeriesChildren = await Account.find({
+                $or: [
+                    { code: { $regex: /^2000(?!$)/ } }, // starts with 2000 but not exactly 2000
+                    { code: { $regex: /^200\d+/ } } // starts with 200 followed by digits (2001, 2002, etc.)
+                ],
+                type: 'Liability',
+                isActive: true,
+                code: { $ne: '2000' } // Exclude parent account itself
+            });
+
+            // Merge and remove duplicates by code
+            const allChildrenMap = new Map();
+            [...explicitlyLinkedChildren, ...apSeriesChildren].forEach(acc => {
+                if (acc.code !== '2000' && !acc._id.equals(mainAPAccount._id)) {
+                    allChildrenMap.set(acc.code, acc);
+                }
+            });
+            const childAccounts = Array.from(allChildrenMap.values());
+
+            console.log(`📊 Found ${childAccounts.length} Accounts Payable child accounts:`);
+            childAccounts.forEach(child => {
+                console.log(`   - ${child.code} (${child.name})`);
+            });
+
             // Calculate main account 2000 balance
             let totalBalance = await this.getAccountBalance('2000', asOfDate, residenceId);
+            console.log(`📊 Parent account (2000) balance: $${totalBalance.toFixed(2)}`);
             
             // Add balances from all child accounts (avoid double-counting main 2000)
+            let childBalanceTotal = 0;
             for (const childAccount of childAccounts) {
                 if (childAccount.code === '2000' || childAccount._id.equals(mainAPAccount._id)) {
                     // Skip if a data issue made 2000 its own child
                     continue;
                 }
                 const childBalance = await this.getAccountBalance(childAccount.code, asOfDate, residenceId);
+                childBalanceTotal += childBalance;
                 totalBalance += childBalance;
-                console.log(`📊 Child account ${childAccount.code} (${childAccount.name}): $${childBalance}`);
+                console.log(`📊 Child account ${childAccount.code} (${childAccount.name}): $${childBalance.toFixed(2)}`);
             }
 
-            console.log(`📊 Total Accounts Payable (2000 + ${childAccounts.length} children): $${totalBalance}`);
+            console.log(`📊 Total Accounts Payable: Parent (2000) = $${(totalBalance - childBalanceTotal).toFixed(2)}, Children = $${childBalanceTotal.toFixed(2)}, TOTAL = $${totalBalance.toFixed(2)}`);
             return totalBalance;
 
         } catch (error) {

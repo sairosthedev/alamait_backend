@@ -22,7 +22,7 @@ const { validateToken } = require('../middleware/auth');
 /**
  * Transform fixed balance sheet data to monthly structure expected by frontend
  */
-function transformFixedBalanceSheetToMonthly(balanceSheetData, month, year) {
+async function transformFixedBalanceSheetToMonthly(balanceSheetData, month, year, residence = null) {
     const monthName = new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long' });
     
     // Extract key accounts from the fixed balance sheet
@@ -91,31 +91,42 @@ function transformFixedBalanceSheetToMonthly(balanceSheetData, month, year) {
     
     // Build liabilities - use balance from service (already aggregated, DO NOT re-aggregate)
     // CRITICAL: The service already aggregated parent + children, so we should NOT re-aggregate
-    // Find the parent account (2000) - it should have the aggregated balance already
-    let accountsPayableAccount = Object.values(liabilities).find(acc => String(acc.code) === '2000');
-    
-    // If not found, try finding by key that starts with "2000 -"
-    if (!accountsPayableAccount) {
-        const apKey = Object.keys(liabilities).find(key => key.startsWith('2000 -'));
-        if (apKey) {
-            accountsPayableAccount = liabilities[apKey];
+    // CRITICAL: Get aggregated Accounts Payable balance using AccountingService method
+    // The balance sheet structure may not have aggregated the child accounts, so we need to calculate it
+    let totalAccountsPayable = 0;
+    try {
+        // Find parent account first
+        let accountsPayableAccount = Object.values(liabilities).find(acc => String(acc.code) === '2000');
+        if (!accountsPayableAccount) {
+            const apKey = Object.keys(liabilities).find(key => key.startsWith('2000 -'));
+            if (apKey) {
+                accountsPayableAccount = liabilities[apKey];
+            }
         }
+        
+        // Calculate month end date for this month/year
+        const monthEndDate = new Date(year, month, 0, 23, 59, 59, 999);
+        
+        // Get aggregated balance using AccountingService (same as account details)
+        // Apply residence filter if provided
+        const aggregatedBalance = await AccountingService.getAccountsPayableWithChildren(monthEndDate, residence);
+        totalAccountsPayable = Math.abs(aggregatedBalance || 0);
+        
+        console.log(`🔧 Accounts Payable (2000) aggregated balance: $${totalAccountsPayable}`);
+        console.log(`   Balance from balance sheet structure: $${accountsPayableAccount?.balance || 0}`);
+        console.log(`   Using aggregated balance (parent + children) = $${totalAccountsPayable}`);
+    } catch (err) {
+        console.error('⚠️ Error getting aggregated Accounts Payable, using balance sheet value:', err.message);
+        // Fallback to balance sheet value
+        let accountsPayableAccount = Object.values(liabilities).find(acc => String(acc.code) === '2000');
+        if (!accountsPayableAccount) {
+            const apKey = Object.keys(liabilities).find(key => key.startsWith('2000 -'));
+            if (apKey) {
+                accountsPayableAccount = liabilities[apKey];
+            }
+        }
+        totalAccountsPayable = accountsPayableAccount?.balance || 0;
     }
-    
-    // Use the balance directly - it's already aggregated by the service (parent + children)
-    // DO NOT add child accounts again - that would double-count!
-    const totalAccountsPayable = accountsPayableAccount?.balance || 0;
-    
-    console.log(`🔧 Accounts Payable (2000) balance from service (already aggregated): $${totalAccountsPayable}`);
-    if (accountsPayableAccount) {
-        console.log(`   Found AP account: code=${accountsPayableAccount.code}, name=${accountsPayableAccount.name}, balance=$${totalAccountsPayable}`);
-    } else {
-        console.log(`   ⚠️ WARNING: Accounts Payable (2000) not found in liabilities object!`);
-        console.log(`   Available liability keys:`, Object.keys(liabilities).slice(0, 10));
-    }
-    
-    // NOTE: We do NOT re-aggregate child accounts here because the service already did it
-    // The service's aggregateParentChildAccounts method already combined parent + children
     
     const tenantDepositsAccount = Object.values(liabilities).find(acc => acc.code === '2020');
     const deferredIncomeAccount = Object.values(liabilities).find(acc => acc.code === '2200');
@@ -1496,7 +1507,8 @@ class FinancialReportsController {
                     
                     if (monthData) {
                         // Transform the fixed balance sheet data to match expected structure
-                        const transformedData = transformFixedBalanceSheetToMonthly(monthData, month, year);
+                        // Pass residence filter so aggregated Accounts Payable respects it
+                        const transformedData = await transformFixedBalanceSheetToMonthly(monthData, month, year, residence);
                         
                         return {
                             month,

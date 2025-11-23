@@ -935,6 +935,27 @@ class BalanceSheetService {
           // Enhanced: Get negotiation details for this month
           const negotiationDetails = await this.getNegotiationDetailsForMonth(monthEndDate, residence);
           
+          // CRITICAL: ALWAYS use aggregated balance from AccountingService.getAccountsPayableWithChildren
+          // This is the SAME method account details uses - it returns parent (90) + children (20) = 110
+          const AccountingService = require('./accountingService');
+          const aggregatedBalance = await AccountingService.getAccountsPayableWithChildren(monthEndDate, residence);
+          const aggregatedAmount = Math.abs(aggregatedBalance || 0);
+          
+          console.log(`🔍🔍🔍 ACCOUNTS PAYABLE AGGREGATION:`);
+          console.log(`   Raw aggregatedBalance from getAccountsPayableWithChildren: ${aggregatedBalance}`);
+          console.log(`   Math.abs(aggregatedBalance): ${aggregatedAmount}`);
+          console.log(`   Setting amount to: ${aggregatedAmount}`);
+          
+          // SET IT DIRECTLY - NO FALLBACKS - ALWAYS use aggregatedAmount
+          const accountsPayableFormatted = {
+            accountCode: '2000',
+            accountName: 'Accounts Payable',
+            amount: aggregatedAmount  // ALWAYS use aggregated balance (110)
+          };
+          
+          console.log(`✅✅✅ FINAL - accountsPayableFormatted.amount = $${accountsPayableFormatted.amount.toFixed(2)}`);
+          console.log(`✅✅✅ accountsPayableFormatted object:`, JSON.stringify(accountsPayableFormatted));
+          
           // Structure the data as expected by the React component with enhanced structure
           monthlyData[monthKey] = {
             month: monthKey,
@@ -958,7 +979,13 @@ class BalanceSheetService {
             // Debug: Show what's in cashAndBank after formatting (move logs outside object construction)
             liabilities: {
               current: {
-                accountsPayable: this.formatAccountsPayable(monthBalanceSheet.liabilities.current),
+                // CRITICAL: Use the aggregated Accounts Payable balance (parent + children = 110)
+                // This is set from AccountingService.getAccountsPayableWithChildren above
+                accountsPayable: {
+                  accountCode: '2000',
+                  accountName: 'Accounts Payable',
+                  amount: aggregatedAmount  // FORCE use aggregated balance - NO FALLBACKS
+                },
                 accruedExpenses: this.formatAccruedExpenses(monthBalanceSheet.liabilities.current),
                 tenantDeposits: this.formatTenantDeposits(monthBalanceSheet.liabilities.current),
                 deferredIncome: this.formatDeferredIncome(monthBalanceSheet.liabilities.current),
@@ -1532,16 +1559,94 @@ class BalanceSheetService {
   }
 
   static formatAccountsPayable(currentLiabilities) {
-    const accountsPayable = {};
+    // CRITICAL: Prioritize the parent account (2000) which contains the aggregated total
+    // The parent account (2000) already includes all child account balances after aggregation
     
+    // First, check if parent account (2000) exists - it should have the aggregated balance
+    if (currentLiabilities['2000']) {
+      const parentAP = currentLiabilities['2000'];
+      // CRITICAL: Always use the aggregated balance (parent + children)
+      // The balance property should contain the aggregated total after aggregateParentChildAccounts
+      // However, we should always verify and use the correct aggregated total
+      let aggregatedBalance = Math.abs(parentAP.balance || 0);
+      
+      // If we have aggregation metadata, use it to ensure correct total
+      // This ensures we always use the aggregated balance even if the balance property wasn't updated correctly
+      if (parentAP.originalBalance !== undefined && parentAP.totalChildBalance !== undefined) {
+        // Calculate the correct aggregated total
+        const recalculatedBalance = Math.abs(parentAP.originalBalance || 0) + Math.abs(parentAP.totalChildBalance || 0);
+        
+        // Use the recalculated balance if it's different (more accurate)
+        // The balance property should already be updated by aggregateParentChildAccounts, but verify
+        if (Math.abs(recalculatedBalance - aggregatedBalance) > 0.01) {
+          console.log(`⚠️ Balance mismatch detected! Balance property: $${aggregatedBalance.toFixed(2)}, Calculated from metadata: $${recalculatedBalance.toFixed(2)}`);
+          console.log(`   Using calculated aggregated balance: $${recalculatedBalance.toFixed(2)}`);
+          aggregatedBalance = recalculatedBalance;
+        }
+        
+        console.log(`✅ Using aggregated Accounts Payable (2000): $${aggregatedBalance.toFixed(2)}`);
+        console.log(`   Parent balance: $${Math.abs(parentAP.originalBalance || 0).toFixed(2)}`);
+        console.log(`   Child accounts total: $${Math.abs(parentAP.totalChildBalance || 0).toFixed(2)}`);
+        console.log(`   Aggregated flag: ${parentAP.aggregated || false}`);
+      } else {
+        // No aggregation metadata - use the balance property directly
+        // This means either aggregation didn't happen, or metadata wasn't saved
+        console.log(`⚠️ Accounts Payable (2000) balance: $${aggregatedBalance.toFixed(2)} (no aggregation metadata found)`);
+        console.log(`   Aggregated flag: ${parentAP.aggregated || false}`);
+        
+        // If not aggregated, try to find child accounts and aggregate manually
+        if (!parentAP.aggregated) {
+          let childTotal = 0;
+          Object.keys(currentLiabilities).forEach(code => {
+            if (code !== '2000' && String(code).startsWith('2000')) {
+              const childBalance = Math.abs(currentLiabilities[code]?.balance || 0);
+              if (childBalance > 0) {
+                childTotal += childBalance;
+                console.log(`   Found unaggregated child account ${code}: $${childBalance.toFixed(2)}`);
+              }
+            }
+          });
+          
+          if (childTotal > 0) {
+            aggregatedBalance = aggregatedBalance + childTotal;
+            console.log(`⚠️ Manually aggregated child accounts: Added $${childTotal.toFixed(2)} to parent balance`);
+            console.log(`   New aggregated total: $${aggregatedBalance.toFixed(2)}`);
+          }
+        }
+      }
+      
+      // Return as both formats: object with key for compatibility, and also include direct access
+      // The response might extract the '2000' key or use the object directly
+      const formattedAP = {
+        accountCode: '2000',
+        accountName: parentAP.name || 'Accounts Payable',
+        amount: aggregatedBalance, // CRITICAL: Use the aggregated balance (parent + children)
+        description: parentAP.description,
+        category: parentAP.category || 'Current Liability'
+      };
+      
+      // Return object with key for compatibility, but ensure the aggregated balance is used
+      return {
+        '2000': formattedAP
+      };
+    }
+    
+    // Fallback: if parent account doesn't exist, collect all payable accounts
+    const accountsPayable = {};
     Object.entries(currentLiabilities).forEach(([code, liability]) => {
+      // Skip child accounts that start with 2000 but aren't exactly 2000
+      if (String(code).startsWith('2000') && code !== '2000') {
+        console.log(`⏭️ Skipping child account ${code} - should be aggregated into parent (2000)`);
+        return;
+      }
+      
       if (liability.name.toLowerCase().includes('payable')) {
         accountsPayable[code] = {
           accountCode: code,
           accountName: liability.name,
-          amount: Math.abs(liability.balance), // FIX: Ensure positive values for liabilities
+          amount: Math.abs(liability.balance || 0),
           description: liability.description,
-          category: liability.category
+          category: liability.category || 'Current Liability'
         };
       }
     });
@@ -1804,9 +1909,13 @@ class BalanceSheetService {
         isActive: true
       });
 
-      // Also include accounts that start with 200 but aren't 2000
+      // Also include accounts that start with 2000 but aren't exactly 2000
+      // This matches child accounts like 20001, 20002, 2000-xxx, etc.
       const apSeriesAccounts = await Account.find({
-        code: { $regex: /^200(?!0$)/ }, // starts with 200 but not exactly 2000
+        $or: [
+          { code: { $regex: /^2000(?!$)/ } }, // starts with 2000 but not exactly 2000
+          { code: { $regex: /^200\d+/ } } // starts with 200 followed by digits (2001, 2002, etc.)
+        ],
         type: 'Liability',
         isActive: true
       });
@@ -1819,10 +1928,19 @@ class BalanceSheetService {
       const allAPChildren = Array.from(allAPChildrenMap.values());
 
       console.log(`🔗 Found ${allAPChildren.length} Accounts Payable child accounts for parent 2000:`);
+      allAPChildren.forEach(child => {
+        console.log(`   - ${child.code} (${child.name})`);
+      });
       
       // Aggregate child account balances into parent
       if (balanceSheet.liabilities.current['2000']) {
+        // CRITICAL: Get parent account balance FIRST - this must be included in the total
+        const parentAccountBalance = balanceSheet.liabilities.current['2000'].balance || 0;
+        console.log(`📊 Parent account (2000) balance BEFORE aggregation: $${parentAccountBalance.toFixed(2)}`);
+        
         let totalChildBalance = 0;
+        
+        // First, aggregate explicitly linked child accounts
         allAPChildren.forEach(childAccount => {
           if (balanceSheet.liabilities.current[childAccount.code] && childAccount.code !== '2000') {
             const childBalance = balanceSheet.liabilities.current[childAccount.code].balance;
@@ -1830,28 +1948,88 @@ class BalanceSheetService {
             console.log(
               `   ↳ Aggregating ${childAccount.code} (${childAccount.name}): $${childBalance.toFixed(2)}`
             );
+          } else if (childAccount.code !== '2000') {
+            console.log(`   ⚠️ Child account ${childAccount.code} (${childAccount.name}) not found in balanceSheet.liabilities.current`);
+          }
+        });
+        
+        // Also check for any accounts in the balance sheet that start with 2000 but aren't exactly 2000
+        // This catches child accounts that might not be explicitly linked
+        Object.keys(balanceSheet.liabilities.current).forEach(code => {
+          if (code !== '2000' && String(code).startsWith('2000')) {
+            // Check if this account wasn't already aggregated
+            const alreadyAggregated = allAPChildren.some(child => child.code === code);
+            if (!alreadyAggregated) {
+              const childBalance = balanceSheet.liabilities.current[code].balance;
+              if (childBalance !== 0) {
+                totalChildBalance += childBalance;
+                console.log(
+                  `   ↳ Aggregating implicit child account ${code} (${balanceSheet.liabilities.current[code].name}): $${childBalance.toFixed(2)}`
+                );
+              }
+            }
           }
         });
 
         // Add the aggregated child balances to parent
-        const originalBalance = balanceSheet.liabilities.current['2000'].balance;
-        balanceSheet.liabilities.current['2000'].balance += totalChildBalance;
+        // IMPORTANT: The parent account (2000) balance should ALWAYS be included in the total
+        // We start with the parent's own balance and add child account balances to it
+        // Use the parentAccountBalance we captured at the start to ensure it's not modified
+        const originalBalance = parentAccountBalance;
+        const aggregatedTotal = originalBalance + totalChildBalance;
+        
+        console.log(`📊 Aggregation calculation:` +
+          `\n   Parent account (2000) own balance: $${originalBalance.toFixed(2)}` +
+          `\n   Total child accounts balance: $${totalChildBalance.toFixed(2)}` +
+          `\n   Calculation: ${originalBalance.toFixed(2)} + ${totalChildBalance.toFixed(2)} = ${aggregatedTotal.toFixed(2)}`
+        );
+        
+        // Set the aggregated total (parent balance + all child balances)
+        balanceSheet.liabilities.current['2000'].balance = aggregatedTotal;
         balanceSheet.liabilities.current['2000'].aggregated = true;
         balanceSheet.liabilities.current['2000'].childAccounts = allAPChildren.map(c => c.code);
         balanceSheet.liabilities.current['2000'].originalBalance = originalBalance;
+        balanceSheet.liabilities.current['2000'].totalChildBalance = totalChildBalance;
         
         console.log(
-          `📊 Accounts Payable (2000) new total: $${balanceSheet.liabilities.current['2000'].balance.toFixed(2)} (added $${totalChildBalance.toFixed(2)} from ${allAPChildren.length} children)`
+          `📊 Accounts Payable (2000) aggregation:` +
+          `\n   Parent account balance: $${originalBalance.toFixed(2)}` +
+          `\n   Child accounts total: $${totalChildBalance.toFixed(2)} (from ${allAPChildren.length} children)` +
+          `\n   AGGREGATED TOTAL: $${aggregatedTotal.toFixed(2)}`
         );
       } else {
         console.warn('⚠️ Parent AP account (2000) not found in balance sheet');
       }
       
       // Recalculate total current liabilities
-      balanceSheet.liabilities.totalCurrent = Object.values(balanceSheet.liabilities.current)
-        .reduce((total, liability) => total + liability.balance, 0);
+      // IMPORTANT: Exclude child accounts that have been aggregated into the parent to avoid double-counting
+      // The parent account (2000) now contains the aggregated total (parent + children)
+      const aggregatedChildCodes = new Set();
+      if (balanceSheet.liabilities.current['2000'] && balanceSheet.liabilities.current['2000'].childAccounts) {
+        balanceSheet.liabilities.current['2000'].childAccounts.forEach(code => {
+          aggregatedChildCodes.add(String(code));
+        });
+      }
+      
+      // Also exclude any accounts that start with 2000 but aren't exactly 2000 (implicit children)
+      balanceSheet.liabilities.totalCurrent = Object.entries(balanceSheet.liabilities.current)
+        .filter(([code, liability]) => {
+          // Always include the parent account (2000)
+          if (code === '2000') return true;
+          // Exclude child accounts that start with 2000 but aren't exactly 2000
+          if (String(code).startsWith('2000') && code !== '2000') return false;
+          // Exclude explicitly aggregated child accounts
+          if (aggregatedChildCodes.has(String(code))) return false;
+          return true;
+        })
+        .reduce((total, [code, liability]) => {
+          const balance = Math.abs(liability.balance || 0);
+          console.log(`   📊 Including ${code} (${liability.name}): $${balance.toFixed(2)}`);
+          return total + balance;
+        }, 0);
       
       console.log(`✅ Recalculated total current liabilities: $${balanceSheet.liabilities.totalCurrent}`);
+      console.log(`   Excluded ${aggregatedChildCodes.size} child accounts that were aggregated into parent (2000)`);
       
     } catch (error) {
       console.error('❌ Error aggregating parent-child accounts:', error);
