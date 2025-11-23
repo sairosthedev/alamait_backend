@@ -260,10 +260,32 @@ class EnhancedCashFlowService {
                 transactionQuery.residence = new mongoose.Types.ObjectId(residenceId);
             }
             
+            // For cash basis, include ALL transactions that represent cash movements
+            // Exclude only accrual transactions which don't involve actual cash
+            // This ensures we capture ALL cash payments regardless of source:
+            // - Bank payments (bank transfers, expense payments, vendor payments, manual entries)
+            // - Ecocash/Innbucks payments (expense payments, vendor payments, payments)
+            // - Petty cash payments (petty_cash_payment, petty_cash_expense, manual with petty cash)
+            // The processing logic will filter to only count actual cash outflows (credits to cash accounts)
+            // and exclude internal transfers (cash moving between accounts)
             if (basis === 'cash') {
+                // Exclude only accrual sources which don't involve actual cash
+                // This allows us to capture ALL cash transactions including:
+                // - All payment sources (payment, expense_payment, vendor_payment, etc.)
+                // - Bank transfers (bank_transfer, manual with bank payments)
+                // - Petty cash payments (petty_cash_payment, petty_cash_expense)
+                // - Manual entries that represent cash payments
                 transactionQuery.source = {
-                    $in: ['payment', 'expense_payment', 'rental_payment', 'manual', 'payment_collection', 'bank_transfer', 'advance_payment', 'debt_settlement', 'current_payment']
+                    $nin: [
+                        'rental_accrual',          // Accruals don't involve cash
+                        'rental_accrual_reversal', // Reversals don't involve cash
+                        'expense_accrual',         // Accruals don't involve cash
+                        'expense_accrual_reversal' // Reversals don't involve cash
+                    ]
                 };
+                // Note: By excluding only accruals, we include ALL other sources which could involve cash.
+                // The processing logic will identify actual cash outflows by checking for cash account credits
+                // and will exclude internal transfers using isInternalCashTransfer()
             }
             
             // Exclude reversed and draft transactions from cash flow
@@ -1940,12 +1962,15 @@ class EnhancedCashFlowService {
                     return; // Skip internal transfers - they don't represent actual cash outflow
                 }
                 
-                // Look for Cash/Bank credits (expenses paid)
-                // BUT ONLY if it's NOT to another cash account (not an internal transfer)
+                // Look for Cash/Bank credits (expenses paid) - include ALL cash accounts (1000-1019, 10003)
+                // This includes: bank, ecocash, innbucks, petty cash (1010-1014), and all other cash accounts
+                // Internal transfers are already excluded above by isInternalCashTransfer check
                 const cashEntry = entry.entries.find(line => {
                     const accountCode = line.accountCode || line.account?.code;
                     const accountName = line.accountName || line.account?.name;
-                    return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
+                    // Match all cash accounts: 1000-1019 and 10003
+                    const isCashAccount = accountCode && (accountCode.match(/^10[0-1][0-9]$/) || accountCode === '10003');
+                    return isCashAccount && line.credit > 0;
                 });
                 
                 if (cashEntry) {
@@ -2425,11 +2450,14 @@ class EnhancedCashFlowService {
             // Transactions are already filtered by residence above
             
             if (entry.entries && entry.entries.length > 0) {
-                // Look for ALL Cash/Bank credits (expenses paid) - not just the first one
+                // Look for ALL Cash/Bank credits (expenses paid) - include ALL cash accounts (1000-1019, 10003)
+                // This includes: bank, ecocash, innbucks, petty cash (1010-1014), and all other cash accounts
                 const cashEntries = entry.entries.filter(line => {
                     const accountCode = line.accountCode || line.account?.code;
                     const accountName = line.accountName || line.account?.name;
-                    return accountCode === '1000' && (accountName === 'Cash' || accountName === 'Bank Account') && line.credit > 0;
+                    // Match all cash accounts: 1000-1019 and 10003
+                    const isCashAccount = accountCode && (accountCode.match(/^10[0-1][0-9]$/) || accountCode === '10003');
+                    return isCashAccount && line.credit > 0;
                 });
                 
                 // Skip internal cash transfers and movements between cash accounts
@@ -3506,35 +3534,43 @@ class EnhancedCashFlowService {
                     if (cashCredit) {
                         const expenseAmount = cashCredit.credit;
                         
-                        // Check if this is an internal cash transfer (vault to petty cash, etc.)
-                        const isInternalTransfer = entry.description && (
-                            entry.description.toLowerCase().includes('gas') ||
-                            entry.description.toLowerCase().includes('petty cash') ||
-                            entry.description.toLowerCase().includes('cash allocation') ||
-                            entry.description.toLowerCase().includes('transfer')
-                        );
+                        // Use the proper isInternalCashTransfer function to check if this is just moving cash between accounts
+                        // This correctly identifies transfers (cash to cash with no expense/income/liability entries)
+                        if (this.isInternalCashTransfer(entry)) {
+                            // This is an internal transfer (cash moving between accounts, not an actual expense)
+                            console.log(`💰 Internal cash transfer excluded from monthly expenses: ${expenseAmount} - ${entry.description}`);
+                            return; // Skip this transaction entry
+                        }
                         
-                        // Check if this is actually a gas expense (debit to expense account) or internal transfer
+                        // Check if this is an actual expense payment:
+                        // - Has expense account debit (5xxx), OR
+                        // - Has Accounts Payable debit (settling accrued liability), OR
+                        // - Source indicates expense payment (expense_payment, vendor_payment, petty_cash_payment)
                         const hasExpenseAccount = entry.entries.some(line => 
                             line.accountCode && line.accountCode.startsWith('5') && line.debit > 0
                         );
                         
-                        if (isInternalTransfer && !hasExpenseAccount) {
-                            // This is an internal transfer (no expense account)
-                            console.log(`💰 Internal transfer excluded from monthly expenses: ${expenseAmount}`);
-                            return; // Skip this transaction entry
-                        }
-                        
-                        // Check if this is a petty cash allocation (should not be counted as expense)
-                        const isPettyCashTransfer = entry.description && (
-                            entry.description.toLowerCase().includes('petty cash') ||
-                            entry.description.toLowerCase().includes('cash allocation')
+                        const hasAccountsPayableDebit = entry.entries.some(line => 
+                            (line.accountCode === '2000' || line.accountCode.startsWith('2000-')) && 
+                            line.accountType === 'Liability' && 
+                            line.debit > 0
                         );
                         
-                        if (isPettyCashTransfer) {
-                            // Don't count as expense - skip to next entry
-                            console.log(`💰 Petty cash transfer excluded from monthly expenses: ${expenseAmount}`);
-                            return; // Skip this transaction entry
+                        const isExpensePayment = entry.source && (
+                            entry.source === 'expense_payment' ||
+                            entry.source === 'vendor_payment' ||
+                            entry.source === 'petty_cash_payment' ||
+                            entry.source === 'petty_cash_expense'
+                        );
+                        
+                        // If it's not an internal transfer AND it has an expense account or AP debit, it's an actual expense payment
+                        // Include all expense payments whether paid by bank, ecocash, petty cash, etc.
+                        const isActualExpense = hasExpenseAccount || hasAccountsPayableDebit || isExpensePayment;
+                        
+                        if (!isActualExpense) {
+                            // This might be something else, but if cash is being credited, it's likely a payment
+                            // Include it to be safe - cash outflows should be counted
+                            console.log(`💰 Including cash outflow as expense (no expense account found): ${expenseAmount} - ${entry.description || entry.source}`);
                         }
                         
                         months[monthKey].expenses.total += expenseAmount;

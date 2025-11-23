@@ -1186,11 +1186,38 @@ class AccountingService {
     }
     
     static async getCashPayments(startDate, endDate, residenceId = null) {
+        // Query for transactions that have cash account credits (cash outflows)
+        // This includes all types of cash payments:
+        // - Regular payments (source: 'payment')
+        // - Expense payments (source: 'expense_payment', 'vendor_payment')
+        // - Petty cash payments (source: 'petty_cash_payment', 'petty_cash_expense', 'manual' with petty cash)
+        // - Any transaction that credits a cash account (1001-1005, 1010-1014)
         let query = {
-            'entries.accountCode': { $in: ['1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014'] },
             date: { $gte: startDate, $lte: endDate },
             status: 'posted'
         };
+        
+        // Build $or condition to include:
+        // 1. Transactions with cash account codes in entries (primary - catches all cash payments)
+        // 2. Explicit expense payment sources (ensures we don't miss any expense payments)
+        const orConditions = [
+            // Match transactions with cash account credits in entries
+            {
+                'entries.accountCode': { $in: ['1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014'] }
+            },
+            // Explicitly include expense payment sources to ensure we capture all expense payments
+            // including those paid by petty cash from requests
+            {
+                source: { $in: ['expense_payment', 'vendor_payment', 'petty_cash_payment', 'petty_cash_expense'] }
+            },
+            // Include manual transactions paid by petty cash (catches expenses created from requests and paid by petty cash)
+            {
+                source: 'manual',
+                'metadata.paymentMethod': 'Petty Cash'
+            }
+        ];
+        
+        query.$or = orConditions;
         
         if (residenceId) {
             query['residence'] = residenceId;
@@ -1202,6 +1229,8 @@ class AccountingService {
         for (const entry of entries) {
             if (entry.entries && Array.isArray(entry.entries)) {
                 for (const subEntry of entry.entries) {
+                    // Count only cash account credits (cash outflows)
+                    // This ensures we're counting actual cash payments, not cash receipts
                     if (['1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014'].includes(subEntry.accountCode) && subEntry.credit > 0) {
                         totalPayments += subEntry.credit;
                     }
