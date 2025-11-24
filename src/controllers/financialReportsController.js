@@ -2502,7 +2502,11 @@ class FinancialReportsController {
                 }
                 
                 // Search in expenses section - check monthly breakdown for expense categories
-                if (!accountData && account.type === 'Expense' && cashFlowData.monthly_breakdown) {
+                // PRIORITY 1: Check if account code exists directly in expenses object (cash flow service uses account codes as keys)
+                // SPECIAL CASE: Account 2028 is a Liability but is used for security expenses (dr 2028, cr cash)
+                const isExpenseAccount = account.type === 'Expense' || accountCode === '2028';
+                
+                if (!accountData && isExpenseAccount && cashFlowData.monthly_breakdown) {
                     const monthlyBreakdown = cashFlowData.monthly_breakdown;
                     
                     // If month is specified, get data for that specific month
@@ -2514,7 +2518,39 @@ class FinancialReportsController {
                     // Check the specific month if provided, otherwise check all months
                     const monthsToCheck = targetMonthKey ? [targetMonthKey] : Object.keys(monthlyBreakdown);
                     
-                    // Map expense account codes to cash flow service expense categories
+                    // FIRST: Check if account code exists directly in expenses object (new structure)
+                    let totalExpense = 0;
+                    let foundInExpenses = false;
+                    
+                    for (const monthKey of monthsToCheck) {
+                        const monthData = monthlyBreakdown[monthKey];
+                        if (monthData && monthData.expenses) {
+                            // Check if account code exists directly as a key in expenses object
+                            if (monthData.expenses[accountCode] !== undefined && monthData.expenses[accountCode] !== null) {
+                                totalExpense += monthData.expenses[accountCode] || 0;
+                                foundInExpenses = true;
+                            }
+                            // Also check operating_activities.breakdown for account code
+                            else if (monthData.operating_activities && monthData.operating_activities.breakdown) {
+                                if (monthData.operating_activities.breakdown[accountCode] !== undefined && monthData.operating_activities.breakdown[accountCode] !== null) {
+                                    totalExpense += monthData.operating_activities.breakdown[accountCode] || 0;
+                                    foundInExpenses = true;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (foundInExpenses) {
+                        accountData = {
+                            totalDebit: totalExpense,
+                            totalCredit: 0,
+                            netAmount: totalExpense,
+                            transactionCount: 0, // Will be calculated from transactions
+                            type: 'expense',
+                            category: 'expense'
+                        };
+                    } else {
+                        // FALLBACK: Map expense account codes to cash flow service expense categories (legacy support)
                     const expenseCategoryMap = {
                         // Map account codes/names to expense categories used by cash flow service
                         '5001': 'maintenance',
@@ -2567,7 +2603,7 @@ class FinancialReportsController {
                     // If we found a category, get the amount from monthly breakdown
                     // Prioritize operating_activities.breakdown (what cash flow statement uses)
                     if (expenseCategory) {
-                        let totalExpense = 0;
+                            totalExpense = 0;
                         for (const monthKey of monthsToCheck) {
                             const monthData = monthlyBreakdown[monthKey];
                             if (monthData) {
@@ -2594,6 +2630,7 @@ class FinancialReportsController {
                             type: 'expense',
                             category: 'expense'
                         };
+                        }
                     }
                 }
                 
@@ -2719,17 +2756,9 @@ class FinancialReportsController {
                     status: { $nin: ['reversed', 'draft'] }
                 };
             } else if (account.type === 'Expense') {
-                // For expense accounts, show transactions where cash was paid out (expense transactions)
-                // Expense transactions can have the expense account code directly OR have cash entries (cash paid out)
-                // Include all expense-related sources: expense_payment, vendor_payment, petty_cash_payment, petty_cash_expense, etc.
+                // For expense accounts, ONLY show transactions that have the specific expense account code
                 query = {
-                    $or: [
-                        { 'entries.accountCode': accountCode }, // Direct expense account entries (primary)
-                        {
-                            'entries.accountCode': { $regex: '^1000' }, // Cash transactions (cash paid out)
-                            source: { $in: ['expense', 'expense_payment', 'vendor_payment', 'petty_cash_payment', 'petty_cash_expense', 'manual'] }
-                        }
-                    ],
+                    'entries.accountCode': accountCode, // Only transactions with the specific account code
                     status: { $nin: ['reversed', 'draft'] }
                 };
             } else if (depositAccountCodes.includes(accountCode)) {
@@ -2932,36 +2961,15 @@ class FinancialReportsController {
                     }
                 }
                 
-                // For expense accounts, filter to include only expense-related transactions
+                // For expense accounts, filter to include ONLY transactions with the specific account code
                 transactions = transactions.filter(tx => {
-                    // Check if transaction has the expense account code directly
-                    const expenseEntry = tx.entries.find(e => e.accountCode === accountCode);
-                    if (expenseEntry) {
-                        return true; // Include transactions with expense account code
-                    }
+                    // ONLY include transactions that have the requested account code in their entries
+                    const hasRequestedAccountCode = tx.entries && tx.entries.some(e => {
+                        const entryAccountCode = String(e.accountCode || '').trim();
+                        return entryAccountCode === accountCode;
+                    });
                     
-                    // Or check if it's an expense transaction with cash paid out
-                    const cashEntry = tx.entries.find(e => e.accountCode.match(/^1000/));
-                    if (cashEntry && cashEntry.credit > 0) {
-                        // For expense transactions, cash is credited (paid out)
-                        // Include if it's an expense transaction or has expense-related entries
-                        if (tx.source === 'expense') {
-                            return true;
-                        }
-                        
-                        // Check if there's an expense account entry in the transaction
-                        const hasExpenseAccount = tx.entries.some(e => 
-                            e.accountType === 'Expense' || 
-                            (e.accountCode && e.accountCode.match(/^5|^6|^7/)) // Expense account codes usually start with 5, 6, or 7
-                        );
-                        
-                        // Include if it's a manual transaction with expense account
-                        if (tx.source === 'manual' && hasExpenseAccount) {
-                            return true;
-                        }
-                    }
-                    
-                    return false;
+                    return hasRequestedAccountCode;
                 });
                 
                 // Deduplicate transactions by transaction ID (in case same transaction appears multiple times)
@@ -2978,27 +2986,63 @@ class FinancialReportsController {
                 // Limit to 100 after filtering
                 transactions = transactions.slice(0, 100);
             } else if (depositAccountCodes.includes(accountCode)) {
-                // For deposit accounts, filter to include only deposit-related transactions
-                const allDepositCodes = depositAccounts.length > 0 
-                    ? depositAccounts.map(acc => acc.code)
-                    : depositAccountCodes;
-                
-                transactions = transactions.filter(tx => {
-                    // Check if transaction has any deposit account entry
-                    const depositEntry = tx.entries.find(e => allDepositCodes.includes(e.accountCode));
-                    if (depositEntry) {
-                        return true; // Include transactions with any deposit account code
-                    }
+                // SPECIAL CASE: Account 2028 is used for security expenses (dr 2028, cr cash)
+                // When viewing account 2028, show ONLY expense transactions, not deposit receipts
+                if (accountCode === '2028') {
+                    transactions = transactions.filter(tx => {
+                        // Check if account 2028 is debited in this transaction (expense transaction)
+                        const account2028Debit = tx.entries.find(e => 
+                            String(e.accountCode || '').trim() === '2028' && (e.debit || 0) > 0
+                        );
+                        
+                        if (!account2028Debit) {
+                            return false; // No 2028 debit = not an expense transaction
+                        }
+                        
+                        // EXCLUDE: Opening balance entries (dr 10005, cr 2028)
+                        const hasOpeningBalanceDebit = tx.entries.some(e => 
+                            String(e.accountCode || '').trim() === '10005' && (e.debit || 0) > 0
+                        );
+                        if (hasOpeningBalanceDebit) {
+                            return false; // Opening balance entry, not an expense
+                        }
+                        
+                        // EXCLUDE: Lease start accounting entries (accruals without cash)
+                        if (tx.description && tx.description.toLowerCase().includes('lease start accounting entries')) {
+                            return false; // Accrual entry, not a cash expense
+                        }
+                        
+                        // Only include if there's a cash credit (cash paid out = expense)
+                        const hasCashCredit = tx.entries.some(e => {
+                            const accCode = String(e.accountCode || '').trim();
+                            return (accCode.startsWith('100') || accCode.startsWith('101')) && (e.credit || 0) > 0;
+                        });
+                        
+                        return hasCashCredit; // Only include if cash was actually paid out
+                    });
+                } else {
+                    // For other deposit accounts, filter to include only deposit-related transactions
+                    const allDepositCodes = depositAccounts.length > 0 
+                        ? depositAccounts.map(acc => acc.code)
+                        : depositAccountCodes;
                     
-                    // Or check if it's a payment transaction with deposit in description
-                    const cashEntry = tx.entries.find(e => e.accountCode.match(/^1000/));
-                    const description = (tx.description || '').toLowerCase();
-                    if (cashEntry && (description.includes('deposit') || description.includes('security'))) {
-                        return true;
-                    }
-                    
-                    return false;
-                });
+                    transactions = transactions.filter(tx => {
+                        // Check if transaction has any deposit account entry
+                        const depositEntry = tx.entries.find(e => allDepositCodes.includes(e.accountCode));
+                        if (depositEntry) {
+                            return true; // Include transactions with any deposit account code
+                        }
+                        
+                        // Or check if it's a payment transaction with deposit in description
+                        const cashEntry = tx.entries.find(e => e.accountCode.match(/^1000/));
+                        const description = (tx.description || '').toLowerCase();
+                        if (cashEntry && (description.includes('deposit') || description.includes('security'))) {
+                            return true;
+                        }
+                        
+                        return false;
+                    });
+                }
                 
                 // Limit to 100 after filtering
                 transactions = transactions.slice(0, 100);
@@ -3032,30 +3076,59 @@ class FinancialReportsController {
                         monthlyBreakdown[monthKey].transactionCount += 1;
                     }
                 } else if (depositAccountCodes.includes(accountCode)) {
-                    // For deposit accounts, show cash received for deposits
-                    // Check for any deposit account entry across all deposit accounts
-                    const allDepositCodes = depositAccounts.length > 0 
-                        ? depositAccounts.map(acc => acc.code)
-                        : depositAccountCodes;
-                    
-                    const depositEntry = transaction.entries.find(entry => allDepositCodes.includes(entry.accountCode));
-                    const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
-                    
-                    if (depositEntry) {
-                        // Direct deposit account entry - use credit amount (liability increases)
-                        const depositAmount = depositEntry.credit || 0;
-                        monthlyBreakdown[monthKey].totalDebit += depositEntry.debit || 0;
-                        monthlyBreakdown[monthKey].totalCredit += depositAmount;
-                        // For deposits: netAmount = credit - debit (credits increase liability, which means cash received)
-                        monthlyBreakdown[monthKey].netAmount += depositAmount - (depositEntry.debit || 0);
-                        monthlyBreakdown[monthKey].transactionCount += 1;
-                    } else if (cashEntry && cashEntry.debit > 0) {
-                        // Payment transaction with deposit - use cash amount received
-                        const cashAmount = cashEntry.debit || 0;
-                        monthlyBreakdown[monthKey].totalDebit += 0;
-                        monthlyBreakdown[monthKey].totalCredit += cashAmount; // Cash received = deposit credit
-                        monthlyBreakdown[monthKey].netAmount += cashAmount; // Net amount = cash received
-                        monthlyBreakdown[monthKey].transactionCount += 1;
+                    // SPECIAL CASE: Account 2028 is used for security expenses (dr 2028, cr cash)
+                    // Treat it as an expense account, not a deposit account
+                    if (accountCode === '2028') {
+                        // For account 2028, treat as expense (dr 2028, cr cash)
+                        const account2028Entry = transaction.entries.find(entry => 
+                            String(entry.accountCode || '').trim() === '2028'
+                        );
+                        const cashEntry = transaction.entries.find(entry => 
+                            entry.accountCode && String(entry.accountCode).match(/^1000/)
+                        );
+                        
+                        if (account2028Entry && account2028Entry.debit > 0) {
+                            // Account 2028 is debited = expense transaction
+                            const expenseAmount = account2028Entry.debit || 0;
+                            monthlyBreakdown[monthKey].totalDebit += expenseAmount;
+                            monthlyBreakdown[monthKey].totalCredit += account2028Entry.credit || 0;
+                            // For expenses: netAmount = debit - credit (debits increase expenses)
+                            monthlyBreakdown[monthKey].netAmount += expenseAmount - (account2028Entry.credit || 0);
+                            monthlyBreakdown[monthKey].transactionCount += 1;
+                        } else if (cashEntry && cashEntry.credit > 0) {
+                            // Cash was credited (cash paid out) = expense
+                            const expenseAmount = cashEntry.credit || 0;
+                            monthlyBreakdown[monthKey].totalDebit += expenseAmount; // Cash paid out = expense debit
+                            monthlyBreakdown[monthKey].totalCredit += 0;
+                            monthlyBreakdown[monthKey].netAmount += expenseAmount;
+                            monthlyBreakdown[monthKey].transactionCount += 1;
+                        }
+                    } else {
+                        // For other deposit accounts, show cash received for deposits
+                        // Check for any deposit account entry across all deposit accounts
+                        const allDepositCodes = depositAccounts.length > 0 
+                            ? depositAccounts.map(acc => acc.code)
+                            : depositAccountCodes;
+                        
+                        const depositEntry = transaction.entries.find(entry => allDepositCodes.includes(entry.accountCode));
+                        const cashEntry = transaction.entries.find(entry => entry.accountCode.match(/^1000/));
+                        
+                        if (depositEntry) {
+                            // Direct deposit account entry - use credit amount (liability increases)
+                            const depositAmount = depositEntry.credit || 0;
+                            monthlyBreakdown[monthKey].totalDebit += depositEntry.debit || 0;
+                            monthlyBreakdown[monthKey].totalCredit += depositAmount;
+                            // For deposits: netAmount = credit - debit (credits increase liability, which means cash received)
+                            monthlyBreakdown[monthKey].netAmount += depositAmount - (depositEntry.debit || 0);
+                            monthlyBreakdown[monthKey].transactionCount += 1;
+                        } else if (cashEntry && cashEntry.debit > 0) {
+                            // Payment transaction with deposit - use cash amount received
+                            const cashAmount = cashEntry.debit || 0;
+                            monthlyBreakdown[monthKey].totalDebit += 0;
+                            monthlyBreakdown[monthKey].totalCredit += cashAmount; // Cash received = deposit credit
+                            monthlyBreakdown[monthKey].netAmount += cashAmount; // Net amount = cash received
+                            monthlyBreakdown[monthKey].transactionCount += 1;
+                        }
                     }
                 } else if (account.type === 'Expense') {
                     // For expense accounts, use the expense account entry or cash entry
@@ -3106,27 +3179,59 @@ class FinancialReportsController {
             } else if (account.type === 'Expense') {
                 cashFlowType = 'expense';
             } else if (depositAccountCodes.includes(accountCode)) {
-                cashFlowType = 'deposit'; // Deposits are liability accounts
+                // SPECIAL CASE: Account 2028 is used for security expenses, treat as expense
+                if (accountCode === '2028') {
+                    cashFlowType = 'expense'; // Security expenses, not deposits
+                } else {
+                    cashFlowType = 'deposit'; // Other deposits are liability accounts
+                }
             }
             
-            // Use cash flow service data if available (to ensure it matches the cash flow statement)
-            // Otherwise calculate from transactions
-            let finalCashFlowData;
-            let finalMonthlyBreakdown = monthlyBreakdown; // Default to transaction-based breakdown
+            // Calculate totals from transactions to ensure accuracy
+            // This ensures we show actual transaction totals, not just what's in cash flow service
+            let calculatedTotalDebit = 0;
+            let calculatedTotalCredit = 0;
+            let calculatedNetAmount = 0;
             
-            if (accountData && (accountData.totalCredit !== undefined || accountData.totalDebit !== undefined || accountData.netAmount !== undefined)) {
-                // Use the data from cash flow service (ensures it matches the cash flow statement)
-                // This works for both income (totalCredit) and expenses (totalDebit)
+            Object.values(monthlyBreakdown).forEach(monthData => {
+                calculatedTotalDebit += monthData.totalDebit || 0;
+                calculatedTotalCredit += monthData.totalCredit || 0;
+                calculatedNetAmount += monthData.netAmount || 0;
+            });
+            
+            // Use cash flow service data if available (matches the cash flow statement)
+            // For expenses, always prefer cash flow service data when available (it includes all paid transactions)
+            // Transaction-based calculation might miss some transactions due to filtering
+            let finalCashFlowData;
+            let finalMonthlyBreakdown = monthlyBreakdown; // Always use transaction-based breakdown for monthly detail
+            
+            // If accountData was found from cash flow service, use that (matches cash flow statement, includes all paid transactions)
+            // This is especially important for expenses where we want to show the full amount from cash flow
+            if (accountData && (accountData.totalDebit !== undefined || accountData.totalCredit !== undefined)) {
+                // Use cash flow service data (this matches what's shown in the cash flow statement)
                 finalCashFlowData = {
                     totalCredit: accountData.totalCredit || 0,
                     totalDebit: accountData.totalDebit || 0,
-                    netAmount: accountData.netAmount !== undefined ? accountData.netAmount : (accountData.totalCredit || 0) - (accountData.totalDebit || 0),
+                    netAmount: accountData.netAmount !== undefined ? accountData.netAmount : (accountData.totalDebit || 0) - (accountData.totalCredit || 0),
+                    transactionCount: transactions.length, // Keep transaction count from actual transactions queried
+                    type: cashFlowType
+                };
+            } else {
+                // Fallback: Use transaction-based calculation (when accountData not found in cash flow service)
+                finalCashFlowData = {
+                    totalCredit: calculatedTotalCredit,
+                    totalDebit: calculatedTotalDebit,
+                    netAmount: calculatedNetAmount,
                     transactionCount: transactions.length,
                     type: cashFlowType
                 };
-                
-                // Also use cash flow service's monthly breakdown if available
-                if (cashFlowData && cashFlowData.monthly_breakdown) {
+            }
+            
+            // Also use cash flow service's monthly breakdown if available (matches cash flow statement)
+            // When accountData is found from cash flow service, use its monthly breakdown to ensure consistency
+            if (cashFlowData && cashFlowData.monthly_breakdown && accountData) {
+                // Use cash flow service breakdown when accountData is available (ensures totals match cash flow statement)
+                // This is especially important for expenses where cash flow service includes all paid transactions
                     const cashFlowMonthlyBreakdown = cashFlowData.monthly_breakdown;
                     const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
                                       'july', 'august', 'september', 'october', 'november', 'december'];
@@ -3162,7 +3267,17 @@ class FinancialReportsController {
                             }
                             monthNetAmount = monthTotalCredit;
                         } else if (account.type === 'Expense') {
-                            // For expense accounts, get from operating_activities.breakdown
+                        // For expense accounts, FIRST check if account code exists directly in expenses object
+                        // Cash flow service now uses account codes as keys (e.g., expenses['50005'])
+                        if (monthData.expenses && monthData.expenses[accountCode] !== undefined && monthData.expenses[accountCode] !== null) {
+                            monthTotalDebit = monthData.expenses[accountCode] || 0;
+                        }
+                        // Also check operating_activities.breakdown for account code
+                        else if (monthData.operating_activities?.breakdown && monthData.operating_activities.breakdown[accountCode] !== undefined) {
+                            monthTotalDebit = monthData.operating_activities.breakdown[accountCode] || 0;
+                        }
+                        // FALLBACK: Check by category name (legacy support)
+                        else {
                             const accountNameLower = (account.name || '').toLowerCase();
                             let expenseCategory = null;
                             
@@ -3197,12 +3312,18 @@ class FinancialReportsController {
                             if (expenseCategory && monthData.operating_activities?.breakdown) {
                                 monthTotalDebit = monthData.operating_activities.breakdown[expenseCategory] || 0;
                             }
+                            }
                             monthNetAmount = monthTotalDebit;
                         }
                         
                         if (monthTotalCredit > 0 || monthTotalDebit > 0 || monthNetAmount !== 0) {
-                            finalMonthlyBreakdown[monthName] = {
-                                month: monthName,
+                        // Convert month name to YYYY-MM format for consistency with transaction-based breakdown
+                        const monthIndex = monthNames.indexOf(monthName);
+                        const monthNumber = monthIndex + 1; // 1-based month
+                        const monthKey = `${period}-${String(monthNumber).padStart(2, '0')}`; // e.g., "2025-10"
+                        
+                        finalMonthlyBreakdown[monthKey] = {
+                            month: monthKey,
                                 totalDebit: monthTotalDebit,
                                 totalCredit: monthTotalCredit,
                                 netAmount: monthNetAmount,
@@ -3214,22 +3335,12 @@ class FinancialReportsController {
                     // Update transaction counts from actual transactions
                     for (const transaction of transactions) {
                         const transactionDate = new Date(transaction.date);
-                        const transactionMonth = monthNames[transactionDate.getMonth()];
-                        
-                        if (finalMonthlyBreakdown[transactionMonth]) {
-                            finalMonthlyBreakdown[transactionMonth].transactionCount += 1;
-                        }
+                    const monthKey = transactionDate.toISOString().slice(0, 7); // YYYY-MM format
+                    
+                    if (finalMonthlyBreakdown[monthKey]) {
+                        finalMonthlyBreakdown[monthKey].transactionCount += 1;
                     }
                 }
-            } else {
-                // Fallback: calculate from transactions
-                finalCashFlowData = {
-                totalCredit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalCredit, 0),
-                totalDebit: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.totalDebit, 0),
-                netAmount: Object.values(monthlyBreakdown).reduce((sum, month) => sum + month.netAmount, 0),
-                transactionCount: transactions.length,
-                type: cashFlowType
-            };
             }
             
             const response = {

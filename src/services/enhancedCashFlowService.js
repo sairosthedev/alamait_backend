@@ -434,8 +434,40 @@ class EnhancedCashFlowService {
             
             const oldFormatMonthlyBreakdown = await EnhancedCashFlowService.generateReliableMonthlyBreakdown(transactionEntries, period, openingCashBalance, cashBalanceByAccount, residenceId);
             
+            // Validate oldFormatMonthlyBreakdown is valid
+            let validatedMonthlyBreakdown = oldFormatMonthlyBreakdown;
+            if (!validatedMonthlyBreakdown || typeof validatedMonthlyBreakdown !== 'object') {
+                console.error('❌ generateReliableMonthlyBreakdown returned invalid data:', {
+                    type: typeof validatedMonthlyBreakdown,
+                    value: validatedMonthlyBreakdown,
+                    isNull: validatedMonthlyBreakdown === null,
+                    isUndefined: validatedMonthlyBreakdown === undefined
+                });
+                
+                // Create empty structure as fallback
+                const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                                   'july', 'august', 'september', 'october', 'november', 'december'];
+                const emptyMonthlyBreakdown = {};
+                monthNames.forEach(month => {
+                    emptyMonthlyBreakdown[month] = {
+                        operating_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
+                        income: { total: 0 },
+                        expenses: { total: 0, transactions: [] },
+                        investing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
+                        financing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
+                        net_cash_flow: 0,
+                        opening_balance: openingCashBalance || 0,
+                        closing_balance: openingCashBalance || 0,
+                        transaction_details: { transaction_count: 0 },
+                        cash_accounts: { total: 0, breakdown: {} }
+                    };
+                });
+                console.log('⚠️ Using empty monthly breakdown as fallback');
+                validatedMonthlyBreakdown = emptyMonthlyBreakdown;
+            }
+            
             // Generate tabular monthly breakdown with proper cash balances
-            const tabularMonthlyBreakdown = await EnhancedCashFlowService.generateTabularMonthlyBreakdown(oldFormatMonthlyBreakdown, period, openingCashBalance, cashBalanceByAccount);
+            const tabularMonthlyBreakdown = await EnhancedCashFlowService.generateTabularMonthlyBreakdown(validatedMonthlyBreakdown, period, openingCashBalance, cashBalanceByAccount);
             
             // --- NEW: populate per-month cash balances and attach to monthly and tabular outputs ---
             try {
@@ -501,21 +533,21 @@ class EnhancedCashFlowService {
                         }
                         cashBalanceByAccountByMonth[month] = monthlyBalances || {};
 
-                        // Attach to monthly_breakdown (oldFormatMonthlyBreakdown uses month names)
-                        if (!oldFormatMonthlyBreakdown[month]) {
-                            oldFormatMonthlyBreakdown[month] = this.initializeMonthData(month);
+                        // Attach to monthly_breakdown (validatedMonthlyBreakdown uses month names)
+                        if (!validatedMonthlyBreakdown[month]) {
+                            validatedMonthlyBreakdown[month] = this.initializeMonthData(month);
                         }
                         
                         // Format cash accounts to match balance sheet structure
                         const formattedCashAccounts = this.formatCashAccountsForBalanceSheet(monthlyBalances);
                         
                         // Keep both formats for backward compatibility
-                        oldFormatMonthlyBreakdown[month].cash_accounts = oldFormatMonthlyBreakdown[month].cash_accounts || { breakdown: {}, total: 0 };
-                        oldFormatMonthlyBreakdown[month].cash_accounts.breakdown = monthlyBalances || {}; // Original format (by account code)
-                        oldFormatMonthlyBreakdown[month].cash_accounts.total = formattedCashAccounts.total;
+                        validatedMonthlyBreakdown[month].cash_accounts = validatedMonthlyBreakdown[month].cash_accounts || { breakdown: {}, total: 0 };
+                        validatedMonthlyBreakdown[month].cash_accounts.breakdown = monthlyBalances || {}; // Original format (by account code)
+                        validatedMonthlyBreakdown[month].cash_accounts.total = formattedCashAccounts.total;
                         
                         // Add balance sheet format (cashAndBank structure matching balance sheet)
-                        oldFormatMonthlyBreakdown[month].cashAndBank = formattedCashAccounts;
+                        validatedMonthlyBreakdown[month].cashAndBank = formattedCashAccounts;
 
                         // Attach to tabularMonthlyBreakdown (month names)
                         if (!tabularMonthlyBreakdown[month]) {
@@ -540,7 +572,7 @@ class EnhancedCashFlowService {
                 cashFlowData = {
                     ...cashFlowData,
                     cash_balance_by_account_monthly: cashBalanceByAccountByMonth,
-                    monthly_breakdown: oldFormatMonthlyBreakdown,
+                    monthly_breakdown: validatedMonthlyBreakdown,
                     tabular_monthly_breakdown: tabularMonthlyBreakdown
                 };
             } catch (populateErr) {
@@ -550,8 +582,8 @@ class EnhancedCashFlowService {
             
             // FINAL VERIFICATION: Ensure all monthly totals are correct from transactions
             // This is the LAST CHANCE to fix any discrepancies before returning
-            Object.keys(oldFormatMonthlyBreakdown).forEach(monthName => {
-                const month = oldFormatMonthlyBreakdown[monthName];
+            Object.keys(validatedMonthlyBreakdown).forEach(monthName => {
+                const month = validatedMonthlyBreakdown[monthName];
                 if (month && month.expenses && month.expenses.transactions && Array.isArray(month.expenses.transactions) && month.expenses.transactions.length > 0) {
                     // Calculate sum from transactions (the source of truth)
                     let transactionSum = 0;
@@ -582,8 +614,8 @@ class EnhancedCashFlowService {
                 }
             });
             
-            // Calculate yearly totals from OLD FORMAT monthly breakdown (the one we're actually returning)
-            const yearlyTotals = this.calculateYearlyTotals(oldFormatMonthlyBreakdown);
+            // Calculate yearly totals from validated monthly breakdown (the one we're actually returning)
+            const yearlyTotals = this.calculateYearlyTotals(validatedMonthlyBreakdown);
             
             // RESTRUCTURED: Monthly-focused cash flow data structure
             const cashFlowData = {
@@ -592,7 +624,7 @@ class EnhancedCashFlowService {
                 residence: residenceId ? { id: residenceId, name: 'Filtered Residence' } : null,
                 
                 // PRIMARY: Monthly breakdown as the main data structure
-                monthly_breakdown: oldFormatMonthlyBreakdown,
+                monthly_breakdown: validatedMonthlyBreakdown,
                 tabular_monthly_breakdown: tabularMonthlyBreakdown,
                 
                 // SECONDARY: Yearly totals derived from monthly data
@@ -607,11 +639,11 @@ class EnhancedCashFlowService {
                 
                 // MONTHLY-FOCUSED SUMMARY
                 summary: {
-                    best_cash_flow_month: this.getBestCashFlowMonth(oldFormatMonthlyBreakdown),
-                    worst_cash_flow_month: this.getWorstCashFlowMonth(oldFormatMonthlyBreakdown),
-                    average_monthly_cash_flow: this.calculateAverageMonthlyCashFlow(oldFormatMonthlyBreakdown),
-                    total_months_with_data: Object.keys(oldFormatMonthlyBreakdown).length,
-                    monthly_consistency_score: this.calculateMonthlyConsistency(oldFormatMonthlyBreakdown),
+                    best_cash_flow_month: this.getBestCashFlowMonth(validatedMonthlyBreakdown),
+                    worst_cash_flow_month: this.getWorstCashFlowMonth(validatedMonthlyBreakdown),
+                    average_monthly_cash_flow: this.calculateAverageMonthlyCashFlow(validatedMonthlyBreakdown),
+                    total_months_with_data: Object.keys(validatedMonthlyBreakdown).length,
+                    monthly_consistency_score: this.calculateMonthlyConsistency(validatedMonthlyBreakdown),
                     total_transactions: transactionEntries.length,
                     net_change_in_cash: netChangeInCash,
                     total_income: incomeBreakdown.total,
@@ -630,7 +662,7 @@ class EnhancedCashFlowService {
                     transactions: this.processTransactionDetails(transactionEntries),
                     payments: this.processPaymentDetails(payments),
                     expenses_detail: this.processExpenseDetails(expenses),
-                    monthly_breakdown: oldFormatMonthlyBreakdown
+                    monthly_breakdown: validatedMonthlyBreakdown
                 },
                 
                 // CASH BALANCE BY ACCOUNT (monthly view)
@@ -2553,7 +2585,7 @@ class EnhancedCashFlowService {
      * Calculate operating activities
      */
     static calculateOperatingActivities(incomeBreakdown, individualExpenses) {
-        return {
+                    return {
             cash_received_from_customers: incomeBreakdown.total,
             cash_paid_to_suppliers: 0, // Would need to be calculated from specific supplier payments
             cash_paid_for_expenses: individualExpenses.total_amount, // CHANGED: Now uses individual expenses total
@@ -2593,15 +2625,168 @@ class EnhancedCashFlowService {
                                accountName.toLowerCase().includes('construction') ||
                                accountName.toLowerCase().includes('property')) {
                         purchase_of_buildings += debit;
-                    }
-                });
-            }
-        });
-        
+                        }
+                    });
+                }
+            });
+            
         return {
             purchase_of_equipment,
             purchase_of_buildings
         };
+    }
+    
+    /**
+     * Find expense account from accrual transaction for a payment transaction
+     * This method finds the expense account code from the original accrual transaction
+     * when an expense payment is processed
+     * @param {Object} entry - Payment transaction entry
+     * @returns {Object|null} Expense account with accountCode and accountName, or null if not found
+     */
+    static async findExpenseAccrualAccount(entry) {
+        try {
+            const TransactionEntry = require('../models/TransactionEntry');
+                    const Expense = require('../models/finance/Expense');
+            
+            // PRIORITY 1: Check if expense account is directly in the transaction entries (for manual entries)
+            if (entry.entries && entry.entries.length > 0) {
+                const expenseEntry = entry.entries.find(e => {
+                    const accCode = String(e.accountCode || '').trim();
+                    const accType = e.accountType;
+                    return accCode.startsWith('5') && accType === 'Expense' && (e.debit > 0 || e.credit > 0);
+                });
+                
+                if (expenseEntry) {
+                    return {
+                        accountCode: expenseEntry.accountCode,
+                        accountName: expenseEntry.accountName || 'Expense Account'
+                    };
+                }
+            }
+            
+            // PRIORITY 2: Find accrual transaction via metadata (requestId, expenseId)
+            let accrualTransaction = null;
+            
+                    if (entry.metadata?.requestId) {
+                accrualTransaction = await TransactionEntry.findOne({
+                    source: 'expense_accrual',
+                    sourceId: entry.metadata.requestId.toString(),
+                    status: 'posted'
+                }).sort({ date: -1 }).lean();
+            }
+            
+            if (!accrualTransaction && entry.metadata?.expenseId) {
+                accrualTransaction = await TransactionEntry.findOne({
+                    source: 'expense_accrual',
+                    $or: [
+                        { sourceId: entry.metadata.expenseId.toString() },
+                        { 'metadata.expenseId': entry.metadata.expenseId.toString() }
+                    ],
+                    status: 'posted'
+                }).sort({ date: -1 }).lean();
+            }
+            
+            // PRIORITY 3: Find accrual transaction via sourceId/reference (expense or request ID)
+            if (!accrualTransaction && entry.sourceId) {
+                accrualTransaction = await TransactionEntry.findOne({
+                    source: 'expense_accrual',
+                    sourceId: entry.sourceId.toString(),
+                    status: 'posted'
+                }).sort({ date: -1 }).lean();
+            }
+            
+            // PRIORITY 4: Find accrual transaction via reference
+            if (!accrualTransaction && entry.reference) {
+                accrualTransaction = await TransactionEntry.findOne({
+                    source: 'expense_accrual',
+                    sourceId: entry.reference.toString(),
+                    status: 'posted'
+                }).sort({ date: -1 }).lean();
+            }
+            
+            // PRIORITY 5: Find via expense record if available
+            if (!accrualTransaction && entry.metadata?.expenseId) {
+                try {
+                    const expense = await Expense.findById(entry.metadata.expenseId).lean();
+                    if (expense && expense.transactionId) {
+                        accrualTransaction = await TransactionEntry.findOne({
+                            transactionId: expense.transactionId,
+                            source: 'expense_accrual',
+                            status: 'posted'
+                        }).lean();
+                    }
+                } catch (error) {
+                    // Expense not found or invalid ID - continue
+                }
+            }
+            
+            // PRIORITY 5.5: Find accrual transaction by transaction ID reference in payment description/reference
+            // Payment transactions often reference the accrual transaction ID (e.g., "Ref: TXN1763623078799ZAMG9")
+            if (!accrualTransaction && entry.description) {
+                const transactionIdMatch = entry.description.match(/TXN[0-9A-Z]+/i);
+                if (transactionIdMatch) {
+                    const referencedTransactionId = transactionIdMatch[0].toUpperCase();
+                    accrualTransaction = await TransactionEntry.findOne({
+                        transactionId: referencedTransactionId,
+                        source: 'expense_accrual',
+                        status: 'posted'
+                    }).sort({ date: -1 }).lean();
+                    
+                    if (accrualTransaction) {
+                        console.log(`✅ Found accrual transaction by ID reference: ${referencedTransactionId} for payment ${entry.transactionId}`);
+                    }
+                }
+            }
+            
+            // PRIORITY 6: Fuzzy match by amount and description (within date range)
+            if (!accrualTransaction && entry.entries && entry.entries.length > 0) {
+                // Find the cash payment amount
+                const cashEntry = entry.entries.find(e => {
+                    const accCode = String(e.accountCode || '').trim();
+                    return (accCode.startsWith('100') || accCode.startsWith('101')) && e.credit > 0;
+                });
+                
+                if (cashEntry && entry.description) {
+                    const paymentAmount = cashEntry.credit;
+                    const paymentDate = new Date(entry.date);
+                    const dateRangeStart = new Date(paymentDate);
+                    dateRangeStart.setMonth(dateRangeStart.getMonth() - 12); // Look back 12 months
+                    
+                    // Search for accrual with matching amount and description
+                    accrualTransaction = await TransactionEntry.findOne({
+                        source: 'expense_accrual',
+                        status: 'posted',
+                        date: { $gte: dateRangeStart, $lte: paymentDate },
+                        $or: [
+                            { totalDebit: paymentAmount },
+                            { totalCredit: paymentAmount },
+                            { description: { $regex: entry.description, $options: 'i' } }
+                        ]
+                    }).sort({ date: -1 }).lean();
+                }
+            }
+            
+            // Extract expense account from accrual transaction
+            if (accrualTransaction && accrualTransaction.entries && accrualTransaction.entries.length > 0) {
+                const expenseEntry = accrualTransaction.entries.find(e => {
+                    const accCode = String(e.accountCode || '').trim();
+                    const accType = e.accountType;
+                    return accCode.startsWith('5') && accType === 'Expense' && e.debit > 0;
+                });
+                
+                if (expenseEntry) {
+        return {
+                        accountCode: expenseEntry.accountCode,
+                        accountName: expenseEntry.accountName || 'Expense Account'
+                    };
+                }
+            }
+            
+            return null;
+        } catch (error) {
+            console.error(`❌ Error finding expense accrual account for ${entry.transactionId}:`, error);
+            return null;
+        }
     }
     
     /**
@@ -3920,7 +4105,7 @@ class EnhancedCashFlowService {
             monthlyData[month] = {
                 operating_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 income: { total: 0 },
-                expenses: { total: 0, transactions: [] },
+                expenses: { total: 0, transactions: [], accountNames: {} },
                 investing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 financing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 net_cash_flow: 0,
@@ -4064,9 +4249,16 @@ class EnhancedCashFlowService {
      * FIXED: Simple and reliable monthly breakdown
      */
     static async generateReliableMonthlyBreakdown(transactionEntries, period, openingBalance, cashBalanceByAccount = null, residenceId = null) {
+        try {
         const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
                            'july', 'august', 'september', 'october', 'november', 'december'];
         
+            // Validate input
+            if (!transactionEntries || !Array.isArray(transactionEntries)) {
+                console.error('❌ generateReliableMonthlyBreakdown: Invalid transactionEntries:', transactionEntries);
+                transactionEntries = [];
+            }
+            
         // Initialize simple monthly structure
         const monthlyData = {};
         monthNames.forEach(month => {
@@ -4126,7 +4318,9 @@ class EnhancedCashFlowService {
                     other_expenses: 0,
                     // Legacy categories for backward compatibility
                     utilities: 0,
-                    transactions: [] 
+                    transactions: [],
+                    // Account names mapping: accountCode -> accountName
+                    accountNames: {}
                 },
                 investing_activities: { inflows: 0, outflows: 0, net: 0 },
                 financing_activities: { inflows: 0, outflows: 0, net: 0 },
@@ -4150,14 +4344,24 @@ class EnhancedCashFlowService {
         // SIMPLE DIRECT MAPPING: Use transaction date directly
         const processedTransactions = new Set();
         
-        transactionEntries.forEach(entry => {
+        for (const entry of transactionEntries) {
+            try {
             const entryDate = new Date(entry.date);
+                const entryYear = entryDate.getUTCFullYear();
             const monthIndex = entryDate.getUTCMonth(); // 0-11 - Use UTC to avoid timezone issues
             const monthName = monthNames[monthIndex];
+                
+                // Verify the transaction year matches the requested period
+                const requestedYear = parseInt(period);
+                if (entryYear !== requestedYear) {
+                    // Transaction is from a different year - skip it
+                    console.log(`⚠️ Skipping transaction ${entry.transactionId} from year ${entryYear} (requested: ${requestedYear})`);
+                    continue;
+                }
             
             if (!monthlyData[monthName]) {
-                console.log(`❌ Month ${monthName} not found for date ${entryDate}`);
-                return;
+                    console.error(`❌ Month ${monthName} not found for date ${entryDate}, skipping transaction ${entry.transactionId}`);
+                    continue; // Skip this transaction instead of returning
             }
 
             monthlyData[monthName].transaction_details.transaction_count++;
@@ -4254,8 +4458,18 @@ class EnhancedCashFlowService {
             }
             
             // PRIORITY 1: Check for deposit RETURN first (debits deposit account, credits Cash) = expense
+            // Account 2028 can be used for both deposit returns and security expenses - both should use account 2028 as expense code
+            // EXCLUDE: Opening balance entries (dr 10005, cr 2028) - these are balance sheet adjustments, not cash flows
+            const hasOpeningBalanceDebit = entry.entries.some(e => 
+                String(e.accountCode || '').trim() === '10005' && (e.debit || 0) > 0
+            );
+            
+            // EXCLUDE: Security deposit receipts (dr cash, cr 2028) - these are income, not expenses
+            const hasDepositReceipt = hasDepositCredit && hasAssetDebit && !hasDepositDebit;
+            
             if (hasDepositDebit && !hasDepositCredit && hasCashCredit && depositDebitAmount > 0 && 
-                !processedTransactions.has(entry.transactionId + '_deposit_return')) {
+                !processedTransactions.has(entry.transactionId + '_deposit_return') && 
+                !hasOpeningBalanceDebit && !hasDepositReceipt) {
                 // This is a deposit return/refund (debits deposit account, credits Cash)
                 // This should be treated as an expense/outflow, not income
                 console.log(`✅ [generateReliableMonthlyBreakdown] DEPOSIT RETURN DETECTED: transactionId=${entry.transactionId}, description="${entry.description}", depositDebitAmount=${depositDebitAmount}, hasCashCredit=${hasCashCredit}`);
@@ -4266,8 +4480,59 @@ class EnhancedCashFlowService {
                 monthlyData[monthName].expenses.total += depositDebitAmount;
                 const afterTotal = monthlyData[monthName].expenses.total;
                 
-                // Use actual expense description as category name for deposit returns
-                const expenseName = entry.description || 'Deposit return';
+                // PRIORITY: Try to find account code from original accrual transaction (same as regular expenses)
+                let expenseAccountCode = null;
+                let expenseAccountName = null;
+                let expenseName = entry.description || 'Deposit return';
+                
+                // Check if account 2028 is debited in this transaction
+                const has2028Debit = entry.entries.some(e => 
+                    String(e.accountCode || '').trim() === '2028' && (e.debit || 0) > 0
+                );
+                
+                // If account 2028 is debited, use account 2028 as the expense account code
+                if (has2028Debit) {
+                    expenseAccountCode = '2028';
+                    // Try to get account name from the entry
+                    const account2028Entry = entry.entries.find(e => 
+                        String(e.accountCode || '').trim() === '2028' && (e.debit || 0) > 0
+                    );
+                    expenseAccountName = account2028Entry?.accountName || 'Security deposit payable';
+                    expenseName = expenseAccountCode; // Use account code as category
+                    console.log(`✅ Using account 2028 for security deposit return/expense: ${expenseAccountCode} - ${expenseAccountName}`);
+                } else {
+                    // Try querying database directly for accrual account (non-security deposits)
+                    try {
+                        const directAccrualAccount = await this.findExpenseAccrualAccount(entry);
+                        if (directAccrualAccount && directAccrualAccount.accountCode && directAccrualAccount.accountName) {
+                            expenseAccountCode = directAccrualAccount.accountCode;
+                            expenseAccountName = directAccrualAccount.accountName;
+                            expenseName = `${expenseAccountCode} - ${expenseAccountName}`;
+                            console.log(`✅ Found accrual account via database query for deposit return ${entry.transactionId}: ${expenseName}`);
+                        } else {
+                            // Fallback: Look for deposit account in current transaction entries (non-security deposits)
+                            const depositAccountEntry = entry.entries.find(e => {
+                                const accCode = String(e.accountCode || '').trim();
+                                return depositAccountCodes.includes(accCode) && (e.debit > 0);
+                            });
+                            
+                            if (depositAccountEntry) {
+                                expenseAccountCode = depositAccountEntry.accountCode;
+                                expenseAccountName = depositAccountEntry.accountName || 'Security Deposit';
+                                expenseName = `${expenseAccountCode} - ${expenseAccountName}`;
+                                console.log(`✅ Using deposit account from transaction for deposit return: ${expenseName}`);
+                            } else {
+                                // Last resort: Use description as category name (original behavior)
+                                expenseName = entry.description || 'Deposit return';
+                                console.log(`⚠️ Using description as category name for deposit return (no account found): ${expenseName}`);
+                            }
+                        }
+                    } catch (accrualLookupError) {
+                        console.error(`❌ Error looking up accrual account for deposit return ${entry.transactionId}:`, accrualLookupError);
+                        // Fallback: Use description as category name
+                        expenseName = entry.description || 'Deposit return';
+                    }
+                }
                 
                 // Initialize the expense category if it doesn't exist
                 if (!monthlyData[monthName].expenses[expenseName]) {
@@ -4275,6 +4540,11 @@ class EnhancedCashFlowService {
                 }
                 if (!monthlyData[monthName].operating_activities.breakdown[expenseName]) {
                     monthlyData[monthName].operating_activities.breakdown[expenseName] = 0;
+                }
+                
+                // Store account name if we have an account code
+                if (expenseAccountCode && expenseAccountName) {
+                    monthlyData[monthName].expenses.accountNames[expenseAccountCode] = expenseAccountName;
                 }
                 
                 // Add amount to the specific expense name (for breakdown)
@@ -4292,6 +4562,8 @@ class EnhancedCashFlowService {
                     date: entry.date,
                     amount: depositDebitAmount,
                     description: entry.description || 'Deposit return',
+                    accountCode: expenseAccountCode || null,
+                    accountName: expenseAccountName || null,
                     category: 'expense'
                 });
                 
@@ -4299,7 +4571,7 @@ class EnhancedCashFlowService {
                 
                 console.log(`💰 [generateReliableMonthlyBreakdown] Deposit RETURN (expense) ADDED: ${depositDebitAmount} for ${monthName} - Transaction: ${entry.transactionId} - Expenses total BEFORE: ${beforeTotal}, AFTER: ${afterTotal} - Category: ${expenseName}`);
                 processedTransactions.add(entry.transactionId + '_expense');
-                return; // Skip further processing - CRITICAL: This prevents double-processing
+                continue; // Skip further processing - CRITICAL: This prevents double-processing
             } else if (isPotentialDepositReturn || entry.transactionId === 'TXN1762169297314NIEWO') {
                 // Log why deposit return detection failed
                 console.log(`❌ [generateReliableMonthlyBreakdown] Deposit RETURN NOT DETECTED (check failed): transactionId=${entry.transactionId}, description="${entry.description}"`, {
@@ -4314,8 +4586,13 @@ class EnhancedCashFlowService {
             }
             
             // PRIORITY 2: Check for deposit RECEIPT (debits asset, credits deposit account) = income
+            // EXCLUDE: Opening balance entries (dr 10005, cr 2028) - these are balance sheet adjustments, not cash flows
+            const hasOpeningBalanceForDeposit = entry.entries.some(e => 
+                String(e.accountCode || '').trim() === '10005' && (e.debit || 0) > 0
+            );
+            
             if (hasDepositCredit && depositCreditAmount > 0 && hasAssetDebit && !hasDepositDebit && 
-                !processedTransactions.has(entry.transactionId + '_deposit')) {
+                !processedTransactions.has(entry.transactionId + '_deposit') && !hasOpeningBalanceForDeposit) {
                 // This is a deposit receipt (cash inflow)
                 monthlyData[monthName].operating_activities.inflows += depositCreditAmount;
                 monthlyData[monthName].income.total += depositCreditAmount;
@@ -4327,11 +4604,11 @@ class EnhancedCashFlowService {
                 
                 // Mark this transaction as processed to prevent double-counting
                 processedTransactions.add(entry.transactionId + '_income');
-                return; // Skip further processing of this transaction
+                continue; // Skip further processing of this transaction
             }
 
             // Process each line in the transaction
-            entry.entries.forEach(line => {
+            for (const line of entry.entries) {
                 const amount = line.debit || line.credit || 0;
                 const isDebit = line.debit > 0;
                 const isCredit = line.credit > 0;
@@ -4345,17 +4622,32 @@ class EnhancedCashFlowService {
                     (accountName?.toLowerCase().includes('cash') || accountName?.toLowerCase().includes('bank')) &&
                     !processedTransactions.has(entry.transactionId + '_income')) {
                     
+                    // EXCLUDE: Opening balance entries (dr 10005, cr 2028) - these are balance sheet adjustments, not cash flows
+                    const hasOpeningBalanceDebit = entry.entries.some(e => 
+                        String(e.accountCode || '').trim() === '10005' && (e.debit || 0) > 0
+                    );
+                    if (hasOpeningBalanceDebit) {
+                        console.log(`💰 Opening balance entry excluded from cash inflow: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                        break; // Skip rest of this transaction, continue to next transaction
+                    }
+                    
+                    // EXCLUDE: Lease start accounting entries (accruals without cash) - exclude from cash flow
+                    if (entry.description && entry.description.toLowerCase().includes('lease start accounting entries')) {
+                        console.log(`💰 Lease start accounting entry excluded from cash inflow (accrual, no cash): ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                        break; // Skip rest of this transaction, continue to next transaction
+                    }
+                    
                     // Check if this is a balance sheet adjustment (NOT actual cash inflow)
                     if (this.isBalanceSheetAdjustment(entry)) {
                         // This is a balance sheet adjustment, not actual cash inflow - skip it
                         console.log(`💰 Balance sheet adjustment excluded from cash inflow: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
-                        return; // Skip this transaction entry
+                        break; // Skip rest of this transaction, continue to next transaction
                     }
                     
                     // Check if this is an internal cash transfer (cash moving between cash accounts)
                     if (this.isInternalCashTransfer(entry)) {
                         console.log(`💰 Internal cash transfer excluded from cash inflow in generateReliableMonthlyBreakdown: ${entry.transactionId} - Description: ${entry.description}`);
-                        return; // Skip internal transfers - they don't represent actual cash inflow
+                        break; // Skip rest of this transaction, continue to next transaction
                     }
                     
                     // This is actual cash inflow
@@ -4424,11 +4716,11 @@ class EnhancedCashFlowService {
                         if (this.isBalanceSheetAdjustment(entry)) {
                             // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                             console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
-                            return; // Skip this transaction entry
+                            break; // Skip rest of this transaction, continue to next transaction
                         }
                         
-                        // Exclude other_income from cash flow entirely - skip this entry
-                        return; // Skip this transaction entry - don't add to any income category
+                        // Exclude other_income from cash flow entirely - skip this line only
+                        continue; // Skip this line item, continue with next line in same transaction
                     }
                 }
                 
@@ -4440,7 +4732,7 @@ class EnhancedCashFlowService {
                     // FIRST: Check if this is an internal cash transfer - EXCLUDE
                     if (this.isInternalCashTransfer(entry)) {
                         console.log(`💰 Internal cash transfer excluded from income processing (FALLBACK): ${entry.transactionId}`);
-                        return; // Skip internal transfers
+                        break; // Skip rest of this transaction, continue to next transaction
                     }
                     
                     // SECOND: Check if there's a cash receipt in this transaction
@@ -4458,7 +4750,7 @@ class EnhancedCashFlowService {
                     // This ensures we only count actual cash income, not accrued income
                     if (!hasCashReceipt) {
                         console.log(`💰 Accrual income excluded (no cash receipt): ${entry.transactionId} - Description: ${entry.description}`);
-                        return; // Skip accruals - they don't represent actual cash inflow
+                        continue; // Skip this line item, continue with next line in same transaction
                     }
                     
                     monthlyData[monthName].operating_activities.inflows += amount;
@@ -4486,7 +4778,7 @@ class EnhancedCashFlowService {
                         if (isLatePaymentFee) {
                             // Late payment fees should be excluded from cash flow income entirely
                             // Skip this entry - don't add to any income category
-                            return; // Skip to next line item in forEach
+                            continue; // Skip this line item, continue with next line in same transaction
                         } else {
                             monthlyData[monthName].income.deposits += amount;
                             monthlyData[monthName].operating_activities.breakdown.deposits += amount;
@@ -4499,11 +4791,11 @@ class EnhancedCashFlowService {
                         if (this.isBalanceSheetAdjustment(entry)) {
                             // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                             console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
-                            return; // Skip this transaction entry
+                            break; // Skip rest of this transaction, continue to next transaction
                         }
                         
-                        // Exclude other_income from cash flow entirely - skip this entry
-                        return; // Skip this transaction entry - don't add to any income category
+                        // Exclude other_income from cash flow entirely - skip this line only
+                        continue; // Skip this line item, continue with next line in same transaction
                     }
                 }
 
@@ -4516,14 +4808,43 @@ class EnhancedCashFlowService {
                     if (this.isBalanceSheetAdjustment(entry)) {
                         // This is a balance sheet adjustment, not actual cash outflow - skip it
                         console.log(`💰 Balance sheet adjustment excluded from cash outflow: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
-                        return; // Skip this transaction entry
+                        break; // Skip rest of this transaction, continue to next transaction
+                    }
+                    
+                    // EXCLUDE: Opening balance entries (dr 10005, cr cash) - these are balance sheet adjustments, not cash flows
+                    const hasOpeningBalanceDebit = entry.entries.some(e => 
+                        String(e.accountCode || '').trim() === '10005' && (e.debit || 0) > 0
+                    );
+                    if (hasOpeningBalanceDebit) {
+                        console.log(`💰 Opening balance entry excluded from cash outflow: ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                        break; // Skip rest of this transaction, continue to next transaction
+                    }
+                    
+                    // EXCLUDE: Security deposit receipts (dr cash, cr 2028) - these are income, not expenses
+                    const has2028Credit = entry.entries.some(e => 
+                        String(e.accountCode || '').trim() === '2028' && (e.credit || 0) > 0
+                    );
+                    const hasCashDebit = entry.entries.some(e => 
+                        (String(e.accountCode || '').trim().startsWith('100') || String(e.accountCode || '').trim().startsWith('101')) &&
+                        (e.debit || 0) > 0
+                    );
+                    if (has2028Credit && hasCashDebit) {
+                        // This is a security deposit receipt (income), not an expense - skip it
+                        console.log(`💰 Security deposit receipt excluded from cash outflow (should be income): ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                        break; // Skip rest of this transaction, continue to next transaction
+                    }
+                    
+                    // EXCLUDE: Lease start accounting entries (accruals without cash) - exclude from cash flow
+                    if (entry.description && entry.description.toLowerCase().includes('lease start accounting entries')) {
+                        console.log(`💰 Lease start accounting entry excluded from cash outflow (accrual, no cash): ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                        break; // Skip rest of this transaction, continue to next transaction
                     }
                     
                     // Skip internal cash transfers and movements between cash accounts
                     // Use the proper isInternalCashTransfer function for consistency
                     if (this.isInternalCashTransfer(entry)) {
                         console.log(`💰 Internal cash transfer excluded from cash outflow in generateReliableMonthlyBreakdown: ${entry.transactionId} - Description: ${entry.description}`);
-                        return; // Skip internal transfers - they don't represent actual cash outflow
+                        break; // Skip rest of this transaction, continue to next transaction
                     }
                     
                     if (!processedTransactions.has(entry.transactionId + '_expense')) {
@@ -4531,8 +4852,179 @@ class EnhancedCashFlowService {
                     monthlyData[monthName].expenses.total += amount;
                         processedTransactions.add(entry.transactionId + '_expense');
 
-                        // Use actual expense description as category name instead of generic categorization
-                        const expenseName = entry.description || 'Unnamed Expense';
+                        // Find expense account from accrual transaction (payment flow)
+                        let expenseAccountCode = null;
+                        let expenseAccountName = null;
+                        let expenseName = entry.description || 'Unnamed Expense';
+                        
+                        try {
+                            const accrualAccount = await this.findExpenseAccrualAccount(entry);
+                            if (accrualAccount && accrualAccount.accountCode && accrualAccount.accountName) {
+                                expenseAccountCode = accrualAccount.accountCode;
+                                expenseAccountName = accrualAccount.accountName;
+                                expenseName = expenseAccountCode; // Use account code as category (like income statement)
+                                console.log(`✅ Found expense account from accrual: ${expenseAccountCode} - ${expenseAccountName} for payment ${entry.transactionId}`);
+                            } else {
+                                // FALLBACK 1: Try to extract expense account directly from transaction entries
+                                // Check for expense accounts (5xxx) OR specific liability accounts used for expenses (e.g., 2028 for security)
+                                let expenseLine = entry.entries.find(e => 
+                                    (e.accountType === 'Expense' || e.accountType === 'Liability') && 
+                                    (e.debit || 0) > 0 &&
+                                    e.accountCode && String(e.accountCode).startsWith('5')
+                                );
+                                
+                                // SPECIAL CASE: Check for account 2028 (security expense) - dr 2028, cr cash 1000
+                                if (!expenseLine) {
+                                    const securityLine = entry.entries.find(e => 
+                                        (e.accountType === 'Liability') && 
+                                        (e.debit || 0) > 0 &&
+                                        String(e.accountCode).trim() === '2028'
+                                    );
+                                    if (securityLine) {
+                                        expenseLine = securityLine;
+                                    }
+                                }
+                                
+                                if (expenseLine && expenseLine.accountCode) {
+                                    expenseAccountCode = expenseLine.accountCode;
+                                    expenseAccountName = expenseLine.accountName || null;
+                                    expenseName = expenseAccountCode; // Use account code as category
+                                    console.log(`✅ Found expense account from transaction entry: ${expenseAccountCode} - ${expenseAccountName || 'Unknown'} for payment ${entry.transactionId}`);
+                                } else {
+                                    // FALLBACK 2: Try to infer account code from description keywords
+                                    const desc = (entry.description || '').toLowerCase();
+                                    let inferredCode = null;
+                                    let inferredName = null;
+                                    
+                                    if (desc.includes('management') || desc.includes('alamait') || desc.includes('alaimait')) {
+                                        // Alamait management fee uses account 50005
+                                        // BUT: Check if this is unpaid (has liability credit but no cash credit) - exclude from cash flow
+                                        const hasCashPayment = entry.entries && entry.entries.some(line => {
+                                            const lineAccountCode = String(line.accountCode || '').trim();
+                                            const isCashAccount = lineAccountCode.startsWith('100') || lineAccountCode.startsWith('101');
+                                            const hasCashCredit = line.credit > 0;
+                                            return isCashAccount && hasCashCredit;
+                                        });
+                                        
+                                        if (!hasCashPayment) {
+                                            // This is an unpaid accrual - exclude from cash flow
+                                            console.log(`💰 Unpaid Alamait management fee excluded (no cash payment): ${entry.transactionId} - Description: ${entry.description}`);
+                                            break; // Skip rest of this transaction, continue to next transaction
+                                        }
+                                        
+                                        inferredCode = '50005';
+                                        inferredName = 'Alamait Management Fee';
+                                    } else if (desc.includes('maintenance') || desc.includes('repair')) {
+                                        inferredCode = '5007';
+                                        inferredName = 'Property Maintenance';
+                                    } else if (desc.includes('electricity') || desc.includes('electric')) {
+                                        inferredCode = '5003';
+                                        inferredName = 'Utilities - Electricity';
+                                    } else if (desc.includes('water') && !desc.includes('delivery')) {
+                                        inferredCode = '5004';
+                                        inferredName = 'Utilities - Water';
+                                    } else if (desc.includes('gas') || desc.includes('lpg')) {
+                                        inferredCode = '5005';
+                                        inferredName = 'Utilities - Gas';
+                                    } else if (desc.includes('internet') || desc.includes('wifi') || desc.includes('wifi')) {
+                                        inferredCode = '5006';
+                                        inferredName = 'WiFi & Internet';
+                                    } else if (desc.includes('security')) {
+                                        inferredCode = '5011';
+                                        inferredName = 'Security Expense';
+                                    } else if (desc.includes('insurance')) {
+                                        inferredCode = '5006';
+                                        inferredName = 'Insurance Expenses';
+                                    } else if (desc.includes('cleaning')) {
+                                        inferredCode = '5008';
+                                        inferredName = 'Cleaning Expenses';
+                                    }
+                                    
+                                    if (inferredCode) {
+                                        expenseAccountCode = inferredCode;
+                                        expenseAccountName = inferredName;
+                                        expenseName = expenseAccountCode; // Use account code as category
+                                        console.log(`✅ Inferred expense account from description: ${expenseAccountCode} - ${expenseAccountName} for payment ${entry.transactionId}`);
+                                    } else {
+                                        // FALLBACK 3: Use description (last resort)
+                                        expenseName = entry.description || 'Unnamed Expense';
+                                        console.log(`⚠️ No accrual, expense account, or keyword match found for payment ${entry.transactionId}, using description: ${expenseName}`);
+                                    }
+                                }
+                            }
+                        } catch (error) {
+                            console.error(`❌ Error finding accrual account for payment ${entry.transactionId}:`, error);
+                            // Try to extract expense account directly from transaction entries as fallback
+                            // Check for expense accounts (5xxx) OR specific liability accounts used for expenses (e.g., 2028 for security)
+                            let expenseLine = entry.entries.find(e => 
+                                (e.accountType === 'Expense' || e.accountType === 'Liability') && 
+                                (e.debit || 0) > 0 &&
+                                e.accountCode && String(e.accountCode).startsWith('5')
+                            );
+                            
+                            // SPECIAL CASE: Check for account 2028 (security expense) - dr 2028, cr cash 1000
+                            if (!expenseLine) {
+                                const securityLine = entry.entries.find(e => 
+                                    (e.accountType === 'Liability') && 
+                                    (e.debit || 0) > 0 &&
+                                    String(e.accountCode).trim() === '2028'
+                                );
+                                if (securityLine) {
+                                    expenseLine = securityLine;
+                                }
+                            }
+                            
+                            if (expenseLine && expenseLine.accountCode) {
+                                expenseAccountCode = expenseLine.accountCode;
+                                expenseAccountName = expenseLine.accountName || null;
+                                expenseName = expenseAccountCode;
+                                console.log(`✅ Fallback: Found expense account from transaction entry: ${expenseAccountCode} - ${expenseAccountName || 'Unknown'} for payment ${entry.transactionId}`);
+                            } else {
+                                // Try to infer account code from description keywords
+                                const desc = (entry.description || '').toLowerCase();
+                                let inferredCode = null;
+                                let inferredName = null;
+                                
+                                if (desc.includes('management') || desc.includes('alamait') || desc.includes('alaimait')) {
+                                    // Alamait management fee uses account 50005
+                                    inferredCode = '50005';
+                                    inferredName = 'Alamait Management Fee';
+                                } else if (desc.includes('maintenance') || desc.includes('repair')) {
+                                    inferredCode = '5007';
+                                    inferredName = 'Property Maintenance';
+                                } else if (desc.includes('electricity') || desc.includes('electric')) {
+                                    inferredCode = '5003';
+                                    inferredName = 'Utilities - Electricity';
+                                } else if (desc.includes('water') && !desc.includes('delivery')) {
+                                    inferredCode = '5004';
+                                    inferredName = 'Utilities - Water';
+                                } else if (desc.includes('gas') || desc.includes('lpg')) {
+                                    inferredCode = '5005';
+                                    inferredName = 'Utilities - Gas';
+                                } else if (desc.includes('internet') || desc.includes('wifi') || desc.includes('wifi')) {
+                                    inferredCode = '5006';
+                                    inferredName = 'WiFi & Internet';
+                                } else if (desc.includes('security')) {
+                                    inferredCode = '5011';
+                                    inferredName = 'Security Expense';
+                                } else if (desc.includes('insurance')) {
+                                    inferredCode = '5006';
+                                    inferredName = 'Insurance Expenses';
+                                } else if (desc.includes('cleaning')) {
+                                    inferredCode = '5008';
+                                    inferredName = 'Cleaning Expenses';
+                                }
+                                
+                                if (inferredCode) {
+                                    expenseAccountCode = inferredCode;
+                                    expenseAccountName = inferredName;
+                                    expenseName = expenseAccountCode;
+                                    console.log(`✅ Fallback: Inferred expense account from description: ${expenseAccountCode} - ${expenseAccountName} for payment ${entry.transactionId}`);
+                                } else {
+                                    expenseName = entry.description || 'Unnamed Expense';
+                                }
+                            }
+                        }
                         
                         // Initialize the expense category if it doesn't exist
                         if (!monthlyData[monthName].expenses[expenseName]) {
@@ -4542,16 +5034,23 @@ class EnhancedCashFlowService {
                             monthlyData[monthName].operating_activities.breakdown[expenseName] = 0;
                         }
                         
-                        // Add amount to the specific expense name
+                        // Store account name if we have an account code
+                        if (expenseAccountCode && expenseAccountName) {
+                            monthlyData[monthName].expenses.accountNames[expenseAccountCode] = expenseAccountName;
+                        }
+                        
+                        // Add amount to the specific expense name (by account code)
                         monthlyData[monthName].expenses[expenseName] += amount;
                         monthlyData[monthName].operating_activities.breakdown[expenseName] += amount;
 
-                        // Add to transactions
+                        // Add to transactions with account code info
                         monthlyData[monthName].expenses.transactions.push({
                             transactionId: entry.transactionId,
                             date: entry.date,
                             amount: amount,
                             description: entry.description,
+                            accountCode: expenseAccountCode || null,
+                            accountName: expenseAccountName || null,
                             category: 'expense'
                         });
                     }
@@ -4565,7 +5064,7 @@ class EnhancedCashFlowService {
                     // FIRST: Check if this is an internal cash transfer - EXCLUDE
                     if (this.isInternalCashTransfer(entry)) {
                         console.log(`💰 Internal cash transfer excluded from expense processing (FALLBACK): ${entry.transactionId}`);
-                        return; // Skip internal transfers
+                        break; // Skip rest of this transaction, continue to next transaction
                     }
                     
                     // SECOND: Check if there's a cash payment in this transaction
@@ -4583,15 +5082,19 @@ class EnhancedCashFlowService {
                     // This ensures we only count actual cash expenses, not accrued expenses
                     if (!hasCashPayment) {
                         console.log(`💰 Accrual expense excluded (no cash payment): ${entry.transactionId} - Description: ${entry.description}`);
-                        return; // Skip accruals - they don't represent actual cash outflow
+                        continue; // Skip this line item, continue with next line in same transaction
                     }
                     
                     monthlyData[monthName].operating_activities.outflows += amount;
                     monthlyData[monthName].expenses.total += amount;
                     processedTransactions.add(entry.transactionId + '_expense');
 
-                    // Use actual expense description as category name instead of generic categorization
-                    const expenseName = entry.description || 'Unnamed Expense';
+                    // For manual entries with expense debit, use account code directly from transaction
+                    let expenseAccountCode = accountCode; // Already have the expense account code
+                    let expenseAccountName = accountName; // Already have the expense account name
+                    const expenseName = expenseAccountCode; // Use account code as category (like income statement)
+                    
+                    console.log(`✅ Using expense account directly from transaction: ${expenseAccountCode} - ${expenseAccountName} for manual entry ${entry.transactionId}`);
                     
                     // Initialize the expense category if it doesn't exist
                     if (!monthlyData[monthName].expenses[expenseName]) {
@@ -4601,26 +5104,44 @@ class EnhancedCashFlowService {
                         monthlyData[monthName].operating_activities.breakdown[expenseName] = 0;
                     }
                     
-                    // Add amount to the specific expense name
+                    // Store account name if we have an account code
+                    if (expenseAccountCode && expenseAccountName) {
+                        monthlyData[monthName].expenses.accountNames[expenseAccountCode] = expenseAccountName;
+                    }
+                    
+                    // Add amount to the specific expense name (by account code)
                     monthlyData[monthName].expenses[expenseName] += amount;
                     monthlyData[monthName].operating_activities.breakdown[expenseName] += amount;
 
-                    // Add to transactions
+                    // Add to transactions with account code info
                     monthlyData[monthName].expenses.transactions.push({
                         transactionId: entry.transactionId,
                         date: entry.date,
                         amount: amount,
                         description: entry.description,
+                        accountCode: expenseAccountCode || null,
+                        accountName: expenseAccountName || null,
                         category: 'expense'
                     });
                 }
+                }
 
                 // FINANCING: Owner contributions (Equity accounts)
-                if (isCredit && accountType === 'Equity' && entry.description?.toLowerCase().includes('balance adjustment')) {
-                    monthlyData[monthName].financing_activities.inflows += amount;
+            if (entry.entries && entry.entries.length > 0) {
+                for (const line of entry.entries) {
+                    const lineAccountType = line.accountType;
+                    const lineCredit = line.credit || 0;
+                    if (lineCredit > 0 && lineAccountType === 'Equity' && entry.description?.toLowerCase().includes('balance adjustment')) {
+                        monthlyData[monthName].financing_activities.inflows += lineCredit;
+                    }
                 }
-            });
-        });
+            }
+            } catch (entryError) {
+                console.error(`❌ Error processing transaction ${entry.transactionId}:`, entryError);
+                // Continue to next transaction instead of failing entire function
+                continue;
+            }
+        }
 
         // Calculate net values and running balances
         let runningBalance = openingBalance;
@@ -4652,6 +5173,12 @@ class EnhancedCashFlowService {
         
         monthNames.forEach(monthName => {
             const month = monthlyData[monthName];
+            
+            // Validate month exists
+            if (!month) {
+                console.error(`❌ Month ${monthName} is undefined in monthlyData`);
+                return; // Skip this month
+            }
             
             // Calculate nets
             month.operating_activities.net = month.operating_activities.inflows - month.operating_activities.outflows;
@@ -4711,8 +5238,8 @@ class EnhancedCashFlowService {
                 
                 // First, sum from month.expenses (exclude only 'total' and 'transactions')
                 Object.keys(month.expenses).forEach(key => {
-                    // Skip only 'total' and 'transactions' keys
-                    if (key === 'total' || key === 'transactions') {
+                    // Skip 'total', 'transactions', and 'accountNames' keys
+                    if (key === 'total' || key === 'transactions' || key === 'accountNames') {
                         return;
                     }
                     
@@ -4981,7 +5508,36 @@ class EnhancedCashFlowService {
             }
         });
         
+        // Ensure monthlyData is always a valid object before returning
+        if (!monthlyData || typeof monthlyData !== 'object') {
+            console.error('❌ monthlyData is invalid before return:', monthlyData);
+            throw new Error('monthlyData is not a valid object');
+        }
+        
+        console.log('✅ generateReliableMonthlyBreakdown: Returning valid monthlyData with', Object.keys(monthlyData).length, 'months');
         return monthlyData;
+        } catch (error) {
+            console.error('❌ Error in generateReliableMonthlyBreakdown:', error);
+            // Return empty structure if error occurs
+            const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                               'july', 'august', 'september', 'october', 'november', 'december'];
+            const monthlyData = {};
+            monthNames.forEach(month => {
+                monthlyData[month] = {
+                    operating_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
+                    income: { total: 0 },
+                expenses: { total: 0, transactions: [], accountNames: {} },
+                investing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
+                financing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
+                net_cash_flow: 0,
+                opening_balance: openingBalance || 0,
+                closing_balance: openingBalance || 0,
+                transaction_details: { transaction_count: 0 },
+                cash_accounts: { total: 0, breakdown: {} }
+                };
+            });
+        return monthlyData;
+        }
     }
     
     /**
@@ -4990,6 +5546,21 @@ class EnhancedCashFlowService {
     static async generateTabularMonthlyBreakdown(monthlyData, period, openingBalance, cashBalanceByAccount) {
         const monthNames = ['january', 'february', 'march', 'april', 'may', 'june',
                            'july', 'august', 'september', 'october', 'november', 'december'];
+        
+        // Validate monthlyData is not undefined
+        if (!monthlyData || typeof monthlyData !== 'object') {
+            console.error('❌ generateTabularMonthlyBreakdown: monthlyData is invalid:', monthlyData);
+            // Return empty structure if monthlyData is invalid
+            const emptyStructure = {};
+            monthNames.forEach(month => {
+                emptyStructure[month] = {
+                    net_change_in_cash: 0,
+                    cash_at_end_of_period: 0,
+                    cash_and_cash_equivalents: {}
+                };
+            });
+            return emptyStructure;
+        }
         
         const tabularMonths = {};
         let cumulativeNetChange = 0;
@@ -5114,7 +5685,7 @@ class EnhancedCashFlowService {
             monthlyData[month] = {
                 operating_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 income: { total: 0 },
-                expenses: { total: 0, transactions: [] },
+                expenses: { total: 0, transactions: [], accountNames: {} },
                 investing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 financing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
                 net_cash_flow: 0,
