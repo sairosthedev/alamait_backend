@@ -2738,6 +2738,75 @@ class EnhancedCashFlowService {
                 }
             }
             
+            // PRIORITY 5.6: Find accrual transaction by matching liability account (for payments to liability accounts)
+            // When cash is paid to settle a liability (dr liability, cr cash), find the accrual that created that liability
+            // This is especially important for manual entries that don't have metadata links
+            if (!accrualTransaction && entry.entries && entry.entries.length > 0) {
+                // Find liability account that was debited (payment to settle liability)
+                const liabilityDebit = entry.entries.find(e => {
+                    const accCode = String(e.accountCode || '').trim();
+                    const accType = e.accountType;
+                    return (accType === 'Liability' || accCode.startsWith('2')) && (e.debit || 0) > 0;
+                });
+                
+                if (liabilityDebit) {
+                    const liabilityAccountCode = String(liabilityDebit.accountCode || '').trim();
+                    const paymentAmount = liabilityDebit.debit || 0;
+                    const paymentDate = new Date(entry.date);
+                    const dateRangeStart = new Date(paymentDate);
+                    dateRangeStart.setMonth(dateRangeStart.getMonth() - 12); // Look back 12 months
+                    
+                    console.log(`🔍 Looking for accrual that credited liability ${liabilityAccountCode} (payment amount: ${paymentAmount})...`);
+                    
+                    // Find accrual transaction that credited this liability account (created the liability)
+                    // The accrual would have: dr expense account, cr liability account
+                    // Try exact match first
+                    accrualTransaction = await TransactionEntry.findOne({
+                        source: 'expense_accrual',
+                        status: 'posted',
+                        date: { $gte: dateRangeStart, $lte: paymentDate },
+                        'entries.accountCode': liabilityAccountCode,
+                        'entries.credit': { $gt: 0 }
+                    }).sort({ date: -1 }).lean();
+                    
+                    // If not found, try matching by amount and description (for manual entries)
+                    if (!accrualTransaction && entry.description) {
+                        const descLower = entry.description.toLowerCase();
+                        accrualTransaction = await TransactionEntry.findOne({
+                            source: 'expense_accrual',
+                            status: 'posted',
+                            date: { $gte: dateRangeStart, $lte: paymentDate },
+                            $or: [
+                                { 'entries.accountCode': liabilityAccountCode, 'entries.credit': { $gt: 0 } },
+                                { description: { $regex: descLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }
+                            ]
+                        }).sort({ date: -1 }).lean();
+                    }
+                    
+                    // If still not found, try matching by amount (within tolerance)
+                    if (!accrualTransaction) {
+                        const tolerance = paymentAmount * 0.1; // 10% tolerance
+                        accrualTransaction = await TransactionEntry.findOne({
+                            source: 'expense_accrual',
+                            status: 'posted',
+                            date: { $gte: dateRangeStart, $lte: paymentDate },
+                            $or: [
+                                { totalDebit: { $gte: paymentAmount - tolerance, $lte: paymentAmount + tolerance } },
+                                { totalCredit: { $gte: paymentAmount - tolerance, $lte: paymentAmount + tolerance } }
+                            ],
+                            'entries.accountCode': liabilityAccountCode,
+                            'entries.credit': { $gt: 0 }
+                        }).sort({ date: -1 }).lean();
+                    }
+                    
+                    if (accrualTransaction) {
+                        console.log(`✅ Found accrual transaction by liability account ${liabilityAccountCode} for payment ${entry.transactionId} (manual entry)`);
+                    } else {
+                        console.log(`⚠️ Could not find accrual for liability ${liabilityAccountCode} payment ${entry.transactionId}`);
+                    }
+                }
+            }
+            
             // PRIORITY 6: Fuzzy match by amount and description (within date range)
             if (!accrualTransaction && entry.entries && entry.entries.length > 0) {
                 // Find the cash payment amount
@@ -4885,12 +4954,111 @@ class EnhancedCashFlowService {
                                     }
                                 }
                                 
-                                if (expenseLine && expenseLine.accountCode) {
+                                // SPECIAL CASE: Check for liability account payments (e.g., dr 20101, cr cash)
+                                // When cash is paid to settle a liability, find the expense account from the accrual
+                                if (!expenseLine) {
+                                    const liabilityDebit = entry.entries.find(e => {
+                                        const accCode = String(e.accountCode || '').trim();
+                                        const accType = e.accountType;
+                                        // Check for liability accounts (2xxx) that were debited (payment to settle liability)
+                                        return (accType === 'Liability' || accCode.startsWith('2')) && (e.debit || 0) > 0;
+                                    });
+                                    
+                                    if (liabilityDebit) {
+                                        const liabilityAccountCode = String(liabilityDebit.accountCode || '').trim();
+                                        console.log(`🔍 Payment to liability account ${liabilityAccountCode} detected, trying to find related expense account...`);
+                                        
+                                        // Try to find accrual transaction that credited this liability
+                                        // This will be handled by findExpenseAccrualAccount, but if it failed, try direct lookup
+                                        // For manual entries without metadata, we need to find the accrual by matching the liability account
+                                        try {
+                                            const TransactionEntry = require('../models/TransactionEntry');
+                                            const paymentDate = new Date(entry.date);
+                                            const dateRangeStart = new Date(paymentDate);
+                                            dateRangeStart.setMonth(dateRangeStart.getMonth() - 12);
+                                            
+                                            // Try exact match first
+                                            let accrualTx = await TransactionEntry.findOne({
+                                                source: 'expense_accrual',
+                                                status: 'posted',
+                                                date: { $gte: dateRangeStart, $lte: paymentDate },
+                                                'entries.accountCode': liabilityAccountCode,
+                                                'entries.credit': { $gt: 0 }
+                                            }).sort({ date: -1 }).lean();
+                                            
+                                            // If not found, try matching by description (for manual entries)
+                                            if (!accrualTx && entry.description) {
+                                                const descLower = entry.description.toLowerCase();
+                                                accrualTx = await TransactionEntry.findOne({
+                                                    source: 'expense_accrual',
+                                                    status: 'posted',
+                                                    date: { $gte: dateRangeStart, $lte: paymentDate },
+                                                    description: { $regex: descLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' },
+                                                    'entries.accountCode': liabilityAccountCode,
+                                                    'entries.credit': { $gt: 0 }
+                                                }).sort({ date: -1 }).lean();
+                                            }
+                                            
+                                            // If still not found, try matching by amount (within tolerance)
+                                            if (!accrualTx && liabilityDebit.debit) {
+                                                const paymentAmount = liabilityDebit.debit;
+                                                const tolerance = paymentAmount * 0.1; // 10% tolerance
+                                                accrualTx = await TransactionEntry.findOne({
+                                                    source: 'expense_accrual',
+                                                    status: 'posted',
+                                                    date: { $gte: dateRangeStart, $lte: paymentDate },
+                                                    $or: [
+                                                        { totalDebit: { $gte: paymentAmount - tolerance, $lte: paymentAmount + tolerance } },
+                                                        { totalCredit: { $gte: paymentAmount - tolerance, $lte: paymentAmount + tolerance } }
+                                                    ],
+                                                    'entries.accountCode': liabilityAccountCode,
+                                                    'entries.credit': { $gt: 0 }
+                                                }).sort({ date: -1 }).lean();
+                                            }
+                                            
+                                            if (accrualTx && accrualTx.entries) {
+                                                const expenseEntry = accrualTx.entries.find(e => {
+                                                    const accCode = String(e.accountCode || '').trim();
+                                                    return accCode.startsWith('5') && (e.debit || 0) > 0;
+                                                });
+                                                
+                                                if (expenseEntry) {
+                                                    expenseAccountCode = expenseEntry.accountCode;
+                                                    expenseAccountName = expenseEntry.accountName || null;
+                                                    expenseName = expenseAccountCode;
+                                                    console.log(`✅ Found expense account ${expenseAccountCode} from liability payment to ${liabilityAccountCode} for manual entry ${entry.transactionId}`);
+                                                } else {
+                                                    console.log(`⚠️ Found accrual for liability ${liabilityAccountCode} but no expense account found in entries`);
+                                                }
+                                            } else {
+                                                console.log(`⚠️ Could not find accrual for liability ${liabilityAccountCode} payment ${entry.transactionId} (manual entry - no accrual exists)`);
+                                                // Since there's no accrual, use description-based inference for the expense account
+                                                // This handles direct payments to liability accounts (e.g., dr 20101, cr cash)
+                                            }
+                                        } catch (error) {
+                                            console.error(`❌ Error finding expense from liability payment: ${error.message}`);
+                                        }
+                                    }
+                                }
+                                
+                                // If we still don't have an expense account code and this is a liability payment,
+                                // use description-based inference (handles direct payments without accruals)
+                                if (!expenseAccountCode && liabilityDebit) {
+                                    const desc = (entry.description || '').toLowerCase();
+                                    if (desc.includes('management') || desc.includes('alamait') || desc.includes('alaimait')) {
+                                        expenseAccountCode = '50005';
+                                        expenseAccountName = 'Alamait Management Fee';
+                                        expenseName = expenseAccountCode;
+                                        console.log(`✅ Using description-based inference for liability payment: ${expenseAccountCode} - ${expenseAccountName} (no accrual found)`);
+                                    }
+                                }
+                                
+                                if (expenseLine && expenseLine.accountCode && !expenseAccountCode) {
                                     expenseAccountCode = expenseLine.accountCode;
                                     expenseAccountName = expenseLine.accountName || null;
                                     expenseName = expenseAccountCode; // Use account code as category
                                     console.log(`✅ Found expense account from transaction entry: ${expenseAccountCode} - ${expenseAccountName || 'Unknown'} for payment ${entry.transactionId}`);
-                                } else {
+                                } else if (!expenseAccountCode) {
                                     // FALLBACK 2: Try to infer account code from description keywords
                                     const desc = (entry.description || '').toLowerCase();
                                     let inferredCode = null;
