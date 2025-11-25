@@ -487,7 +487,7 @@ exports.verifyEmail = async (req, res) => {
     }
 };
 
-// Request password reset
+// Request password reset - sends OTP to email
 exports.forgotPassword = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -497,42 +497,46 @@ exports.forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
 
-        const user = await User.findOne({ email });
+        const user = await User.findOne({ email: email.toLowerCase() });
         if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+            // Don't reveal if user exists for security
+            return res.json({ message: 'If the email exists, an OTP has been sent' });
         }
 
-        // Generate reset token
+        // Generate 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otpExpires = Date.now() + 600000; // 10 minutes
+
+        // Store OTP and reset verification status
+        user.resetPasswordOtp = otp;
+        user.resetPasswordOtpExpires = otpExpires;
+        user.resetPasswordOtpVerified = false;
+        // Also keep reset token for backward compatibility if needed
         const resetToken = crypto.randomBytes(20).toString('hex');
         user.resetPasswordToken = resetToken;
         user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
 
         await user.save();
 
-        // Send password reset email (same method as invoice emails)
+        // Send OTP email
         try {
-            const resetUrl = `${process.env.FRONTEND_URL || 'https://alamait.vercel.app'}/reset-password?token=${resetToken}`;
-            
             await sendEmail({
                 to: user.email,
-                subject: 'Password Reset Request - Alamait Student Accommodation',
-                text: `Reset your password by visiting: ${resetUrl}`,
+                subject: 'Password Reset OTP - Alamait Student Accommodation',
+                text: `Your password reset OTP is: ${otp}\n\nThis OTP will expire in 10 minutes.\n\nIf you didn't request this password reset, please ignore this email.`,
                 html: `
                     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                         <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
-                            <h2 style="color: #333;">Password Reset Request</h2>
+                            <h2 style="color: #333;">Password Reset Verification</h2>
                             <p>You requested a password reset for your Alamait Student Accommodation account.</p>
-                            <p>Click the button below to reset your password:</p>
+                            <p>Use the following OTP (One-Time Password) to verify your identity:</p>
                             <div style="text-align: center; margin: 30px 0;">
-                                <a href="${resetUrl}" 
-                                   style="background-color: #dc3545; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
-                                    Reset Password
-                                </a>
+                                <div style="background-color: #007bff; color: white; padding: 20px; border-radius: 10px; font-size: 32px; font-weight: bold; letter-spacing: 10px; display: inline-block;">
+                                    ${otp}
+                                </div>
                             </div>
-                            <p>If the button doesn't work, copy and paste this link into your browser:</p>
-                            <p style="word-break: break-all; color: #666;">${resetUrl}</p>
-                            <p><strong>Important:</strong> This link will expire in 1 hour for security reasons.</p>
-                            <p>If you didn't request this password reset, please ignore this email.</p>
+                            <p><strong>Important:</strong> This OTP will expire in 10 minutes for security reasons.</p>
+                            <p>If you didn't request this password reset, please ignore this email and your account will remain secure.</p>
                             <hr style="margin: 20px 0;">
                             <p style="font-size: 12px; color: #666;">
                                 This is an automated message from Alamait Student Accommodation.<br>
@@ -542,11 +546,15 @@ exports.forgotPassword = async (req, res) => {
                     </div>
                 `
             });
-            console.log('✅ Password reset email sent successfully');
-            res.json({ message: 'Password reset email sent' });
+            console.log(`✅ Password reset OTP sent successfully to ${user.email}`);
+            res.json({ 
+                message: 'If the email exists, an OTP has been sent',
+                // Include token for frontend to use in verify-otp endpoint
+                resetToken: resetToken
+            });
         } catch (emailError) {
-            console.error('Failed to send password reset email:', emailError);
-            res.status(500).json({ error: 'Failed to send password reset email' });
+            console.error('Failed to send password reset OTP email:', emailError);
+            res.status(500).json({ error: 'Failed to send password reset OTP email' });
         }
     } catch (error) {
         console.error('Error in forgotPassword:', error);
@@ -554,7 +562,52 @@ exports.forgotPassword = async (req, res) => {
     }
 };
 
-// Reset password
+// Verify OTP for password reset
+exports.verifyOtp = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+        const { email, otp, resetToken } = req.body;
+
+        const user = await User.findOne({
+            email: email.toLowerCase(),
+            resetPasswordToken: resetToken,
+            resetPasswordExpires: { $gt: Date.now() }
+        });
+
+        if (!user) {
+            return res.status(400).json({ error: 'Invalid or expired reset request' });
+        }
+
+        // Check if OTP matches and is not expired
+        if (user.resetPasswordOtp !== otp) {
+            return res.status(400).json({ error: 'Invalid OTP' });
+        }
+
+        if (!user.resetPasswordOtpExpires || user.resetPasswordOtpExpires < Date.now()) {
+            return res.status(400).json({ error: 'OTP has expired. Please request a new one.' });
+        }
+
+        // Mark OTP as verified
+        user.resetPasswordOtpVerified = true;
+        await user.save();
+
+        console.log(`✅ OTP verified successfully for ${user.email}`);
+        res.json({ 
+            message: 'OTP verified successfully',
+            verified: true,
+            resetToken: resetToken // Return token for password reset
+        });
+    } catch (error) {
+        console.error('Error in verifyOtp:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+};
+
+// Reset password - requires OTP verification
 exports.resetPassword = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -562,10 +615,10 @@ exports.resetPassword = async (req, res) => {
     }
 
     try {
-        const { token } = req.params;
-        const { newPassword } = req.body;
+        const { token, email, newPassword } = req.body;
 
         const user = await User.findOne({
+            email: email ? email.toLowerCase() : undefined,
             resetPasswordToken: token,
             resetPasswordExpires: { $gt: Date.now() }
         });
@@ -574,14 +627,33 @@ exports.resetPassword = async (req, res) => {
             return res.status(400).json({ error: 'Invalid or expired reset token' });
         }
 
-        // Hash new password
-        const salt = await bcrypt.genSalt(10);
-        user.password = await bcrypt.hash(newPassword, salt);
+        // Check if OTP has been verified
+        if (!user.resetPasswordOtpVerified) {
+            return res.status(400).json({ 
+                error: 'OTP not verified. Please verify the OTP first.',
+                requiresOtpVerification: true
+            });
+        }
+
+        // Normalize password (handle client-side hashing)
+        // This ensures the password is stored in new format (bcrypt(SHA256_hash))
+        const { normalizePassword } = require('../../utils/clientPasswordHash');
+        const normalizedPassword = normalizePassword(newPassword);
+
+        // Set password - the pre-save hook will hash it with bcrypt
+        user.password = normalizedPassword;
+        
+        // Clear reset fields
         user.resetPasswordToken = undefined;
         user.resetPasswordExpires = undefined;
+        user.resetPasswordOtp = undefined;
+        user.resetPasswordOtpExpires = undefined;
+        user.resetPasswordOtpVerified = false;
 
         await user.save();
 
+        console.log(`✅ Password reset successful for ${user.email}`);
+        console.log(`   Password has been migrated to new format (bcrypt(SHA256_hash))`);
         res.json({ message: 'Password reset successful' });
     } catch (error) {
         console.error('Error in resetPassword:', error);

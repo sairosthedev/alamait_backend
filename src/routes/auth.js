@@ -6,6 +6,7 @@ const {
     login,
     verifyEmail,
     forgotPassword,
+    verifyOtp,
     resetPassword,
     adminResetPassword
 } = require('../controllers/auth/authController');
@@ -41,7 +42,15 @@ router.post('/register', registerValidation, register);
 router.post('/login', loginValidation, login);
 router.get('/verify-email/:token', verifyEmail);
 router.post('/forgot-password', forgotPasswordValidation, forgotPassword);
-router.post('/reset-password/:token', resetPasswordValidation, resetPassword);
+router.post('/verify-otp', [
+    check('email', 'Please include a valid email').isEmail(),
+    check('otp', 'OTP is required and must be 6 digits').isLength({ min: 6, max: 6 }).isNumeric(),
+    check('resetToken', 'Reset token is required').notEmpty()
+], verifyOtp);
+router.post('/reset-password', resetPasswordValidation.concat([
+    check('token', 'Reset token is required').notEmpty(),
+    check('email', 'Email is required for security verification').isEmail()
+]), resetPassword);
 
 // Validate application code
 router.post('/validate-code', [
