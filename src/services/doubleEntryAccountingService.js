@@ -1038,20 +1038,28 @@ class DoubleEntryAccountingService {
         try {
             console.log('🏗️ Recording maintenance approval (accrual basis)');
 
-            // Check if transaction already exists to prevent duplicates (per item via metadata)
+            // Check if transaction already exists to prevent duplicates
+            // Check by reference ID and description to catch all duplicates, not just within 60 seconds
             const duplicateQuery = {
                 source: 'expense_accrual',
                 sourceId: request._id,
                 'metadata.requestType': 'maintenance',
-                createdAt: { $gte: new Date(Date.now() - 60000) } // Within last minute
+                description: `Maintenance approval: ${request.title}`
             };
+            
+            // If itemIndex is provided, also check by itemIndex to prevent duplicates for specific items
             if (request && request.itemIndex !== undefined) {
                 duplicateQuery['metadata.itemIndex'] = request.itemIndex;
             }
+            
+            // Check for existing transaction (no time limit - check all time)
             const existingTransaction = await TransactionEntry.findOne(duplicateQuery);
 
             if (existingTransaction) {
                 console.log('⚠️ Duplicate maintenance approval detected, skipping');
+                console.log(`   - Existing transaction: ${existingTransaction.transactionId}`);
+                console.log(`   - Reference: ${request._id}`);
+                console.log(`   - Description: ${request.title}`);
                 return { transaction: null, transactionEntry: existingTransaction };
             }
             
@@ -3128,6 +3136,25 @@ class DoubleEntryAccountingService {
                 return '5012'; // Garden & Landscaping
             }
             
+            // Fuel/Transportation related - use Fuel Expense account (5005 for gas, but we should use a fuel account)
+            // Check for fuel account first (5005 is Utilities - Gas, but we need a fuel/transportation account)
+            if (desc.includes('fuel') || desc.includes('gasoline') || desc.includes('diesel') ||
+                desc.includes('petrol') || desc.includes('toll') || desc.includes('toll gate') ||
+                desc.includes('tollgate') || desc.includes('transport') || desc.includes('travel')) {
+                // Check if there's a fuel expense account (5016 or 5005)
+                const fuelAccount = await Account.findOne({ 
+                    $or: [
+                        { code: '5016', type: 'Expense' },
+                        { code: '5005', type: 'Expense', name: /fuel|gas/i }
+                    ]
+                });
+                if (fuelAccount) {
+                    return fuelAccount.code;
+                }
+                // Fallback to 5005 (Utilities - Gas) if no dedicated fuel account
+                return '5005'; // Utilities - Gas (can be used for fuel expenses)
+            }
+            
             // Painting related - use Property Maintenance (5007) since no specific painting account
             if (desc.includes('paint') || desc.includes('wall') || desc.includes('ceiling') ||
                 desc.includes('color') || desc.includes('brush') || desc.includes('roller')) {
@@ -3140,10 +3167,23 @@ class DoubleEntryAccountingService {
                 return '5007'; // Property Maintenance
             }
             
-            // Fuel and transportation related
-            if (desc.includes('fuel') || desc.includes('gas') || desc.includes('petrol') || 
-                desc.includes('diesel') || desc.includes('transport') || desc.includes('vehicle')) {
-                return '5011'; // Maintenance Supplies (or could be Transportation if that account exists)
+            // Fuel and transportation related - use Fuel Expense account (5005 for gas/fuel)
+            if (desc.includes('fuel') || desc.includes('gasoline') || desc.includes('petrol') || 
+                desc.includes('diesel') || desc.includes('toll') || desc.includes('toll gate') ||
+                desc.includes('tollgate') || desc.includes('transport') || desc.includes('vehicle') ||
+                desc.includes('travel')) {
+                // Check if there's a dedicated fuel expense account (5016)
+                const fuelAccount = await Account.findOne({ 
+                    $or: [
+                        { code: '5016', type: 'Expense' },
+                        { code: '5005', type: 'Expense', name: /fuel|gas/i }
+                    ]
+                });
+                if (fuelAccount) {
+                    return fuelAccount.code;
+                }
+                // Fallback to 5005 (Utilities - Gas) which can be used for fuel expenses
+                return '5005'; // Utilities - Gas (can be used for fuel expenses)
             }
             
             // Food and meals

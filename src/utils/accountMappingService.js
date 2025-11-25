@@ -94,6 +94,10 @@ class AccountMappingService {
             'fuel': { code: '5016', name: 'Fuel Expense' },
             'gasoline': { code: '5016', name: 'Fuel Expense' },
             'diesel': { code: '5016', name: 'Fuel Expense' },
+            'toll': { code: '5016', name: 'Fuel Expense' },
+            'toll gate': { code: '5016', name: 'Fuel Expense' },
+            'tollgate': { code: '5016', name: 'Fuel Expense' },
+            'petrol': { code: '5016', name: 'Fuel Expense' },
             
             // Supplies & Materials
             'supplies': { code: '5017', name: 'Office Supplies Expense' },
