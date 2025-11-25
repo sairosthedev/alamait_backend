@@ -494,6 +494,8 @@ async function getRecentMaintenances(limit = 10) {
             priority: m.priority,
             status: m.status,
             room: m.room,
+            amount: m.amount || 0,
+            financeStatus: m.financeStatus || 'pending',
             residence: m.residence ? {
                 _id: m.residence._id,
                 name: m.residence.name

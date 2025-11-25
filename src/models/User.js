@@ -45,6 +45,12 @@ const userSchema = new mongoose.Schema({
   emailVerificationExpires: Date,
   resetPasswordToken: String,
   resetPasswordExpires: Date,
+  resetPasswordOtp: String,
+  resetPasswordOtpExpires: Date,
+  resetPasswordOtpVerified: {
+    type: Boolean,
+    default: false
+  },
   currentRoom: {
     type: String,
     default: null
@@ -353,10 +359,58 @@ userSchema.methods.createTenantAccount = async function() {
 };
 
 // Method to compare password
+// Supports both plain text passwords and client-side pre-hashed passwords (SHA-256)
+// Handles backward compatibility: existing users have bcrypt(plain), new users have bcrypt(SHA256)
 userSchema.methods.comparePassword = async function(candidatePassword) {
   try {
-    return await bcrypt.compare(candidatePassword, this.password);
+    const { isSha256Hash, hashPasswordSha256 } = require('../utils/clientPasswordHash');
+    
+    // Handle both old format (bcrypt(plain)) and new format (bcrypt(SHA256))
+    if (isSha256Hash(candidatePassword)) {
+      // Client sent SHA-256 hash
+      // Try 1: Compare SHA-256 hash directly (for new users with bcrypt(SHA256))
+      const matchWithHash = await bcrypt.compare(candidatePassword, this.password);
+      if (matchWithHash) {
+        console.log('✅ Password match: SHA-256 hash with bcrypt(SHA256) format');
+        return true;
+      }
+      
+      // Try 2: If hash doesn't match, the stored password might be old format (bcrypt(plain))
+      // We can't reverse SHA-256, but we can store the hash and flag for special handling
+      // The frontend will need to retry with plain text or the user needs to reset password
+      console.log('❌ Password mismatch: SHA-256 hash sent but stored password format mismatch');
+      console.log('   Possible causes:');
+      console.log('   1. User has old password format (bcrypt(plain)) - needs plain text login or reset');
+      console.log('   2. Password is incorrect');
+      this._formatMismatch = true;
+      this._receivedSha256Hash = candidatePassword; // Store for potential plain text retry check
+      return false;
+    } else {
+      // Client sent plain text password
+      // Try 1: Compare plain text directly (for existing users with bcrypt(plain))
+      const matchWithPlain = await bcrypt.compare(candidatePassword, this.password);
+      if (matchWithPlain) {
+        console.log('✅ Password match: Plain text with bcrypt(plain) format');
+        // Flag for migration - user logged in with plain text (old format)
+        this._plainPasswordLogin = true;
+        this._plainPasswordForMigration = candidatePassword;
+        return true;
+      }
+      
+      // Try 2: Hash with SHA-256 and compare (for new users with bcrypt(SHA256))
+      const hashedPassword = hashPasswordSha256(candidatePassword);
+      const matchWithHashed = await bcrypt.compare(hashedPassword, this.password);
+      if (matchWithHashed) {
+        console.log('✅ Password match: Plain text with bcrypt(SHA256) format');
+        return true;
+      }
+      
+      console.log('❌ Password mismatch: Plain text does not match stored password');
+    }
+    
+    return false;
   } catch (error) {
+    console.error('Error in comparePassword:', error);
     throw error;
   }
 };

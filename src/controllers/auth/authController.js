@@ -240,7 +240,13 @@ exports.login = async (req, res) => {
     try {
         const { email, password } = req.body;
         console.log('Login attempt for email:', email);
-        console.log('Password provided (length):', password.length);
+        
+        // Check if password is SHA-256 hash (from client-side hashing)
+        const { isSha256Hash } = require('../../utils/clientPasswordHash');
+        const isHashed = isSha256Hash(password);
+        console.log('Password provided: [REDACTED]');
+        console.log('Password format:', isHashed ? 'SHA-256 hash (client-side hashed)' : 'Plain text');
+        console.log('Password length:', password ? password.length : 0);
 
         // Get device information including real IP address
         const deviceInfo = getDeviceIdentifier(req);
@@ -294,12 +300,18 @@ exports.login = async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
         console.log('User found:', user.email, 'Role:', user.role);
-        console.log('Stored password hash:', user.password);
+        console.log('Password hash: [REDACTED]');
 
         // Verify password using the model's method
         try {
             const isMatch = await user.comparePassword(password);
             console.log('Password match result:', isMatch);
+            
+            // Check if login failed due to format mismatch (SHA-256 hash vs old format)
+            if (!isMatch && isHashed && user._formatMismatch) {
+                console.log('⚠️ Login failed: Client sent SHA-256 hash but user has old password format');
+                console.log('   Solution: User needs to login with plain text password once to migrate');
+            }
             
             if (!isMatch) {
                 // Log failed login attempt to audit log
@@ -382,6 +394,25 @@ exports.login = async (req, res) => {
 
         // Update last login
         user.lastLogin = Date.now();
+        
+        // Migrate password if user logged in with plain text (old format)
+        // Convert to new format (bcrypt(SHA256)) for future logins with client-side hashing
+        if (user._plainPasswordLogin && user._plainPasswordForMigration) {
+            try {
+                const { hashPasswordSha256 } = require('../../utils/clientPasswordHash');
+                const sha256Hash = hashPasswordSha256(user._plainPasswordForMigration);
+                const salt = await bcrypt.genSalt(10);
+                user.password = await bcrypt.hash(sha256Hash, salt);
+                console.log('✅ Migrated user password from old format to new format (bcrypt(SHA256))');
+                // Clear migration flags
+                delete user._plainPasswordLogin;
+                delete user._plainPasswordForMigration;
+            } catch (migrationError) {
+                console.error('⚠️ Failed to migrate password:', migrationError);
+                // Don't fail login if migration fails
+            }
+        }
+        
         await user.save();
 
         // Log successful login to audit log with device information
