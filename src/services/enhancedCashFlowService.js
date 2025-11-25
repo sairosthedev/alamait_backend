@@ -390,12 +390,15 @@ class EnhancedCashFlowService {
             }
             
             // Run cash balance calculations in parallel
-            const [openingCashBalance, closingCashBalance, cashBalanceByAccount] = await Promise.all([
+            const [openingCashBalance, closingCashBalance, cashBalanceByAccount, cashBalanceByAccountBeginning] = await Promise.all([
                 isNaN(openingDate.getTime()) 
                     ? this.getOpeningCashBalance(startDate, residenceId)
                     : this.getOpeningCashBalance(openingDate, residenceId),
                 this.getClosingCashBalance(endDate, residenceId),
-                this.getCashBalanceByAccount(endDate, residenceId)
+                this.getCashBalanceByAccount(endDate, residenceId),
+                isNaN(openingDate.getTime()) 
+                    ? this.getCashBalanceByAccount(startDate, residenceId)
+                    : this.getCashBalanceByAccount(openingDate, residenceId)
             ]);
             
             if (isDebugMode) {
@@ -636,6 +639,10 @@ class EnhancedCashFlowService {
                     ending_cash: closingCashBalance,
                     net_change_in_cash: netChangeInCash
                 },
+                
+                // Cash balance by account for beginning and ending
+                cash_balance_by_account: cashBalanceByAccount,
+                cash_balance_by_account_beginning: cashBalanceByAccountBeginning,
                 
                 // MONTHLY-FOCUSED SUMMARY
                 summary: {
@@ -2630,7 +2637,7 @@ class EnhancedCashFlowService {
                 }
             });
             
-        return {
+                    return {
             purchase_of_equipment,
             purchase_of_buildings
         };
@@ -2667,12 +2674,38 @@ class EnhancedCashFlowService {
             // PRIORITY 2: Find accrual transaction via metadata (requestId, expenseId)
             let accrualTransaction = null;
             
-                    if (entry.metadata?.requestId) {
-                accrualTransaction = await TransactionEntry.findOne({
-                    source: 'expense_accrual',
+            // For petty cash payments and other payments that settle accruals, we need to find accruals by reference/amount
+            // First, check if this is a payment that debits a liability account (Accounts Payable, etc.)
+            const liabilityDebit = entry.entries?.find(e => {
+                const accCode = String(e.accountCode || '').trim();
+                return accCode.startsWith('2') && (e.debit || 0) > 0;
+            });
+            const paymentAmount = liabilityDebit ? (liabilityDebit.debit || 0) : 0;
+            
+            if (entry.metadata?.requestId) {
+                // Find ALL accruals with this requestId, then match by amount
+                const allAccruals = await TransactionEntry.find({
+                source: 'expense_accrual',
                     sourceId: entry.metadata.requestId.toString(),
-                    status: 'posted'
+                status: 'posted'
                 }).sort({ date: -1 }).lean();
+                
+                if (allAccruals.length > 0 && paymentAmount > 0) {
+                    // Match by amount to find the correct accrual
+                    accrualTransaction = allAccruals.find(acc => acc.totalDebit === paymentAmount);
+                    if (!accrualTransaction) {
+                        const tolerance = 0.01;
+                        accrualTransaction = allAccruals.find(acc => Math.abs(acc.totalDebit - paymentAmount) <= tolerance);
+                    }
+                    if (accrualTransaction) {
+                        console.log(`✅ Matched payment ${entry.transactionId} (amount: ${paymentAmount}) to accrual ${accrualTransaction.transactionId} via requestId`);
+                    }
+                } else if (allAccruals.length === 1) {
+                    accrualTransaction = allAccruals[0];
+                } else if (allAccruals.length > 1 && paymentAmount === 0) {
+                    // Multiple accruals but no amount to match - use first one
+                    accrualTransaction = allAccruals[0];
+                }
             }
             
             if (!accrualTransaction && entry.metadata?.expenseId) {
@@ -2696,12 +2729,110 @@ class EnhancedCashFlowService {
             }
             
             // PRIORITY 4: Find accrual transaction via reference
+            // If multiple accruals share the same reference (from one request), find ALL of them and match by amount
+            // This handles petty cash payments (PETTY-EXP-...), regular payments, and other payments that settle accruals
             if (!accrualTransaction && entry.reference) {
-                accrualTransaction = await TransactionEntry.findOne({
-                    source: 'expense_accrual',
-                    sourceId: entry.reference.toString(),
-                    status: 'posted'
-                }).sort({ date: -1 }).lean();
+                // Get payment amount from multiple sources (priority order):
+                // 1. Liability debit (2000 Accounts Payable, etc.) - for petty cash payments that settle accruals
+                // 2. Cash credit (1000, 1011, etc.) - for regular cash payments
+                // 3. Expense debit (5xxx) - direct expense payments
+                let paymentAmount = null;
+                
+                // First, check for liability debit (petty cash payments settle Accounts Payable)
+                paymentAmount = entry.entries?.find(e => {
+                    const accCode = String(e.accountCode || '').trim();
+                    return accCode.startsWith('2') && (e.debit || 0) > 0;
+                });
+                
+                if (!paymentAmount) {
+                    // Check for cash credit (regular payments)
+                    paymentAmount = entry.entries?.find(e => {
+                        const accCode = String(e.accountCode || '').trim();
+                        return (accCode.startsWith('100') || accCode.startsWith('101')) && (e.credit || 0) > 0;
+                    });
+                }
+                
+                if (!paymentAmount) {
+                    // Check for direct expense debit
+                    paymentAmount = entry.entries?.find(e => {
+                        return (e.accountType === 'Expense' || String(e.accountCode || '').startsWith('5')) && (e.debit || 0) > 0;
+                    });
+                }
+                
+                const amount = paymentAmount ? (paymentAmount.debit || paymentAmount.credit || 0) : 0;
+                
+                if (amount > 0) {
+                    // Find ALL accruals with this reference (multiple accruals can come from one request)
+                    // Also check if payment debits a liability account (Accounts Payable, etc.) - we need to match by liability account too
+                    const liabilityDebit = entry.entries?.find(e => {
+                        const accCode = String(e.accountCode || '').trim();
+                        return accCode.startsWith('2') && (e.debit || 0) > 0;
+                    });
+                    const liabilityAccountCode = liabilityDebit ? String(liabilityDebit.accountCode || '').trim() : null;
+                    
+                    let allAccruals = await TransactionEntry.find({
+                        source: 'expense_accrual',
+                        $or: [
+                            { sourceId: entry.reference.toString() },
+                            { 'metadata.requestId': entry.reference.toString() }
+                        ],
+                        status: 'posted'
+                    }).sort({ date: -1 }).lean();
+                    
+                    // If payment debits a liability account, ALWAYS filter accruals to only those that credited that liability
+                    // This ensures we match the correct accrual even if only one accrual exists (but multiple could exist)
+                    if (liabilityAccountCode && allAccruals.length > 0) {
+                        const accrualsWithLiability = allAccruals.filter(acc => 
+                            acc.entries && acc.entries.some(e => 
+                                String(e.accountCode || '').trim() === liabilityAccountCode && (e.credit || 0) > 0
+                            )
+                        );
+                        if (accrualsWithLiability.length > 0) {
+                            allAccruals = accrualsWithLiability;
+                            console.log(`🔍 Filtered to ${allAccruals.length} accrual(s) that credited liability ${liabilityAccountCode} (from ${allAccruals.length + (allAccruals.length === 0 ? 0 : allAccruals.length)} total)`);
+                        } else if (allAccruals.length > 0) {
+                            console.log(`⚠️ No accruals found that credited liability ${liabilityAccountCode}, but ${allAccruals.length} accrual(s) found with reference ${entry.reference}`);
+                        }
+                    }
+                    
+                    console.log(`🔍 Found ${allAccruals.length} accrual(s) with reference ${entry.reference} for payment ${entry.transactionId} (amount: ${amount}${liabilityAccountCode ? `, liability: ${liabilityAccountCode}` : ''})`);
+                    
+                    if (allAccruals.length > 0) {
+                        // Match by amount to find the correct accrual
+                        // Try exact match first
+                        accrualTransaction = allAccruals.find(acc => acc.totalDebit === amount);
+                        
+                        // If no exact match, try within small tolerance (for rounding differences)
+                        if (!accrualTransaction) {
+                            const tolerance = 0.01; // 1 cent tolerance
+                            accrualTransaction = allAccruals.find(acc => 
+                                Math.abs(acc.totalDebit - amount) <= tolerance
+                            );
+                        }
+                        
+                        // If still no match, use the first one (fallback)
+                        if (!accrualTransaction && allAccruals.length === 1) {
+                            accrualTransaction = allAccruals[0];
+                            console.log(`⚠️ Using only accrual found (amount mismatch: accrual=${allAccruals[0].totalDebit}, payment=${amount})`);
+                        } else if (!accrualTransaction && allAccruals.length > 1) {
+                            // Multiple accruals but no amount match - log warning
+                            console.log(`⚠️ Multiple accruals found but none match payment amount ${amount}. Accrual amounts: ${allAccruals.map(a => a.totalDebit).join(', ')}`);
+                            // Use the first one as fallback
+                            accrualTransaction = allAccruals[0];
+                        }
+                        
+                        if (accrualTransaction) {
+                            console.log(`✅ Matched payment ${entry.transactionId} (amount: ${amount}) to accrual ${accrualTransaction.transactionId} (amount: ${accrualTransaction.totalDebit}, expense account: ${accrualTransaction.entries?.find(e => String(e.accountCode || '').startsWith('5'))?.accountCode || 'unknown'})`);
+                        }
+                    }
+                } else {
+                    // No amount found, just use reference (find first accrual)
+                    accrualTransaction = await TransactionEntry.findOne({
+                        source: 'expense_accrual',
+                        sourceId: entry.reference.toString(),
+                        status: 'posted'
+                    }).sort({ date: -1 }).lean();
+                }
             }
             
             // PRIORITY 5: Find via expense record if available
@@ -2715,7 +2846,7 @@ class EnhancedCashFlowService {
                             status: 'posted'
                         }).lean();
                     }
-                } catch (error) {
+        } catch (error) {
                     // Expense not found or invalid ID - continue
                 }
             }
@@ -2758,49 +2889,292 @@ class EnhancedCashFlowService {
                     
                     console.log(`🔍 Looking for accrual that credited liability ${liabilityAccountCode} (payment amount: ${paymentAmount})...`);
                     
-                    // Find accrual transaction that credited this liability account (created the liability)
-                    // The accrual would have: dr expense account, cr liability account
-                    // Try exact match first
-                    accrualTransaction = await TransactionEntry.findOne({
-                        source: 'expense_accrual',
-                        status: 'posted',
-                        date: { $gte: dateRangeStart, $lte: paymentDate },
-                        'entries.accountCode': liabilityAccountCode,
-                        'entries.credit': { $gt: 0 }
-                    }).sort({ date: -1 }).lean();
+                    // PRIORITY: If payment has a reference or metadata, find the accrual using the most direct method
+                    // Petty cash payments store expenseId in metadata.expenseId, which uniquely identifies the expense
+                    // even when multiple expenses share the same request ID
+                    let expenseIdToLookup = null;
                     
-                    // If not found, try matching by amount and description (for manual entries)
-                    if (!accrualTransaction && entry.description) {
-                        const descLower = entry.description.toLowerCase();
-                        accrualTransaction = await TransactionEntry.findOne({
-                            source: 'expense_accrual',
-                            status: 'posted',
-                            date: { $gte: dateRangeStart, $lte: paymentDate },
-                            $or: [
-                                { 'entries.accountCode': liabilityAccountCode, 'entries.credit': { $gt: 0 } },
-                                { description: { $regex: descLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }
-                            ]
-                        }).sort({ date: -1 }).lean();
+                    // Determine paymentAmount first (needed for accurate accrual matching when multiple accruals exist)
+                    // Get payment amount from liability debit (for petty cash payments) or cash credit
+                    let paymentAmountForMatching = paymentAmount; // Use paymentAmount from earlier calculation
+                    if (!paymentAmountForMatching || paymentAmountForMatching === 0) {
+                        const liabilityDebitForMatching = entry.entries?.find(e => {
+                            const accCode = String(e.accountCode || '').trim();
+                            return accCode.startsWith('2') && (e.debit || 0) > 0;
+                        });
+                        if (liabilityDebitForMatching) {
+                            paymentAmountForMatching = liabilityDebitForMatching.debit || 0;
+                        } else {
+                            const cashCredit = entry.entries?.find(e => {
+                                const accCode = String(e.accountCode || '').trim();
+                                return (accCode.startsWith('100') || accCode.startsWith('101')) && (e.credit || 0) > 0;
+                            });
+                            if (cashCredit) {
+                                paymentAmountForMatching = cashCredit.credit || 0;
+                            }
+                        }
                     }
                     
-                    // If still not found, try matching by amount (within tolerance)
+                    // PRIORITY 4.1: Check metadata.expenseId first (most reliable - this is how petty cash identifies the expense)
+                    if (entry.metadata && entry.metadata.expenseId) {
+                        expenseIdToLookup = entry.metadata.expenseId.toString();
+                        console.log(`🔍 Found expenseId in metadata.expenseId: ${expenseIdToLookup} for payment ${entry.transactionId} (paymentAmount: ${paymentAmountForMatching})`);
+                    }
+                    
+                    // PRIORITY 4.2: Fallback to reference if it's in "PETTY-EXP-{expenseId}" format
+                    if (!expenseIdToLookup && entry.reference) {
+                        const refStr = entry.reference.toString();
+                        if (refStr.startsWith('PETTY-EXP-')) {
+                            expenseIdToLookup = refStr.replace('PETTY-EXP-', '');
+                            console.log(`🔍 Extracted expenseId from reference: ${expenseIdToLookup} for payment ${entry.transactionId} (paymentAmount: ${paymentAmountForMatching})`);
+                        }
+                    }
+                    
+                    // If we have an expenseId, look up the Expense record and find its accrual
+                    if (expenseIdToLookup) {
+                        try {
+                            const Expense = require('../models/finance/Expense');
+                            const mongoose = require('mongoose');
+                            
+                            // Try to find expense by _id or expenseId
+                            let expense = null;
+                            if (mongoose.Types.ObjectId.isValid(expenseIdToLookup)) {
+                                expense = await Expense.findById(expenseIdToLookup).lean();
+                            }
+                            
+                            // If not found, try by expenseId field
+                            if (!expense) {
+                                expense = await Expense.findOne({ expenseId: expenseIdToLookup }).lean();
+                            }
+                                
+                                if (expense && expense.transactionId) {
+                                    // Find accrual transaction using the expense's transactionId
+                                    // expense.transactionId is the Transaction _id (ObjectId)
+                                    // We need to find the TransactionEntry that matches this Transaction
+                                    const Transaction = require('../models/Transaction');
+                                    
+                                    // Use expense amount for matching if paymentAmountForMatching is not available
+                                    const expenseAmount = expense.amount || 0;
+                                    const matchingAmount = paymentAmountForMatching > 0 ? paymentAmountForMatching : expenseAmount;
+                                    
+                                    // Method 1: Find Transaction by _id, then find TransactionEntry by transactionId string
+                                    if (mongoose.Types.ObjectId.isValid(expense.transactionId)) {
+                                        const transaction = await Transaction.findById(expense.transactionId).populate('entries').lean();
+                                        
+                                        if (transaction) {
+                                            // Try to find TransactionEntry via transactionId string
+                                            // If multiple accruals share the same transactionId, match by amount to get the correct one
+                                            if (transaction.transactionId) {
+                                                const allAccrualsWithTxnId = await TransactionEntry.find({
+                                                    transactionId: transaction.transactionId,
+                                                    source: 'expense_accrual',
+                                                    status: 'posted'
+                                                }).lean();
+                                                
+                                                if (allAccrualsWithTxnId.length > 0) {
+                                                    // If multiple accruals, match by amount to get the correct one
+                                                    if (allAccrualsWithTxnId.length > 1 && matchingAmount > 0) {
+                                                        accrualTransaction = allAccrualsWithTxnId.find(acc => {
+                                                            const tolerance = 0.01;
+                                                            return Math.abs(acc.totalDebit - matchingAmount) <= tolerance;
+                                                        });
+                                                        if (accrualTransaction) {
+                                                            console.log(`✅ Found accrual ${accrualTransaction.transactionId} for expense ${expenseIdToLookup} via Transaction.transactionId ${transaction.transactionId} (matched by amount ${matchingAmount})`);
+                                                        }
+                                                    }
+                                                    
+                                                    // If only one accrual or no amount match, use first one
+                                                    if (!accrualTransaction && allAccrualsWithTxnId.length > 0) {
+                                                        accrualTransaction = allAccrualsWithTxnId[0];
+                                                        console.log(`✅ Found accrual ${accrualTransaction.transactionId} for expense ${expenseIdToLookup} via Transaction.transactionId ${transaction.transactionId}${allAccrualsWithTxnId.length > 1 ? ' (using first accrual)' : ''}`);
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Method 2: Transaction.entries contains TransactionEntry _ids, find the accrual one
+                                            // When multiple accruals exist, match by amount to get the correct one
+                                            if (!accrualTransaction && transaction.entries && transaction.entries.length > 0) {
+                                                const potentialAccruals = [];
+                                                for (const entryId of transaction.entries) {
+                                                    const entry = await TransactionEntry.findById(entryId).lean();
+                                                    if (entry && entry.source === 'expense_accrual' && entry.status === 'posted') {
+                                                        potentialAccruals.push(entry);
+                                                    }
+                                                }
+                                                
+                                                // If multiple accruals, match by amount to get the correct one
+                                                if (potentialAccruals.length > 1 && matchingAmount > 0) {
+                                                    accrualTransaction = potentialAccruals.find(acc => {
+                                                        const tolerance = 0.01;
+                                                        return Math.abs(acc.totalDebit - matchingAmount) <= tolerance;
+                                                    });
+                                                    if (accrualTransaction) {
+                                                        console.log(`✅ Found accrual ${accrualTransaction.transactionId} for expense ${expenseIdToLookup} via Transaction.entries (matched by amount ${matchingAmount})`);
+                                                    }
+                                                }
+                                                
+                                                // If still no match, use first accrual (shouldn't happen if amounts differ)
+                                                if (!accrualTransaction && potentialAccruals.length > 0) {
+                                                    accrualTransaction = potentialAccruals[0];
+                                                    console.log(`✅ Found accrual ${accrualTransaction.transactionId} for expense ${expenseIdToLookup} via Transaction.entries (using first accrual)`);
+                                                }
+                            }
+                        }
+                    }
+                    
+                                    // Fallback: Find accrual by requestId and itemIndex (if expense has these)
+                                    // This is important when multiple accruals share the same requestId
+                                    // PRIORITY: Also match by amount to ensure we get the correct accrual
+                                    if (!accrualTransaction && expense.requestId) {
+                                        const matchCriteria = {
+                                            source: 'expense_accrual',
+                                            status: 'posted',
+                                            sourceId: expense.requestId.toString(),
+                                            'entries.accountCode': liabilityAccountCode,
+                                            'entries.credit': { $gt: 0 }
+                                        };
+                                        
+                                        // If expense has itemIndex, use it to narrow down (multiple accruals can share requestId)
+                                        if (expense.itemIndex !== undefined && expense.itemIndex !== null) {
+                                            matchCriteria['metadata.itemIndex'] = expense.itemIndex;
+                                        }
+                                        
+                                        // Use expense amount for matching if paymentAmountForMatching is not available
+                                        const expenseAmountForFallback = expense.amount || 0;
+                                        const matchingAmountForFallback = paymentAmountForMatching > 0 ? paymentAmountForMatching : expenseAmountForFallback;
+                                        
+                                        // Also match by amount if we have a matching amount
+                                        if (matchingAmountForFallback > 0) {
+                                            matchCriteria.totalDebit = matchingAmountForFallback;
+                                        }
+                                        
+                                        accrualTransaction = await TransactionEntry.findOne(matchCriteria).sort({ date: -1 }).lean();
+                                        
+                                        // If exact amount match failed, try with tolerance
+                                        if (!accrualTransaction && matchingAmountForFallback > 0) {
+                                            delete matchCriteria.totalDebit;
+                                            const allMatchingAccruals = await TransactionEntry.find(matchCriteria).sort({ date: -1 }).lean();
+                                            
+                                            // Find accrual with matching amount
+                                            accrualTransaction = allMatchingAccruals.find(acc => {
+                                                const tolerance = 0.01;
+                                                return Math.abs(acc.totalDebit - matchingAmountForFallback) <= tolerance;
+                                            });
+                                            
+                                            // If still no match and only one accrual, use it
+                                            if (!accrualTransaction && allMatchingAccruals.length === 1) {
+                                                accrualTransaction = allMatchingAccruals[0];
+                                            }
+                                        }
+                                        
+                                        if (accrualTransaction) {
+                                            console.log(`✅ Found accrual ${accrualTransaction.transactionId} for expense ${expenseIdToLookup} via requestId ${expense.requestId}${expense.itemIndex !== undefined && expense.itemIndex !== null ? ` and itemIndex ${expense.itemIndex}` : ''}${matchingAmountForFallback > 0 ? ` and amount ${matchingAmountForFallback}` : ''}`);
+                                        }
+                                    }
+                                } else if (expense) {
+                                    console.log(`⚠️ Expense ${expenseIdToLookup} found but has no transactionId`);
+                                } else {
+                                    console.log(`⚠️ Expense ${expenseIdToLookup} not found`);
+                                }
+                            } catch (expenseError) {
+                                console.error(`❌ Error looking up expense ${expenseIdToLookup}:`, expenseError);
+                            }
+                    }
+                    
+                    // PRIORITY 4.3: Fallback to original logic for non-PETTY-EXP references or when expenseId not found
+                    if (!accrualTransaction && entry.reference) {
+                        const refStr = entry.reference.toString();
+                        
+                        if (!refStr.startsWith('PETTY-EXP-')) {
+                            // Try multiple reference formats:
+                            // 1. Direct match (if reference is request ID or expense ID)
+                            // 2. Extract expense ID from other formats
+                            let expenseIdFromRef = null;
+                            
+                            // Find ALL accruals that match the reference (by sourceId, metadata.requestId, or metadata.expenseId)
+                            const allAccrualsWithRef = await TransactionEntry.find({
+                                source: 'expense_accrual',
+                                status: 'posted',
+                                'entries.accountCode': liabilityAccountCode,
+                                'entries.credit': { $gt: 0 },
+                                $or: [
+                                    { sourceId: refStr },
+                                    { 'metadata.requestId': refStr },
+                                    { 'metadata.expenseId': refStr }
+                                ]
+                            }).sort({ date: -1 }).lean();
+                            
+                            console.log(`🔍 Found ${allAccrualsWithRef.length} accrual(s) with reference ${entry.reference} and liability ${liabilityAccountCode} for payment ${entry.transactionId}`);
+                            
+                            if (allAccrualsWithRef.length > 0) {
+                                // Match by amount to find the correct accrual from multiple accruals with same reference
+                                accrualTransaction = allAccrualsWithRef.find(acc => acc.totalDebit === paymentAmount);
+                                if (!accrualTransaction) {
+                                    const tolerance = 0.01; // 1 cent tolerance
+                                    accrualTransaction = allAccrualsWithRef.find(acc => 
+                                        Math.abs(acc.totalDebit - paymentAmount) <= tolerance
+                                    );
+                                }
+                                if (accrualTransaction) {
+                                    console.log(`✅ Matched payment ${entry.transactionId} (amount: ${paymentAmount}) to accrual ${accrualTransaction.transactionId} via reference + liability + amount`);
+                                } else if (allAccrualsWithRef.length === 1) {
+                                    // Only one accrual with this reference and liability - use it
+                                    accrualTransaction = allAccrualsWithRef[0];
+                                    console.log(`✅ Using only accrual found with reference ${entry.reference} and liability ${liabilityAccountCode}`);
+                                } else if (allAccrualsWithRef.length > 1) {
+                                    console.log(`⚠️ Multiple accruals found (${allAccrualsWithRef.length}) but none match payment amount ${paymentAmount}. Amounts: ${allAccrualsWithRef.map(a => a.totalDebit).join(', ')}`);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Fallback: Find accrual transaction that credited this liability account (created the liability)
+                    // The accrual would have: dr expense account, cr liability account
                     if (!accrualTransaction) {
-                        const tolerance = paymentAmount * 0.1; // 10% tolerance
+                        // Try exact match by liability account and amount
                         accrualTransaction = await TransactionEntry.findOne({
                             source: 'expense_accrual',
                             status: 'posted',
                             date: { $gte: dateRangeStart, $lte: paymentDate },
-                            $or: [
-                                { totalDebit: { $gte: paymentAmount - tolerance, $lte: paymentAmount + tolerance } },
-                                { totalCredit: { $gte: paymentAmount - tolerance, $lte: paymentAmount + tolerance } }
-                            ],
                             'entries.accountCode': liabilityAccountCode,
-                            'entries.credit': { $gt: 0 }
+                            'entries.credit': { $gt: 0 },
+                            totalDebit: paymentAmount // Match by amount
                         }).sort({ date: -1 }).lean();
+                        
+                        // If not found, try matching by amount and description (for manual entries)
+                        if (!accrualTransaction && entry.description) {
+                            const descLower = entry.description.toLowerCase();
+                            accrualTransaction = await TransactionEntry.findOne({
+                                source: 'expense_accrual',
+                                status: 'posted',
+                                date: { $gte: dateRangeStart, $lte: paymentDate },
+                                $or: [
+                                    { 'entries.accountCode': liabilityAccountCode, 'entries.credit': { $gt: 0 } },
+                                    { description: { $regex: descLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }
+                                ],
+                                totalDebit: paymentAmount // Also match by amount
+                            }).sort({ date: -1 }).lean();
+                        }
+                        
+                        // If still not found, try matching by amount within tolerance
+                        if (!accrualTransaction) {
+                            const tolerance = paymentAmount * 0.1; // 10% tolerance
+                            accrualTransaction = await TransactionEntry.findOne({
+                                source: 'expense_accrual',
+                                status: 'posted',
+                                date: { $gte: dateRangeStart, $lte: paymentDate },
+                                $or: [
+                                    { totalDebit: { $gte: paymentAmount - tolerance, $lte: paymentAmount + tolerance } },
+                                    { totalCredit: { $gte: paymentAmount - tolerance, $lte: paymentAmount + tolerance } }
+                                ],
+                                'entries.accountCode': liabilityAccountCode,
+                                'entries.credit': { $gt: 0 }
+                            }).sort({ date: -1 }).lean();
+                        }
                     }
                     
                     if (accrualTransaction) {
-                        console.log(`✅ Found accrual transaction by liability account ${liabilityAccountCode} for payment ${entry.transactionId} (manual entry)`);
+                        console.log(`✅ Found accrual transaction by liability account ${liabilityAccountCode} for payment ${entry.transactionId}`);
                     } else {
                         console.log(`⚠️ Could not find accrual for liability ${liabilityAccountCode} payment ${entry.transactionId}`);
                     }
@@ -2836,6 +3210,7 @@ class EnhancedCashFlowService {
             }
             
             // Extract expense account from accrual transaction
+            // Use the account code directly from the accrual entry - it's the source of truth
             if (accrualTransaction && accrualTransaction.entries && accrualTransaction.entries.length > 0) {
                 const expenseEntry = accrualTransaction.entries.find(e => {
                     const accCode = String(e.accountCode || '').trim();
@@ -2844,10 +3219,15 @@ class EnhancedCashFlowService {
                 });
                 
                 if (expenseEntry) {
+                    // Use the account code and name directly from the accrual entry
+                    // This is the source of truth - the accrual transaction already has the correct account
+                    console.log(`✅ Found accrual expense entry: accountCode=${expenseEntry.accountCode}, accountName=${expenseEntry.accountName}, amount=${expenseEntry.debit || 0}, accrualTransactionId=${accrualTransaction.transactionId}`);
         return {
                         accountCode: expenseEntry.accountCode,
                         accountName: expenseEntry.accountName || 'Expense Account'
                     };
+                } else {
+                    console.log(`⚠️ Accrual transaction ${accrualTransaction.transactionId} found but no expense entry with account code starting with 5`);
                 }
             }
             
@@ -4327,7 +4707,7 @@ class EnhancedCashFlowService {
                 console.error('❌ generateReliableMonthlyBreakdown: Invalid transactionEntries:', transactionEntries);
                 transactionEntries = [];
             }
-            
+        
         // Initialize simple monthly structure
         const monthlyData = {};
         monthNames.forEach(month => {
@@ -4434,6 +4814,136 @@ class EnhancedCashFlowService {
             }
 
             monthlyData[monthName].transaction_details.transaction_count++;
+
+            // EXCLUDE: Expense accrual transactions - they don't involve cash, so exclude from cash flow
+            if (entry.source === 'expense_accrual' || entry.source === 'expense_accrual_reversal') {
+                console.log(`💰 Expense accrual excluded from cash flow (no cash movement): ${entry.transactionId} - Description: ${entry.description}`);
+                continue; // Skip accrual transactions - they don't involve cash
+            }
+            
+            // PREPROCESSING: Extract and process all expense entries from transactions with multiple expenses FIRST
+            // This prevents double-counting and ensures each expense is processed once before other logic runs
+            if (!processedTransactions.has(entry.transactionId + '_expense_multi') && 
+                !processedTransactions.has(entry.transactionId + '_expense')) {
+                
+                // Extract all expense entries from this transaction
+                const expenseEntries = entry.entries.filter(e => {
+                    const accCode = String(e.accountCode || '').trim();
+                    const accType = e.accountType;
+                    return (accType === 'Expense' || accCode.startsWith('5')) && (e.debit || 0) > 0;
+                });
+                
+                // Also check for liability accounts used as expenses (like 2028 for security)
+                const liabilityExpenseEntries = entry.entries.filter(e => {
+                    const accCode = String(e.accountCode || '').trim();
+                    return accCode === '2028' && (e.debit || 0) > 0;
+                });
+                
+                const allExpenseEntries = [...expenseEntries, ...liabilityExpenseEntries];
+                
+                // If transaction has multiple expense entries, process them all first
+                if (allExpenseEntries.length > 1) {
+                    console.log(`🔍 Transaction ${entry.transactionId} has ${allExpenseEntries.length} expense entries - extracting and processing them first...`);
+                    
+                    // Get all cash credits in this transaction
+                    const cashCredits = entry.entries.filter(e => {
+                        const accCode = String(e.accountCode || '').trim();
+                        return (accCode.startsWith('100') || accCode.startsWith('101')) && 
+                               e.accountType === 'Asset' && (e.credit || 0) > 0;
+                    });
+                    
+                    // Only process if we have cash credits (cash flow basis)
+                    if (cashCredits.length > 0) {
+                        // Process each expense entry and match it with a cash credit
+                        for (const expenseEntry of allExpenseEntries) {
+                            const expenseAccountCode = expenseEntry.accountCode;
+                            const expenseAccountName = expenseEntry.accountName;
+                            const expenseAmount = expenseEntry.debit || 0;
+                            const expenseKey = `${entry.transactionId}_expense_${expenseAccountCode}`;
+                            
+                            // Skip if this expense entry was already processed
+                            if (processedTransactions.has(expenseKey)) {
+                                console.log(`⚠️ Expense entry ${expenseAccountCode} from transaction ${entry.transactionId} already processed, skipping...`);
+                                continue;
+                            }
+                            
+                            // Find matching cash credit for this expense (by amount)
+                            let matchingCashCredit = cashCredits.find(c => (c.credit || 0) === expenseAmount);
+                            
+                            // If exact match not found, use first available cash credit
+                            // (for transactions where cash credits are not exactly matched by amount)
+                            if (!matchingCashCredit && cashCredits.length > 0) {
+                                // Track which cash credits have been used
+                                const usedCashCredits = new Set();
+                                for (const otherExpense of allExpenseEntries) {
+                                    if (otherExpense !== expenseEntry) {
+                                        const matchingCash = cashCredits.find(c => 
+                                            (c.credit || 0) === (otherExpense.debit || 0) && 
+                                            !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
+                                        );
+                                        if (matchingCash) {
+                                            usedCashCredits.add(matchingCash._id?.toString() || matchingCash.id?.toString() || JSON.stringify(matchingCash));
+                                        }
+                                    }
+                                }
+                                
+                                // Find first unused cash credit
+                                matchingCashCredit = cashCredits.find(c => 
+                                    !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
+                                );
+                            }
+                            
+                            // Only process if we have a matching cash credit (ensures cash flow basis)
+                            if (matchingCashCredit && (matchingCashCredit.credit || 0) > 0) {
+                                const expenseName = expenseAccountCode; // Use account code as category
+                                
+                                // Initialize the expense category if it doesn't exist
+                                if (!monthlyData[monthName].expenses[expenseName]) {
+                                    monthlyData[monthName].expenses[expenseName] = 0;
+                                }
+                                if (!monthlyData[monthName].operating_activities.breakdown[expenseName]) {
+                                    monthlyData[monthName].operating_activities.breakdown[expenseName] = 0;
+                                }
+                                
+                                // Store account name
+                                if (expenseAccountCode && expenseAccountName) {
+                                    monthlyData[monthName].expenses.accountNames[expenseAccountCode] = expenseAccountName;
+                                }
+                                
+                                // Add to expenses
+                                monthlyData[monthName].expenses[expenseName] += expenseAmount;
+                                monthlyData[monthName].expenses.total += expenseAmount;
+                                monthlyData[monthName].operating_activities.breakdown[expenseName] += expenseAmount;
+                                monthlyData[monthName].operating_activities.outflows += expenseAmount;
+                                
+                                // Add to transactions array
+                                monthlyData[monthName].expenses.transactions.push({
+                                    transactionId: entry.transactionId,
+                                    date: entry.date,
+                                    amount: expenseAmount,
+                                    description: entry.description,
+                                    accountCode: expenseAccountCode,
+                                    accountName: expenseAccountName,
+                                    category: 'expense'
+                                });
+                                
+                                // Mark this expense entry as processed
+                                processedTransactions.add(expenseKey);
+                                
+                                console.log(`✅ Extracted and processed expense ${expenseAccountCode} (${expenseAccountName}) for ${expenseAmount} from transaction ${entry.transactionId}`);
+                            }
+                        }
+                        
+                        // Mark entire transaction as processed through multi-entry extraction
+                        processedTransactions.add(entry.transactionId + '_expense');
+                        processedTransactions.add(entry.transactionId + '_expense_multi');
+                        console.log(`✅ Transaction ${entry.transactionId} fully processed through expense extraction, skipping further processing`);
+                        
+                        // Skip the rest of the processing for this transaction
+                        continue; // Move to next transaction
+                    }
+                }
+            }
 
             // FIRST: Check for deposit returns and receipts BEFORE processing other entries
             // This must happen BEFORE processing cash debits to ensure deposits aren't missed
@@ -4676,7 +5186,7 @@ class EnhancedCashFlowService {
                 continue; // Skip further processing of this transaction
             }
 
-            // Process each line in the transaction
+            // Process each line in the transaction (for single-expense transactions or non-expense transactions)
             for (const line of entry.entries) {
                 const amount = line.debit || line.credit || 0;
                 const isDebit = line.debit > 0;
@@ -4870,6 +5380,7 @@ class EnhancedCashFlowService {
 
                 // EXPENSES: Credit to Cash accounts (1000 series) - money paid out
                 // BUT EXCLUDE balance sheet adjustments and internal transfers
+                // IMPORTANT: Handle transactions with multiple expense entries - process each expense separately
                 if (isCredit && accountCode && accountCode.startsWith('1') && 
                     (accountName?.toLowerCase().includes('cash') || accountName?.toLowerCase().includes('bank'))) {
                     
@@ -4903,6 +5414,12 @@ class EnhancedCashFlowService {
                         break; // Skip rest of this transaction, continue to next transaction
                     }
                     
+                    // EXCLUDE: Expense accrual transactions - they don't involve cash, so exclude from cash flow
+                    if (entry.source === 'expense_accrual' || entry.source === 'expense_accrual_reversal') {
+                        console.log(`💰 Expense accrual excluded from cash outflow (no cash movement): ${entry.transactionId} - Description: ${entry.description}`);
+                        break; // Skip accrual transactions - they don't involve cash
+                    }
+                    
                     // EXCLUDE: Lease start accounting entries (accruals without cash) - exclude from cash flow
                     if (entry.description && entry.description.toLowerCase().includes('lease start accounting entries')) {
                         console.log(`💰 Lease start accounting entry excluded from cash outflow (accrual, no cash): ${amount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
@@ -4916,6 +5433,31 @@ class EnhancedCashFlowService {
                         break; // Skip rest of this transaction, continue to next transaction
                     }
                     
+                    // CRITICAL: Check if transaction was already processed through multi-entry extraction FIRST
+                    // Multi-entry transactions are processed in the preprocessing step above
+                    if (processedTransactions.has(entry.transactionId + '_expense_multi')) {
+                        console.log(`⚠️ Transaction ${entry.transactionId} already processed through multi-entry extraction, skipping...`);
+                        break; // Skip rest of this transaction, continue to next transaction
+                    }
+                    
+                    // Check if any expense entry from this transaction was already processed individually
+                    // This prevents double-counting when iterating through entry lines
+                    const hasProcessedExpenseEntry = entry.entries.some(e => {
+                        const accCode = String(e.accountCode || '').trim();
+                        const accType = e.accountType;
+                        if ((accType === 'Expense' || accCode.startsWith('5')) && (e.debit || 0) > 0) {
+                            const expenseKey = `${entry.transactionId}_expense_${accCode}`;
+                            return processedTransactions.has(expenseKey);
+                        }
+                        return false;
+                    });
+                    
+                    if (hasProcessedExpenseEntry) {
+                        console.log(`⚠️ Transaction ${entry.transactionId} has expense entries already processed individually, skipping normal processing...`);
+                        break; // Skip rest of this transaction, continue to next transaction
+                    }
+                    
+                    // Single expense entry transactions - process using original logic
                     if (!processedTransactions.has(entry.transactionId + '_expense')) {
                     monthlyData[monthName].operating_activities.outflows += amount;
                     monthlyData[monthName].expenses.total += amount;
@@ -5053,13 +5595,72 @@ class EnhancedCashFlowService {
                                     }
                                 }
                                 
-                                if (expenseLine && expenseLine.accountCode && !expenseAccountCode) {
+                                // PRIORITY: For petty cash payments, parse description FIRST to get actual expense type
+                                // Petty cash payments have format: "Petty cash payment: Paid: [Residence] - [expense type] (Other)"
+                                // The expense type in the description is more accurate than the transaction entry account code
+                                const isPettyCashPayment = entry.description && entry.description.toLowerCase().includes('petty cash payment');
+                                let descriptionParsed = false;
+                                
+                                if (isPettyCashPayment && !expenseAccountCode) {
+                                    // Parse description for petty cash payments to extract actual expense type
+                                    const desc = (entry.description || '').toLowerCase();
+                                    let inferredCode = null;
+                                    let inferredName = null;
+                                    
+                                    // Extract the expense type from description (after the dash)
+                                    // Format: "petty cash payment: paid: [residence] - [expense type] (other)"
+                                    const expenseTypeMatch = desc.match(/-\s*([^\(]+)/);
+                                    const expenseType = expenseTypeMatch ? expenseTypeMatch[1].trim() : '';
+                                    
+                                    // Map expense types to account codes
+                                    if (expenseType.includes('gas') || expenseType.includes('lpg')) {
+                                        inferredCode = '5005';
+                                        inferredName = 'Utilities - Gas';
+                                    } else if (expenseType.includes('wifi') || expenseType.includes('internet')) {
+                                        inferredCode = '5006';
+                                        inferredName = 'WiFi & Internet';
+                                    } else if (expenseType.includes('electricity') || expenseType.includes('electric')) {
+                                        inferredCode = '5003';
+                                        inferredName = 'Utilities - Electricity';
+                                    } else if (expenseType.includes('water') && !expenseType.includes('delivery')) {
+                                        inferredCode = '5004';
+                                        inferredName = 'Utilities - Water';
+                                    } else if (expenseType.includes('cleaning') || expenseType.includes('cleaning supplies')) {
+                                        inferredCode = '5008';
+                                        inferredName = 'Cleaning Expenses';
+                                    } else if (expenseType.includes('bin') || expenseType.includes('collection')) {
+                                        inferredCode = '5010';
+                                        inferredName = 'Waste Management';
+                                    } else if (expenseType.includes('maintenance') && !expenseType.includes('supplies')) {
+                                        inferredCode = '5007';
+                                        inferredName = 'Property Maintenance';
+                                    } else if (expenseType.includes('maintenance supplies')) {
+                                        inferredCode = '5011';
+                                        inferredName = 'Maintenance Supplies';
+                                    } else if (expenseType.includes('management') || expenseType.includes('alamait')) {
+                                        inferredCode = '50005';
+                                        inferredName = 'Alamait Management Fee';
+                                    } else if (expenseType.includes('security')) {
+                                        inferredCode = '5011';
+                                        inferredName = 'Security Expense';
+                                    }
+                                    
+                                    if (inferredCode) {
+                                        expenseAccountCode = inferredCode;
+                                        expenseAccountName = inferredName;
+                                        expenseName = expenseAccountCode;
+                                        console.log(`✅ Petty cash payment categorized by description: ${expenseAccountCode} - ${expenseAccountName} for ${entry.transactionId}`);
+                                    }
+                                }
+                                
+                                // If not petty cash or parsing failed, use transaction entry account code
+                                if (!expenseAccountCode && expenseLine && expenseLine.accountCode) {
                                     expenseAccountCode = expenseLine.accountCode;
                                     expenseAccountName = expenseLine.accountName || null;
                                     expenseName = expenseAccountCode; // Use account code as category
                                     console.log(`✅ Found expense account from transaction entry: ${expenseAccountCode} - ${expenseAccountName || 'Unknown'} for payment ${entry.transactionId}`);
                                 } else if (!expenseAccountCode) {
-                                    // FALLBACK 2: Try to infer account code from description keywords
+                                    // FALLBACK 2: Try to infer account code from description keywords (for non-petty cash transactions)
                                     const desc = (entry.description || '').toLowerCase();
                                     let inferredCode = null;
                                     let inferredName = null;
@@ -5315,28 +5916,46 @@ class EnhancedCashFlowService {
         let runningBalance = openingBalance;
         let runningCashAccounts = {}; // Track cash accounts by month
         
-        // Calculate month-end dates for cash balance calculations
+        // Calculate month-end dates and month-beginning dates for cash balance calculations
         const monthEndDates = {};
+        const monthBeginDates = {};
         monthNames.forEach(monthName => {
             const monthIndex = monthNames.indexOf(monthName);
             const year = parseInt(period);
             const monthEndDate = new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59, 999));
             monthEndDates[monthName] = monthEndDate;
+            
+            // Month beginning is the day before the month starts (last day of previous month)
+            const monthBeginDate = new Date(Date.UTC(year, monthIndex, 0, 23, 59, 59, 999));
+            monthBeginDates[monthName] = monthBeginDate;
         });
         
-        // Fetch cash balances for each month-end in parallel
+        // Fetch cash balances for each month-end and month-beginning in parallel
         const monthEndBalancesPromises = monthNames.map(monthName => 
             this.getCashBalanceByAccount(monthEndDates[monthName], residenceId)
-                .then(balances => ({ monthName, balances }))
+                .then(balances => ({ monthName, balances, type: 'end' }))
                 .catch(err => {
                     console.error(`Error fetching cash balance for ${monthName}:`, err);
-                    return { monthName, balances: {} };
+                    return { monthName, balances: {}, type: 'end' };
                 })
         );
-        const monthEndBalancesResults = await Promise.all(monthEndBalancesPromises);
+        const monthBeginBalancesPromises = monthNames.map(monthName => 
+            this.getCashBalanceByAccount(monthBeginDates[monthName], residenceId)
+                .then(balances => ({ monthName, balances, type: 'begin' }))
+                .catch(err => {
+                    console.error(`Error fetching beginning cash balance for ${monthName}:`, err);
+                    return { monthName, balances: {}, type: 'begin' };
+                })
+        );
+        const allBalancesResults = await Promise.all([...monthEndBalancesPromises, ...monthBeginBalancesPromises]);
         const monthEndBalances = {};
-        monthEndBalancesResults.forEach(({ monthName, balances }) => {
-            monthEndBalances[monthName] = balances;
+        const monthBeginBalances = {};
+        allBalancesResults.forEach(({ monthName, balances, type }) => {
+            if (type === 'end') {
+                monthEndBalances[monthName] = balances;
+            } else {
+                monthBeginBalances[monthName] = balances;
+            }
         });
         
         monthNames.forEach(monthName => {
@@ -5356,12 +5975,20 @@ class EnhancedCashFlowService {
             // Total net cash flow
             month.net_cash_flow = month.operating_activities.net + month.investing_activities.net + month.financing_activities.net;
             
-            // Running balances
-            month.opening_balance = runningBalance;
-            month.closing_balance = runningBalance + month.net_cash_flow;
-            runningBalance = month.closing_balance;
+            // Calculate opening balance from actual cash accounts at month beginning
+            let openingTotalCash = 0;
+            const monthBeginBalancesForMonth = monthBeginBalances[monthName] || {};
+            Object.values(monthBeginBalancesForMonth).forEach(account => {
+                const accountName = account.accountName;
+                const accountCode = account.accountCode;
+                
+                // Only include proper cash accounts, exclude clearing accounts
+                if (this.isCashAccount(accountName, accountCode)) {
+                    openingTotalCash += account.balance || 0;
+                }
+            });
             
-            // Calculate cash accounts for this month using actual account balances as of month-end
+            // Calculate closing balance from actual cash accounts at month-end
             const cashAccounts = {};
             let totalCash = 0;
             
@@ -5386,6 +6013,10 @@ class EnhancedCashFlowService {
                     totalCash += account.balance;
                 }
             });
+            
+            // Set opening and closing balances to actual totals of cash equivalents
+            month.opening_balance = openingTotalCash;
+            month.closing_balance = totalCash;
             
             // Add to monthly cash accounts (original format by account code)
             month.cash_accounts.breakdown = cashAccounts;
@@ -5488,20 +6119,37 @@ class EnhancedCashFlowService {
                 }
                 
                 // Calculate verificationSum from line items as fallback
+                // Sum all account code keys (numeric keys like '5003', '5004', etc.)
                 let verificationSum = 0;
                 Object.keys(month.expenses).forEach(key => {
-                    if (key !== 'total' && key !== 'transactions' && typeof month.expenses[key] === 'number' && month.expenses[key] !== 0) {
+                    // Skip 'total', 'transactions', 'accountNames', and legacy category keys
+                    if (key === 'total' || key === 'transactions' || key === 'accountNames' ||
+                        key === 'cleaning' || key === 'council_rates' || key === 'electricity' || 
+                        key === 'water' || key === 'gas' || key === 'insurance' || key === 'internet' ||
+                        key === 'maintenance' || key === 'management' || key === 'other_expenses' ||
+                        key === 'plumbing' || key === 'sanitary' || key === 'security' || key === 'solar' ||
+                        key === 'utilities') {
+                        return;
+                    }
+                    // Only sum numeric account codes (expense account codes like '5003', '5004', '5006', '50001')
+                    // Account codes can be strings that represent numbers (like '50001')
+                    const isAccountCode = /^\d+$/.test(key); // Check if key is all digits
+                    if (isAccountCode && typeof month.expenses[key] === 'number' && month.expenses[key] !== 0) {
                         verificationSum += month.expenses[key];
+                        console.log(`💰 ${monthName}: Adding expense ${key} = ${month.expenses[key]} to verificationSum. Current sum: ${verificationSum}`);
                     }
                 });
                 
-                // PRIORITY: Use transaction sum if available (it's the source of truth)
-                // Otherwise use verificationSum (line items sum)
-                let finalTotal = transactionSum > 0 ? transactionSum : verificationSum;
+                // PRIORITY: Use verificationSum (sum of individual account codes) as primary source
+                // This ensures accuracy since account codes are the source of truth for expense amounts
+                // Only use transactionSum as fallback if verificationSum is 0
+                let finalTotal = verificationSum > 0 ? verificationSum : transactionSum;
                 
                 // Log if there's a discrepancy
-                if (transactionSum > 0 && Math.abs(verificationSum - transactionSum) > 0.01) {
-                    console.log(`⚠️ [generateReliableMonthlyBreakdown] ${monthName}: Transaction sum (${transactionSum}) differs from line items sum (${verificationSum}). Using transaction sum.`);
+                if (transactionSum > 0 && verificationSum > 0 && Math.abs(verificationSum - transactionSum) > 0.01) {
+                    console.log(`⚠️ [generateReliableMonthlyBreakdown] ${monthName}: Transaction sum (${transactionSum}) differs from account codes sum (${verificationSum}). Using account codes sum (${verificationSum}).`);
+                } else if (verificationSum > 0) {
+                    console.log(`✅ [generateReliableMonthlyBreakdown] ${monthName}: Using account codes sum (${verificationSum}) as total.`);
                 }
                 if (Math.abs(finalTotal - sumFromBreakdown) > 0.01) {
                     console.log(`⚠️ [generateReliableMonthlyBreakdown] ${monthName}: Final total (${finalTotal}) differs from breakdown sum (${sumFromBreakdown}). Using final total.`);
@@ -7207,41 +7855,73 @@ class EnhancedCashFlowService {
      * Format cash flow statement in standard format
      */
     static formatCashFlowStatement(cashFlowData) {
-        const { period, cash_breakdown, cash_balance_by_account, operating_activities, investing_activities, financing_activities, summary } = cashFlowData;
+        const { period, cash_breakdown, cash_balance_by_account, cash_balance_by_account_beginning, operating_activities, investing_activities, financing_activities, summary } = cashFlowData;
         
-        // Format cash and cash equivalents with clear account names
-        const cashAndEquivalents = {
-            total_cash: cash_breakdown.ending_cash,
+        // Format cash and cash equivalents ENDING with clear account names
+        const cashAndEquivalentsEnding = {
+            total_cash: 0,
             breakdown: {}
         };
         
         if (cash_balance_by_account) {
-            console.log('💰 Formatting cash balance by account:', cash_balance_by_account);
+            console.log('💰 Formatting cash balance by account (ending):', cash_balance_by_account);
             Object.values(cash_balance_by_account).forEach(account => {
                 // Only include proper cash accounts, exclude clearing accounts
                 if (this.isCashAccount(account.accountName, account.accountCode)) {
-                    cashAndEquivalents.breakdown[account.accountName] = {
+                    cashAndEquivalentsEnding.breakdown[account.accountName] = {
                         account_code: account.accountCode,
                         balance: account.balance,
                         description: this.getCashAccountDescription(account.accountName)
                     };
+                    // Sum all cash account balances to get total
+                    cashAndEquivalentsEnding.total_cash += account.balance || 0;
                 } else {
                     console.log(`🚫 Excluding non-cash account from cash equivalents: ${account.accountName} (${account.accountCode})`);
                 }
             });
-            console.log('💰 Formatted cash and equivalents breakdown:', cashAndEquivalents.breakdown);
+            console.log('💰 Formatted cash and equivalents breakdown (ending):', cashAndEquivalentsEnding.breakdown);
+            console.log('💰 Total cash and cash equivalents (ending):', cashAndEquivalentsEnding.total_cash);
         } else {
             console.log('❌ No cash_balance_by_account data provided to formatCashFlowStatement');
+            // Fallback to cash_breakdown.ending_cash if no breakdown available
+            cashAndEquivalentsEnding.total_cash = cash_breakdown.ending_cash || 0;
+        }
+        
+        // Format cash and cash equivalents BEGINNING
+        const cashAndEquivalentsBeginning = {
+            total_cash: 0,
+            breakdown: {}
+        };
+        
+        // If we have beginning balance by account, use it; otherwise use the simple breakdown
+        if (cash_balance_by_account_beginning) {
+            console.log('💰 Formatting cash balance by account (beginning):', cash_balance_by_account_beginning);
+            Object.values(cash_balance_by_account_beginning).forEach(account => {
+                // Only include proper cash accounts, exclude clearing accounts
+                if (this.isCashAccount(account.accountName, account.accountCode)) {
+                    cashAndEquivalentsBeginning.breakdown[account.accountName] = {
+                        account_code: account.accountCode,
+                        balance: account.balance,
+                        description: this.getCashAccountDescription(account.accountName)
+                    };
+                    // Sum all cash account balances to get total
+                    cashAndEquivalentsBeginning.total_cash += account.balance || 0;
+                } else {
+                    console.log(`🚫 Excluding non-cash account from cash equivalents (beginning): ${account.accountName} (${account.accountCode})`);
+                }
+            });
+            console.log('💰 Total cash and cash equivalents (beginning):', cashAndEquivalentsBeginning.total_cash);
+        } else {
+            // Fallback to simple breakdown if no beginning balance by account available
+            cashAndEquivalentsBeginning.total_cash = cash_breakdown.beginning_cash || 0;
+            cashAndEquivalentsBeginning.breakdown = this.getBeginningCashBreakdown(cash_breakdown.beginning_cash || 0);
         }
         
         return {
             period,
             cash_flow_statement: {
                 // Cash and Cash Equivalents at Beginning of Period
-                cash_and_cash_equivalents_beginning: {
-                    total_cash: cash_breakdown.beginning_cash,
-                    breakdown: this.getBeginningCashBreakdown(cash_breakdown.beginning_cash)
-                },
+                cash_and_cash_equivalents_beginning: cashAndEquivalentsBeginning,
                 
                 // Operating Activities
                 operating_activities: {
@@ -7284,7 +7964,7 @@ class EnhancedCashFlowService {
                 net_change_in_cash: summary.net_change_in_cash,
                 
                 // Cash and Cash Equivalents at End of Period
-                cash_and_cash_equivalents_ending: cashAndEquivalents,
+                cash_and_cash_equivalents_ending: cashAndEquivalentsEnding,
                 
                 // Internal Cash Transfers (for reference)
                 internal_cash_transfers: {
