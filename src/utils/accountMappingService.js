@@ -51,84 +51,253 @@ class AccountMappingService {
 
     /**
      * Get account by specific keywords in title/description
+     * First tries to find matching accounts in the database, then falls back to keyword mappings
      */
     static async getAccountByKeywords(searchText) {
+        // Priority 1: Search the database for accounts that match keywords in their name or description
+        // IMPORTANT: Order matters - more specific keywords should come first
+        // IMPORTANT: Fuel and gas are different - search for them separately
+        // Use whatever account exists in the database - don't hardcode account codes
+        const keywordMatches = [
+            // Fuel/Transportation keywords - HIGHEST PRIORITY (check first)
+            // Search for accounts with fuel-related terms (NOT gas - that's separate)
+            { keywords: ['fuel', 'gasoline', 'diesel', 'petrol', 'toll', 'toll gate', 'tollgate', 'transport', 'travel'], searchTerms: ['fuel', 'transport', 'toll', 'gasoline', 'diesel', 'petrol'], priority: 'fuel' },
+            // Water & Utilities
+            { keywords: ['water', 'sewer'], searchTerms: ['water', 'sewer'] },
+            { keywords: ['electricity', 'power'], searchTerms: ['electricity', 'power'] },
+            // Gas is separate from fuel - search for gas accounts specifically
+            { keywords: ['gas'], searchTerms: ['gas'], excludeTerms: ['fuel', 'gasoline', 'diesel', 'petrol'] },
+            { keywords: ['internet', 'wifi', 'telephone', 'phone'], searchTerms: ['internet', 'wifi', 'telephone'] },
+            // Maintenance & Repairs
+            { keywords: ['plumbing', 'pipe', 'drain', 'tap', 'toilet', 'sink'], searchTerms: ['plumbing'] },
+            { keywords: ['electrical', 'wiring', 'light', 'switch', 'outlet'], searchTerms: ['electrical', 'electricity'] },
+            { keywords: ['hvac', 'heating', 'air conditioning', 'ventilation'], searchTerms: ['hvac', 'heating', 'air'] },
+            { keywords: ['roof'], searchTerms: ['roof'] },
+            { keywords: ['painting', 'paint', 'wall', 'ceiling'], searchTerms: ['painting', 'paint'] },
+            { keywords: ['carpentry', 'wood', 'door', 'window', 'cabinet'], searchTerms: ['carpentry', 'wood', 'window'] },
+            { keywords: ['flooring', 'floor'], searchTerms: ['flooring', 'floor'] },
+            // Cleaning & Services
+            { keywords: ['cleaning', 'clean', 'janitorial', 'housekeeping'], searchTerms: ['cleaning', 'clean'] },
+            { keywords: ['security', 'guard', 'patrol', 'camera', 'alarm'], searchTerms: ['security', 'guard'] },
+            { keywords: ['landscaping', 'garden', 'gardening', 'lawn'], searchTerms: ['landscaping', 'garden', 'lawn'] },
+            // Supplies & Materials
+            { keywords: ['supplies'], searchTerms: ['supplies'] },
+            { keywords: ['materials', 'building materials'], searchTerms: ['materials'] },
+            { keywords: ['tools', 'tool', 'equipment'], searchTerms: ['tools', 'equipment'] },
+            // Insurance & Legal
+            { keywords: ['insurance'], searchTerms: ['insurance'] },
+            { keywords: ['legal', 'lawyer', 'attorney'], searchTerms: ['legal', 'lawyer'] },
+            // Taxes & Fees
+            { keywords: ['tax', 'property tax'], searchTerms: ['tax'] },
+            { keywords: ['permit', 'license'], searchTerms: ['permit', 'license'] },
+            // Administrative
+            { keywords: ['office'], searchTerms: ['office'] },
+            { keywords: ['administrative', 'admin'], searchTerms: ['administrative', 'admin'] },
+            { keywords: ['management', 'property management'], searchTerms: ['management'] },
+            { keywords: ['accounting', 'bookkeeping'], searchTerms: ['accounting', 'bookkeeping'] }
+        ];
+
+        // Try to find matching account in database for each keyword group
+        // Return immediately on first match (prioritizes order)
+        // Use whatever account exists in the database - don't hardcode
+        let matchedKeywordGroup = null;
+        for (const { keywords, searchTerms, priority } of keywordMatches) {
+            // Check if any keyword matches the search text
+            const hasKeywordMatch = keywords.some(keyword => searchText.includes(keyword));
+            if (hasKeywordMatch) {
+                matchedKeywordGroup = { keywords, searchTerms, priority };
+                
+                // For fuel priority, do a comprehensive search of all possible fuel-related accounts
+                // IMPORTANT: Fuel and gas are different - only search for fuel, not gas
+                if (priority === 'fuel') {
+                    // First, search by name/description with fuel-related terms (NOT gas)
+                    for (const term of searchTerms) {
+                        const matchingAccount = await Account.findOne({
+                            type: 'Expense',
+                            isActive: true,
+                            $or: [
+                                { name: { $regex: term, $options: 'i' } },
+                                { description: { $regex: term, $options: 'i' } }
+                            ]
+                        }).sort({ code: 1 });
+                        
+                        if (matchingAccount) {
+                            // Verify it's fuel-related, not gas (unless it's gasoline)
+                            const accountName = (matchingAccount.name || '').toLowerCase();
+                            if (!accountName.includes('gas') || accountName.includes('gasoline') || accountName.includes('fuel')) {
+                                console.log(`✅ Found fuel account in database: ${matchingAccount.code} - ${matchingAccount.name} for keyword: ${term} (matched: ${keywords.filter(k => searchText.includes(k)).join(', ')})`);
+                                return matchingAccount.code;
+                            }
+                        }
+                    }
+                    
+                    // If no direct match, try to find any expense account that might be fuel-related
+                    // Search all expense accounts and look for fuel-related keywords (NOT gas)
+                    const allExpenseAccounts = await Account.find({ 
+                        type: 'Expense', 
+                        isActive: true 
+                    }).sort({ code: 1 });
+                    
+                    for (const account of allExpenseAccounts) {
+                        const accountName = (account.name || '').toLowerCase();
+                        const accountDesc = ((account.description || '') + ' ' + accountName).toLowerCase();
+                        
+                        // Check if account name/description contains fuel-related keywords (NOT gas)
+                        if ((accountDesc.includes('fuel') || accountDesc.includes('gasoline') || 
+                            accountDesc.includes('diesel') || accountDesc.includes('petrol') ||
+                            accountDesc.includes('transport') || accountDesc.includes('toll')) &&
+                            !accountDesc.includes('gas') || accountDesc.includes('gasoline')) {
+                            console.log(`✅ Found fuel account in database: ${account.code} - ${account.name} for keyword match: ${keywords.filter(k => searchText.includes(k)).join(', ')}`);
+                            return account.code;
+                        }
+                    }
+                    
+                    console.log(`⚠️ Fuel keyword match found (${keywords.filter(k => searchText.includes(k)).join(', ')}) but no fuel account found in database for search terms: ${searchTerms.join(', ')}`);
+                    break; // Stop searching other keyword groups
+                } else if (keywords.includes('gas') && !keywords.includes('fuel') && !keywords.includes('gasoline')) {
+                    // Gas is separate from fuel - search for gas accounts specifically
+                    // Make sure we exclude fuel-related terms
+                    const gasAccount = await Account.findOne({
+                        type: 'Expense',
+                        isActive: true,
+                        $and: [
+                            {
+                                $or: [
+                                    { name: { $regex: /gas/i } },
+                                    { description: { $regex: /gas/i } }
+                                ]
+                            },
+                            {
+                                name: { $not: { $regex: /fuel|gasoline|diesel|petrol/i } } },
+                            {
+                                description: { $not: { $regex: /fuel|gasoline|diesel|petrol/i } } }
+                        ]
+                    }).sort({ code: 1 });
+                    
+                    if (gasAccount) {
+                        console.log(`✅ Found gas account in database: ${gasAccount.code} - ${gasAccount.name} for keyword: gas`);
+                        return gasAccount.code;
+                    }
+                } else {
+                    // For non-fuel keywords, use standard search
+                    for (const term of searchTerms) {
+                        const matchingAccount = await Account.findOne({
+                            type: 'Expense',
+                            isActive: true,
+                            $or: [
+                                { name: { $regex: term, $options: 'i' } },
+                                { description: { $regex: term, $options: 'i' } }
+                            ]
+                        }).sort({ code: 1 });
+                        
+                        if (matchingAccount) {
+                            console.log(`✅ Found matching account in database: ${matchingAccount.code} - ${matchingAccount.name} for keyword: ${term} (matched: ${keywords.filter(k => searchText.includes(k)).join(', ')})`);
+                            return matchingAccount.code;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Priority 2: Fallback to default keyword mappings if no database match found
         const keywordMappings = {
             // Water & Utilities
-            'water': { code: '5001', name: 'Water & Sewer Expense' },
-            'sewer': { code: '5001', name: 'Water & Sewer Expense' },
-            'electricity': { code: '5002', name: 'Electricity Expense' },
-            'power': { code: '5002', name: 'Electricity Expense' },
-            'gas': { code: '5003', name: 'Gas Expense' },
-            'internet': { code: '5004', name: 'Internet & Communication Expense' },
-            'wifi': { code: '5004', name: 'Internet & Communication Expense' },
-            'telephone': { code: '5004', name: 'Internet & Communication Expense' },
-            'phone': { code: '5004', name: 'Internet & Communication Expense' },
+            'water': { code: '5004', name: 'Utilities - Water' },
+            'sewer': { code: '5004', name: 'Utilities - Water' },
+            'electricity': { code: '5003', name: 'Utilities - Electricity' },
+            'power': { code: '5003', name: 'Utilities - Electricity' },
+            'gas': { code: '5005', name: 'Utilities - Gas' },
+            'internet': { code: '5006', name: 'WiFi & Internet' },
+            'wifi': { code: '5006', name: 'WiFi & Internet' },
+            'telephone': { code: '5006', name: 'WiFi & Internet' },
+            'phone': { code: '5006', name: 'WiFi & Internet' },
             
             // Maintenance & Repairs
-            'plumbing': { code: '5005', name: 'Plumbing Maintenance Expense' },
-            'electrical': { code: '5006', name: 'Electrical Maintenance Expense' },
-            'hvac': { code: '5007', name: 'HVAC Maintenance Expense' },
-            'heating': { code: '5007', name: 'HVAC Maintenance Expense' },
-            'air conditioning': { code: '5007', name: 'HVAC Maintenance Expense' },
-            'roof': { code: '5008', name: 'Roof Maintenance Expense' },
-            'painting': { code: '5009', name: 'Painting & Decorating Expense' },
-            'carpentry': { code: '5010', name: 'Carpentry Maintenance Expense' },
-            'flooring': { code: '5011', name: 'Flooring Maintenance Expense' },
+            'plumbing': { code: '5000', name: 'Plumbing Expenses' },
+            'electrical': { code: '5007', name: 'Property Maintenance' },
+            'hvac': { code: '5007', name: 'Property Maintenance' },
+            'heating': { code: '5007', name: 'Property Maintenance' },
+            'air conditioning': { code: '5007', name: 'Property Maintenance' },
+            'roof': { code: '5007', name: 'Property Maintenance' },
+            'painting': { code: '5007', name: 'Property Maintenance' },
+            'carpentry': { code: '5007', name: 'Property Maintenance' },
+            'flooring': { code: '5007', name: 'Property Maintenance' },
+            'window': { code: '5007', name: 'Property Maintenance' },
             
             // Cleaning & Services
-            'cleaning': { code: '5012', name: 'Cleaning Services Expense' },
-            'janitorial': { code: '5012', name: 'Cleaning Services Expense' },
-            'housekeeping': { code: '5012', name: 'Cleaning Services Expense' },
-            'security': { code: '5013', name: 'Security Services Expense' },
-            'guard': { code: '5013', name: 'Security Services Expense' },
-            'patrol': { code: '5013', name: 'Security Services Expense' },
-            'landscaping': { code: '5014', name: 'Landscaping Expense' },
-            'gardening': { code: '5014', name: 'Landscaping Expense' },
-            'lawn': { code: '5014', name: 'Landscaping Expense' },
+            'cleaning': { code: '5009', name: 'Cleaning Services' },
+            'janitorial': { code: '5009', name: 'Cleaning Services' },
+            'housekeeping': { code: '5009', name: 'Cleaning Services' },
+            'security': { code: '5014', name: 'Security Services' },
+            'guard': { code: '5014', name: 'Security Services' },
+            'patrol': { code: '5014', name: 'Security Services' },
+            'landscaping': { code: '5007', name: 'Property Maintenance' },
+            'gardening': { code: '5007', name: 'Property Maintenance' },
+            'lawn': { code: '5007', name: 'Property Maintenance' },
             
-            // Transportation & Logistics
-            'transport': { code: '5015', name: 'Transportation Expense' },
-            'delivery': { code: '5015', name: 'Transportation Expense' },
-            'shipping': { code: '5015', name: 'Transportation Expense' },
-            'fuel': { code: '5016', name: 'Fuel Expense' },
-            'gasoline': { code: '5016', name: 'Fuel Expense' },
-            'diesel': { code: '5016', name: 'Fuel Expense' },
-            'toll': { code: '5016', name: 'Fuel Expense' },
-            'toll gate': { code: '5016', name: 'Fuel Expense' },
-            'tollgate': { code: '5016', name: 'Fuel Expense' },
-            'petrol': { code: '5016', name: 'Fuel Expense' },
+            // Transportation & Logistics - try to use existing gas account
+            'transport': { code: '5005', name: 'Utilities - Gas' },
+            'delivery': { code: '5005', name: 'Utilities - Gas' },
+            'shipping': { code: '5005', name: 'Utilities - Gas' },
+            'fuel': { code: '5005', name: 'Utilities - Gas' },
+            'gasoline': { code: '5005', name: 'Utilities - Gas' },
+            'diesel': { code: '5005', name: 'Utilities - Gas' },
+            'toll': { code: '5005', name: 'Utilities - Gas' },
+            'toll gate': { code: '5005', name: 'Utilities - Gas' },
+            'tollgate': { code: '5005', name: 'Utilities - Gas' },
+            'petrol': { code: '5005', name: 'Utilities - Gas' },
             
             // Supplies & Materials
-            'supplies': { code: '5017', name: 'Office Supplies Expense' },
-            'materials': { code: '5018', name: 'Building Materials Expense' },
-            'tools': { code: '5019', name: 'Tools & Equipment Expense' },
-            'equipment': { code: '5019', name: 'Tools & Equipment Expense' },
-            
-            // Insurance & Legal
-            'insurance': { code: '5020', name: 'Insurance Expense' },
-            'legal': { code: '5021', name: 'Legal & Professional Expense' },
-            'lawyer': { code: '5021', name: 'Legal & Professional Expense' },
-            'attorney': { code: '5021', name: 'Legal & Professional Expense' },
-            
-            // Taxes & Fees
-            'tax': { code: '5022', name: 'Property Tax Expense' },
-            'permit': { code: '5023', name: 'Permits & Licenses Expense' },
-            'license': { code: '5023', name: 'Permits & Licenses Expense' },
-            'fee': { code: '5024', name: 'Miscellaneous Fees Expense' },
-            
-            // Administrative
-            'office': { code: '5025', name: 'Office Expense' },
-            'administrative': { code: '5026', name: 'Administrative Expense' },
-            'management': { code: '5027', name: 'Property Management Expense' },
-            'accounting': { code: '5028', name: 'Accounting & Bookkeeping Expense' },
-            'bookkeeping': { code: '5028', name: 'Accounting & Bookkeeping Expense' }
+            'supplies': { code: '5011', name: 'Maintenance Supplies' },
+            'materials': { code: '5011', name: 'Maintenance Supplies' },
+            'tools': { code: '5011', name: 'Maintenance Supplies' },
+            'equipment': { code: '5011', name: 'Maintenance Supplies' }
         };
 
-        // Check for keyword matches
+        // Check for keyword matches as fallback - only use accounts that exist in database
+        // IMPORTANT: Check priority keywords (like fuel) first
+        const priorityKeywords = [];
+        const regularKeywords = [];
+        
         for (const [keyword, accountInfo] of Object.entries(keywordMappings)) {
+            if (accountInfo.priority) {
+                priorityKeywords.push([keyword, accountInfo]);
+            } else {
+                regularKeywords.push([keyword, accountInfo]);
+            }
+        }
+        
+        // Check priority keywords first (fuel, toll, etc.)
+        for (const [keyword, accountInfo] of priorityKeywords) {
             if (searchText.includes(keyword)) {
-                return await this.getOrCreateAccount(accountInfo.code, accountInfo.name, 'Expense');
+                const account = await Account.findOne({ 
+                    code: accountInfo.code, 
+                    type: 'Expense',
+                    isActive: true 
+                });
+                if (account) {
+                    console.log(`✅ Using existing account from fallback (PRIORITY): ${account.code} - ${account.name} for keyword: ${keyword}`);
+                    return account.code;
+                } else {
+                    console.log(`⚠️ Priority account ${accountInfo.code} (${accountInfo.name}) not found in database, skipping fallback for keyword: ${keyword}`);
+                }
+            }
+        }
+        
+        // Then check regular keywords
+        for (const [keyword, accountInfo] of regularKeywords) {
+            if (searchText.includes(keyword)) {
+                const account = await Account.findOne({ 
+                    code: accountInfo.code, 
+                    type: 'Expense',
+                    isActive: true 
+                });
+                if (account) {
+                    console.log(`✅ Using existing account from fallback: ${account.code} - ${account.name} for keyword: ${keyword}`);
+                    return account.code;
+                } else {
+                    console.log(`⚠️ Account ${accountInfo.code} (${accountInfo.name}) not found in database, skipping fallback for keyword: ${keyword}`);
+                }
             }
         }
 

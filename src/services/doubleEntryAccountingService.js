@@ -3092,104 +3092,204 @@ class DoubleEntryAccountingService {
      */
     static async resolveExpenseAccountByDescription(description, fallbackCategory = 'maintenance') {
         try {
+            const Account = require('../models/Account');
+            
             if (!description) {
                 return await this.getMaintenanceExpenseAccount();
             }
 
             const desc = description.toLowerCase();
             
-            // Plumbing related - use Property Maintenance (5007) since no specific plumbing account
-            if (desc.includes('plumbing') || desc.includes('pipe') || desc.includes('drain') || 
-                desc.includes('tap') || desc.includes('toilet') || desc.includes('sink') ||
-                desc.includes('shower') || desc.includes('bath') || desc.includes('water')) {
-                return '5007'; // Property Maintenance
-            }
-            
-            // Electrical related - use Property Maintenance (5007) since no specific electrical account
-            if (desc.includes('electrical') || desc.includes('wiring') || desc.includes('power') ||
-                desc.includes('light') || desc.includes('switch') || desc.includes('outlet') ||
-                desc.includes('circuit') || desc.includes('fuse') || desc.includes('breaker')) {
-                return '5007'; // Property Maintenance
-            }
-            
-            // HVAC related - use Property Maintenance (5007) since no specific HVAC account
-            if (desc.includes('hvac') || desc.includes('air') || desc.includes('conditioning') ||
-                desc.includes('heating') || desc.includes('ventilation') || desc.includes('fan')) {
-                return '5007'; // Property Maintenance
-            }
-            
-            // Cleaning related
-            if (desc.includes('cleaning') || desc.includes('clean') || desc.includes('sanitize') ||
-                desc.includes('disinfect') || desc.includes('wash') || desc.includes('mop')) {
-                return '5009'; // Cleaning Services
-            }
-            
-            // Security related
-            if (desc.includes('security') || desc.includes('guard') || desc.includes('camera') ||
-                desc.includes('alarm') || desc.includes('lock') || desc.includes('access')) {
-                return '5014'; // Security Services
-            }
-            
-            // Landscaping related
-            if (desc.includes('landscaping') || desc.includes('garden') || desc.includes('lawn') ||
-                desc.includes('tree') || desc.includes('plant') || desc.includes('irrigation')) {
-                return '5012'; // Garden & Landscaping
-            }
-            
-            // Fuel/Transportation related - use Fuel Expense account (5005 for gas, but we should use a fuel account)
-            // Check for fuel account first (5005 is Utilities - Gas, but we need a fuel/transportation account)
-            if (desc.includes('fuel') || desc.includes('gasoline') || desc.includes('diesel') ||
+            // CRITICAL: Check for fuel keywords FIRST - fuel and gas are different things
+            // Search database for fuel account specifically (not gas)
+            if (desc.includes('fuel') || desc.includes('gasoline') || desc.includes('diesel') || 
                 desc.includes('petrol') || desc.includes('toll') || desc.includes('toll gate') ||
-                desc.includes('tollgate') || desc.includes('transport') || desc.includes('travel')) {
-                // Check if there's a fuel expense account (5016 or 5005)
-                const fuelAccount = await Account.findOne({ 
-                    $or: [
-                        { code: '5016', type: 'Expense' },
-                        { code: '5005', type: 'Expense', name: /fuel|gas/i }
-                    ]
-                });
-                if (fuelAccount) {
-                    return fuelAccount.code;
+                desc.includes('tollgate') || desc.includes('transport')) {
+                
+                // Search database for accounts matching FUEL-related keywords specifically
+                // Don't search for "gas" - that's a separate category
+                const fuelSearchTerms = ['fuel', 'transport', 'toll', 'gasoline', 'diesel', 'petrol'];
+                
+                for (const term of fuelSearchTerms) {
+                    const fuelAccount = await Account.findOne({
+                        type: 'Expense',
+                        isActive: true,
+                        $or: [
+                            { name: { $regex: term, $options: 'i' } },
+                            { description: { $regex: term, $options: 'i' } }
+                        ]
+                    }).sort({ code: 1 });
+                    
+                    if (fuelAccount) {
+                        console.log(`✅ Found fuel account in database: ${fuelAccount.code} - ${fuelAccount.name} for: ${description} (matched term: ${term})`);
+                        return fuelAccount.code;
+                    }
                 }
-                // Fallback to 5005 (Utilities - Gas) if no dedicated fuel account
-                return '5005'; // Utilities - Gas (can be used for fuel expenses)
-            }
-            
-            // Painting related - use Property Maintenance (5007) since no specific painting account
-            if (desc.includes('paint') || desc.includes('wall') || desc.includes('ceiling') ||
-                desc.includes('color') || desc.includes('brush') || desc.includes('roller')) {
-                return '5007'; // Property Maintenance
-            }
-            
-            // Carpentry related - use Property Maintenance (5007) since no specific carpentry account
-            if (desc.includes('carpentry') || desc.includes('wood') || desc.includes('door') ||
-                desc.includes('window') || desc.includes('cabinet') || desc.includes('shelf')) {
-                return '5007'; // Property Maintenance
-            }
-            
-            // Fuel and transportation related - use Fuel Expense account (5005 for gas/fuel)
-            if (desc.includes('fuel') || desc.includes('gasoline') || desc.includes('petrol') || 
-                desc.includes('diesel') || desc.includes('toll') || desc.includes('toll gate') ||
-                desc.includes('tollgate') || desc.includes('transport') || desc.includes('vehicle') ||
-                desc.includes('travel')) {
-                // Check if there's a dedicated fuel expense account (5016)
-                const fuelAccount = await Account.findOne({ 
-                    $or: [
-                        { code: '5016', type: 'Expense' },
-                        { code: '5005', type: 'Expense', name: /fuel|gas/i }
-                    ]
-                });
-                if (fuelAccount) {
-                    return fuelAccount.code;
+                
+                // Search all expense accounts for any that might be fuel-related
+                const allExpenseAccounts = await Account.find({ 
+                    type: 'Expense', 
+                    isActive: true 
+                }).sort({ code: 1 });
+                
+                for (const account of allExpenseAccounts) {
+                    const accountName = (account.name || '').toLowerCase();
+                    const accountDesc = ((account.description || '') + ' ' + accountName).toLowerCase();
+                    
+                    // Check for fuel-related keywords (but NOT gas - that's separate)
+                    if (accountDesc.includes('fuel') || accountDesc.includes('gasoline') || 
+                        accountDesc.includes('diesel') || accountDesc.includes('petrol') ||
+                        accountDesc.includes('transport') || accountDesc.includes('toll')) {
+                        // Make sure it's not gas (gas is separate)
+                        if (!accountDesc.includes('gas') || accountDesc.includes('gasoline')) {
+                            console.log(`✅ Found fuel account in database: ${account.code} - ${account.name} for: ${description}`);
+                            return account.code;
+                        }
+                    }
                 }
-                // Fallback to 5005 (Utilities - Gas) which can be used for fuel expenses
-                return '5005'; // Utilities - Gas (can be used for fuel expenses)
+                
+                console.log(`⚠️ Fuel/toll keyword detected but no matching fuel account found in database. Description: ${description}`);
+            }
+            
+            // Separate check for gas (not fuel) - gas and fuel are different
+            if (desc.includes('gas') && !desc.includes('fuel') && !desc.includes('gasoline') && 
+                !desc.includes('diesel') && !desc.includes('petrol')) {
+                
+                // Search database for accounts matching GAS-related keywords
+                const gasAccount = await Account.findOne({
+                    type: 'Expense',
+                    isActive: true,
+                    $or: [
+                        { name: { $regex: /^gas$|gas\s/i } }, // Match "gas" as whole word or "gas " to avoid matching "gasoline"
+                        { description: { $regex: /^gas$|gas\s/i } }
+                    ]
+                }).sort({ code: 1 });
+                
+                if (gasAccount) {
+                    console.log(`✅ Found gas account in database: ${gasAccount.code} - ${gasAccount.name} for: ${description}`);
+                    return gasAccount.code;
+                }
+                
+                // Search all expense accounts for gas (but not fuel)
+                const allExpenseAccounts = await Account.find({ 
+                    type: 'Expense', 
+                    isActive: true 
+                }).sort({ code: 1 });
+                
+                for (const account of allExpenseAccounts) {
+                    const accountName = (account.name || '').toLowerCase();
+                    const accountDesc = ((account.description || '') + ' ' + accountName).toLowerCase();
+                    
+                    // Check for gas (but exclude fuel-related terms)
+                    if (accountDesc.includes('gas') && !accountDesc.includes('fuel') && 
+                        !accountDesc.includes('gasoline') && !accountDesc.includes('diesel') &&
+                        !accountDesc.includes('petrol')) {
+                        console.log(`✅ Found gas account in database: ${account.code} - ${account.name} for: ${description}`);
+                        return account.code;
+                    }
+                }
+            }
+            
+            // Use AccountMappingService which queries the database first
+            const AccountMappingService = require('../utils/accountMappingService');
+            const mappedAccountCode = await AccountMappingService.getAccountByKeywords(desc);
+            if (mappedAccountCode) {
+                return mappedAccountCode;
+            }
+            
+            // Fallback: Try direct database searches for common keywords
+            // IMPORTANT: Fuel/Transportation must be checked FIRST before other keywords
+            const keywordSearches = [
+                // Fuel/Transportation - HIGHEST PRIORITY (must check first)
+                { keywords: ['fuel', 'gasoline', 'diesel', 'petrol', 'toll', 'toll gate', 'tollgate', 'transport', 'travel'], searchTerms: ['fuel', 'gas', 'transport', 'toll'], priority: true },
+                // Plumbing
+                { keywords: ['plumbing', 'pipe', 'drain', 'tap', 'toilet', 'sink', 'shower', 'bath'], searchTerms: ['plumbing'] },
+                // Water
+                { keywords: ['water'], searchTerms: ['water'] },
+                // Electrical
+                { keywords: ['electrical', 'wiring', 'power', 'light', 'switch', 'outlet', 'circuit', 'electricity'], searchTerms: ['electrical', 'electricity'] },
+                // Cleaning
+                { keywords: ['cleaning', 'clean', 'sanitize', 'disinfect', 'wash', 'mop'], searchTerms: ['cleaning', 'clean'] },
+                // Security
+                { keywords: ['security', 'guard', 'camera', 'alarm', 'lock', 'access'], searchTerms: ['security'] },
+                // Window/Carpentry
+                { keywords: ['window', 'carpentry', 'wood', 'door', 'cabinet', 'shelf'], searchTerms: ['window', 'carpentry', 'maintenance'] },
+                // Painting
+                { keywords: ['paint', 'wall', 'ceiling', 'color'], searchTerms: ['painting', 'paint', 'maintenance'] },
+                // HVAC
+                { keywords: ['hvac', 'air', 'conditioning', 'heating', 'ventilation', 'fan'], searchTerms: ['hvac', 'heating', 'air', 'maintenance'] },
+                // Landscaping
+                { keywords: ['landscaping', 'garden', 'lawn', 'tree', 'plant'], searchTerms: ['landscaping', 'garden', 'lawn'] }
+            ];
+            
+            // Search database for matching accounts
+            // Check fuel/transportation FIRST and handle specially
+            for (const { keywords, searchTerms, priority } of keywordSearches) {
+                if (keywords.some(keyword => desc.includes(keyword))) {
+                    // For fuel/transportation keywords, try direct account code lookup first
+                    if (priority && (keywords.includes('fuel') || keywords.includes('toll'))) {
+                        // Try specific account codes for fuel/gas that should exist
+                        const fuelAccountCodes = ['5005', '5003']; // Utilities - Gas, Utilities - Electricity
+                        for (const code of fuelAccountCodes) {
+                            const account = await Account.findOne({ code: code, type: 'Expense', isActive: true });
+                            if (account) {
+                                console.log(`✅ Using account ${account.code} - ${account.name} for fuel/toll (direct code lookup)`);
+                                return account.code;
+                            }
+                        }
+                    }
+                    
+                    // Then try database search by name/description
+                    for (const term of searchTerms) {
+                        const matchingAccount = await Account.findOne({
+                            type: 'Expense',
+                            isActive: true,
+                            $or: [
+                                { name: { $regex: term, $options: 'i' } },
+                                { description: { $regex: term, $options: 'i' } }
+                            ]
+                        }).sort({ code: 1 });
+                        
+                        if (matchingAccount) {
+                            console.log(`✅ Found matching account in database: ${matchingAccount.code} - ${matchingAccount.name} for description: ${description}`);
+                            return matchingAccount.code;
+                        }
+                    }
+                    
+                    // If fuel keyword matched but no account found, don't fall through to other categories
+                    if (priority) {
+                        console.log(`⚠️ Fuel/toll keyword matched but no account found. Trying default gas account.`);
+                        // Try account 5005 directly as last resort for fuel
+                        const defaultGasAccount = await Account.findOne({ code: '5005', type: 'Expense', isActive: true });
+                        if (defaultGasAccount) {
+                            console.log(`✅ Using default gas account: ${defaultGasAccount.code} - ${defaultGasAccount.name} for fuel`);
+                            return defaultGasAccount.code;
+                        }
+                        // If still not found, return maintenance account but log warning
+                        console.log(`❌ No gas account found for fuel. Falling back to maintenance account.`);
+                        return await this.getMaintenanceExpenseAccount();
+                    }
+                }
             }
             
             // Food and meals
             if (desc.includes('food') || desc.includes('meal') || desc.includes('lunch') || 
                 desc.includes('dinner') || desc.includes('breakfast') || desc.includes('catering')) {
-                return '5011'; // Maintenance Supplies (or could be Meals & Entertainment if that account exists)
+                // Try to find meals/food account in database first
+                const foodAccount = await Account.findOne({
+                    type: 'Expense',
+                    isActive: true,
+                    $or: [
+                        { name: { $regex: /food|meal|catering/i } },
+                        { description: { $regex: /food|meal|catering/i } }
+                    ]
+                });
+                if (foodAccount) {
+                    return foodAccount.code;
+                }
+                // Fallback to supplies if no food account exists
+                const suppliesAccount = await Account.findOne({ code: '5011', type: 'Expense', isActive: true });
+                if (suppliesAccount) return suppliesAccount.code;
             }
             
             // Supplies and materials (including twine, oil, etc.)
@@ -3197,17 +3297,54 @@ class DoubleEntryAccountingService {
                 desc.includes('tool') || desc.includes('equipment') || desc.includes('hardware') ||
                 desc.includes('twine') || desc.includes('oil') || desc.includes('lubricant') ||
                 desc.includes('rope') || desc.includes('string') || desc.includes('wire')) {
-                return '5011'; // Maintenance Supplies
+                // Try to find supplies account in database
+                const suppliesAccount = await Account.findOne({
+                    type: 'Expense',
+                    isActive: true,
+                    $or: [
+                        { code: '5011' }, // Maintenance Supplies
+                        { name: { $regex: /supplies|materials|tools/i } },
+                        { description: { $regex: /supplies|materials|tools/i } }
+                    ]
+                }).sort({ code: 1 });
+                if (suppliesAccount) {
+                    return suppliesAccount.code;
+                }
             }
             
             // Administrative/other services
             if (desc.includes('service') || desc.includes('admin') || desc.includes('consult') ||
                 desc.includes('inspection') || desc.includes('assessment') || desc.includes('report')) {
-                return '5062'; // Professional Fees
+                // Try to find professional fees account in database
+                const professionalAccount = await Account.findOne({
+                    type: 'Expense',
+                    isActive: true,
+                    $or: [
+                        { code: '5062' }, // Professional Fees
+                        { name: { $regex: /professional|fees|service/i } },
+                        { description: { $regex: /professional|fees|service/i } }
+                    ]
+                }).sort({ code: 1 });
+                if (professionalAccount) {
+                    return professionalAccount.code;
+                }
             }
             
-            // Default to maintenance expense
-            return '5007'; // Property Maintenance
+            // Default to maintenance expense - check if it exists in database
+            const maintenanceAccount = await Account.findOne({ code: '5007', type: 'Expense', isActive: true });
+            if (maintenanceAccount) {
+                return maintenanceAccount.code;
+            }
+            
+            // Final fallback: find any active expense account
+            const anyExpenseAccount = await Account.findOne({ type: 'Expense', isActive: true }).sort({ code: 1 });
+            if (anyExpenseAccount) {
+                console.log(`⚠️ Using fallback expense account: ${anyExpenseAccount.code} - ${anyExpenseAccount.name}`);
+                return anyExpenseAccount.code;
+            }
+            
+            // Last resort: return null if no accounts exist
+            return null;
             
         } catch (error) {
             console.error('Error resolving expense account by description:', error);
