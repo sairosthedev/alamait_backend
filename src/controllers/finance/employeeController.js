@@ -9,7 +9,7 @@ const { logSalaryRequestOperation } = require('../../utils/auditHelpers');
 // List employees with basic filtering and pagination
 exports.list = async (req, res) => {
     try {
-        const { page = 1, limit = 10, search, status, department, jobTitle } = req.query;
+        const { page = 1, limit, search, status, department, jobTitle, all = false } = req.query;
         const query = {};
 
         if (status) query.status = status;
@@ -25,15 +25,31 @@ exports.list = async (req, res) => {
             ];
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-        const [employees, total] = await Promise.all([
-            Employee.find(query)
+        // Get total count first
+        const total = await Employee.countDocuments(query);
+
+        // If all=true or no limit specified, return all employees without pagination
+        if (all === 'true' || all === true || !limit) {
+            const employees = await Employee.find(query)
                 .sort({ lastName: 1, firstName: 1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-            Employee.countDocuments(query)
-        ]);
+                .lean();
+            
+            return res.status(200).json({
+                employees,
+                total: employees.length,
+                currentPage: 1,
+                totalPages: 1,
+                showingAll: true
+            });
+        }
+
+        // Otherwise, use pagination with specified limit
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const employees = await Employee.find(query)
+            .sort({ lastName: 1, firstName: 1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
 
         return res.status(200).json({
             employees,
@@ -56,14 +72,12 @@ exports.create = async (req, res) => {
         if (missing.length) {
             return res.status(400).json({ error: 'Missing required fields', missing });
         }
+        
         const employee = await Employee.create({ ...data, createdBy: req.user?._id });
         return res.status(201).json({ message: 'Employee created', employee });
     } catch (error) {
         console.error('Error creating employee:', error);
-        if (error.code === 11000) {
-            return res.status(409).json({ error: 'Employee with this email already exists' });
-        }
-        return res.status(500).json({ error: 'Failed to create employee' });
+        return res.status(500).json({ error: 'Failed to create employee', details: error.message });
     }
 };
 
