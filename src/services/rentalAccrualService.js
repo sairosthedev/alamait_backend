@@ -938,12 +938,13 @@ class RentalAccrualService {
                 }
             }
 
-            // 🆕 CRITICAL: Use a more robust duplicate check that queries by exact metadata fields
+            // 🆕 CRITICAL: Use a more robust duplicate check that queries by exact metadata fields AND sourceId
             // This prevents race conditions better than the general checkExistingMonthlyAccrual
             const monthKey = `${year}-${String(month).padStart(2, '0')}`;
             const studentIdString = student.student.toString();
+            const sourceId = student.student; // Lease/student ID used as sourceId
             
-            // Check for existing accrual using exact metadata match (most reliable)
+            // Check 1: By metadata (studentId + month + year)
             const existingAccrualExact = await TransactionEntry.findOne({
                 source: 'rental_accrual',
                 'metadata.type': 'monthly_rent_accrual',
@@ -954,11 +955,37 @@ class RentalAccrualService {
             });
             
             if (existingAccrualExact) {
-                console.log(`   ⚠️ Monthly accrual already exists for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingAccrualExact._id}, created: ${existingAccrualExact.createdAt})`);
+                console.log(`   ⚠️ Monthly accrual already exists (metadata check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingAccrualExact._id}, created: ${existingAccrualExact.createdAt})`);
                 return { success: false, error: 'Accrual already exists for this month', existingTransaction: existingAccrualExact._id };
             }
             
-            // Also check using the general method as a backup
+            // Check 2: By sourceId + date (catches duplicates with same lease ID and date)
+            const existingBySourceId = await TransactionEntry.findOne({
+                source: 'rental_accrual',
+                sourceId: sourceId,
+                date: monthStart,
+                'metadata.type': 'monthly_rent_accrual',
+                status: { $ne: 'deleted' }
+            });
+            
+            if (existingBySourceId) {
+                console.log(`   ⚠️ Monthly accrual already exists (sourceId + date check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingBySourceId._id}, sourceId: ${sourceId})`);
+                return { success: false, error: 'Accrual already exists for this lease and month', existingTransaction: existingBySourceId._id };
+            }
+            
+            // Check 3: By description pattern (catches duplicates with same description)
+            const existingByDescription = await TransactionEntry.findOne({
+                source: 'rental_accrual',
+                description: { $regex: new RegExp(`Monthly rent accrual.*${student.firstName}.*${student.lastName}.*${month}/${year}`, 'i') },
+                status: { $ne: 'deleted' }
+            });
+            
+            if (existingByDescription) {
+                console.log(`   ⚠️ Monthly accrual already exists (description check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingByDescription._id})`);
+                return { success: false, error: 'Accrual already exists (description match)', existingTransaction: existingByDescription._id };
+            }
+            
+            // Check 4: Also check using the general method as a backup
             const existingAccrual = await this.checkExistingMonthlyAccrual(
                 student.student, 
                 month, 
@@ -1046,19 +1073,32 @@ class RentalAccrualService {
                 }
             ];
             
-            // 🆕 FINAL CHECK: One more duplicate check right before creating the transaction entry
+            // 🆕 FINAL CHECK: One more comprehensive duplicate check right before creating the transaction entry
             // This is the last chance to prevent duplicates before database write
+            // Check by both metadata AND sourceId to catch all possible duplicates
             const finalDuplicateCheck = await TransactionEntry.findOne({
-                source: 'rental_accrual',
-                'metadata.type': 'monthly_rent_accrual',
-                'metadata.accrualMonth': month,
-                'metadata.accrualYear': year,
-                'metadata.studentId': student.student.toString(),
-                status: { $ne: 'deleted' }
+                $or: [
+                    {
+                        source: 'rental_accrual',
+                        'metadata.type': 'monthly_rent_accrual',
+                        'metadata.accrualMonth': month,
+                        'metadata.accrualYear': year,
+                        'metadata.studentId': student.student.toString(),
+                        status: { $ne: 'deleted' }
+                    },
+                    {
+                        source: 'rental_accrual',
+                        sourceId: sourceId,
+                        date: monthStart,
+                        'metadata.type': 'monthly_rent_accrual',
+                        status: { $ne: 'deleted' }
+                    }
+                ]
             });
             
             if (finalDuplicateCheck) {
                 console.log(`   ⚠️ Final duplicate check: Accrual already exists for ${student.firstName} ${student.lastName} - ${monthKey} - aborting`);
+                console.log(`   Existing transaction ID: ${finalDuplicateCheck._id}, created: ${finalDuplicateCheck.createdAt}`);
                 // Clean up the transaction we created
                 await Transaction.findByIdAndDelete(transaction._id);
                 return { success: false, error: 'Duplicate accrual detected in final check', existingTransaction: finalDuplicateCheck._id };
@@ -1092,13 +1132,16 @@ class RentalAccrualService {
                 }
             });
             
-            // 🆕 Use save with error handling to catch duplicate key errors
+            // 🆕 Use save with error handling to catch duplicate key errors (unique index violations)
             try {
                 await transactionEntry.save();
             } catch (saveError) {
-                // If save fails due to duplicate, check if another process created it
-                if (saveError.code === 11000 || saveError.message.includes('duplicate')) {
-                    const existingAfterSave = await TransactionEntry.findOne({
+                // If save fails due to duplicate (unique index violation), check if another process created it
+                if (saveError.code === 11000 || saveError.message.includes('duplicate') || saveError.message.includes('E11000')) {
+                    console.log(`   ⚠️ Unique index violation detected during save - checking for existing accrual`);
+                    
+                    // Try multiple queries to find the existing duplicate
+                    let existingAfterSave = await TransactionEntry.findOne({
                         source: 'rental_accrual',
                         'metadata.type': 'monthly_rent_accrual',
                         'metadata.accrualMonth': month,
@@ -1107,11 +1150,28 @@ class RentalAccrualService {
                         status: { $ne: 'deleted' }
                     });
                     
+                    // If not found by metadata, try by sourceId + date
+                    if (!existingAfterSave) {
+                        existingAfterSave = await TransactionEntry.findOne({
+                            source: 'rental_accrual',
+                            sourceId: sourceId,
+                            date: monthStart,
+                            'metadata.type': 'monthly_rent_accrual',
+                            status: { $ne: 'deleted' }
+                        });
+                    }
+                    
                     if (existingAfterSave) {
-                        console.log(`   ⚠️ Duplicate detected during save - another process created the accrual`);
+                        console.log(`   ⚠️ Duplicate detected during save - another process created the accrual (ID: ${existingAfterSave._id})`);
                         // Clean up the transaction we created
                         await Transaction.findByIdAndDelete(transaction._id);
-                        return { success: false, error: 'Duplicate accrual detected during save', existingTransaction: existingAfterSave._id };
+                        return { 
+                            success: false, 
+                            error: 'Duplicate accrual detected - another process created it simultaneously', 
+                            existingTransaction: existingAfterSave._id 
+                        };
+                    } else {
+                        console.log(`   ⚠️ Unique index violation but existing accrual not found - may be a different constraint`);
                     }
                 }
                 throw saveError; // Re-throw if it's a different error

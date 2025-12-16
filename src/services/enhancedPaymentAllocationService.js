@@ -681,9 +681,10 @@ class EnhancedPaymentAllocationService {
       // 🆕 Include payment and allocation transactions linked by studentId, sourceId, or AR account credit
       const payments = allUserTransactions.filter(tx => {
         const isAllocation = tx.metadata?.allocationType === 'payment_allocation';
-        const isPayment = tx.source === 'payment';
+        const isPayment = tx.source === 'payment' || tx.source === 'advance_payment';
         const matchesStudent = tx.metadata?.studentId?.toString() === userIdString || tx.metadata?.userId?.toString() === userIdString || (tx.sourceId && tx.sourceId.toString() === userIdString);
         const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
+        // Include if it's a payment allocation, or if it's a payment/advance_payment that matches student or touches AR
         return isAllocation || (isPayment && (matchesStudent || touchesAR));
       });
       
@@ -697,12 +698,35 @@ class EnhancedPaymentAllocationService {
       
       console.log(`📊 Found ${accruals.length} accrual transactions, ${payments.length} payment transactions, and ${manualAdjustments.length} manual adjustments`);
       
+      // Debug: Log payment transactions found
+      if (payments.length > 0) {
+        console.log(`🔍 Payment transactions found:`);
+        payments.forEach((payment, index) => {
+          const arEntry = Array.isArray(payment.entries) && payment.entries.find(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
+          const amount = arEntry?.credit || 0;
+          console.log(`  Payment ${index + 1}: ${payment.transactionId}`);
+          console.log(`    Date: ${payment.date}`);
+          console.log(`    Source: ${payment.source}`);
+          console.log(`    Amount: $${amount}`);
+          console.log(`    monthSettled: ${payment.metadata?.monthSettled || 'NOT SET'}`);
+          console.log(`    paymentMonth: ${payment.metadata?.paymentMonth || 'NOT SET'}`);
+          console.log(`    arTransactionId: ${payment.metadata?.arTransactionId || 'NOT SET'}`);
+          console.log(`    Description: ${payment.description || 'N/A'}`);
+        });
+      }
+      
       // Debug: Log the accrual transactions found
       console.log(`🔍 Found ${accruals.length} accrual transactions:`);
       accruals.forEach((accrual, index) => {
+        const monthKey = accrual.metadata?.month || (() => {
+          const d = new Date(accrual.date);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        })();
         console.log(`📋 Accrual ${index + 1}:`);
         console.log(`   ID: ${accrual._id}`);
+        console.log(`   Transaction ID: ${accrual.transactionId}`);
         console.log(`   Date: ${accrual.date}`);
+        console.log(`   Month Key: ${monthKey}`);
         console.log(`   Source: ${accrual.source}`);
         console.log(`   Type: ${accrual.metadata?.type}`);
         console.log(`   Description: ${accrual.description}`);
@@ -743,75 +767,60 @@ class EnhancedPaymentAllocationService {
             source: accrual.source,
             metadata: accrual.metadata
           };
-          console.log(`📅 Created monthly outstanding for ${monthKey} with transaction ID: ${accrual._id}`);
+          console.log(`📅 Created monthly outstanding for ${monthKey} with transaction ID: ${accrual._id} (type: ${accrual.metadata?.type || accrual.source})`);
         } else {
-          console.log(`📅 Updating existing monthly outstanding for ${monthKey} (current transaction: ${monthlyOutstanding[monthKey].transactionId}, new transaction: ${accrual._id})`);
+          console.log(`⚠️ WARNING: Multiple accruals found for ${monthKey}!`);
+          console.log(`   Existing transaction: ${monthlyOutstanding[monthKey].transactionId} (type: ${monthlyOutstanding[monthKey].metadata?.type || monthlyOutstanding[monthKey].source})`);
+          console.log(`   New transaction: ${accrual._id} (type: ${accrual.metadata?.type || accrual.source})`);
+          console.log(`   This may indicate duplicate accruals for the same month.`);
         }
         
-        // Categorize the debt by type
-        accrual.entries.forEach(entry => {
-          if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0) {
-            const description = (entry.description || '').toLowerCase();
-            
-            if (description.includes('admin fee') || description.includes('administrative')) {
-              monthlyOutstanding[monthKey].adminFee.owed += entry.debit;
-            } else if (description.includes('security deposit') || description.includes('deposit')) {
-              monthlyOutstanding[monthKey].deposit.owed += entry.debit;
-            } else {
-              // Default to rent
-              monthlyOutstanding[monthKey].rent.owed += entry.debit;
-            }
-          }
-        });
-        
-        // 🆕 FIX: For lease start transactions, we need to break down the AR debit into components
-        // The AR debit entry contains the total amount owed, but we need to categorize it
+        // 🆕 FIX: For lease_start transactions, ONLY use income/liability entries to determine breakdown
+        // Do NOT process AR debit entries for lease_start as they may contain totals that need to be broken down
         if (accrual.metadata?.type === 'lease_start') {
           console.log(`🔍 Processing lease start transaction breakdown: ${accrual._id}`);
           
-          // Find the AR debit entry to get the total amount
-          const arEntry = accrual.entries.find(entry => 
-            entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0
-          );
+          // For lease_start, categorize based ONLY on the income/liability entries (not AR debit entries)
+          // This ensures we get the correct breakdown: rent from 4001, admin fee from 4002, deposit from 2020
+          accrual.entries.forEach(entry => {
+            const description = (entry.description || '').toLowerCase();
+            
+            // Admin fee entry (account 4002) - Income account
+            if (entry.accountCode === '4002' && entry.accountType === 'Income' && entry.credit > 0) {
+              monthlyOutstanding[monthKey].adminFee.owed += entry.credit;
+              console.log(`  → Found admin fee in lease start: $${entry.credit}`);
+            }
+            
+            // Deposit entry (account 2020) - Liability account
+            if (entry.accountCode === '2020' && entry.accountType === 'Liability' && entry.credit > 0) {
+              monthlyOutstanding[monthKey].deposit.owed += entry.credit;
+              console.log(`  → Found deposit in lease start: $${entry.credit}`);
+            }
+            
+            // Rent entry (account 4001) - Income account (prorated or full month)
+            if (entry.accountCode === '4001' && entry.accountType === 'Income' && entry.credit > 0) {
+              monthlyOutstanding[monthKey].rent.owed += entry.credit;
+              console.log(`  → Found rent in lease start: $${entry.credit} (${description.includes('prorated') ? 'prorated' : 'full month'})`);
+            }
+          });
           
-          if (arEntry) {
-            const totalAmount = arEntry.debit;
-            console.log(`  → Total AR debit amount: $${totalAmount}`);
-            
-            // Reset the amounts since we'll recalculate them properly
-            monthlyOutstanding[monthKey].rent.owed = 0;
-            monthlyOutstanding[monthKey].adminFee.owed = 0;
-            monthlyOutstanding[monthKey].deposit.owed = 0;
-            
-            // Now categorize based on the income/liability entries
-            accrual.entries.forEach(entry => {
+          console.log(`  ✅ Lease start breakdown: Rent=$${monthlyOutstanding[monthKey].rent.owed}, AdminFee=$${monthlyOutstanding[monthKey].adminFee.owed}, Deposit=$${monthlyOutstanding[monthKey].deposit.owed}`);
+        } else {
+          // For monthly_rent_accrual and other accrual types, categorize by AR debit entry description
+          accrual.entries.forEach(entry => {
+            if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0) {
               const description = (entry.description || '').toLowerCase();
               
-              // Admin fee entry (account 4002)
-              if (entry.accountCode === '4002' && entry.accountType === 'Income' && entry.credit > 0) {
-                if (description.includes('admin fee') || description.includes('administrative')) {
-                  monthlyOutstanding[monthKey].adminFee.owed += entry.credit;
-                  console.log(`  → Found admin fee in lease start: $${entry.credit}`);
-                }
+              if (description.includes('admin fee') || description.includes('administrative')) {
+                monthlyOutstanding[monthKey].adminFee.owed += entry.debit;
+              } else if (description.includes('security deposit') || description.includes('deposit')) {
+                monthlyOutstanding[monthKey].deposit.owed += entry.debit;
+              } else {
+                // Default to rent for monthly accruals
+                monthlyOutstanding[monthKey].rent.owed += entry.debit;
               }
-              
-              // Deposit entry (account 2020)
-              if (entry.accountCode === '2020' && entry.accountType === 'Liability' && entry.credit > 0) {
-                if (description.includes('security deposit') || description.includes('deposit')) {
-                  monthlyOutstanding[monthKey].deposit.owed += entry.credit;
-                  console.log(`  → Found deposit in lease start: $${entry.credit}`);
-                }
-              }
-              
-              // Rent entry (account 4001) - Income entry creates the charge
-              if (entry.accountCode === '4001' && entry.accountType === 'Income' && entry.credit > 0) {
-                if (description.includes('rental income') || description.includes('prorated')) {
-                  monthlyOutstanding[monthKey].rent.owed += entry.credit;
-                  console.log(`  → Found prorated rent in lease start: $${entry.credit}`);
-                }
-              }
-            });
-          }
+            }
+          });
         }
       });
       
@@ -819,17 +828,59 @@ class EnhancedPaymentAllocationService {
        // Do NOT create virtual months as they don't have real AR transactions to allocate to
        console.log(`📊 Working with ${Object.keys(monthlyOutstanding).length} actual accrual months for user ${userId}`);
       
-      // 🆕 Process payments: subtract by monthSettled; fallback to FIFO if missing
+      // 🆕 Process payments: subtract by monthSettled; fallback to allocation metadata, description, or FIFO if missing
       payments.forEach(payment => {
         // Look for monthSettled in metadata for payment allocation transactions
-        const monthSettled = payment.metadata?.monthSettled;
+        let monthSettled = payment.metadata?.monthSettled;
         const paymentType = payment.metadata?.paymentType;
         const arEntry = Array.isArray(payment.entries) && payment.entries.find(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
         const amount = arEntry?.credit || 0;
         if (amount <= 0) return;
         
+        // 🆕 IMPROVED: Try multiple methods to determine which month this payment applies to
+        if (!monthSettled) {
+          // Method 1: Check payment allocation metadata
+          if (payment.metadata?.paymentAllocation?.month) {
+            monthSettled = payment.metadata.paymentAllocation.month;
+            console.log(`🔍 Found month from paymentAllocation.month: ${monthSettled}`);
+          }
+          // Method 2: Check paymentMonth metadata
+          else if (payment.metadata?.paymentMonth) {
+            monthSettled = payment.metadata.paymentMonth;
+            console.log(`🔍 Found month from paymentMonth: ${monthSettled}`);
+          }
+          // Method 3: Check arTransactionId and find the accrual month
+          else if (payment.metadata?.arTransactionId) {
+            const arTxId = payment.metadata.arTransactionId;
+            const matchingAccrual = accruals.find(acc => acc._id?.toString() === arTxId.toString() || acc.transactionId === arTxId);
+            if (matchingAccrual) {
+              monthSettled = matchingAccrual.metadata?.month || (() => {
+                const d = new Date(matchingAccrual.date);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+              })();
+              console.log(`🔍 Found month from arTransactionId ${arTxId}: ${monthSettled}`);
+            }
+          }
+          // Method 4: Parse description for month (e.g., "Payment allocation: rent for 2025-12")
+          else if (payment.description) {
+            const monthMatch = payment.description.match(/for\s+(\d{4})-(\d{1,2})/i);
+            if (monthMatch) {
+              monthSettled = `${monthMatch[1]}-${String(monthMatch[2]).padStart(2, '0')}`;
+              console.log(`🔍 Found month from description: ${monthSettled}`);
+            }
+          }
+          // Method 5: Check entry description for month
+          else if (arEntry?.description) {
+            const monthMatch = arEntry.description.match(/for\s+(\d{4})-(\d{1,2})/i) || arEntry.description.match(/(\d{4})-(\d{1,2})/);
+            if (monthMatch) {
+              monthSettled = `${monthMatch[1]}-${String(monthMatch[2]).padStart(2, '0')}`;
+              console.log(`🔍 Found month from entry description: ${monthSettled}`);
+            }
+          }
+        }
+        
         if (monthSettled && monthlyOutstanding[monthSettled]) {
-          console.log(`💰 Applying payment to ${monthSettled}: $${amount} (${paymentType})`);
+          console.log(`💰 Applying payment to ${monthSettled}: $${amount} (${paymentType || 'unknown'})`);
           if (paymentType === 'admin') {
             monthlyOutstanding[monthSettled].adminFee.paid += amount;
           } else if (paymentType === 'deposit') {
@@ -838,7 +889,7 @@ class EnhancedPaymentAllocationService {
             monthlyOutstanding[monthSettled].rent.paid += amount;
           } else {
             // Fallback by description hint
-            const desc = (arEntry?.description || '').toLowerCase();
+            const desc = (arEntry?.description || payment.description || '').toLowerCase();
             if (desc.includes('admin')) monthlyOutstanding[monthSettled].adminFee.paid += amount;
             else if (desc.includes('deposit')) monthlyOutstanding[monthSettled].deposit.paid += amount;
             else monthlyOutstanding[monthSettled].rent.paid += amount;
@@ -847,6 +898,12 @@ class EnhancedPaymentAllocationService {
         }
 
         // FIFO fallback: apply to oldest months with outstanding
+        if (!monthSettled) {
+          console.log(`⚠️ No monthSettled found for payment ${payment.transactionId}, using FIFO allocation`);
+        } else {
+          console.log(`⚠️ Month ${monthSettled} not found in outstanding balances, using FIFO allocation`);
+        }
+        
         let remaining = amount;
         const ordered = Object.keys(monthlyOutstanding).sort();
         for (const mk of ordered) {
@@ -953,9 +1010,9 @@ class EnhancedPaymentAllocationService {
       console.log(`📅 Detailed outstanding balances for user ${userId} (FIFO order):`);
       outstandingArray.forEach(month => {
         console.log(`  ${month.monthKey} (${month.monthName}):`);
-        console.log(`    Rent: $${month.rent.outstanding.toFixed(2)}`);
-        console.log(`    Admin Fee: $${month.adminFee.outstanding.toFixed(2)}`);
-        console.log(`    Deposit: $${month.deposit.outstanding.toFixed(2)}`);
+        console.log(`    Rent: Owed=$${month.rent.owed.toFixed(2)}, Paid=$${month.rent.paid.toFixed(2)}, Outstanding=$${month.rent.outstanding.toFixed(2)}`);
+        console.log(`    Admin Fee: Owed=$${month.adminFee.owed.toFixed(2)}, Paid=$${month.adminFee.paid.toFixed(2)}, Outstanding=$${month.adminFee.outstanding.toFixed(2)}`);
+        console.log(`    Deposit: Owed=$${month.deposit.owed.toFixed(2)}, Paid=$${month.deposit.paid.toFixed(2)}, Outstanding=$${month.deposit.outstanding.toFixed(2)}`);
         console.log(`    Total Outstanding: $${month.totalOutstanding.toFixed(2)}`);
       });
       

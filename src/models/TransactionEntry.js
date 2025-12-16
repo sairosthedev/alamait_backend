@@ -297,4 +297,48 @@ transactionEntrySchema.index({ 'metadata.residenceId': 1, date: 1, source: 1 });
 // Balance sheet account details optimization (date + entries.accountCode + status + residence)
 transactionEntrySchema.index({ date: 1, 'entries.accountCode': 1, status: 1, residence: 1 });
 
+// 🆕 UNIQUE INDEX: Prevent duplicate monthly rent accruals for same student/month/year
+// This prevents race conditions where two requests create accruals simultaneously
+// The index is sparse (only applies when all fields exist) to avoid conflicts with other transaction types
+transactionEntrySchema.index(
+  { 
+    source: 1, 
+    'metadata.type': 1, 
+    'metadata.accrualMonth': 1, 
+    'metadata.accrualYear': 1, 
+    'metadata.studentId': 1 
+  },
+  { 
+    unique: true, 
+    sparse: true,
+    name: 'unique_monthly_rent_accrual',
+    partialFilterExpression: {
+      source: 'rental_accrual',
+      'metadata.type': 'monthly_rent_accrual',
+      status: { $ne: 'deleted' }
+    }
+  }
+);
+
+// 🆕 UNIQUE INDEX: Also prevent duplicates by sourceId + date for monthly accruals
+// This catches duplicates even if metadata fields differ slightly
+transactionEntrySchema.index(
+  { 
+    source: 1, 
+    sourceId: 1, 
+    date: 1,
+    'metadata.type': 1
+  },
+  { 
+    unique: true, 
+    sparse: true,
+    name: 'unique_accrual_sourceId_date',
+    partialFilterExpression: {
+      source: 'rental_accrual',
+      'metadata.type': 'monthly_rent_accrual',
+      status: { $ne: 'deleted' }
+    }
+  }
+);
+
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 
