@@ -16,12 +16,28 @@ const User = require('../models/User');
 
 // Validation middleware
 const registerValidation = [
-    check('email', 'Please include a valid email').optional().isEmail(),
+    check('email', 'Please include a valid email')
+        .optional({ checkFalsy: true, nullable: true }) // Allow empty strings, null, undefined
+        .isEmail()
+        .normalizeEmail(),
     check('password', 'Password must be at least 6 characters').isLength({ min: 6 }),
-    check('firstName', 'First name is required').notEmpty(),
-    check('lastName', 'Last name is optional').optional().trim(),
-    check('phone', 'Phone number is optional').optional().trim(),
-    check('applicationCode', 'Application code is required').notEmpty()
+    check('firstName', 'First name is required').notEmpty().trim(),
+    check('lastName', 'Last name is optional')
+        .optional({ checkFalsy: true, nullable: true }) // Allow empty strings, null, undefined
+        .trim(),
+    check('phone', 'Phone number is optional')
+        .optional({ checkFalsy: true, nullable: true }) // Allow empty strings, null, undefined
+        .trim(),
+    check('emergencyContact.name', 'Emergency contact name is optional')
+        .optional({ checkFalsy: true, nullable: true })
+        .trim(),
+    check('emergencyContact.relationship', 'Emergency contact relationship is optional')
+        .optional({ checkFalsy: true, nullable: true })
+        .trim(),
+    check('emergencyContact.phone', 'Emergency contact phone is optional')
+        .optional({ checkFalsy: true, nullable: true })
+        .trim(),
+    check('applicationCode', 'Application code is required').notEmpty().trim()
 ];
 
 const loginValidation = [
