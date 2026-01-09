@@ -7,9 +7,10 @@ const applicationSchema = new mongoose.Schema({
     },
     email: {
         type: String,
-        required: true,
+        required: false,
         trim: true,
-        lowercase: true
+        lowercase: true,
+        sparse: true // Allow multiple null/undefined values for unique index
     },
     firstName: {
         type: String,
@@ -18,12 +19,12 @@ const applicationSchema = new mongoose.Schema({
     },
     lastName: {
         type: String,
-        required: true,
+        required: false,
         trim: true
     },
     phone: {
         type: String,
-        required: true,
+        required: false,
         trim: true
     },
     applicationCode: {

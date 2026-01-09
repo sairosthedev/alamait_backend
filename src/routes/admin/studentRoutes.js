@@ -63,26 +63,47 @@ const {
 
 // Validation middleware
 const studentValidation = [
-    check('email', 'Please include a valid email').isEmail(),
+    check('email', 'Please include a valid email')
+        .optional({ checkFalsy: true, nullable: true })
+        .isEmail()
+        .normalizeEmail(),
     check('firstName', 'First name is required').notEmpty(),
-    check('lastName', 'Last name is required').notEmpty(),
-    check('phone', 'Phone number is required').optional().notEmpty(),
+    check('lastName', 'Last name is optional')
+        .optional({ checkFalsy: true, nullable: true }),
+    check('phone', 'Phone number is optional')
+        .optional({ checkFalsy: true, nullable: true }),
     check('status').optional().isIn(['active', 'inactive', 'pending']),
-    check('emergencyContact.name', 'Emergency contact name is required').optional().notEmpty(),
-    check('emergencyContact.relationship', 'Emergency contact relationship is required').optional().notEmpty(),
-    check('emergencyContact.phone', 'Emergency contact phone is required').optional().notEmpty(),
+    check('emergencyContact.name', 'Emergency contact name is optional')
+        .optional({ checkFalsy: true, nullable: true }),
+    check('emergencyContact.relationship', 'Emergency contact relationship is optional')
+        .optional({ checkFalsy: true, nullable: true }),
+    check('emergencyContact.phone', 'Emergency contact phone is optional')
+        .optional({ checkFalsy: true, nullable: true }),
     check('residenceId', 'Residence ID is required').notEmpty().isMongoId().withMessage('Invalid residence ID format')
 ];
 
 // Comprehensive validation for manual student addition
 const manualStudentValidation = [
-    check('email', 'Please include a valid email').isEmail(),
+    check('email', 'Please include a valid email')
+        .optional({ checkFalsy: true, nullable: true })
+        .isEmail()
+        .normalizeEmail(),
     check('firstName', 'First name is required').notEmpty().trim(),
-    check('lastName', 'Last name is required').notEmpty().trim(),
-    check('phone', 'Phone number is required').notEmpty().trim(),
-    check('emergencyContact.name', 'Emergency contact name is required').notEmpty().trim(),
-    check('emergencyContact.relationship', 'Emergency contact relationship is required').notEmpty().trim(),
-    check('emergencyContact.phone', 'Emergency contact phone is required').notEmpty().trim(),
+    check('lastName', 'Last name is optional')
+        .optional({ checkFalsy: true, nullable: true })
+        .trim(),
+    check('phone', 'Phone number is optional')
+        .optional({ checkFalsy: true, nullable: true })
+        .trim(),
+    check('emergencyContact.name', 'Emergency contact name is optional')
+        .optional({ checkFalsy: true, nullable: true })
+        .trim(),
+    check('emergencyContact.relationship', 'Emergency contact relationship is optional')
+        .optional({ checkFalsy: true, nullable: true })
+        .trim(),
+    check('emergencyContact.phone', 'Emergency contact phone is optional')
+        .optional({ checkFalsy: true, nullable: true })
+        .trim(),
     check('residenceId', 'Residence ID is required').isMongoId(),
     check('roomNumber', 'Room number is required').notEmpty().trim(),
     check('startDate', 'Start date is required').isISO8601().toDate(),
