@@ -34,6 +34,55 @@ class BalanceSheetService {
   }
 
   /**
+   * Build residence match filter that also includes transactions affecting non-current asset accounts
+   * This ensures non-current assets (like property, equipment) appear on filtered balance sheets
+   */
+  static buildResidenceMatchFilterWithNonCurrentAssets(residence, existingConditions = {}, nonCurrentAssetCodes = []) {
+    if (!residence) return existingConditions;
+    
+    const residenceObjectId = mongoose.Types.ObjectId.isValid(residence) 
+      ? new mongoose.Types.ObjectId(residence) 
+      : residence;
+    
+    // Build the residence match conditions
+    const residenceConditions = [
+      { residence: residenceObjectId },
+      { residence: residence.toString() },
+      { 'metadata.residenceId': residenceObjectId },
+      { 'metadata.residenceId': residence.toString() },
+      { 'metadata.residence': residenceObjectId },
+      { 'metadata.residence': residence.toString() }
+    ];
+    
+    // Build conditions for transactions affecting non-current asset accounts
+    const nonCurrentAssetConditions = [];
+    if (nonCurrentAssetCodes.length > 0) {
+      // Check if any entry in the transaction affects a non-current asset account
+      // Convert all codes to strings to ensure proper matching
+      const nonCurrentAssetCodesStr = nonCurrentAssetCodes.map(code => String(code));
+      nonCurrentAssetConditions.push({
+        'entries.accountCode': { $in: nonCurrentAssetCodesStr }
+      });
+      console.log(`🏢 Including transactions affecting non-current asset accounts: ${nonCurrentAssetCodesStr.slice(0, 10).join(', ')}${nonCurrentAssetCodesStr.length > 10 ? '...' : ''}`);
+    }
+    
+    // Combine: include transactions that match residence OR affect non-current assets
+    const combinedConditions = [...residenceConditions];
+    if (nonCurrentAssetConditions.length > 0) {
+      combinedConditions.push(...nonCurrentAssetConditions);
+    }
+    
+    return {
+      $and: [
+        existingConditions,
+        {
+          $or: combinedConditions
+        }
+      ]
+    };
+  }
+
+  /**
    * Enrich transactions with residence data from Request/Expense references
    * This ensures expense_accrual transactions are properly filtered by residence
    */
@@ -176,6 +225,28 @@ class BalanceSheetService {
         voided: { $ne: true }
       };
       
+      // Get ALL accounts from the database first to identify non-current asset accounts
+      const Account = require('../models/Account');
+      const allAccountsForFilter = await Account.find().sort({ code: 1 });
+      
+      // Identify non-current asset account codes
+      // Use both isCurrentAsset check AND category field for more reliable identification
+      const nonCurrentAssetCodes = [];
+      allAccountsForFilter.forEach(account => {
+        if (account.type === 'Asset') {
+          // Check if it's a fixed asset by category
+          const isFixedAsset = account.category === 'Fixed Assets' || account.category === 'Other Assets';
+          // Check if it's non-current by name/code logic
+          const isNonCurrentByName = !this.isCurrentAsset(account.code, account.name);
+          
+          if (isFixedAsset || isNonCurrentByName) {
+            nonCurrentAssetCodes.push(account.code);
+            console.log(`🏢 Identified non-current asset: ${account.code} - ${account.name} (category: ${account.category})`);
+          }
+        }
+      });
+      console.log(`🏢 Found ${nonCurrentAssetCodes.length} non-current asset accounts: ${nonCurrentAssetCodes.join(', ')}`);
+      
       // Build queries with flexible residence filtering
       const accrualBaseQuery = {
         source: { $in: ['rental_accrual', 'expense_accrual'] },
@@ -198,20 +269,21 @@ class BalanceSheetService {
       };
       
       // Apply flexible residence filtering if residence is provided
+      // Include transactions that match residence OR affect non-current asset accounts
       const accrualQuery = residence 
-        ? this.buildResidenceMatchFilter(residence, accrualBaseQuery)
+        ? this.buildResidenceMatchFilterWithNonCurrentAssets(residence, accrualBaseQuery, nonCurrentAssetCodes)
         : accrualBaseQuery;
       
       const paymentQuery = residence
-        ? this.buildResidenceMatchFilter(residence, paymentBaseQuery)
+        ? this.buildResidenceMatchFilterWithNonCurrentAssets(residence, paymentBaseQuery, nonCurrentAssetCodes)
         : paymentBaseQuery;
       
       const otherQuery = residence
-        ? this.buildResidenceMatchFilter(residence, otherBaseQuery)
+        ? this.buildResidenceMatchFilterWithNonCurrentAssets(residence, otherBaseQuery, nonCurrentAssetCodes)
         : otherBaseQuery;
       
       const manualQuery = residence
-        ? this.buildResidenceMatchFilter(residence, manualBaseQuery)
+        ? this.buildResidenceMatchFilterWithNonCurrentAssets(residence, manualBaseQuery, nonCurrentAssetCodes)
         : manualBaseQuery;
       
       // Get all relevant transactions with timeout optimization
@@ -300,9 +372,8 @@ class BalanceSheetService {
         message: 'Balance sheet generated successfully'
       };
       
-      // Get ALL accounts from the database to ensure none are missing
-      const Account = require('../models/Account');
-      const allAccounts = await Account.find().sort({ code: 1 });
+      // Reuse accounts fetched earlier for filter building
+      const allAccounts = allAccountsForFilter;
       
       console.log(`🔍 Found ${allEntries.length} transaction entries and ${allAccounts.length} accounts in database`);
       
@@ -1769,7 +1840,7 @@ class BalanceSheetService {
   static isCurrentAsset(accountCode, accountName) {
     // Current assets: typically convertible to cash within 12 months
     const currentAssetCodes = ['1000', '1010', '1011', '1012', '1013', '1014', '1100', '1200', '1300', '1400', '1500'];
-    const currentAssetNames = ['cash', 'bank', 'petty', 'receivable', 'inventory', 'prepaid', 'short-term', 'current'];
+    const currentAssetNames = ['cash', 'bank', 'petty', 'receivable', 'inventory', 'prepaid', 'short-term', 'current', 'vault', 'clearing'];
     
     // Non-current assets: long-term assets not easily convertible to cash
     const nonCurrentAssetNames = ['property', 'building', 'equipment', 'furniture', 'vehicle', 'land', 'fixed', 'long-term', 'depreciation', 'accumulated'];
@@ -1779,7 +1850,16 @@ class BalanceSheetService {
       return false;
     }
     
-    return currentAssetCodes.includes(accountCode) || 
+    // Check if account code starts with 1000-1019 or is 10003, 10005 (cash accounts)
+    const isCashAccount = accountCode && (
+      accountCode.match(/^10[0-1][0-9]$/) || // 1000-1019
+      accountCode === '10003' || // Cbz Vault
+      accountCode === '10005' || // Opening balance clearing account
+      accountCode.startsWith('1000') // Any account starting with 1000
+    );
+    
+    return isCashAccount ||
+           currentAssetCodes.includes(accountCode) || 
            currentAssetNames.some(name => accountName.toLowerCase().includes(name));
   }
   

@@ -3641,8 +3641,49 @@ function transformResidenceFilteredToFixed(monthBreakdown, month, year) {
             equityAccounts[key] = { balance: account.balance || 0, code: account.code, name: account.name };
         });
         
+        // Extract current and non-current assets from the actual assets data
+        const BalanceSheetService = require('../services/balanceSheetService');
+        const nonCurrentAssets = {};
+        const allOtherCurrentAssets = {}; // All current assets not in the hardcoded list
+        
+        Object.entries(assets).forEach(([key, account]) => {
+            if (account && account.code) {
+                const accountCode = String(account.code || '');
+                const accountName = String(account.name || '');
+                const accountBalance = account.balance || 0;
+                
+                // Skip accounts we've already handled (cash accounts, AR)
+                const isHandledAccount = ['1000', '1001', '1002', '1003', '1004', '1005', '1010', '1011', '1012', '1013', '1014', '10003', '10005', '1100'].includes(accountCode);
+                
+                if (!isHandledAccount) {
+                    // Check if it's a current or non-current asset
+                    const isCurrent = BalanceSheetService.isCurrentAsset(accountCode, accountName);
+                    
+                    if (isCurrent) {
+                        // Add to other current assets
+                        allOtherCurrentAssets[key] = {
+                            balance: accountBalance,
+                            code: accountCode,
+                            name: accountName
+                        };
+                        console.log(`💰 Extracted current asset: ${key} = $${accountBalance}`);
+                    } else {
+                        // Add to non-current assets
+                        nonCurrentAssets[key] = {
+                            balance: accountBalance,
+                            code: accountCode,
+                            name: accountName
+                        };
+                        console.log(`🏢 Extracted non-current asset: ${key} = $${accountBalance}`);
+                    }
+                }
+            }
+        });
+        
         console.log(`🔧 Account totals: Cash: $${totalCash}, Bank: $${totalBank}, AR: $${totalAR}, Petty: $${totalPettyCash}, Vault: $${totalVault}, Clearing: $${totalClearing}`);
         console.log(`🔧 Liability totals: $${totalLiabilities}, Equity totals: $${totalEquity}`);
+        console.log(`💰 Other current assets found: ${Object.keys(allOtherCurrentAssets).length} accounts`);
+        console.log(`🏢 Non-current assets found: ${Object.keys(nonCurrentAssets).length} accounts`);
         
         // Transform to match the EXACT structure expected by transformFixedBalanceSheetToMonthly
         return {
@@ -3664,12 +3705,11 @@ function transformResidenceFilteredToFixed(monthBreakdown, month, year) {
                     '10003 - Cbz Vault': { balance: totalVault, code: '10003', name: 'Cbz Vault' },
                     '10005 - Opening balance clearing account': { balance: totalClearing, code: '10005', name: 'Opening balance clearing account' },
                     // AR accounts - aggregate all individual AR accounts
-                    '1100 - Accounts Receivable': { balance: totalAR, code: '1100', name: 'Accounts Receivable' }
+                    '1100 - Accounts Receivable': { balance: totalAR, code: '1100', name: 'Accounts Receivable' },
+                    // Include ALL other current assets (like unfiltered does)
+                    ...allOtherCurrentAssets
                 },
-                non_current_assets: {
-                    '1500 - Property, Plant & Equipment': { balance: 0, code: '1500', name: 'Property, Plant & Equipment' },
-                    '1600 - Other Non-Current Assets': { balance: 0, code: '1600', name: 'Other Non-Current Assets' }
-                }
+                non_current_assets: nonCurrentAssets  // Use actual non-current assets from data
             },
             liabilities: {
                 total_liabilities: totalLiabilities,

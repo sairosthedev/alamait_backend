@@ -4405,6 +4405,29 @@ class FinancialReportingService {
                 };
             });
             
+            // Get ALL accounts to identify non-current asset accounts
+            // Import BalanceSheetService to use isCurrentAsset function
+            const BalanceSheetService = require('./balanceSheetService');
+            const allAccountsForFilter = await Account.find().sort({ code: 1 });
+            
+            // Identify non-current asset account codes
+            // Use both isCurrentAsset check AND category field for more reliable identification
+            const nonCurrentAssetCodes = [];
+            allAccountsForFilter.forEach(account => {
+                if (account.type === 'Asset') {
+                    // Check if it's a fixed asset by category
+                    const isFixedAsset = account.category === 'Fixed Assets' || account.category === 'Other Assets';
+                    // Check if it's non-current by name/code logic
+                    const isNonCurrentByName = !BalanceSheetService.isCurrentAsset(account.code, account.name);
+                    
+                    if (isFixedAsset || isNonCurrentByName) {
+                        nonCurrentAssetCodes.push(String(account.code));
+                        console.log(`🏢 Identified non-current asset: ${account.code} - ${account.name} (category: ${account.category})`);
+                    }
+                }
+            });
+            console.log(`🏢 Found ${nonCurrentAssetCodes.length} non-current asset accounts: ${nonCurrentAssetCodes.slice(0, 10).join(', ')}${nonCurrentAssetCodes.length > 10 ? '...' : ''}`);
+            
             // Process each month to build monthly balance sheet
             for (let monthIndex = 0; monthIndex < 12; monthIndex++) {
                 const monthStartDate = new Date(period, monthIndex, 1);
@@ -4414,17 +4437,34 @@ class FinancialReportingService {
                 
                 // Get ALL transaction entries up to month end (CUMULATIVE) for balance sheet
                 // Balance sheet shows balances as of month end, which requires all transactions from beginning
-                // Check both residence field and metadata fields (like income statement does)
+                // Include transactions that match residence OR affect non-current asset accounts
+                const residenceConditions = [
+                    { residence: actualResidenceId },
+                    { residence: actualResidenceId.toString() },
+                    { 'metadata.residenceId': actualResidenceId.toString() },
+                    { 'metadata.residence': actualResidenceId.toString() }
+                ];
+                
+                // Build conditions for transactions affecting non-current asset accounts
+                const nonCurrentAssetConditions = [];
+                if (nonCurrentAssetCodes.length > 0) {
+                    nonCurrentAssetConditions.push({
+                        'entries.accountCode': { $in: nonCurrentAssetCodes }
+                    });
+                }
+                
+                // Combine: include transactions that match residence OR affect non-current assets
+                const combinedConditions = [...residenceConditions];
+                if (nonCurrentAssetConditions.length > 0) {
+                    combinedConditions.push(...nonCurrentAssetConditions);
+                }
+                
                 const query = {
                     date: { 
                         $lte: monthEndDate  // All transactions up to and including month end (cumulative)
                     },
                     status: 'posted',  // Only include posted transactions
-                    $or: [
-                        { residence: actualResidenceId },
-                        { 'metadata.residenceId': actualResidenceId.toString() },
-                        { 'metadata.residence': actualResidenceId.toString() }
-                    ]
+                    $or: combinedConditions
                 };
                 
                 const entries = await TransactionEntry.find(query).populate('residence');
