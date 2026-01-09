@@ -4,8 +4,9 @@ const bcrypt = require('bcryptjs');
 const userSchema = new mongoose.Schema({
   email: {
     type: String,
-    required: true,
+    required: false,
     unique: true,
+    sparse: true, // Allow multiple null/undefined values
     trim: true,
     lowercase: true
   },
@@ -25,12 +26,12 @@ const userSchema = new mongoose.Schema({
   },
   lastName: {
     type: String,
-    required: true,
+    required: false,
     trim: true
   },
   phone: {
     type: String,
-    required: true,
+    required: false,
     trim: true
   },
   applicationCode: {
@@ -169,7 +170,10 @@ userSchema.index({ currentRoom: 1 });
 
 // Virtual for full name
 userSchema.virtual('fullName').get(function() {
-  return `${this.firstName} ${this.lastName}`;
+  if (this.lastName) {
+    return `${this.firstName} ${this.lastName}`;
+  }
+  return this.firstName;
 });
 
 // Virtual for active maintenance requests

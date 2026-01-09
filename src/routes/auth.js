@@ -16,11 +16,11 @@ const User = require('../models/User');
 
 // Validation middleware
 const registerValidation = [
-    check('email', 'Please include a valid email').isEmail(),
+    check('email', 'Please include a valid email').optional().isEmail(),
     check('password', 'Password must be at least 6 characters').isLength({ min: 6 }),
     check('firstName', 'First name is required').notEmpty(),
-    check('lastName', 'Last name is required').notEmpty(),
-    check('phone', 'Phone number is required').notEmpty(),
+    check('lastName', 'Last name is optional').optional().trim(),
+    check('phone', 'Phone number is optional').optional().trim(),
     check('applicationCode', 'Application code is required').notEmpty()
 ];
 
