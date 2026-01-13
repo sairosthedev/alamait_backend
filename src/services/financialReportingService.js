@@ -4446,14 +4446,27 @@ class FinancialReportingService {
                 ];
                 
                 // Build conditions for transactions affecting non-current asset accounts
+                // IMPORTANT: Non-current assets must ALSO have a matching residence field
+                // This ensures that when filtering by residence, only non-current assets belonging to that residence are included
                 const nonCurrentAssetConditions = [];
                 if (nonCurrentAssetCodes.length > 0) {
+                    // Non-current asset transactions must have a matching residence field
                     nonCurrentAssetConditions.push({
-                        'entries.accountCode': { $in: nonCurrentAssetCodes }
+                        $and: [
+                            { 'entries.accountCode': { $in: nonCurrentAssetCodes } },
+                            {
+                                $or: [
+                                    { residence: actualResidenceId },
+                                    { residence: actualResidenceId.toString() },
+                                    { 'metadata.residenceId': actualResidenceId.toString() },
+                                    { 'metadata.residence': actualResidenceId.toString() }
+                                ]
+                            }
+                        ]
                     });
                 }
                 
-                // Combine: include transactions that match residence OR affect non-current assets
+                // Combine: include transactions that match residence OR affect non-current assets with matching residence
                 const combinedConditions = [...residenceConditions];
                 if (nonCurrentAssetConditions.length > 0) {
                     combinedConditions.push(...nonCurrentAssetConditions);

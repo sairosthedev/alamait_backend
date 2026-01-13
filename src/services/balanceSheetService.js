@@ -35,7 +35,8 @@ class BalanceSheetService {
 
   /**
    * Build residence match filter that also includes transactions affecting non-current asset accounts
-   * This ensures non-current assets (like property, equipment) appear on filtered balance sheets
+   * Non-current assets are only included if they have a matching residence field
+   * This ensures non-current assets (like property, equipment) appear on filtered balance sheets only when they belong to that residence
    */
   static buildResidenceMatchFilterWithNonCurrentAssets(residence, existingConditions = {}, nonCurrentAssetCodes = []) {
     if (!residence) return existingConditions;
@@ -55,18 +56,34 @@ class BalanceSheetService {
     ];
     
     // Build conditions for transactions affecting non-current asset accounts
+    // IMPORTANT: Non-current assets must ALSO have a matching residence field
+    // This ensures that when filtering by residence, only non-current assets belonging to that residence are included
     const nonCurrentAssetConditions = [];
     if (nonCurrentAssetCodes.length > 0) {
       // Check if any entry in the transaction affects a non-current asset account
       // Convert all codes to strings to ensure proper matching
       const nonCurrentAssetCodesStr = nonCurrentAssetCodes.map(code => String(code));
+      
+      // Non-current asset transactions must have a matching residence field
       nonCurrentAssetConditions.push({
-        'entries.accountCode': { $in: nonCurrentAssetCodesStr }
+        $and: [
+          { 'entries.accountCode': { $in: nonCurrentAssetCodesStr } },
+          {
+            $or: [
+              { residence: residenceObjectId },
+              { residence: residence.toString() },
+              { 'metadata.residenceId': residenceObjectId },
+              { 'metadata.residenceId': residence.toString() },
+              { 'metadata.residence': residenceObjectId },
+              { 'metadata.residence': residence.toString() }
+            ]
+          }
+        ]
       });
-      console.log(`🏢 Including transactions affecting non-current asset accounts: ${nonCurrentAssetCodesStr.slice(0, 10).join(', ')}${nonCurrentAssetCodesStr.length > 10 ? '...' : ''}`);
+      console.log(`🏢 Including non-current asset transactions with matching residence: ${nonCurrentAssetCodesStr.slice(0, 10).join(', ')}${nonCurrentAssetCodesStr.length > 10 ? '...' : ''}`);
     }
     
-    // Combine: include transactions that match residence OR affect non-current assets
+    // Combine: include transactions that match residence OR affect non-current assets with matching residence
     const combinedConditions = [...residenceConditions];
     if (nonCurrentAssetConditions.length > 0) {
       combinedConditions.push(...nonCurrentAssetConditions);
