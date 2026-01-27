@@ -280,6 +280,28 @@ class RentalAccrualService {
         try {
             console.log(`🏠 Processing lease start for ${application.firstName} ${application.lastName}`);
             
+            // 🚫 PREVENT FUTURE MONTH LEASE STARTS: Only create lease starts for current or past months
+            const now = new Date();
+            const leaseStartDate = new Date(application.startDate);
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+            const leaseStartMonth = leaseStartDate.getMonth() + 1;
+            const leaseStartYear = leaseStartDate.getFullYear();
+            
+            // Check if lease starts in a future month
+            if (leaseStartYear > currentYear || (leaseStartYear === currentYear && leaseStartMonth > currentMonth)) {
+                console.log(`⏭️ Skipping lease start for ${application.firstName} ${application.lastName} - lease starts in future month (${leaseStartMonth}/${leaseStartYear}). Current month: ${currentMonth}/${currentYear}`);
+                return {
+                    success: true,
+                    skipped: true,
+                    message: `Lease start skipped - starts in future month (${leaseStartMonth}/${leaseStartYear}). Will be processed when that month begins.`,
+                    leaseStartMonth,
+                    leaseStartYear,
+                    currentMonth,
+                    currentYear
+                };
+            }
+            
             // Check if lease start entries already exist for THIS SPECIFIC APPLICATION
             // Allow multiple lease starts for the same student (re-applications)
             const existingEntries = await TransactionEntry.findOne({
@@ -587,21 +609,19 @@ class RentalAccrualService {
             }
             
             // 🆕 AUTO-BACKFILL: If lease started in the past, create missing monthly accruals
-            const now = new Date();
-            const leaseStartDate = new Date(application.startDate);
-            const currentMonth = now.getMonth() + 1;
-            const currentYear = now.getFullYear();
-            const leaseStartMonth = leaseStartDate.getMonth() + 1;
-            const leaseStartYear = leaseStartDate.getFullYear();
+            // Reuse variables already declared at the top of the function
+            const leaseStartDateForBackfill = new Date(application.startDate);
+            const leaseStartMonthForBackfill = leaseStartDateForBackfill.getMonth() + 1;
+            const leaseStartYearForBackfill = leaseStartDateForBackfill.getFullYear();
             
             // Check if lease started in a past month (not current month)
-            if (leaseStartYear < currentYear || (leaseStartYear === currentYear && leaseStartMonth < currentMonth)) {
-                console.log(`🔄 Lease started in past month (${leaseStartMonth}/${leaseStartYear}), auto-creating missing monthly accruals...`);
+            if (leaseStartYearForBackfill < currentYear || (leaseStartYearForBackfill === currentYear && leaseStartMonthForBackfill < currentMonth)) {
+                console.log(`🔄 Lease started in past month (${leaseStartMonthForBackfill}/${leaseStartYearForBackfill}), auto-creating missing monthly accruals...`);
                 
                 try {
                     // Create missing monthly accruals from month AFTER lease start up to current month
-                    let month = leaseStartMonth + 1;
-                    let year = leaseStartYear;
+                    let month = leaseStartMonthForBackfill + 1;
+                    let year = leaseStartYearForBackfill;
                     
                     // Handle year boundary
                     if (month > 12) {
@@ -638,7 +658,7 @@ class RentalAccrualService {
                     // Don't fail the lease start process if backfill fails
                 }
             } else {
-                console.log(`ℹ️ Lease started in current month (${leaseStartMonth}/${leaseStartYear}), no backfill needed`);
+                console.log(`ℹ️ Lease started in current month (${leaseStartMonthForBackfill}/${leaseStartYearForBackfill}), no backfill needed`);
             }
             
             return {
@@ -1187,14 +1207,19 @@ class RentalAccrualService {
                 console.log(`🔍 Checking for advance payments for ${monthKey} (student: ${student.student.toString()})`);
                 
                 // Strategy 1: Find advance payment transactions with monthSettled matching this month
+                // OR paymentMonth/intendedLeaseStartMonth matching this month (for payments made before lease start)
                 let advancePayments = await TransactionEntry.find({
                     source: 'advance_payment',
                     'metadata.studentId': student.student.toString(),
-                    'metadata.monthSettled': monthKey,
+                    $or: [
+                        { 'metadata.monthSettled': monthKey },
+                        { 'metadata.paymentMonth': monthKey },
+                        { 'metadata.intendedLeaseStartMonth': monthKey }
+                    ],
                     status: 'posted'
                 }).sort({ date: 1 });
                 
-                console.log(`   Strategy 1: Found ${advancePayments.length} advance payment(s) with monthSettled=${monthKey}`);
+                console.log(`   Strategy 1: Found ${advancePayments.length} advance payment(s) with monthSettled/paymentMonth/intendedLeaseStartMonth=${monthKey}`);
                 
                 // Strategy 2: If none found, check for advance payments with null monthSettled made before this month
                 if (advancePayments.length === 0) {

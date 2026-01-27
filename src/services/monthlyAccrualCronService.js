@@ -153,6 +153,10 @@ class MonthlyAccrualCronService {
                 console.log(`ℹ️ Found ${existingAccruals.length} existing accrual entries for ${month}/${year}. Continuing to create for missing students...`);
             }
 
+            // 🆕 PROCESS LEASE STARTS: Process lease starts for applications beginning in current month
+            console.log(`🏠 Processing lease starts for applications beginning in ${month}/${year}...`);
+            await this.processLeaseStartsForMonth(month, year);
+            
             // Create monthly accruals for all active students (service checks per student and skips existing)
             console.log(`🏠 Creating monthly rent accruals for ${month}/${year}...`);
             const result = await RentalAccrualService.createMonthlyRentAccrual(month, year);
@@ -188,6 +192,84 @@ class MonthlyAccrualCronService {
             console.error('❌ Error in monthly accrual process:', error);
             this.lastRun = new Date();
             this.calculateNextRun();
+        }
+    }
+    
+    /**
+     * Process lease starts for applications beginning in the current month
+     */
+    async processLeaseStartsForMonth(month, year) {
+        try {
+            await this.ensureDatabaseConnection();
+            
+            const Application = require('../models/Application');
+            const monthStart = new Date(year, month - 1, 1);
+            const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
+            
+            // Find applications that start in this month and are approved but don't have lease start transactions yet
+            const applicationsStartingThisMonth = await Application.find({
+                status: 'approved',
+                startDate: {
+                    $gte: monthStart,
+                    $lte: monthEnd
+                },
+                paymentStatus: { $ne: 'cancelled' }
+            }).populate('student', 'firstName lastName email');
+            
+            console.log(`   Found ${applicationsStartingThisMonth.length} applications starting in ${month}/${year}`);
+            
+            if (applicationsStartingThisMonth.length === 0) {
+                return { processed: 0, skipped: 0, errors: [] };
+            }
+            
+            const TransactionEntry = require('../models/TransactionEntry');
+            let processed = 0;
+            let skipped = 0;
+            const errors = [];
+            
+            for (const application of applicationsStartingThisMonth) {
+                try {
+                    // Check if lease start already exists for this application
+                    const existingLeaseStart = await TransactionEntry.findOne({
+                        $or: [
+                            { 'metadata.applicationId': application._id, 'metadata.type': 'lease_start' },
+                            { 'metadata.applicationCode': application.applicationCode, 'metadata.type': 'lease_start' }
+                        ]
+                    });
+                    
+                    if (existingLeaseStart) {
+                        console.log(`   ⏭️ Lease start already exists for ${application.applicationCode}`);
+                        skipped++;
+                        continue;
+                    }
+                    
+                    // Process lease start
+                    console.log(`   🏠 Processing lease start for ${application.firstName} ${application.lastName} (${application.applicationCode})...`);
+                    const result = await RentalAccrualService.processLeaseStart(application);
+                    
+                    if (result && result.success && !result.skipped) {
+                        console.log(`   ✅ Lease start processed successfully for ${application.applicationCode}`);
+                        processed++;
+                    } else if (result && result.skipped) {
+                        console.log(`   ⏭️ Lease start skipped for ${application.applicationCode}: ${result.message}`);
+                        skipped++;
+                    } else {
+                        console.log(`   ⚠️ Lease start processing returned warning for ${application.applicationCode}: ${result?.error || 'Unknown issue'}`);
+                        errors.push({ application: application.applicationCode, error: result?.error || 'Unknown issue' });
+                    }
+                } catch (error) {
+                    console.error(`   ❌ Error processing lease start for ${application.applicationCode}:`, error.message);
+                    errors.push({ application: application.applicationCode, error: error.message });
+                }
+            }
+            
+            console.log(`✅ Lease start processing completed for ${month}/${year}: ${processed} processed, ${skipped} skipped, ${errors.length} errors`);
+            
+            return { processed, skipped, errors };
+            
+        } catch (error) {
+            console.error('❌ Error processing lease starts for month:', error);
+            return { processed: 0, skipped: 0, errors: [{ error: error.message }] };
         }
     }
     

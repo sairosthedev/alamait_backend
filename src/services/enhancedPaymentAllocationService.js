@@ -1206,7 +1206,10 @@ class EnhancedPaymentAllocationService {
       const liabilityAccountName = isDeposit ? 'Tenant Security Deposits' : 'Advance Payment Liability';
 
       // Determine monthSettled for deposit: use lease_start month if available
+      // Also determine intendedLeaseStartMonth from application if available
       let monthSettled = null;
+      let intendedLeaseStartMonth = paymentData.intendedLeaseStartMonth || null;
+      
       if (isDeposit) {
         try {
           const leaseStartAccrual = await TransactionEntry.findOne({
@@ -1217,6 +1220,25 @@ class EnhancedPaymentAllocationService {
           if (leaseStartAccrual) {
             const d = new Date(leaseStartAccrual.date);
             monthSettled = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          }
+        } catch (_) {
+          // ignore lookup errors, fallback to null
+        }
+      }
+      
+      // 🆕 If no intendedLeaseStartMonth from paymentData, try to get it from application
+      if (!intendedLeaseStartMonth) {
+        try {
+          const Application = require('../models/Application');
+          const application = await Application.findOne({
+            student: userId,
+            status: 'approved'
+          }).sort({ applicationDate: -1 }).lean();
+          
+          if (application && application.startDate) {
+            const startDate = new Date(application.startDate);
+            intendedLeaseStartMonth = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, '0')}`;
+            console.log(`📅 Found intended lease start month from application: ${intendedLeaseStartMonth}`);
           }
         } catch (_) {
           // ignore lookup errors, fallback to null
@@ -1288,7 +1310,11 @@ class EnhancedPaymentAllocationService {
           advanceType: 'future_payment',
           allocationType: 'advance_payment',
           description: isDeposit ? 'Deposit received (liability)' : `Advance ${paymentType} payment for future periods`,
-          monthSettled: monthSettled
+          monthSettled: monthSettled,
+          // 🆕 Store paymentMonth if provided (indicates intended month for advance payment)
+          paymentMonth: paymentData.paymentMonth || null,
+          // 🆕 Store lease start date if available (helps match advance payments to lease starts)
+          intendedLeaseStartMonth: paymentData.intendedLeaseStartMonth || null
         }
       });
       
