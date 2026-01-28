@@ -2381,12 +2381,34 @@ class FinancialReportsController {
                     });
                 }
             } else {
-                account = await Account.findOne({ code: accountCode });
-            if (!account) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Account not found'
-                });
+                // Special handling for virtual income accounts
+                if (accountCode === 'other_income' || accountCode === '4006') {
+                    // Create a virtual account object for other_income
+                    account = {
+                        code: accountCode === 'other_income' ? '4006' : accountCode,
+                        name: 'Other Income',
+                        type: 'Income',
+                        category: 'Income',
+                        isVirtual: true
+                    };
+                } else if (accountCode === '4003') {
+                    // Account code 4003 is used for deposits in cashflow (virtual account)
+                    // Create a virtual account object for deposits
+                    account = {
+                        code: '4003',
+                        name: 'Deposits Income',
+                        type: 'Income',
+                        category: 'Income',
+                        isVirtual: true
+                    };
+                } else {
+                    account = await Account.findOne({ code: accountCode });
+                    if (!account) {
+                        return res.status(404).json({
+                            success: false,
+                            message: 'Account not found'
+                        });
+                    }
                 }
             }
             
@@ -2424,6 +2446,7 @@ class FinancialReportsController {
                     let totalRentalIncome = 0;
                     let totalAdminFees = 0;
                     let totalDeposits = 0;
+                    let totalOtherIncome = 0;
                     
                     for (const monthKey of monthsToCheck) {
                         const monthData = monthlyBreakdown[monthKey];
@@ -2437,6 +2460,9 @@ class FinancialReportsController {
                                 totalAdminFees += incomeData.admin_fees || 0;
                             } else if (accountCode === '4003' && incomeData.deposits) {
                                 totalDeposits += incomeData.deposits || 0;
+                            } else if ((accountCode === '4006' || accountCode === 'other_income') && incomeData.other_income) {
+                                // Support for other income (account code 4006 or virtual 'other_income')
+                                totalOtherIncome += incomeData.other_income || 0;
                             }
                         }
                     }
@@ -2465,6 +2491,15 @@ class FinancialReportsController {
                             totalCredit: totalDeposits,
                                     totalDebit: 0,
                             netAmount: totalDeposits,
+                                    transactionCount: 0,
+                                    type: 'income',
+                            category: 'income'
+                        };
+                    } else if (accountCode === '4006' || accountCode === 'other_income') {
+                                accountData = {
+                            totalCredit: totalOtherIncome,
+                                    totalDebit: 0,
+                            netAmount: totalOtherIncome,
                                     transactionCount: 0,
                                     type: 'income',
                             category: 'income'
@@ -2660,35 +2695,109 @@ class FinancialReportsController {
             if (account.type === 'Income') {
                 // For cash flow account details, query payment transactions (cash received)
                 // Match the same sources as the cash flow service uses
-                query = {
-                    $or: [
-                        {
-                            // Payment transactions: cash received (match cash flow service sources)
-                            'entries.accountCode': { $regex: '^1000' }, // Has cash account entry
-                            source: { 
-                                $in: [
-                                    'payment', 
-                                    'expense_payment', 
-                                    'rental_payment', 
-                                    'manual', 
-                                    'payment_collection', 
-                                    'bank_transfer', 
-                                    'advance_payment', 
-                                    'debt_settlement', 
-                                    'current_payment',
-                                    'accounts_receivable_collection'
-                                ] 
+                // Special handling for other_income - fetch ALL payment transactions (will filter by description)
+                if (accountCode === '4006' || accountCode === 'other_income') {
+                    // For other_income, fetch ONLY transactions that debit cash account (1000) and credit debtors
+                    // Uses cash account code 1000 (regex ^100), NOT account code 4003
+                    // This includes: DR Cash CR Debtor (council payments, etc.)
+                    query = {
+                        $or: [
+                            {
+                                // Any transaction with cash account debit (cash received) - account code 1000 series
+                                // Regex ^100 matches 1000, 1001, etc. but NOT 4003
+                                'entries.accountCode': { $regex: '^100' }, // Cash account entry (1000, 1001, etc.) - NOT 4003
+                                'entries.debit': { $gt: 0 }, // Cash is debited (money coming in)
+                                source: { 
+                                    $in: [
+                                        'payment', 
+                                        'expense_payment', 
+                                        'rental_payment', 
+                                        'manual', 
+                                        'payment_collection', 
+                                        'bank_transfer', 
+                                        'advance_payment', 
+                                        'debt_settlement', 
+                                        'current_payment',
+                                        'accounts_receivable_collection',
+                                        'payment_allocation'
+                                    ] 
+                                }
+                            },
+                            {
+                                // Manual transactions with cash debit (DR Cash CR Debtor, etc.)
+                                source: 'manual',
+                                'entries.accountCode': { $regex: '^100' }, // Cash account entry (1000) - NOT 4003
+                                'entries.debit': { $gt: 0 } // Cash is debited
                             }
-                        },
-                        {
-                            // Accrual transactions: income earned (lease start, monthly accruals)
-                            // Note: These will be filtered out later for cash flow, but included here for query completeness
-                            'entries.accountCode': accountCode, // Has the income account code directly
-                            source: { $in: ['rental_accrual', 'expense_accrual'] }
-                        }
-                    ],
-                    status: { $nin: ['reversed', 'draft'] }
-                };
+                        ],
+                        status: { $nin: ['reversed', 'draft'] }
+                    };
+                } else if (accountCode === '4003') {
+                    // For deposits (4003), fetch cash receipt transactions (DR Cash CR Debtor)
+                    // These are the actual cash receipts, not the accounting entries that credit account 4003
+                    query = {
+                        $or: [
+                            {
+                                // Cash debit transactions (cash received) - DR Cash CR Debtor pattern
+                                'entries.accountCode': { $regex: '^100' }, // Has cash account entry (1000, 1001, etc.)
+                                'entries.debit': { $gt: 0 }, // Cash is debited (money coming in)
+                                source: { 
+                                    $in: [
+                                        'payment', 
+                                        'expense_payment', 
+                                        'rental_payment', 
+                                        'manual', 
+                                        'payment_collection', 
+                                        'bank_transfer', 
+                                        'advance_payment', 
+                                        'debt_settlement', 
+                                        'current_payment',
+                                        'accounts_receivable_collection',
+                                        'payment_allocation'
+                                    ] 
+                                }
+                            },
+                            {
+                                // Manual transactions with cash debit (DR Cash CR Debtor, etc.)
+                                source: 'manual',
+                                'entries.accountCode': { $regex: '^100' }, // Has cash account entry
+                                'entries.debit': { $gt: 0 } // Cash is debited
+                            }
+                        ],
+                        status: { $nin: ['reversed', 'draft'] }
+                    };
+                } else {
+                    // For other income accounts (rental, admin), use standard query
+                    query = {
+                        $or: [
+                            {
+                                // Payment transactions: cash received (match cash flow service sources)
+                                'entries.accountCode': { $regex: '^1000' }, // Has cash account entry
+                                source: { 
+                                    $in: [
+                                        'payment', 
+                                        'expense_payment', 
+                                        'rental_payment', 
+                                        'manual', 
+                                        'payment_collection', 
+                                        'bank_transfer', 
+                                        'advance_payment', 
+                                        'debt_settlement', 
+                                        'current_payment',
+                                        'accounts_receivable_collection'
+                                    ] 
+                                }
+                            },
+                            {
+                                // Accrual transactions: income earned (lease start, monthly accruals)
+                                // Note: These will be filtered out later for cash flow, but included here for query completeness
+                                'entries.accountCode': accountCode, // Has the income account code directly
+                                source: { $in: ['rental_accrual', 'expense_accrual'] }
+                            }
+                        ],
+                        status: { $nin: ['reversed', 'draft'] }
+                    };
+                }
             } else if (account.type === 'Expense') {
                 // For expense accounts, show ONLY transactions that have the specific expense account code
                 // Each expense account should only show its own transactions, not other expense accounts
@@ -2852,15 +2961,18 @@ class FinancialReportsController {
                         return false;
                     }
                     
-                    // Only include payment transactions (cash received)
+                    // Only include transactions with cash account debit (cash received)
+                    // This includes: DR Cash CR Debtor, DR Cash CR Income, payment transactions
                     // Must have cash account entry (1000 series) with debit (cash coming in)
-                    const cashEntry = tx.entries.find(e => {
-                        const code = e.accountCode || '';
-                        return code.match(/^100/) && (e.accountName?.toLowerCase().includes('cash') || e.accountName?.toLowerCase().includes('bank'));
+                    const cashEntry = tx.entries?.find(e => {
+                        const code = String(e.accountCode || '').trim();
+                        const isCashAccount = code.match(/^100/);
+                        const hasCashDebit = (e.debit || 0) > 0;
+                        return isCashAccount && hasCashDebit;
                     });
                     
                     if (cashEntry && cashEntry.debit > 0) {
-                        // This is a payment transaction - categorize using same logic as cash flow service
+                        // This is a cash receipt transaction - categorize using same logic as cash flow service
                         if (accountCode === '4001') {
                             // Rental income - match cash flow service logic exactly
                             // Check for: "rent", "rental", "accommodation", or "payment allocation" in description
@@ -2873,6 +2985,83 @@ class FinancialReportsController {
                             return description.includes('admin') || 
                                    description.includes('administrative') || 
                                    description.includes('fee');
+                        } else if (accountCode === '4003') {
+                            // Deposits - match cash flow service logic
+                            return description.includes('deposit') || 
+                                   description.includes('security');
+                        } else if (accountCode === '4006' || accountCode === 'other_income') {
+                            // Other income - ONLY transactions that debited cash (1000) and credited debtors (1100 series)
+                            // Must be DR Cash CR Debtor pattern - NOT account code 4003 or deposit liability accounts
+                            
+                            // EXCLUDE: Check if transaction has account code 4003 (deposits) in any entry
+                            const hasDepositAccountCode = tx.entries?.some(e => {
+                                const code = String(e.accountCode || '').trim();
+                                return code === '4003';
+                            });
+                            if (hasDepositAccountCode) {
+                                return false; // This is a deposit transaction - exclude from other_income
+                            }
+                            
+                            // EXCLUDE: Check if transaction has deposit liability account codes (2028, 20002, 2020, etc.) credited
+                            const depositAccountCodes = ['2028', '20002', '2020', '2002', '20020', '2201'];
+                            const hasDepositLiabilityAccount = tx.entries?.some(e => {
+                                const code = String(e.accountCode || '').trim();
+                                return depositAccountCodes.includes(code) && (e.credit || 0) > 0;
+                            });
+                            if (hasDepositLiabilityAccount) {
+                                return false; // This is a deposit transaction - exclude from other_income
+                            }
+                            
+                            // REQUIRE: Must have debtor/AR account credited (1100 series) - DR Cash CR Debtor pattern
+                            const hasDebtorCredit = tx.entries?.some(e => {
+                                const code = String(e.accountCode || '').trim();
+                                return code.match(/^1100/) && (e.credit || 0) > 0;
+                            });
+                            if (!hasDebtorCredit) {
+                                return false; // Must credit a debtor account - exclude if not
+                            }
+                            
+                            // Exclude rent, admin, deposits, utilities, advance payments by description
+                            const isRent = description.includes('rent') || 
+                                         description.includes('rental') || 
+                                         description.includes('accommodation') || 
+                                         description.includes('payment allocation');
+                            const isAdmin = description.includes('admin') || 
+                                          description.includes('administrative') || 
+                                          description.includes('fee');
+                            const isDeposit = description.includes('deposit') || 
+                                            description.includes('security');
+                            const isUtilities = description.includes('utilit') || 
+                                               description.includes('internet') || 
+                                               description.includes('wifi');
+                            const isAdvance = description.includes('advance') || 
+                                            description.includes('prepaid') || 
+                                            description.includes('future');
+                            
+                            // Check if this is an internal cash transfer (cash to cash) - exclude
+                            const hasCashCredit = tx.entries?.some(e => {
+                                const code = String(e.accountCode || '').trim();
+                                return code.match(/^100/) && (e.credit || 0) > 0;
+                            });
+                            if (hasCashCredit && cashEntry) {
+                                // Check if there's a non-cash entry (debtor, income, etc.) - if not, it's an internal transfer
+                                const hasNonCashEntry = tx.entries?.some(e => {
+                                    const code = String(e.accountCode || '').trim();
+                                    const accountType = (e.accountType || '').toLowerCase();
+                                    return !code.match(/^100/) && 
+                                           (accountType === 'expense' || 
+                                            accountType === 'income' || 
+                                            accountType === 'liability' || 
+                                            accountType === 'asset' ||
+                                            code.match(/^1100/)); // Debtor/AR accounts
+                                });
+                                if (!hasNonCashEntry) {
+                                    return false; // Internal cash transfer - exclude
+                                }
+                            }
+                            
+                            // Include if it's other income (council, DR Cash CR Debtor, etc.) and not any of the excluded categories
+                            return !isRent && !isAdmin && !isDeposit && !isUtilities && !isAdvance;
                         }
                         // For other income accounts, include all payment transactions
                         return true;
@@ -3180,6 +3369,8 @@ class FinancialReportsController {
                                 monthTotalCredit = monthData.income.admin_fees || 0;
                             } else if (accountCode === '4003' && monthData.income?.deposits) {
                                 monthTotalCredit = monthData.income.deposits || 0;
+                            } else if ((accountCode === '4006' || accountCode === 'other_income') && monthData.income?.other_income) {
+                                monthTotalCredit = monthData.income.other_income || 0;
                             }
                             monthNetAmount = monthTotalCredit;
                         } else if (account.type === 'Expense') {

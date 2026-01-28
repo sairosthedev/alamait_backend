@@ -4455,12 +4455,12 @@ class FinancialReportingService {
                         $and: [
                             { 'entries.accountCode': { $in: nonCurrentAssetCodes } },
                             {
-                                $or: [
-                                    { residence: actualResidenceId },
+                    $or: [
+                        { residence: actualResidenceId },
                                     { residence: actualResidenceId.toString() },
-                                    { 'metadata.residenceId': actualResidenceId.toString() },
-                                    { 'metadata.residence': actualResidenceId.toString() }
-                                ]
+                        { 'metadata.residenceId': actualResidenceId.toString() },
+                        { 'metadata.residence': actualResidenceId.toString() }
+                    ]
                             }
                         ]
                     });

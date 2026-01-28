@@ -141,13 +141,13 @@ class EnhancedCashFlowService {
         
         // Check transaction ID patterns
         const hasAdjustmentId = transactionId.startsWith('ADJ-') || 
-                               transactionId.startsWith('JE-') ||
                                transactionId.startsWith('BS-');
         
-        // Check reference patterns  
+        // Check reference patterns - Only exclude if it's clearly a balance sheet adjustment
+        // Don't exclude all JE- entries as they can be legitimate income/expense transactions
         const hasAdjustmentRef = reference.startsWith('ADJ-') ||
-                                reference.startsWith('JE-') ||
-                                reference.startsWith('BS-');
+                                reference.startsWith('BS-') ||
+                                (reference.startsWith('JE-') && hasBalanceSheetPattern); // Only exclude JE- if description also matches
         
         return hasBalanceSheetPattern || hasAdjustmentId || hasAdjustmentRef;
     }
@@ -1048,6 +1048,13 @@ class EnhancedCashFlowService {
                         return; // Skip this transaction entry
                     }
                     
+                    // Check for balance sheet adjustments (exclude from income) - DO THIS BEFORE adding to total
+                    if (this.isBalanceSheetAdjustment(entry)) {
+                        // This is a balance sheet adjustment or internal transfer, not income - don't count as income
+                        console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from income: ${incomeAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                        return; // Skip this transaction entry
+                    }
+                    
                     incomeBreakdown.total += incomeAmount;
                     
                     // Special logging for R180 transaction
@@ -1057,13 +1064,6 @@ class EnhancedCashFlowService {
                             accountCode: cashEntry.accountCode,
                             accountName: cashEntry.accountName
                         });
-                    }
-                    
-                        // Check for balance sheet adjustments (exclude from income)
-                        if (this.isBalanceSheetAdjustment(entry)) {
-                        // This is a balance sheet adjustment or internal transfer, not income - don't count as income
-                        console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from income: ${incomeAmount} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
-                        return; // Skip this transaction entry
                     }
                     
                     // Categorize based on description and source
@@ -1299,6 +1299,10 @@ class EnhancedCashFlowService {
                         } else if (desc.includes('utilit')) {
                             category = 'utilities';
                             description = 'Utilities Income';
+                        } else if (desc.includes('council')) {
+                            // Council payments should be treated as income
+                            category = 'other_income';
+                            description = 'Council Payments';
                         }
                     }
                     
@@ -1770,15 +1774,50 @@ class EnhancedCashFlowService {
                                 description: entry.description || 'Utilities Income'
                             });
                         } else {
-                        // Check for balance sheet adjustments (exclude from income)
-                        if (this.isBalanceSheetAdjustment(entry)) {
+                            // Check for balance sheet adjustments (exclude from income)
+                            if (this.isBalanceSheetAdjustment(entry)) {
                                 // This is a balance sheet adjustment or internal transfer, not income - don't count as income
                                 console.log(`💰 Opening balance/balance adjustment/internal transfer excluded from other_income: ${credit} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
                                 return; // Skip this transaction entry
                             }
                             
-                            // Exclude other_income from cash flow entirely - skip this entry
-                            return; // Skip this transaction entry - don't add to any income category
+                            // This is other income (council payments, etc.) - add to other_income category
+                            const desc = (entry.description || '').toLowerCase();
+                            const isRent = desc.includes('rent') || desc.includes('rental') || desc.includes('accommodation') || desc.includes('payment allocation');
+                            const isAdmin = desc.includes('admin') || desc.includes('administrative') || desc.includes('fee');
+                            const isDeposit = desc.includes('deposit') || desc.includes('security');
+                            const isUtilities = desc.includes('utilit') || desc.includes('internet') || desc.includes('wifi');
+                            const isAdvance = desc.includes('advance') || desc.includes('prepaid') || desc.includes('future');
+                            
+                            // Only add to other_income if it doesn't match any other category
+                            if (!isRent && !isAdmin && !isDeposit && !isUtilities && !isAdvance) {
+                                incomeBreakdown.by_source.other_income.total += credit;
+                                incomeBreakdown.by_source.other_income.transactions.push({
+                                    transactionId: entry.transactionId,
+                                    date: effectiveDate,
+                                    amount: credit,
+                                    accountCode,
+                                    accountName,
+                                    residence: entry.residence?.name || 'Unknown',
+                                    description: entry.description || 'Other Income'
+                                });
+                                
+                                // Group by residence
+                                const residenceName = entry.residence?.name || 'Unknown';
+                                if (!incomeBreakdown.by_residence[residenceName]) {
+                                    incomeBreakdown.by_residence[residenceName] = 0;
+                                }
+                                incomeBreakdown.by_residence[residenceName] += credit;
+                                
+                                // Group by month
+                                const monthKey = effectiveDate.toISOString().slice(0, 7);
+                                if (!incomeBreakdown.by_month[monthKey]) {
+                                    incomeBreakdown.by_month[monthKey] = 0;
+                                }
+                                incomeBreakdown.by_month[monthKey] += credit;
+                                
+                                console.log(`💰 Other income identified: ${accountCode} (${accountName}) - Amount: ${credit} - Transaction: ${entry.transactionId} - Description: ${entry.description}`);
+                            }
                         }
                         
                         // Group by residence
@@ -3349,6 +3388,7 @@ class EnhancedCashFlowService {
                 deposits: 0,
                 utilities: 0,
                 advance_payments: 0,
+                other_income: 0,
                 transactions: []
             },
             expenses: {
@@ -3364,7 +3404,8 @@ class EnhancedCashFlowService {
                     admin_fees: { amount: 0, description: "Administrative Fees" },
                     deposits: { amount: 0, description: "Security Deposits" },
                     utilities_income: { amount: 0, description: "Utilities Income" },
-                    advance_payments: { amount: 0, description: "Advance Payments from Students" }
+                    advance_payments: { amount: 0, description: "Advance Payments from Students" },
+                    other_income: { amount: 0, description: "Other Income" }
                 }
             },
             investing_activities: {
@@ -5290,6 +5331,10 @@ class EnhancedCashFlowService {
                     } else if (desc.includes('utilit') || desc.includes('internet') || desc.includes('wifi')) {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
+                    } else if (desc.includes('council')) {
+                        // Council payments should be treated as income
+                        monthlyData[monthName].income.other_income += amount;
+                        monthlyData[monthName].operating_activities.breakdown.other_income = (monthlyData[monthName].operating_activities.breakdown.other_income || 0) + amount;
                     } else {
                         // Check for balance sheet adjustments (exclude from income)
                         if (this.isBalanceSheetAdjustment(entry)) {
@@ -5298,8 +5343,9 @@ class EnhancedCashFlowService {
                             break; // Skip rest of this transaction, continue to next transaction
                         }
                         
-                        // Exclude other_income from cash flow entirely - skip this line only
-                        continue; // Skip this line item, continue with next line in same transaction
+                        // Include other_income in cash flow (don't exclude it)
+                        monthlyData[monthName].income.other_income += amount;
+                        monthlyData[monthName].operating_activities.breakdown.other_income = (monthlyData[monthName].operating_activities.breakdown.other_income || 0) + amount;
                     }
                 }
                 
@@ -5365,6 +5411,11 @@ class EnhancedCashFlowService {
                     } else if (accountCode.startsWith('4004') || accountCode.startsWith('4005') || fallbackDesc.includes('utilit') || fallbackDesc.includes('internet') || fallbackDesc.includes('wifi')) {
                         monthlyData[monthName].income.utilities += amount;
                         monthlyData[monthName].operating_activities.breakdown.utilities += amount;
+                    } else if (fallbackDesc.includes('council')) {
+                        // Council payments should be treated as income
+                        monthlyData[monthName].income.other_income += amount;
+                        monthlyData[monthName].operating_activities.breakdown.other_income = (monthlyData[monthName].operating_activities.breakdown.other_income || { amount: 0, description: "Other Income" });
+                        monthlyData[monthName].operating_activities.breakdown.other_income.amount += amount;
                     } else {
                         // Check for balance sheet adjustments (exclude from income)
                         if (this.isBalanceSheetAdjustment(entry)) {
@@ -5373,8 +5424,10 @@ class EnhancedCashFlowService {
                             break; // Skip rest of this transaction, continue to next transaction
                         }
                         
-                        // Exclude other_income from cash flow entirely - skip this line only
-                        continue; // Skip this line item, continue with next line in same transaction
+                        // Include other_income in cash flow (don't exclude it)
+                        monthlyData[monthName].income.other_income += amount;
+                        monthlyData[monthName].operating_activities.breakdown.other_income = (monthlyData[monthName].operating_activities.breakdown.other_income || { amount: 0, description: "Other Income" });
+                        monthlyData[monthName].operating_activities.breakdown.other_income.amount += amount;
                     }
                 }
 
