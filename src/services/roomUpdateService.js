@@ -212,6 +212,202 @@ class RoomUpdateService {
 
         return updateSummary;
     }
+
+    /**
+     * 🆕 Update room price and details in all related documents when room price or details change
+     * @param {string} residenceId - Residence ID
+     * @param {string} roomNumber - Room number
+     * @param {Object} roomUpdates - Updated room data (price, type, etc.)
+     * @param {Object} oldRoomData - Old room data for comparison
+     * @returns {Object} Update summary
+     */
+    static async cascadeUpdateRoomDetails(residenceId, roomNumber, roomUpdates, oldRoomData) {
+        const updateSummary = {
+            residenceId: residenceId.toString(),
+            roomNumber,
+            updated: {
+                applications: 0,
+                debtors: 0,
+                users: 0
+            },
+            priceChange: {
+                oldPrice: oldRoomData?.price || null,
+                newPrice: roomUpdates?.price || null,
+                effectiveNextMonth: null
+            },
+            errors: []
+        };
+
+        try {
+            console.log(`🔄 Cascading room details update for room ${roomNumber} in residence ${residenceId}`);
+            
+            // Fetch residence once to get updated room details
+            const Residence = require('../models/Residence');
+            const residence = await Residence.findById(residenceId);
+            const finalRoomNumber = roomUpdates.roomNumber || roomNumber;
+            const updatedRoom = residence?.rooms?.find(r => 
+                r.roomNumber === finalRoomNumber
+            );
+            
+            // Calculate effective date for price changes (next month)
+            let effectiveDate = null;
+            if (roomUpdates.price !== undefined && roomUpdates.price !== oldRoomData?.price) {
+                const now = new Date();
+                effectiveDate = new Date(now.getFullYear(), now.getMonth() + 1, 1); // First day of next month
+                updateSummary.priceChange.effectiveNextMonth = effectiveDate.toISOString().split('T')[0];
+                console.log(`   💰 Price change detected: $${oldRoomData?.price || 'N/A'} → $${roomUpdates.price}`);
+                console.log(`   📅 Price change effective: ${updateSummary.priceChange.effectiveNextMonth}`);
+            }
+
+            // 1. Update Applications - Update allocatedRoomDetails with new price and room info
+            try {
+                
+                const applicationUpdate = {};
+                
+                // Always update price, type, capacity if provided
+                if (roomUpdates.price !== undefined) {
+                    applicationUpdate['allocatedRoomDetails.price'] = roomUpdates.price;
+                }
+                if (roomUpdates.type !== undefined) {
+                    applicationUpdate['allocatedRoomDetails.type'] = roomUpdates.type;
+                }
+                if (roomUpdates.capacity !== undefined) {
+                    applicationUpdate['allocatedRoomDetails.capacity'] = roomUpdates.capacity;
+                }
+                
+                // If room number changed, update that too
+                if (roomUpdates.roomNumber && roomUpdates.roomNumber !== roomNumber) {
+                    applicationUpdate.allocatedRoom = roomUpdates.roomNumber;
+                    applicationUpdate['allocatedRoomDetails.roomNumber'] = roomUpdates.roomNumber;
+                }
+                
+                // Update roomId if we found the updated room
+                if (updatedRoom && updatedRoom._id) {
+                    applicationUpdate['allocatedRoomDetails.roomId'] = updatedRoom._id;
+                }
+
+                const applicationResult = await Application.updateMany(
+                    {
+                        residence: new mongoose.Types.ObjectId(residenceId),
+                        allocatedRoom: roomNumber
+                    },
+                    {
+                        $set: applicationUpdate
+                    }
+                );
+                updateSummary.updated.applications = applicationResult.modifiedCount;
+                console.log(`   ✅ Updated ${applicationResult.modifiedCount} applications`);
+            } catch (error) {
+                updateSummary.errors.push({ collection: 'Application', error: error.message });
+                console.error(`   ❌ Error updating applications:`, error.message);
+            }
+
+            // 2. Update Debtors - Update roomPrice (effective next month for accruals)
+            try {
+                // Reuse residence and updatedRoom from above
+                
+                const debtorUpdate = {};
+                
+                // Update room price if provided
+                if (roomUpdates.price !== undefined) {
+                    debtorUpdate.roomPrice = roomUpdates.price;
+                }
+                
+                // Update room number if changed
+                if (roomUpdates.roomNumber && roomUpdates.roomNumber !== roomNumber) {
+                    debtorUpdate.roomNumber = roomUpdates.roomNumber;
+                }
+
+                // Update room details
+                if (roomUpdates.type !== undefined) {
+                    debtorUpdate['roomDetails.roomType'] = roomUpdates.type;
+                }
+                if (roomUpdates.capacity !== undefined) {
+                    debtorUpdate['roomDetails.roomCapacity'] = roomUpdates.capacity;
+                }
+                if (roomUpdates.features !== undefined) {
+                    debtorUpdate['roomDetails.roomFeatures'] = roomUpdates.features;
+                }
+                if (roomUpdates.amenities !== undefined) {
+                    debtorUpdate['roomDetails.roomAmenities'] = roomUpdates.amenities;
+                }
+                
+                // Update roomId if we found the updated room
+                if (updatedRoom && updatedRoom._id) {
+                    debtorUpdate['roomDetails.roomId'] = updatedRoom._id;
+                }
+
+                const debtorResult = await Debtor.updateMany(
+                    {
+                        residence: new mongoose.Types.ObjectId(residenceId),
+                        roomNumber: roomNumber
+                    },
+                    {
+                        $set: debtorUpdate
+                    }
+                );
+                updateSummary.updated.debtors = debtorResult.modifiedCount;
+                console.log(`   ✅ Updated ${debtorResult.modifiedCount} debtors`);
+                
+                // Store price change effective date in debtor metadata if price changed
+                if (roomUpdates.price !== undefined && roomUpdates.price !== oldRoomData?.price && effectiveDate) {
+                    await Debtor.updateMany(
+                        {
+                            residence: new mongoose.Types.ObjectId(residenceId),
+                            roomNumber: roomUpdates.roomNumber || roomNumber
+                        },
+                        {
+                            $set: {
+                                'metadata.priceChangeEffectiveDate': effectiveDate,
+                                'metadata.priceChangeDate': new Date(),
+                                'metadata.oldPrice': oldRoomData?.price || 0,
+                                'metadata.newPrice': roomUpdates.price
+                            }
+                        }
+                    );
+                    console.log(`   📅 Set price change effective date for debtors: ${effectiveDate.toISOString().split('T')[0]}`);
+                }
+            } catch (error) {
+                updateSummary.errors.push({ collection: 'Debtor', error: error.message });
+                console.error(`   ❌ Error updating debtors:`, error.message);
+            }
+
+            // 3. Update Users - Update currentRoom if room number changed
+            if (roomUpdates.roomNumber && roomUpdates.roomNumber !== roomNumber) {
+                try {
+                    const userResult = await User.updateMany(
+                        {
+                            residence: new mongoose.Types.ObjectId(residenceId),
+                            currentRoom: roomNumber
+                        },
+                        {
+                            $set: {
+                                currentRoom: roomUpdates.roomNumber
+                            }
+                        }
+                    );
+                    updateSummary.updated.users = userResult.modifiedCount;
+                    console.log(`   ✅ Updated ${userResult.modifiedCount} users`);
+                } catch (error) {
+                    updateSummary.errors.push({ collection: 'User', error: error.message });
+                    console.error(`   ❌ Error updating users:`, error.message);
+                }
+            }
+
+            const totalUpdated = Object.values(updateSummary.updated).reduce((sum, count) => sum + count, 0);
+            console.log(`✅ Cascade room details update complete: ${totalUpdated} documents updated`);
+            
+            updateSummary.success = true;
+            updateSummary.totalUpdated = totalUpdated;
+
+        } catch (error) {
+            console.error('❌ Error in cascade room details update:', error);
+            updateSummary.success = false;
+            updateSummary.errors.push({ general: error.message });
+        }
+
+        return updateSummary;
+    }
 }
 
 module.exports = RoomUpdateService;
