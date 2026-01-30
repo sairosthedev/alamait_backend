@@ -646,6 +646,19 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
 
         console.log(`👥 Getting students with outstanding balances (OPTIMIZED method)`);
 
+        // Validate residence ID if provided
+        let residenceFilter = {};
+        if (residence) {
+            if (!mongoose.Types.ObjectId.isValid(residence)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid residence ID format',
+                    error: 'Residence ID must be a valid MongoDB ObjectId'
+                });
+            }
+            residenceFilter = { residence: new mongoose.Types.ObjectId(residence) };
+        }
+
         // Use aggregation pipeline for much faster processing
         const pipeline = [
             // Match AR transactions (both debits and credits)
@@ -653,7 +666,7 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
                 $match: {
                     'entries.accountCode': { $regex: '^1100-' },
                     'entries.accountType': 'Asset',
-                    ...(residence && { residence: new mongoose.Types.ObjectId(residence) })
+                    ...residenceFilter
                 }
             },
             // Unwind entries to process each AR entry
@@ -706,14 +719,18 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
         console.log(`🔍 Found ${studentBalances.length} students with outstanding balances`);
 
         // Get debtor information in batch for better performance
-        const studentIds = studentBalances.map(s => s._id);
+        const studentIds = studentBalances.map(s => s._id).filter(id => id); // Filter out null/undefined
         const Debtor = require('../../models/Debtor');
+        
+        // Validate and convert student IDs to ObjectIds, filtering out invalid ones
+        const validStudentObjectIds = studentIds
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
         
         const debtors = await Debtor.find({
             $or: [
-                { user: { $in: studentIds } },
-                { user: { $in: studentIds.map(id => new mongoose.Types.ObjectId(id)) } },
-                { accountCode: { $in: studentIds.map(id => `1100-${id}`) } }
+                { user: { $in: validStudentObjectIds } },
+                { accountCode: { $in: studentIds.filter(id => id).map(id => `1100-${id}`) } }
             ]
         });
 
@@ -768,6 +785,15 @@ const getStudentsWithOutstandingBalances = async (req, res) => {
         // Get student details for all students (active and expired)
         const studentsWithDetails = await Promise.all(
             limitedStudents.map(async (student) => {
+                // Validate studentId before calling getStudentInfo
+                if (!student.studentId || !mongoose.Types.ObjectId.isValid(student.studentId)) {
+                    console.warn(`⚠️ Invalid studentId: ${student.studentId}`);
+                    return {
+                        ...student,
+                        studentDetails: null
+                    };
+                }
+                
                 const studentInfo = await getStudentInfo(student.studentId);
                 console.log(`🔍 Student ${student.studentId}:`, {
                     found: !!studentInfo,

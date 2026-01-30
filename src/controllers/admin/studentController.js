@@ -1207,6 +1207,49 @@ exports.manualAddStudent = async (req, res) => {
             console.log(`🔄 Re-application detected for existing student: ${email}`);
         }
 
+        // 🔄 Check if this is a renewal (existing user with previous application/debtor)
+        let isReapplication = false;
+        let previousDebtor = null;
+        let previousFinancialSummary = null;
+        let previousApplication = null;
+
+        if (existingUser) {
+            isReapplication = true;
+            
+            // Find previous debtor account
+            const Debtor = require('../../models/Debtor');
+            previousDebtor = await Debtor.findOne({ user: existingUser._id });
+            
+            if (previousDebtor) {
+                console.log(`💰 Found previous debtor account: ${previousDebtor.debtorCode}`);
+                console.log(`   Previous balance: $${previousDebtor.currentBalance || 0}`);
+                console.log(`   Total paid: $${previousDebtor.totalPaid || 0}`);
+                console.log(`   Total owed: $${previousDebtor.totalOwed || 0}`);
+                
+                // Build previous financial summary
+                previousFinancialSummary = {
+                    debtorCode: previousDebtor.debtorCode,
+                    previousBalance: previousDebtor.currentBalance || 0,
+                    totalPaid: previousDebtor.totalPaid || 0,
+                    totalOwed: previousDebtor.totalOwed || 0,
+                    lastPaymentDate: previousDebtor.lastPaymentDate || null,
+                    lastPaymentAmount: previousDebtor.lastPaymentAmount || 0,
+                    transactionCount: 0
+                };
+            }
+            
+            // Find previous application (expired or any previous one)
+            previousApplication = await Application.findOne({
+                student: existingUser._id
+            }).sort({ endDate: -1 }); // Get the most recent one
+            
+            if (previousApplication) {
+                console.log(`📋 Found previous application: ${previousApplication.applicationCode}`);
+                console.log(`   Status: ${previousApplication.status}`);
+                console.log(`   End Date: ${previousApplication.endDate}`);
+            }
+        }
+
         // Validate residence and room
         const residence = await Residence.findById(residenceId);
         if (!residence) {
@@ -1436,6 +1479,9 @@ exports.manualAddStudent = async (req, res) => {
         // Generate application code
         const applicationCode = `APP${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
 
+        // Determine request type: if it's a re-application, mark as renewal
+        const requestType = isReapplication ? 'renewal' : 'new';
+
         // Create application record with proper application code
         const application = new Application({
             student: student._id,
@@ -1443,7 +1489,7 @@ exports.manualAddStudent = async (req, res) => {
             firstName,
             lastName,
             phone,
-            requestType: 'new',
+            requestType: requestType, // 'renewal' if re-application, 'new' otherwise
             status: 'approved', // Directly approve the application
             paymentStatus: 'paid', // Mark as paid since admin is adding manually
             startDate: parsedStartDate,
@@ -1454,7 +1500,12 @@ exports.manualAddStudent = async (req, res) => {
             applicationCode: applicationCode, // Set the generated application code
             applicationDate: new Date(),
             actionDate: new Date(),
-            actionBy: req.user._id // Use _id consistently
+            actionBy: req.user._id, // Use _id consistently
+            // Add re-application metadata if applicable
+            isReapplication: isReapplication,
+            previousStudentId: existingUser?._id || null,
+            previousDebtorCode: previousDebtor?.debtorCode || null,
+            previousFinancialSummary: previousFinancialSummary
         });
 
         await application.save();

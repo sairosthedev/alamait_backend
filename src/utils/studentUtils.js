@@ -76,6 +76,12 @@ async function getStudentIdentifierMap() {
  */
 async function getStudentInfo(studentId) {
     try {
+        // Validate studentId before using it
+        if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) {
+            console.warn(`⚠️ Invalid studentId provided to getStudentInfo: ${studentId}`);
+            return null;
+        }
+        
         // First try to find in active users
         const activeStudent = await User.findById(studentId);
         if (activeStudent) {
@@ -96,13 +102,20 @@ async function getStudentInfo(studentId) {
 
         // If not found in active users, check expired students
         // Handle both cases: student as object with _id and student as direct ID string
-        const expiredStudent = await ExpiredStudent.findOne({
+        // Only try ObjectId conversion if studentId is valid
+        const expiredStudentQuery = {
             $or: [
                 { 'student._id': studentId },
-                { 'student': studentId },
-                { 'student': new mongoose.Types.ObjectId(studentId) }
+                { 'student': studentId }
             ]
-        });
+        };
+        
+        // Only add ObjectId conversion if studentId is valid
+        if (mongoose.Types.ObjectId.isValid(studentId)) {
+            expiredStudentQuery.$or.push({ 'student': new mongoose.Types.ObjectId(studentId) });
+        }
+        
+        const expiredStudent = await ExpiredStudent.findOne(expiredStudentQuery);
 
         if (expiredStudent) {
             // First, try to get student data from application.student (most complete)

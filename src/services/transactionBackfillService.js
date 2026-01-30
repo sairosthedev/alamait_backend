@@ -186,7 +186,20 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 			]
 		});
 		
-		if (!existingLeaseStart) {
+		// 🚫 PREVENT FUTURE MONTH LEASE STARTS: Only create lease starts for current or past months
+		const now = new Date();
+		const leaseStartDate = new Date(startDate);
+		const currentMonth = now.getMonth() + 1;
+		const currentYear = now.getFullYear();
+		const leaseStartMonth = leaseStartDate.getMonth() + 1;
+		const leaseStartYear = leaseStartDate.getFullYear();
+		
+		// Check if lease starts in a future month
+		const isFutureMonth = leaseStartYear > currentYear || (leaseStartYear === currentYear && leaseStartMonth > currentMonth);
+		
+		if (isFutureMonth) {
+			console.log(`⏭️ Skipping lease start for ${debtor.user.firstName} ${debtor.user.lastName} (${debtor.debtorCode}) - lease starts in future month (${leaseStartMonth}/${leaseStartYear}). Current month: ${currentMonth}/${currentYear}`);
+		} else if (!existingLeaseStart) {
 			// Create lease start transaction
             const proratedRent = calculateProratedRent(startDate, monthlyRent, residence);
 			const totalLeaseStartAmount = proratedRent + (adminFee || 0) + depositAmount;
@@ -317,15 +330,10 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
 		const currentMonthIter = new Date(startDate);
         currentMonthIter.setDate(1); // Set to first day of month
         
-        // Get lease start month to skip it for monthly accruals
-        const leaseStartYear = startDate.getFullYear();
-        const leaseStartMonth = startDate.getMonth() + 1; // 1-12
+        // Get lease start month to skip it for monthly accruals (reuse variables declared earlier)
         const leaseStartMonthKey = `${leaseStartYear}-${String(leaseStartMonth).padStart(2, '0')}`;
         
-        // Get current month boundary - only create transactions up to current month
-        const now = new Date();
-        const currentYear = now.getFullYear();
-        const currentMonth = now.getMonth() + 1; // 1-12
+        // Get current month boundary - only create transactions up to current month (reuse variables declared earlier)
         const currentMonthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
         
         while (currentMonthIter < endDate) {
