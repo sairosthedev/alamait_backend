@@ -101,10 +101,48 @@ class AccrualCorrectionService {
                 console.log(`   Found ${allAccruals.length} accruals via account code pattern fallback`);
             }
             
+            // 🔄 Check if there's a renewed/active application that covers months after the expired lease
+            // This prevents reversing accruals for months that are covered by a renewed lease
+            let renewedApplication = null;
+            if (actualStudentIdString) {
+                // Check for active or approved applications for the same student
+                // that start after or around when this lease ends (could be renewal)
+                const monthAfterLeaseEnd = new Date(leaseEndYear, leaseEndMonth, 1); // First day of month after lease end
+                
+                renewedApplication = await Application.findOne({
+                    student: actualStudentIdObj,
+                    _id: { $ne: application._id }, // Exclude the current expired application
+                    status: { $in: ['approved', 'pending'] },
+                    $or: [
+                        // Renewal that starts in the same month as lease end or after
+                        { startDate: { $gte: new Date(leaseEndYear, leaseEndMonth - 1, 1) } },
+                        // Renewal that starts before lease end but extends beyond it
+                        { 
+                            startDate: { $lte: leaseEndDate },
+                            endDate: { $gt: leaseEndDate }
+                        }
+                    ]
+                }).session(session);
+                
+                if (renewedApplication) {
+                    console.log(`🔄 Found renewed application: ${renewedApplication.applicationCode}`);
+                    console.log(`   Start: ${renewedApplication.startDate}`);
+                    console.log(`   End: ${renewedApplication.endDate}`);
+                    console.log(`   Status: ${renewedApplication.status}`);
+                    console.log(`   Request Type: ${renewedApplication.requestType}`);
+                    console.log(`   Is Reapplication: ${renewedApplication.isReapplication}`);
+                }
+            }
+            
             // Identify incorrect accruals (created for months after lease end date)
             const incorrectAccruals = [];
             
             console.log(`📅 Lease end date: ${leaseEndDate.toISOString()} (${leaseEndMonth}/${leaseEndYear})`);
+            if (renewedApplication) {
+                const renewedStart = new Date(renewedApplication.startDate);
+                const renewedEnd = new Date(renewedApplication.endDate);
+                console.log(`🔄 Renewed lease covers: ${renewedStart.toISOString()} to ${renewedEnd.toISOString()}`);
+            }
             
             for (const accrual of allAccruals) {
                 // Get accrual month/year from metadata or date
@@ -149,18 +187,37 @@ class AccrualCorrectionService {
                     accrualYear > leaseEndYear || 
                     (accrualYear === leaseEndYear && accrualMonth > leaseEndMonth);
                 
+                // 🔄 Check if the accrual month is covered by a renewed lease
+                let isCoveredByRenewedLease = false;
+                if (renewedApplication && isAfterLeaseEnd) {
+                    const accrualDate = new Date(accrualYear, accrualMonth - 1, 1); // First day of accrual month
+                    const renewedStart = new Date(renewedApplication.startDate);
+                    const renewedEnd = new Date(renewedApplication.endDate);
+                    
+                    // Check if accrual month falls within the renewed lease period
+                    isCoveredByRenewedLease = accrualDate >= renewedStart && accrualDate <= renewedEnd;
+                    
+                    if (isCoveredByRenewedLease) {
+                        console.log(`  ✅ Accrual ${accrualMonth}/${accrualYear} is covered by renewed lease - SKIPPING reversal`);
+                    }
+                }
+                
                 // Also check if it's a lease start transaction (should not be reversed unless it's after lease end)
                 const isLeaseStart = accrual.metadata?.type === 'lease_start' || 
                                     (accrual.description && /lease start/i.test(accrual.description));
                 
-                console.log(`  📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Is lease start: ${isLeaseStart}`);
+                console.log(`  📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Covered by renewal: ${isCoveredByRenewedLease} | Is lease start: ${isLeaseStart}`);
                 
-                if (isAfterLeaseEnd && !isLeaseStart) {
+                // Only reverse if:
+                // 1. It's after the lease end date, AND
+                // 2. It's NOT covered by a renewed lease, AND
+                // 3. It's NOT a lease start transaction
+                if (isAfterLeaseEnd && !isCoveredByRenewedLease && !isLeaseStart) {
                     incorrectAccruals.push({
                         accrual,
                         accrualMonth,
                         accrualYear,
-                        reason: `Accrual for ${accrualMonth}/${accrualYear} is after lease end date (${leaseEndMonth}/${leaseEndYear})`
+                        reason: `Accrual for ${accrualMonth}/${accrualYear} is after lease end date (${leaseEndMonth}/${leaseEndYear}) and not covered by renewed lease`
                     });
                 }
             }
@@ -547,6 +604,31 @@ class AccrualCorrectionService {
                 }
             });
             
+            // 🔄 Pre-fetch all renewed applications for all students to avoid N+1 queries
+            const allStudentIds = applications
+                .map(app => app.student)
+                .filter(id => id)
+                .map(id => new mongoose.Types.ObjectId(id));
+            
+            const renewedApplications = await Application.find({
+                student: { $in: allStudentIds },
+                status: { $in: ['approved', 'pending'] }
+            }).lean();
+            
+            // Build a map: studentId -> renewed applications
+            const renewedAppsByStudent = new Map();
+            renewedApplications.forEach(renewedApp => {
+                if (renewedApp.student) {
+                    const studentIdStr = renewedApp.student.toString();
+                    if (!renewedAppsByStudent.has(studentIdStr)) {
+                        renewedAppsByStudent.set(studentIdStr, []);
+                    }
+                    renewedAppsByStudent.get(studentIdStr).push(renewedApp);
+                }
+            });
+            
+            console.log(`🔄 Found ${renewedApplications.length} renewed/active applications for ${renewedAppsByStudent.size} students`);
+            
             const issues = [];
             
             for (const app of applications) {
@@ -565,6 +647,11 @@ class AccrualCorrectionService {
                 const leaseWasUpdated = updatedAt && createdAt && 
                     (updatedAt.getTime() - createdAt.getTime()) > 60000; // More than 1 minute difference
                 
+                // 🔄 Check for renewed applications for this student
+                const studentIdString = app.student ? app.student.toString() : null;
+                const renewedApps = studentIdString ? (renewedAppsByStudent.get(studentIdString) || []) : [];
+                const renewedApp = renewedApps.find(ra => ra._id.toString() !== app._id.toString());
+                
                 // Only log in development or for first few applications
                 if (process.env.NODE_ENV === 'development' || issues.length < 3) {
                     console.log(`\n🔍 Checking application ${app._id} (${app.firstName} ${app.lastName})`);
@@ -572,11 +659,15 @@ class AccrualCorrectionService {
                     if (leaseWasUpdated) {
                         console.log(`   ⚠️ Lease was updated: ${updatedAt.toISOString()} (originally created: ${createdAt.toISOString()})`);
                     }
+                    if (renewedApp) {
+                        console.log(`   🔄 Found renewed application: ${renewedApp.applicationCode || renewedApp._id}`);
+                        console.log(`      Renewed lease: ${renewedApp.startDate} to ${renewedApp.endDate}`);
+                    }
                 }
                 
                 // OPTIMIZATION: Get accruals from pre-built maps instead of querying
                 const applicationIdString = app._id.toString();
-                const studentIdString = app.student ? app.student.toString() : null;
+                // studentIdString already declared above (line 651)
                 
                 // Get accruals from maps (deduplicate)
                 const accrualIds = new Set();
@@ -654,15 +745,34 @@ class AccrualCorrectionService {
                         accrualYear > appEndYear || 
                         (accrualYear === appEndYear && accrualMonth > appEndMonth);
                     
+                    // 🔄 Check if the accrual month is covered by a renewed lease
+                    let isCoveredByRenewedLease = false;
+                    if (renewedApp && isAfterLeaseEnd) {
+                        const accrualDate = new Date(accrualYear, accrualMonth - 1, 1); // First day of accrual month
+                        const renewedStart = new Date(renewedApp.startDate);
+                        const renewedEnd = new Date(renewedApp.endDate);
+                        
+                        // Check if accrual month falls within the renewed lease period
+                        isCoveredByRenewedLease = accrualDate >= renewedStart && accrualDate <= renewedEnd;
+                        
+                        if (isCoveredByRenewedLease && (process.env.NODE_ENV === 'development' || issues.length < 3)) {
+                            console.log(`   ✅ Accrual ${accrualMonth}/${accrualYear} is covered by renewed lease - SKIPPING`);
+                        }
+                    }
+                    
                     const isLeaseStart = accrual.metadata?.type === 'lease_start' || 
                                         (accrual.description && /lease start/i.test(accrual.description));
                     
                     // Only log in development
                     if (process.env.NODE_ENV === 'development') {
-                        console.log(`   📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Is lease start: ${isLeaseStart}`);
+                        console.log(`   📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Covered by renewal: ${isCoveredByRenewedLease} | Is lease start: ${isLeaseStart}`);
                     }
                     
-                    if (isAfterLeaseEnd && !isLeaseStart) {
+                    // Only mark as incorrect if:
+                    // 1. It's after the lease end date, AND
+                    // 2. It's NOT covered by a renewed lease, AND
+                    // 3. It's NOT a lease start transaction
+                    if (isAfterLeaseEnd && !isCoveredByRenewedLease && !isLeaseStart) {
                         incorrectAccruals.push({
                             accrualId: accrual._id,
                             transactionId: accrual.transactionId,
@@ -671,7 +781,7 @@ class AccrualCorrectionService {
                             amount: accrual.totalDebit,
                             description: accrual.description,
                             createdAt: accrual.createdAt,
-                            issue: `Accrual for ${accrualMonth}/${accrualYear} is after lease end date (${appEndMonth}/${appEndYear})`
+                            issue: `Accrual for ${accrualMonth}/${accrualYear} is after lease end date (${appEndMonth}/${appEndYear}) and not covered by renewed lease`
                         });
                     }
                 }

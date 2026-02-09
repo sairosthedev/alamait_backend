@@ -866,6 +866,15 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
         
         // Apply residence filter if provided (check both top-level residence and metadata)
         if (residence) {
+            // Validate residence ID before using it
+            if (!mongoose.Types.ObjectId.isValid(residence)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid residence ID format',
+                    error: 'Residence ID must be a valid MongoDB ObjectId'
+                });
+            }
+            
             const residenceId = new mongoose.Types.ObjectId(residence);
             // Use $and to combine residence filter with other conditions
             transactionQuery.$and = [
@@ -1070,14 +1079,18 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
         });
 
         // Get debtor information in batch for better performance
-        const studentIds = studentBalances.map(s => s._id);
+        const studentIds = studentBalances.map(s => s._id).filter(id => id); // Filter out null/undefined
         const Debtor = require('../../models/Debtor');
+        
+        // Validate and convert student IDs to ObjectIds, filtering out invalid ones
+        const validStudentObjectIds = studentIds
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
         
         const debtors = await Debtor.find({
             $or: [
-                { user: { $in: studentIds } },
-                { user: { $in: studentIds.map(id => new mongoose.Types.ObjectId(id)) } },
-                { accountCode: { $in: studentIds.map(id => `1100-${id}`) } }
+                { user: { $in: validStudentObjectIds } },
+                { accountCode: { $in: studentIds.filter(id => id).map(id => `1100-${id}`) } }
             ]
         });
 
@@ -1119,16 +1132,16 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
 
         // Get invoices for ALL students BEFORE limiting (batch query for performance)
         const Invoice = require('../../models/Invoice');
-        const allStudentObjectIds = studentsWithMonthlyBalances.map(s => {
-            const id = s.studentId || s._id;
-            return new mongoose.Types.ObjectId(id);
-        });
+        const allStudentObjectIds = studentsWithMonthlyBalances
+            .map(s => s.studentId || s._id)
+            .filter(id => id && mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
         
         // Get invoices for all students (not just limited ones)
-        const allInvoices = await Invoice.find({
+        const allInvoices = allStudentObjectIds.length > 0 ? await Invoice.find({
             student: { $in: allStudentObjectIds },
             status: { $ne: 'cancelled' } // Exclude cancelled invoices
-        }).sort({ billingStartDate: 1 }).lean();
+        }).sort({ billingStartDate: 1 }).lean() : [];
         
         // Group invoices by student and month
         const invoicesByStudentAndMonth = new Map();
@@ -1360,6 +1373,16 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
         const allStudentsWithDetails = await Promise.all(
             studentsWithInvoices.map(async (student) => {
                 const studentId = student.studentId || student._id;
+                
+                // Validate studentId before calling getStudentInfo
+                if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) {
+                    console.warn(`⚠️ Invalid studentId: ${studentId}`);
+                    return {
+                        ...student,
+                        studentDetails: null
+                    };
+                }
+                
                 const studentInfo = await getStudentInfo(studentId);
                 
                 // Debug: Check November specifically

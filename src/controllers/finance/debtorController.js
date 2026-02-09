@@ -32,8 +32,8 @@ exports.createDebtor = async (req, res) => {
             });
         }
 
-        // Check if debtor account already exists
-        const existingDebtor = await Debtor.findOne({ user: userId });
+        // Check if debtor account already exists - check by user ID
+        let existingDebtor = await Debtor.findOne({ user: userId });
         if (existingDebtor) {
             return res.status(400).json({
                 success: false,
@@ -41,9 +41,43 @@ exports.createDebtor = async (req, res) => {
             });
         }
 
+        // Also check by email to prevent duplicates for the same person
+        if (user.email) {
+            const emailLower = user.email.toLowerCase().trim();
+            existingDebtor = await Debtor.findOne({ 
+                'contactInfo.email': { $regex: new RegExp(`^${emailLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+            });
+            
+            if (existingDebtor) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Debtor account already exists for email ${user.email} (Debtor Code: ${existingDebtor.debtorCode})`
+                });
+            }
+        }
+
         // Generate codes
         const debtorCode = await Debtor.generateDebtorCode();
-        const accountCode = await Debtor.generateAccountCode();
+        
+        // Get the correct AR account code for this student (format: 1100-{userId})
+        const expectedAccountCode = `1100-${userId.toString()}`;
+        let arAccount = await Account.findOne({ code: expectedAccountCode });
+        
+        if (!arAccount) {
+            // Create the AR account if it doesn't exist
+            arAccount = new Account({
+                code: expectedAccountCode,
+                name: `Accounts Receivable - ${user.firstName} ${user.lastName}`,
+                type: 'Asset',
+                category: 'Current Assets',
+                subcategory: 'Accounts Receivable',
+                isActive: true,
+                description: `Accounts Receivable account for ${user.firstName} ${user.lastName} (${user.email})`
+            });
+            await arAccount.save();
+        }
+        
+        const accountCode = arAccount.code;
 
         // Create debtor account
         const debtor = new Debtor({
@@ -65,18 +99,8 @@ exports.createDebtor = async (req, res) => {
 
         await debtor.save();
 
-        // Create corresponding account in chart of accounts
-        const account = new Account({
-            code: accountCode,
-            name: `Accounts Receivable - ${user.firstName} ${user.lastName}`,
-            type: 'Asset',
-            description: `Accounts receivable for ${user.firstName} ${user.lastName}`,
-            isActive: true,
-            parentAccount: '1100', // Accounts Receivable - Tenants
-            createdBy: req.user._id
-        });
-
-        await account.save();
+        // Note: AR account was already created/verified above (lines 49-63)
+        // No need to create duplicate account
 
         // Populate user details
         await debtor.populate('user', 'firstName lastName email phone');

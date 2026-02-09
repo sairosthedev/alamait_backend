@@ -227,6 +227,31 @@ exports.createDebtorForStudent = async (user, options = {}) => {
             const arAccountCode = `1100-${actualUser._id.toString()}`;
             existingDebtor = await Debtor.findOne({ accountCode: arAccountCode });
         }
+        
+        // Also check by email address to prevent duplicate debtors for the same person
+        // This handles cases where multiple User records exist for the same email
+        if (!existingDebtor && actualUser.email) {
+            const emailLower = actualUser.email.toLowerCase().trim();
+            existingDebtor = await Debtor.findOne({ 
+                'contactInfo.email': { $regex: new RegExp(`^${emailLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+            });
+            
+            // If found by email but user field doesn't match, update it to prevent future duplicates
+            if (existingDebtor && existingDebtor.user.toString() !== actualUser._id.toString()) {
+                console.log(`⚠️  Found existing debtor by email (${actualUser.email}) but with different user ID`);
+                console.log(`   Existing debtor user: ${existingDebtor.user}`);
+                console.log(`   Current user: ${actualUser._id}`);
+                console.log(`   Updating debtor to use current user ID...`);
+                
+                // Update the debtor to use the current user ID
+                existingDebtor.user = actualUser._id;
+                await existingDebtor.save();
+                console.log(`✅ Updated debtor ${existingDebtor.debtorCode} to use user ${actualUser._id}`);
+                
+                // Refresh the debtor to ensure we have the latest data
+                existingDebtor = await Debtor.findById(existingDebtor._id);
+            }
+        }
 
         // Ensure student AR account exists asap
         try {
