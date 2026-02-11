@@ -799,18 +799,33 @@ exports.getDebtorBalance = async (req, res) => {
         })
         .sort({ paymentDate: -1 });
 
+        // Get refunds for this debtor
+        const Refund = require('../../models/Refund');
+        const refunds = await Refund.find({
+            $or: [
+                { debtor: debtor._id },
+                { student: debtor.user._id }
+            ]
+        })
+        .populate('payment', 'paymentId totalAmount date method status')
+        .populate('student', 'firstName lastName email')
+        .sort({ createdAt: -1 });
+
         res.status(200).json({
             success: true,
             debtor,
             transactions,
             invoices,
             payments,
+            refunds,
             summary: {
                 totalOwed: debtor.totalOwed,
                 totalPaid: debtor.totalPaid,
                 currentBalance: debtor.currentBalance,
                 overdueAmount: debtor.overdueAmount,
-                daysOverdue: debtor.daysOverdue
+                daysOverdue: debtor.daysOverdue,
+                totalRefunds: refunds.length,
+                totalRefundAmount: refunds.reduce((sum, refund) => sum + (refund.amount || 0), 0)
             }
         });
 
@@ -955,6 +970,7 @@ exports.getDebtorComprehensiveData = async (req, res) => {
                 data: includeHistory ? payments : [],
                 statistics: paymentStats
             },
+            refunds: includeHistory ? refunds : [],
             transactions: {
                 data: includeHistory ? transactions : [],
                 statistics: transactionStats
@@ -963,6 +979,8 @@ exports.getDebtorComprehensiveData = async (req, res) => {
             bookings: includeHistory ? bookings : [],
             summary: {
                 totalPayments: payments.length,
+                totalRefunds: refunds.length,
+                totalRefundAmount: refunds.reduce((sum, refund) => sum + (refund.amount || 0), 0),
                 totalTransactions: transactions.length,
                 totalApplications: applications.length,
                 totalBookings: bookings.length,
@@ -1917,6 +1935,18 @@ exports.getDebtorDetails = async (req, res) => {
     // Get payments and transactions
     const payments = await Payment.find({ student: studentId }).sort({ date: -1 });
     
+    // Get refunds for this debtor
+    const Refund = require('../../models/Refund');
+    const refunds = await Refund.find({ 
+      $or: [
+        { debtor: debtor._id },
+        { student: studentId }
+      ]
+    })
+    .populate('payment', 'paymentId totalAmount date method status')
+    .populate('student', 'firstName lastName email')
+    .sort({ createdAt: -1 });
+    
     // Get all transactions for this debtor using multiple criteria
     const transactions = await TransactionEntry.find({
       $or: [
@@ -1945,6 +1975,7 @@ exports.getDebtorDetails = async (req, res) => {
         allocation: allocationData
       },
       payments: payments,
+      refunds: refunds,
       transactions: transactions,
       monthsBreakdown: monthsBreakdown.success ? monthsBreakdown.breakdown : null,
       // Enhanced data for ledger display

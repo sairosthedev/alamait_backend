@@ -478,6 +478,7 @@ app.use('/api/finance/users', financeUsersRoutes);
 
 // Refunds endpoints
 app.use('/api/finance/refunds', refundRoutes);
+app.use('/api/refunds', refundRoutes); // Alias for frontend compatibility
 
 // Depreciation endpoints
 app.use('/api/finance/depreciation', depreciationRoutes);

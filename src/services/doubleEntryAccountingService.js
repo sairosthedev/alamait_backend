@@ -3499,6 +3499,415 @@ class DoubleEntryAccountingService {
             return null;
         }
     }
+
+    /**
+     * Create refund transaction for advance payments
+     * Handles refunds for advance payments (deferred income) that were made for future leases
+     * 
+     * Scenario: Student pays in January for February lease, then cancels and gets refunded
+     * - Original payment: DR Cash, CR Deferred Income (liability)
+     * - Refund: DR Deferred Income (reduces liability), CR Cash (reduces cash)
+     * 
+     * @param {Object} refundData - Refund data
+     * @param {string} refundData.refundId - Refund document ID
+     * @param {string} refundData.paymentId - Original payment ID
+     * @param {string} refundData.studentId - Student/User ID
+     * @param {number} refundData.amount - Refund amount
+     * @param {string} refundData.reason - Reason for refund
+     * @param {string} refundData.description - Transaction description
+     * @param {Date} refundData.date - Refund date (can be different month than payment)
+     * @param {string} refundData.method - Refund method (Bank Transfer, Cash, etc.)
+     * @param {ObjectId} refundData.createdBy - User creating the refund
+     * @param {ObjectId} refundData.residence - Residence ID (optional)
+     * @returns {Object} Transaction result
+     */
+    static async createRefundTransaction(refundData) {
+        try {
+            const {
+                refundId,
+                paymentId,
+                studentId,
+                amount,
+                reason,
+                description,
+                date,
+                method = 'Bank Transfer',
+                createdBy,
+                residence = null
+            } = refundData;
+
+            console.log(`\n💸 Processing refund transaction:`);
+            console.log(`   Refund ID: ${refundId}`);
+            console.log(`   Payment ID: ${paymentId}`);
+            console.log(`   Student ID: ${studentId}`);
+            console.log(`   Amount: $${amount}`);
+            console.log(`   Date: ${date}`);
+            console.log(`   Method: ${method}`);
+
+            // Validate required fields - convert ObjectIds to strings if needed
+            const refundIdStr = refundId ? (typeof refundId === 'object' ? refundId.toString() : refundId) : null;
+            const paymentIdStr = paymentId ? (typeof paymentId === 'object' ? paymentId.toString() : paymentId) : null;
+            const studentIdStr = studentId ? (typeof studentId === 'object' ? studentId.toString() : studentId) : null;
+            
+            if (!refundIdStr || !paymentIdStr || !studentIdStr || !amount || !date) {
+                throw new Error(`Missing required fields: refundId=${refundIdStr}, paymentId=${paymentIdStr}, studentId=${studentIdStr}, amount=${amount}, date=${date}`);
+            }
+
+            // Get the original payment to understand what was paid
+            const Payment = require('../models/Payment');
+            const mongoose = require('mongoose');
+            const paymentObjectId = mongoose.Types.ObjectId.isValid(paymentIdStr) 
+                ? new mongoose.Types.ObjectId(paymentIdStr) 
+                : paymentIdStr;
+            const payment = await Payment.findById(paymentObjectId).populate('user', 'firstName lastName email');
+            
+            if (!payment) {
+                throw new Error(`Payment not found: ${paymentIdStr}`);
+            }
+
+            const studentName = payment.user 
+                ? `${payment.user.firstName} ${payment.user.lastName}`
+                : 'Student';
+
+            console.log(`   Student: ${studentName}`);
+            console.log(`   Original Payment Date: ${payment.date}`);
+            console.log(`   Original Payment Amount: $${payment.totalAmount || payment.amount || 0}`);
+
+            // Get refund document
+            const Refund = require('../models/Refund');
+            const refundObjectId = mongoose.Types.ObjectId.isValid(refundIdStr) 
+                ? new mongoose.Types.ObjectId(refundIdStr) 
+                : refundIdStr;
+            const refund = await Refund.findById(refundObjectId);
+            if (!refund) {
+                throw new Error(`Refund not found: ${refundIdStr}`);
+            }
+
+            // Determine if this was an advance payment (check original payment transaction)
+            const TransactionEntry = require('../models/TransactionEntry');
+            
+            // Try multiple ways to find the original payment transaction
+            let originalTransaction = null;
+            
+            // Method 1: Try by reference field (paymentId string or ObjectId)
+            originalTransaction = await TransactionEntry.findOne({
+                $or: [
+                    { reference: paymentIdStr },
+                    { reference: payment.paymentId },
+                    { reference: payment._id.toString() }
+                ],
+                source: { $in: ['advance_payment', 'payment'] },
+                status: { $ne: 'deleted' }
+            }).sort({ createdAt: -1 });
+            
+            // Method 2: Try by sourceId if not found
+            if (!originalTransaction && mongoose.Types.ObjectId.isValid(paymentIdStr)) {
+                originalTransaction = await TransactionEntry.findOne({
+                    sourceId: paymentObjectId,
+                    source: { $in: ['advance_payment', 'payment'] },
+                    status: { $ne: 'deleted' }
+                }).sort({ createdAt: -1 });
+            }
+            
+            // Method 3: Try by metadata.paymentId
+            if (!originalTransaction) {
+                originalTransaction = await TransactionEntry.findOne({
+                    'metadata.paymentId': paymentIdStr,
+                    source: { $in: ['advance_payment', 'payment'] },
+                    status: { $ne: 'deleted' }
+                }).sort({ createdAt: -1 });
+            }
+            
+            // Method 4: Try by payment.paymentId in metadata
+            if (!originalTransaction && payment.paymentId) {
+                originalTransaction = await TransactionEntry.findOne({
+                    'metadata.paymentId': payment.paymentId,
+                    source: { $in: ['advance_payment', 'payment'] },
+                    status: { $ne: 'deleted' }
+                }).sort({ createdAt: -1 });
+            }
+
+            let isAdvancePayment = false;
+            let deferredIncomeAccount = null;
+            let advancePaymentAccount = null;
+
+            if (originalTransaction) {
+                console.log(`   ✅ Found original transaction: ${originalTransaction.transactionId}`);
+                console.log(`   Source: ${originalTransaction.source}, Reference: ${originalTransaction.reference}`);
+                
+                // Check if original transaction had deferred income entries (account 2200)
+                const deferredEntry = originalTransaction.entries?.find(e => 
+                    e.accountCode === '2200' || 
+                    e.accountName?.toLowerCase().includes('deferred') ||
+                    e.accountName?.toLowerCase().includes('advance')
+                );
+                
+                if (deferredEntry) {
+                    isAdvancePayment = true;
+                    deferredIncomeAccount = deferredEntry.accountCode || '2200';
+                    console.log(`   ✅ Identified as advance payment refund`);
+                    console.log(`   Deferred Income Account: ${deferredIncomeAccount}`);
+                    console.log(`   Original Deferred Income Entry: DR $${deferredEntry.debit || 0}, CR $${deferredEntry.credit || 0}`);
+                } else {
+                    console.log(`   ⚠️ Transaction found but no deferred income entry detected`);
+                }
+            } else {
+                console.log(`   ⚠️ Could not find original payment transaction`);
+            }
+
+            // If not found in transaction, check payment metadata or paymentMonth
+            // Also check if payment was made before lease start date
+            if (!isAdvancePayment) {
+                const paymentDate = new Date(payment.date);
+                const refundDate = new Date(date);
+                
+                // Check if payment was for a future month (advance payment indicator)
+                if (payment.paymentMonth) {
+                    const paymentMonth = paymentDate.getMonth() + 1;
+                    const paymentYear = paymentDate.getFullYear();
+                    const refundMonth = refundDate.getMonth() + 1;
+                    const refundYear = refundDate.getFullYear();
+
+                    // If payment was for a future month, likely advance payment
+                    if (payment.paymentMonth && payment.paymentMonth !== `${paymentYear}-${String(paymentMonth).padStart(2, '0')}`) {
+                        isAdvancePayment = true;
+                        console.log(`   ✅ Payment was for future month ${payment.paymentMonth}, treating as advance payment`);
+                    } else if (refundMonth !== paymentMonth || refundYear !== paymentYear) {
+                        // Refund in different month suggests advance payment
+                        isAdvancePayment = true;
+                        console.log(`   ✅ Refund in different month (payment: ${paymentMonth}/${paymentYear}, refund: ${refundMonth}/${refundYear}), treating as advance payment`);
+                    }
+                }
+                
+                // Check if payment was made before lease start date (if available)
+                if (!isAdvancePayment && payment.date) {
+                    const Debtor = require('../models/Debtor');
+                    const studentObjectId = mongoose.Types.ObjectId.isValid(studentIdStr) 
+                        ? new mongoose.Types.ObjectId(studentIdStr) 
+                        : studentIdStr;
+                    const debtor = await Debtor.findOne({ user: studentObjectId });
+                    if (debtor && debtor.startDate) {
+                        const leaseStartDate = new Date(debtor.startDate);
+                        if (paymentDate < leaseStartDate) {
+                            isAdvancePayment = true;
+                            console.log(`   ✅ Payment made before lease start (payment: ${paymentDate.toISOString().split('T')[0]}, lease start: ${leaseStartDate.toISOString().split('T')[0]}), treating as advance payment`);
+                        }
+                    }
+                }
+            }
+
+            // Get or create deferred income account if this is an advance payment
+            if (isAdvancePayment && !deferredIncomeAccount) {
+                deferredIncomeAccount = '2200'; // Advance Payments Liability account
+                const Account = require('../models/Account');
+                let account = await Account.findOne({ code: deferredIncomeAccount });
+                if (!account) {
+                    account = new Account({
+                        code: deferredIncomeAccount,
+                        name: 'Advance Payments Liability',
+                        type: 'Liability',
+                        category: 'Current Liabilities',
+                        subcategory: 'Deferred Income',
+                        isActive: true
+                    });
+                    await account.save();
+                }
+            }
+
+            // Get refund method account (cash account for cash refunds, bank for transfers)
+            const refundAccountCode = method === 'Cash' ? '1000' : 
+                                     method === 'Ecocash' ? '1002' :
+                                     method === 'Innbucks' ? '1003' :
+                                     '1001'; // Default to bank
+
+            // Get residence if not provided
+            let refundResidence = residence || payment.residence;
+            if (!refundResidence) {
+                refundResidence = await this.getDefaultResidence();
+            }
+            
+            // Validate residence is available (required field)
+            if (!refundResidence) {
+                throw new Error('Residence is required for refund transaction. Please provide a residence or ensure at least one residence exists in the system.');
+            }
+
+            // Validate createdBy - handle both ObjectId and object with _id
+            let transactionCreatedBy = createdBy;
+            if (transactionCreatedBy && typeof transactionCreatedBy === 'object' && transactionCreatedBy._id) {
+                transactionCreatedBy = transactionCreatedBy._id;
+            }
+            if (!transactionCreatedBy && refund && refund.createdBy) {
+                transactionCreatedBy = refund.createdBy;
+                if (transactionCreatedBy && typeof transactionCreatedBy === 'object' && transactionCreatedBy._id) {
+                    transactionCreatedBy = transactionCreatedBy._id;
+                }
+            }
+            if (!transactionCreatedBy) {
+                throw new Error('createdBy is required for refund transaction');
+            }
+
+            // Create transaction
+            const transactionId = await this.generateTransactionId();
+            const refundTransaction = new Transaction({
+                transactionId,
+                date: new Date(date),
+                description: description || `Refund to ${studentName}: ${reason || 'Cancelled lease'}`,
+                type: 'refund',
+                reference: refundIdStr, // Use string version
+                residence: refundResidence,
+                createdBy: transactionCreatedBy
+            });
+
+            await refundTransaction.save();
+
+            // Create transaction entries
+            const entries = [];
+
+            if (isAdvancePayment && deferredIncomeAccount) {
+                // Refund of advance payment - reverse deferred income
+                console.log(`   📊 Creating advance payment refund entries:`);
+                console.log(`      DR Deferred Income (${deferredIncomeAccount}) - $${amount}`);
+                console.log(`      CR Cash/Bank (${refundAccountCode}) - $${amount}`);
+
+                // Entry 1: Debit Deferred Income (reduces liability)
+                entries.push({
+                    accountCode: deferredIncomeAccount,
+                    accountName: 'Advance Payments Liability',
+                    accountType: 'Liability',
+                    debit: amount,
+                    credit: 0,
+                    description: `Refund of advance payment to ${studentName} - ${reason || 'Cancelled lease'}`
+                });
+
+                // Entry 2: Credit Cash/Bank (reduces cash)
+                entries.push({
+                    accountCode: refundAccountCode,
+                    accountName: this.getPaymentAccountName(method),
+                    accountType: 'Asset',
+                    debit: 0,
+                    credit: amount,
+                    description: `Refund payment to ${studentName} via ${method} - ${reason || 'Cancelled lease'}`
+                });
+            } else {
+                // Regular refund - reverse accounts receivable or income
+                console.log(`   📊 Creating regular refund entries:`);
+                console.log(`      DR Accounts Receivable/Income - $${amount}`);
+                console.log(`      CR Cash/Bank (${refundAccountCode}) - $${amount}`);
+
+                const studentARCode = `1100-${studentIdStr}`;
+                
+                // Entry 1: Debit Accounts Receivable (if payment settled AR) or Income
+                entries.push({
+                    accountCode: studentARCode,
+                    accountName: `Accounts Receivable - ${studentName}`,
+                    accountType: 'Asset',
+                    debit: amount,
+                    credit: 0,
+                    description: `Refund of payment to ${studentName} - ${reason || 'Cancelled lease'}`
+                });
+
+                // Entry 2: Credit Cash/Bank
+                entries.push({
+                    accountCode: refundAccountCode,
+                    accountName: this.getPaymentAccountName(method),
+                    accountType: 'Asset',
+                    debit: 0,
+                    credit: amount,
+                    description: `Refund payment to ${studentName} via ${method} - ${reason || 'Cancelled lease'}`
+                });
+            }
+
+            // Create transaction entry
+            // Use specific source type based on refund type for better reporting
+            const sourceType = isAdvancePayment ? 'advance_payment_refund' : 'regular_payment_refund';
+            
+            const transactionEntry = new TransactionEntry({
+                transactionId,
+                date: new Date(date),
+                description: description || `Refund to ${studentName}: ${reason || 'Cancelled lease'}`,
+                reference: refundIdStr,
+                entries: entries,
+                totalDebit: amount,
+                totalCredit: amount,
+                source: sourceType,
+                sourceId: refundObjectId,
+                sourceModel: 'Refund',
+                residence: refundResidence,
+                createdBy: transactionCreatedBy, // Use validated createdBy
+                status: 'posted',
+                metadata: {
+                    type: 'refund',
+                    originalPaymentId: paymentIdStr,
+                    studentId: studentIdStr,
+                    originalPaymentDate: payment.date,
+                    refundDate: date,
+                    refundMethod: method,
+                    reason: reason,
+                    isAdvancePaymentRefund: isAdvancePayment,
+                    originalPaymentMonth: payment.paymentMonth
+                }
+            });
+
+            await transactionEntry.save();
+
+            // Link transaction to refund
+            refund.transactionId = transactionId;
+            refund.status = 'Processed';
+            refund.processedAt = new Date();
+            await refund.save();
+
+            // Link transaction to entry
+            refundTransaction.entries = [transactionEntry._id];
+            await refundTransaction.save();
+
+            console.log(`✅ Refund transaction created successfully`);
+            console.log(`   Transaction ID: ${transactionId}`);
+            console.log(`   Transaction Entry ID: ${transactionEntry._id}`);
+            console.log(`   Amount: $${amount}`);
+            console.log(`   Type: ${isAdvancePayment ? 'Advance Payment Refund' : 'Regular Refund'}`);
+
+            // Log audit trail
+            // Extract userId properly - handle both ObjectId and object with _id
+            let userIdForLog = transactionCreatedBy;
+            if (userIdForLog && typeof userIdForLog === 'object' && userIdForLog._id) {
+                userIdForLog = userIdForLog._id;
+            }
+            
+            try {
+                await logTransactionOperation(
+                    'refund_created',
+                    transactionEntry,
+                    userIdForLog,
+                    JSON.stringify({
+                        refundId: refundIdStr,
+                        paymentId: paymentIdStr,
+                        studentId: studentIdStr,
+                        amount: amount,
+                        reason: reason,
+                        transactionId: transactionId,
+                        isAdvancePaymentRefund: isAdvancePayment
+                    })
+                );
+            } catch (logError) {
+                console.error('⚠️ Failed to log refund transaction operation:', logError);
+                // Don't fail the refund creation if logging fails
+            }
+
+            return {
+                success: true,
+                transactionId,
+                transactionEntryId: transactionEntry._id,
+                refundId: refundIdStr,
+                amount,
+                isAdvancePaymentRefund: isAdvancePayment,
+                entries: entries
+            };
+
+        } catch (error) {
+            console.error('❌ Error creating refund transaction:', error);
+            throw error;
+        }
+    }
 }
 
 module.exports = DoubleEntryAccountingService; 

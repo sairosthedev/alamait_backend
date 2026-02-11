@@ -735,6 +735,160 @@ class RentalAccrualService {
     }
 
     /**
+     * Check for missing accruals across all students and create them
+     * This proactively finds students who should have accruals but don't
+     */
+    static async checkAndCreateMissingAccruals(options = {}) {
+        try {
+            const { 
+                startMonth = null, 
+                startYear = null, 
+                endMonth = null, 
+                endYear = null,
+                dryRun = false 
+            } = options;
+
+            console.log(`\n🔍 Checking for missing accruals...`);
+            if (dryRun) {
+                console.log(`   ⚠️ DRY RUN MODE - No accruals will be created`);
+            }
+
+            const Application = require('../models/Application');
+            const now = new Date();
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+
+            // Determine date range
+            const checkStartMonth = startMonth || 1;
+            const checkStartYear = startYear || currentYear;
+            const checkEndMonth = endMonth || currentMonth;
+            const checkEndYear = endYear || currentYear;
+
+            console.log(`   Date range: ${checkStartMonth}/${checkStartYear} to ${checkEndMonth}/${checkEndYear}`);
+
+            // Get all approved applications
+            const applications = await Application.find({
+                status: 'approved',
+                paymentStatus: { $ne: 'cancelled' }
+            }).populate('student', 'firstName lastName email').lean();
+
+            console.log(`   Found ${applications.length} approved applications to check`);
+
+            let totalMissing = 0;
+            let totalCreated = 0;
+            let totalErrors = 0;
+            const missingAccruals = [];
+
+            for (const app of applications) {
+                if (!app.startDate || !app.endDate) {
+                    continue;
+                }
+
+                const leaseStart = new Date(app.startDate);
+                const leaseEnd = new Date(app.endDate);
+                const leaseStartMonth = leaseStart.getMonth() + 1;
+                const leaseStartYear = leaseStart.getFullYear();
+                const leaseEndMonth = leaseEnd.getMonth() + 1;
+                const leaseEndYear = leaseEnd.getFullYear();
+
+                // Determine which months to check
+                let checkMonth = Math.max(checkStartMonth, leaseStartMonth);
+                let checkYear = checkStartMonth >= leaseStartMonth ? checkStartYear : leaseStartYear;
+
+                // Adjust if lease started before check period
+                if (leaseStartYear < checkStartYear || (leaseStartYear === checkStartYear && leaseStartMonth < checkStartMonth)) {
+                    checkMonth = checkStartMonth;
+                    checkYear = checkStartYear;
+                }
+
+                // Check each month from lease start (or check start) to lease end (or check end)
+                const endCheckMonth = Math.min(checkEndMonth, leaseEndMonth);
+                const endCheckYear = checkEndMonth <= leaseEndMonth ? checkEndYear : leaseEndYear;
+
+                let month = checkMonth;
+                let year = checkYear;
+
+                while (year < endCheckYear || (year === endCheckYear && month <= endCheckMonth)) {
+                    // Skip lease start month (handled by lease_start process)
+                    if (month === leaseStartMonth && year === leaseStartYear) {
+                        month++;
+                        if (month > 12) {
+                            month = 1;
+                            year++;
+                        }
+                        continue;
+                    }
+
+                    // Check if accrual exists
+                    const studentId = app.student?._id || app.student;
+                    const existingAccrual = await this.checkExistingMonthlyAccrual(
+                        studentId,
+                        month,
+                        year,
+                        app._id,
+                        null
+                    );
+
+                    if (!existingAccrual) {
+                        totalMissing++;
+                        missingAccruals.push({
+                            applicationId: app._id,
+                            studentId: studentId,
+                            studentName: app.student ? `${app.student.firstName} ${app.student.lastName}` : app.firstName + ' ' + app.lastName,
+                            month,
+                            year
+                        });
+
+                        // Create missing accrual if not dry run
+                        if (!dryRun) {
+                            try {
+                                const result = await this.createStudentRentAccrual(app, month, year);
+                                if (result.success) {
+                                    totalCreated++;
+                                    console.log(`   ✅ Created missing accrual for ${app.student?.firstName || app.firstName} - ${month}/${year}`);
+                                } else {
+                                    totalErrors++;
+                                    console.log(`   ❌ Failed to create accrual for ${app.student?.firstName || app.firstName} - ${month}/${year}: ${result.error}`);
+                                }
+                            } catch (error) {
+                                totalErrors++;
+                                console.log(`   ❌ Error creating accrual for ${app.student?.firstName || app.firstName} - ${month}/${year}: ${error.message}`);
+                            }
+                        }
+                    }
+
+                    // Move to next month
+                    month++;
+                    if (month > 12) {
+                        month = 1;
+                        year++;
+                    }
+                }
+            }
+
+            console.log(`\n📊 Missing Accrual Check Summary:`);
+            console.log(`   Total missing accruals found: ${totalMissing}`);
+            if (!dryRun) {
+                console.log(`   Accruals created: ${totalCreated}`);
+                console.log(`   Errors: ${totalErrors}`);
+            }
+
+            return {
+                success: true,
+                totalMissing,
+                totalCreated: dryRun ? 0 : totalCreated,
+                totalErrors: dryRun ? 0 : totalErrors,
+                missingAccruals,
+                dryRun
+            };
+
+        } catch (error) {
+            console.error('❌ Error checking for missing accruals:', error);
+            throw error;
+        }
+    }
+
+    /**
      * Backfill missing monthly rent accruals from lease start up to current month
      * - Excludes the lease start month (handled by lease_start)
      * - Skips months that already have a monthly_rent_accrual entry

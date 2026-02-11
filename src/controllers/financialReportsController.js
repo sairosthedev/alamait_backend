@@ -3573,17 +3573,40 @@ class FinancialReportsController {
                         // Method 2: Check transaction metadata for studentId
                         if (!studentId && tx.metadata && tx.metadata.studentId) {
                             studentId = tx.metadata.studentId.toString();
+                            // Try to fetch student name immediately if we have the ID
+                            if (studentId && !studentName) {
+                                try {
+                                    const User = require('../models/User');
+                                    const mongoose = require('mongoose');
+                                    if (mongoose.Types.ObjectId.isValid(studentId)) {
+                                        const student = await User.findById(studentId).select('firstName lastName email').lean();
+                                        if (student) {
+                                            studentName = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+                                        }
+                                    }
+                                } catch (err) {
+                                    // Continue to other methods if this fails
+                                }
+                            }
                         }
                         
                         // Method 3: Check sourceId if it's a Payment or relates to a student
+                        // Also check for advance_payment source type
                         if (!studentId && tx.sourceId) {
-                            if (tx.sourceModel === 'Payment' || !tx.sourceModel) {
+                            if (tx.sourceModel === 'Payment' || !tx.sourceModel || tx.source === 'advance_payment' || tx.source === 'payment') {
                                 const Payment = require('../models/Payment');
-                                const payment = await Payment.findById(tx.sourceId).select('student').populate('student', 'firstName lastName');
-                                if (payment && payment.student) {
-                                    studentId = payment.student._id ? payment.student._id.toString() : payment.student.toString();
-                                    if (payment.student.firstName && payment.student.lastName) {
-                                        studentName = `${payment.student.firstName} ${payment.student.lastName}`;
+                                const payment = await Payment.findById(tx.sourceId)
+                                    .select('student user')
+                                    .populate('student', 'firstName lastName')
+                                    .populate('user', 'firstName lastName');
+                                if (payment) {
+                                    // Try student field first, then user field
+                                    const studentRef = payment.student || payment.user;
+                                    if (studentRef) {
+                                        studentId = studentRef._id ? studentRef._id.toString() : studentRef.toString();
+                                        if (studentRef.firstName && studentRef.lastName) {
+                                            studentName = `${studentRef.firstName} ${studentRef.lastName}`;
+                                        }
                                     }
                                 }
                             } else if (tx.sourceModel === 'Lease') {
@@ -3611,34 +3634,93 @@ class FinancialReportsController {
                             }
                         }
                         
-                        // Method 4: Check reference field for student ID
+                        // Method 4: Check reference field for Payment ID or student ID
                         if (!studentId && tx.reference) {
-                            // Try to parse student ID from reference if it's an ObjectId
                             const mongoose = require('mongoose');
                             if (mongoose.Types.ObjectId.isValid(tx.reference)) {
-                                // Check if it's a student ID by checking User collection
-                                const User = require('../models/User');
-                                const user = await User.findById(tx.reference).select('firstName lastName');
-                                if (user) {
-                                    studentId = tx.reference.toString();
-                                    studentName = `${user.firstName} ${user.lastName}`;
+                                // First try as Payment ID (for advance payments)
+                                const Payment = require('../models/Payment');
+                                const payment = await Payment.findById(tx.reference)
+                                    .select('student user')
+                                    .populate('student', 'firstName lastName')
+                                    .populate('user', 'firstName lastName');
+                                if (payment) {
+                                    const studentRef = payment.student || payment.user;
+                                    if (studentRef) {
+                                        studentId = studentRef._id ? studentRef._id.toString() : studentRef.toString();
+                                        if (studentRef.firstName && studentRef.lastName) {
+                                            studentName = `${studentRef.firstName} ${studentRef.lastName}`;
+                                        }
+                                    }
+                                } else {
+                                    // If not a Payment, try as User ID
+                                    const User = require('../models/User');
+                                    const user = await User.findById(tx.reference).select('firstName lastName');
+                                    if (user) {
+                                        studentId = tx.reference.toString();
+                                        studentName = `${user.firstName} ${user.lastName}`;
+                                    }
                                 }
                             }
                         }
                         
                         // If we have studentId but no studentName, fetch it
                         if (studentId && !studentName) {
-                            const User = require('../models/User');
-                            const student = await User.findById(studentId).select('firstName lastName');
-                            if (student) {
-                                studentName = `${student.firstName} ${student.lastName}`;
-                            } else {
-                                // Try Application collection as fallback
-                                const Application = require('../models/Application');
-                                const application = await Application.findOne({ student: studentId }).select('firstName lastName');
-                                if (application) {
-                                    studentName = `${application.firstName} ${application.lastName}`;
+                            try {
+                                const User = require('../models/User');
+                                const mongoose = require('mongoose');
+                                
+                                // Validate ObjectId format and convert if needed
+                                let studentIdToUse = studentId;
+                                if (typeof studentId === 'string' && mongoose.Types.ObjectId.isValid(studentId)) {
+                                    studentIdToUse = new mongoose.Types.ObjectId(studentId);
+                                } else if (!mongoose.Types.ObjectId.isValid(studentId)) {
+                                    console.log(`⚠️ Invalid ObjectId format for studentId: ${studentId}`);
+                                    studentIdToUse = null;
                                 }
+                                
+                                if (studentIdToUse && mongoose.Types.ObjectId.isValid(studentIdToUse)) {
+                                    // Try User collection first
+                                    const student = await User.findById(studentIdToUse).select('firstName lastName email').lean();
+                                    if (student) {
+                                        studentName = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+                                        console.log(`✅ Found student name for ID ${studentId}: ${studentName}`);
+                                    } else {
+                                        console.log(`⚠️ Student not found in User collection for ID: ${studentId}`);
+                                        
+                                        // If still no name, try Application collection as fallback
+                                        const Application = require('../models/Application');
+                                        const application = await Application.findOne({ student: studentIdToUse }).select('firstName lastName email').lean();
+                                        if (application) {
+                                            studentName = `${application.firstName || ''} ${application.lastName || ''}`.trim();
+                                            console.log(`✅ Found student name from Application for ID ${studentId}: ${studentName}`);
+                                        } else {
+                                            // If still no name, try Debtor collection
+                                            const Debtor = require('../models/Debtor');
+                                            const debtor = await Debtor.findOne({ user: studentIdToUse }).populate('user', 'firstName lastName').lean();
+                                            if (debtor && debtor.user) {
+                                                studentName = `${debtor.user.firstName || ''} ${debtor.user.lastName || ''}`.trim();
+                                                console.log(`✅ Found student name from Debtor for ID ${studentId}: ${studentName}`);
+                                            } else if (debtor && debtor.contactInfo && debtor.contactInfo.name) {
+                                                studentName = debtor.contactInfo.name;
+                                                console.log(`✅ Found student name from Debtor contactInfo for ID ${studentId}: ${studentName}`);
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Last resort: try to get name from account name if it contains a name
+                                if (!studentName && arEntry && arEntry.accountName) {
+                                    const accountNameParts = arEntry.accountName.split('-');
+                                    if (accountNameParts.length > 1) {
+                                        const nameFromAccount = accountNameParts.slice(1).join('-').trim();
+                                        if (nameFromAccount && nameFromAccount !== 'Student' && nameFromAccount.length > 2) {
+                                            studentName = nameFromAccount;
+                                        }
+                                    }
+                                }
+                            } catch (fetchError) {
+                                console.log(`Error fetching student name for ID ${studentId}:`, fetchError.message);
                             }
                         }
                         

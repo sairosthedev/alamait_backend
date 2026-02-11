@@ -13,6 +13,12 @@ const refundSchema = new mongoose.Schema({
         required: true,
         index: true
     },
+    debtor: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Debtor',
+        default: null,
+        index: true
+    },
     amount: {
         type: Number,
         required: true,
@@ -36,8 +42,17 @@ const refundSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    transactionId: {
+        type: String,
+        default: null,
+        index: true
+    },
     reference: {
         type: String,
+        default: null
+    },
+    refundDate: {
+        type: Date,
         default: null
     },
     createdBy: {
@@ -50,6 +65,18 @@ const refundSchema = new mongoose.Schema({
         ref: 'User'
     }
 }, { timestamps: true });
+
+// Virtual for student name (requires population)
+refundSchema.virtual('studentName').get(function() {
+    if (this.student && typeof this.student === 'object') {
+        return `${this.student.firstName || ''} ${this.student.lastName || ''}`.trim() || 'Unknown Student';
+    }
+    return 'Unknown Student';
+});
+
+// Ensure virtuals are included in JSON output
+refundSchema.set('toJSON', { virtuals: true });
+refundSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.model('Refund', refundSchema);
 

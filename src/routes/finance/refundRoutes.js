@@ -7,11 +7,20 @@ const refundController = require('../../controllers/finance/refundController');
 router.use(auth);
 router.use(checkAdminOrFinance);
 
+// List all refunds with filtering
+router.get('/', refundController.listRefunds);
+
+// Get refund by ID
+router.get('/:refundId', refundController.getRefundById);
+
 // List payments for a student (to choose refunds source)
 router.get('/payments', refundController.listStudentPayments);
 
-// Create a refund entry
+// Create a refund entry (automatically creates transaction by default)
 router.post('/', refundController.createRefund);
+
+// Process existing refund (create transaction if not already created)
+router.post('/:refundId/process', refundController.processRefund);
 
 module.exports = router;
 
