@@ -77,6 +77,10 @@ exports.listRefunds = async (req, res) => {
                     model: 'User'
                 }
             })
+            .populate({
+                path: 'debtor',
+                select: 'debtorCode contactInfo accountCode'
+            })
             .populate('createdBy', 'firstName lastName email')
             .sort({ createdAt: -1 })
             .skip(skip)
@@ -397,7 +401,7 @@ exports.createRefund = async (req, res) => {
 
         await refund.save();
 
-        // Populate student and payment information for response
+        // Populate student, payment, and debtor information for response
         await refund.populate('student', 'firstName lastName email studentId');
         await refund.populate({
             path: 'payment',
@@ -407,6 +411,13 @@ exports.createRefund = async (req, res) => {
                 select: 'firstName lastName email'
             }
         });
+        // Populate debtor to get contactInfo (name, email, phone) - important for expired students
+        if (refund.debtor) {
+            await refund.populate({
+                path: 'debtor',
+                select: 'debtorCode contactInfo accountCode'
+            });
+        }
 
         let transactionResult = null;
 
@@ -461,6 +472,13 @@ exports.createRefund = async (req, res) => {
                         select: 'firstName lastName email'
                     }
                 });
+                // Populate debtor to get contactInfo (name, email, phone)
+                if (refund.debtor) {
+                    await refund.populate({
+                        path: 'debtor',
+                        select: 'debtorCode contactInfo accountCode'
+                    });
+                }
                 
                 // Get student name from multiple sources
                 let studentName = 'Unknown Student';

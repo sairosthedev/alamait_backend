@@ -3462,7 +3462,7 @@ class FinancialReportsController {
                     }))
                 } : {}),
                 cashFlowData: finalCashFlowData,
-                transactions: (await Promise.all(transactions.map(async (tx) => {
+                transactions: (await Promise.all(transactions.map(async (tx, index) => {
                     // For cash flow, we want to show the cash amount that came in
                     // Look for cash account entries (1000 series) in payment transactions
                     const cashEntry = tx.entries.find(e => e.accountCode.match(/^100/));
@@ -3695,15 +3695,24 @@ class FinancialReportsController {
                                             studentName = `${application.firstName || ''} ${application.lastName || ''}`.trim();
                                             console.log(`✅ Found student name from Application for ID ${studentId}: ${studentName}`);
                                         } else {
-                                            // If still no name, try Debtor collection
+                                            // If still no name, try Debtor collection (for expired students)
                                             const Debtor = require('../models/Debtor');
                                             const debtor = await Debtor.findOne({ user: studentIdToUse }).populate('user', 'firstName lastName').lean();
-                                            if (debtor && debtor.user) {
-                                                studentName = `${debtor.user.firstName || ''} ${debtor.user.lastName || ''}`.trim();
-                                                console.log(`✅ Found student name from Debtor for ID ${studentId}: ${studentName}`);
-                                            } else if (debtor && debtor.contactInfo && debtor.contactInfo.name) {
-                                                studentName = debtor.contactInfo.name;
-                                                console.log(`✅ Found student name from Debtor contactInfo for ID ${studentId}: ${studentName}`);
+                                            if (debtor) {
+                                                // First try populated user (if student is still active)
+                                                if (debtor.user && debtor.user.firstName) {
+                                                    studentName = `${debtor.user.firstName || ''} ${debtor.user.lastName || ''}`.trim();
+                                                    console.log(`✅ Found student name from Debtor.user for ID ${studentId}: ${studentName}`);
+                                                } 
+                                                // If user is null (expired student), use contactInfo
+                                                else if (debtor.contactInfo && debtor.contactInfo.name) {
+                                                    studentName = debtor.contactInfo.name;
+                                                    console.log(`✅ Found expired student name from Debtor contactInfo for ID ${studentId}: ${studentName}`);
+                                                } else if (debtor.debtorCode) {
+                                                    // Last resort: use debtor code
+                                                    studentName = `Debtor ${debtor.debtorCode}`;
+                                                    console.log(`⚠️ Using debtor code as name for ID ${studentId}: ${studentName}`);
+                                                }
                                             }
                                         }
                                     }
@@ -3817,9 +3826,33 @@ class FinancialReportsController {
                         status: tx.status,
                         studentId: studentId,
                         studentName: studentName,
+                        tenant: studentName || 'N/A', // Tenant/Reference field
+                        reference: tx.transactionId, // Reference field
                         entries: entriesWithAccountNames // Include all entries for full double-entry view
                     };
-                }))).filter(tx => {
+                }))).map((tx, index, array) => {
+                    // Calculate running balance (cumulative sum)
+                    // For liability accounts (2200), credits increase balance, debits decrease
+                    // For asset accounts, debits increase balance, credits decrease
+                    if (index === 0) {
+                        // First transaction
+                        if (account.type === 'Liability' || account.type === 'Equity') {
+                            tx.runningBalance = tx.type === 'credit' ? tx.amount : -tx.amount;
+                        } else {
+                            tx.runningBalance = tx.type === 'debit' ? tx.amount : -tx.amount;
+                        }
+                    } else {
+                        // Cumulative balance from previous transaction
+                        const prevTx = array[index - 1];
+                        const prevBalance = prevTx.runningBalance || 0;
+                        if (account.type === 'Liability' || account.type === 'Equity') {
+                            tx.runningBalance = prevBalance + (tx.type === 'credit' ? tx.amount : -tx.amount);
+                        } else {
+                            tx.runningBalance = prevBalance + (tx.type === 'debit' ? tx.amount : -tx.amount);
+                        }
+                    }
+                    return tx;
+                }).filter(tx => {
                     // For account 2028, filter out transactions with amount 0 (deposit receipts, opening balances, lease starts)
                     if (accountCode === '2028') {
                         return tx.amount > 0;
