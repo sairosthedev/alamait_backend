@@ -1293,35 +1293,7 @@ exports.getDebtorTransactions = async (req, res) => {
 
         // Only add studentId query if user exists
         if (debtor.user && debtor.user._id) {
-            const studentIdStr = debtor.user._id.toString();
-            transactionQuery.$or.push({ 'metadata.studentId': studentIdStr });
-            
-            // Add AR account code for this student (refunds may use AR account codes)
-            const arAccountCode = `1100-${studentIdStr}`;
-            transactionQuery.$or.push({ 'entries.accountCode': arAccountCode });
-            
-            // Add refund source types - refunds affect debtor accounts
-            transactionQuery.$or.push({ 
-                source: { $in: ['advance_payment_refund', 'regular_payment_refund'] },
-                'metadata.studentId': studentIdStr
-            });
-        }
-        
-        // Also check for refunds linked to this debtor via Refund model
-        // Refunds have sourceId pointing to Refund._id, and Refund has debtor field
-        if (debtor.user && debtor.user._id) {
-            const Refund = require('../../models/Refund');
-            const refunds = await Refund.find({ 
-                debtor: debtor._id,
-                transactionId: { $ne: null } // Only refunds with transactions
-            }).select('transactionId').lean();
-            
-            if (refunds.length > 0) {
-                const refundTransactionIds = refunds.map(r => r.transactionId).filter(Boolean);
-                if (refundTransactionIds.length > 0) {
-                    transactionQuery.$or.push({ transactionId: { $in: refundTransactionIds } });
-                }
-            }
+            transactionQuery.$or.push({ 'metadata.studentId': debtor.user._id.toString() });
         }
 
         // Add date filters if provided
@@ -1336,9 +1308,7 @@ exports.getDebtorTransactions = async (req, res) => {
             if (type === 'accrual') {
                 transactionQuery.source = 'rental_accrual';
             } else if (type === 'payment') {
-                transactionQuery.source = { $in: ['payment', 'advance_payment'] };
-            } else if (type === 'refund') {
-                transactionQuery.source = { $in: ['advance_payment_refund', 'regular_payment_refund'] };
+                transactionQuery.source = 'payment';
             } else {
                 transactionQuery.source = type;
             }
@@ -1352,18 +1322,11 @@ exports.getDebtorTransactions = async (req, res) => {
         // Calculate transaction statistics
         let totalAccruals = 0;
         let totalPayments = 0;
-        let totalRefunds = 0;
         let totalDebit = 0;
         let totalCredit = 0;
 
         transactions.forEach(transaction => {
-            // Check both debtor account code and AR account code for entries
-            let debitEntry = transaction.entries.find(e => e.accountCode === debtor.accountCode);
-            if (!debitEntry && debtor.user && debtor.user._id) {
-                const arAccountCode = `1100-${debtor.user._id.toString()}`;
-                debitEntry = transaction.entries.find(e => e.accountCode === arAccountCode);
-            }
-            
+            const debitEntry = transaction.entries.find(e => e.accountCode === debtor.accountCode);
             const amount = debitEntry ? debitEntry.debit : 0;
             const creditAmount = debitEntry ? debitEntry.credit : 0;
 
@@ -1372,12 +1335,8 @@ exports.getDebtorTransactions = async (req, res) => {
 
             if (transaction.source === 'rental_accrual') {
                 totalAccruals += amount;
-            } else if (transaction.source === 'payment' || transaction.source === 'advance_payment') {
+            } else if (transaction.source === 'payment') {
                 totalPayments += creditAmount;
-            } else if (transaction.source === 'advance_payment_refund' || transaction.source === 'regular_payment_refund') {
-                // For refunds, the amount is typically a debit to AR or credit to liability
-                // We want to track refunds separately
-                totalRefunds += Math.abs(amount || creditAmount);
             }
         });
 
@@ -1393,23 +1352,14 @@ exports.getDebtorTransactions = async (req, res) => {
                 };
             }
 
-            // Check both debtor account code and AR account code for entries
-            let debitEntry = transaction.entries.find(e => e.accountCode === debtor.accountCode);
-            if (!debitEntry && debtor.user && debtor.user._id) {
-                const arAccountCode = `1100-${debtor.user._id.toString()}`;
-                debitEntry = transaction.entries.find(e => e.accountCode === arAccountCode);
-            }
-            
+            const debitEntry = transaction.entries.find(e => e.accountCode === debtor.accountCode);
             const amount = debitEntry ? debitEntry.debit : 0;
             const creditAmount = debitEntry ? debitEntry.credit : 0;
 
             if (transaction.source === 'rental_accrual') {
                 acc[month].accruals += amount;
-            } else if (transaction.source === 'payment' || transaction.source === 'advance_payment') {
+            } else if (transaction.source === 'payment') {
                 acc[month].payments += creditAmount;
-            } else if (transaction.source === 'advance_payment_refund' || transaction.source === 'regular_payment_refund') {
-                // Track refunds in payments (they reduce what's owed)
-                acc[month].payments += Math.abs(amount || creditAmount);
             }
 
             acc[month].net = acc[month].accruals - acc[month].payments;
@@ -1435,28 +1385,9 @@ exports.getDebtorTransactions = async (req, res) => {
                 accountCode: debtor.accountCode
             },
             transactions: transactions.map(tx => {
-                // Check both debtor account code and AR account code for entries
-                let debitEntry = tx.entries.find(e => e.accountCode === debtor.accountCode);
-                if (!debitEntry && debtor.user && debtor.user._id) {
-                    const arAccountCode = `1100-${debtor.user._id.toString()}`;
-                    debitEntry = tx.entries.find(e => e.accountCode === arAccountCode);
-                }
-                
+                const debitEntry = tx.entries.find(e => e.accountCode === debtor.accountCode);
                 const amount = debitEntry ? debitEntry.debit : 0;
                 const creditAmount = debitEntry ? debitEntry.credit : 0;
-                
-                // For refunds, determine amount from appropriate entry
-                let transactionAmount = amount || creditAmount;
-                if ((tx.source === 'advance_payment_refund' || tx.source === 'regular_payment_refund') && !transactionAmount) {
-                    // For refunds, check for AR debit or liability credit
-                    const arEntry = tx.entries.find(e => e.accountCode && e.accountCode.startsWith('1100-'));
-                    const liabilityEntry = tx.entries.find(e => e.accountCode === '2200');
-                    if (arEntry && arEntry.debit > 0) {
-                        transactionAmount = arEntry.debit;
-                    } else if (liabilityEntry && liabilityEntry.debit > 0) {
-                        transactionAmount = liabilityEntry.debit;
-                    }
-                }
                 
                 return {
                     _id: tx._id,
@@ -1466,8 +1397,8 @@ exports.getDebtorTransactions = async (req, res) => {
                     source: tx.source,
                     sourceId: tx.sourceId,
                     sourceModel: tx.sourceModel,
-                    amount: transactionAmount,
-                    type: amount > 0 ? 'debit' : (creditAmount > 0 ? 'credit' : (transactionAmount > 0 ? 'debit' : 'credit')),
+                    amount: amount || creditAmount,
+                    type: amount > 0 ? 'debit' : 'credit',
                     metadata: tx.metadata
                 };
             }),
@@ -1475,7 +1406,6 @@ exports.getDebtorTransactions = async (req, res) => {
                 totalTransactions: transactions.length,
                 totalAccruals,
                 totalPayments,
-                totalRefunds,
                 totalDebit,
                 totalCredit,
                 netAmount: totalDebit - totalCredit,
