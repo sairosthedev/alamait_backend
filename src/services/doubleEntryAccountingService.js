@@ -3879,11 +3879,11 @@ class DoubleEntryAccountingService {
                     transactionEntry,
                     userIdForLog,
                     JSON.stringify({
-                        refundId: refundIdStr,
-                        paymentId: paymentIdStr,
-                        studentId: studentIdStr,
-                        amount: amount,
-                        reason: reason,
+                refundId: refundIdStr,
+                paymentId: paymentIdStr,
+                studentId: studentIdStr,
+                amount: amount,
+                reason: reason,
                         transactionId: transactionId,
                         isAdvancePaymentRefund: isAdvancePayment
                     })

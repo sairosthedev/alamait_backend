@@ -1296,6 +1296,23 @@ exports.getDebtorTransactions = async (req, res) => {
             transactionQuery.$or.push({ 'metadata.studentId': debtor.user._id.toString() });
         }
 
+        // CRITICAL: Also include payments by sourceId (Payment ID) to catch payments without transactions
+        // This ensures payments show up even if transaction wasn't created
+        const Payment = require('../../models/Payment');
+        const studentPayments = await Payment.find({ 
+            student: debtor.user?._id || debtor.user 
+        }).select('_id').lean();
+        
+        if (studentPayments.length > 0) {
+            const paymentIds = studentPayments.map(p => p._id);
+            transactionQuery.$or.push({
+                sourceId: { $in: paymentIds }
+            });
+            transactionQuery.$or.push({
+                'metadata.paymentId': { $in: paymentIds.map(id => id.toString()) }
+            });
+        }
+
         // Add date filters if provided
         if (startDate || endDate) {
             transactionQuery.date = {};

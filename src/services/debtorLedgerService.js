@@ -21,14 +21,63 @@ class DebtorLedgerService {
         try {
             console.log(`📊 Computing ledger for debtor ${debtorId}, student ${studentId}`);
             
-            // Get student-specific AR account code
-            const arAccountCode = `1100-${studentId}`;
+            // CRITICAL: Get Debtor to access accountCode (uses Debtor ID, persists after User deletion)
+            const Debtor = require('../models/Debtor');
+            const debtor = await Debtor.findById(debtorId);
+            if (!debtor) {
+                throw new Error(`Debtor not found: ${debtorId}`);
+            }
             
-            // Fetch all transactions for this student's AR account
-            const transactions = await TransactionEntry.find({
-                'entries.accountCode': arAccountCode,
-                status: { $nin: ['reversed', 'draft'] }
-            })
+            // Use Debtor's accountCode as primary (stable, never deleted)
+            // Format: 1100-<debtorId> (new) or 1100-<userId> (legacy)
+            const arAccountCode = debtor.accountCode || `1100-${studentId}`;
+            
+            console.log(`   📋 Using AR account code: ${arAccountCode} (from Debtor record)`);
+            
+            // Build comprehensive query to find ALL transactions for this debtor
+            // Include: AR account code, advance payments by sourceId, and metadata
+            const transactionQuery = {
+                $or: [
+                    { 'entries.accountCode': arAccountCode },
+                    // Legacy support: Also check by User ID if different from Debtor ID
+                    ...(arAccountCode !== `1100-${studentId}` ? [{ 'entries.accountCode': `1100-${studentId}` }] : []),
+                    // CRITICAL: Include advance payments by sourceId (payment ID) as fallback
+                    // This catches advance payments even if they have wrong AR codes
+                    { 
+                        source: 'advance_payment',
+                        'metadata.studentId': studentId?.toString()
+                    },
+                    {
+                        source: 'advance_payment',
+                        'metadata.studentId': studentId
+                    },
+                    // Also check by debtorId in metadata
+                    {
+                        'metadata.debtorId': debtorId.toString()
+                    },
+                    {
+                        'metadata.debtorId': debtorId
+                    }
+                ],
+                status: { $nin: ['reversed', 'draft', 'deleted'] }
+            };
+            
+            // Also check for advance payments via Payment model (by sourceId)
+            const Payment = require('../models/Payment');
+            const studentPayments = await Payment.find({ 
+                student: studentId 
+            }).select('_id').lean();
+            
+            if (studentPayments.length > 0) {
+                const paymentIds = studentPayments.map(p => p._id);
+                transactionQuery.$or.push({
+                    source: 'advance_payment',
+                    sourceId: { $in: paymentIds }
+                });
+            }
+            
+            // Fetch all transactions for this debtor's AR account
+            const transactions = await TransactionEntry.find(transactionQuery)
             .populate('entries')
             .sort({ date: 1 });
             

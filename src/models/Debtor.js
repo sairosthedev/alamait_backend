@@ -28,8 +28,22 @@ const debtorSchema = new mongoose.Schema({
   // Current Status
   status: {
     type: String,
-    enum: ['active', 'inactive', 'overdue', 'defaulted', 'paid'],
+    enum: ['active', 'inactive', 'overdue', 'defaulted', 'paid', 'expired'],
     default: 'active'
+  },
+  
+  // Expiration tracking (for expired students)
+  isExpired: {
+    type: Boolean,
+    default: false
+  },
+  
+  expiredAt: {
+    type: Date
+  },
+  
+  expirationReason: {
+    type: String
   },
   
   // Financial Information

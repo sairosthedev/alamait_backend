@@ -135,6 +135,12 @@ router.delete('/entries/:id/entry/:entryId', TransactionController.deleteEntryFr
 router.delete('/entries/:id', TransactionController.deleteTransactionEntry);
 
 /**
+ * Get transactions by account code (must be before /:id route)
+ * GET /api/finance/transactions/account/:accountCode?debtorId=xxx&includeEntries=true
+ */
+router.get('/account/:accountCode', TransactionController.getTransactionsByAccount);
+
+/**
  * Get transaction entries by transaction ID
  * GET /api/finance/transactions/:id/entries
  */

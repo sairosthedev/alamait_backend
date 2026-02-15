@@ -153,8 +153,25 @@ const seedDefaultCategories = async () => {
     }
 };
 
-// Call seed function when the controller is loaded
-seedDefaultCategories();
+// Call seed function after database connection is established
+// Use setImmediate to defer execution until after database connection
+setImmediate(async () => {
+    // Wait for database connection before seeding
+    const mongoose = require('mongoose');
+    let attempts = 0;
+    const maxAttempts = 30;
+    
+    while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        attempts++;
+    }
+    
+    if (mongoose.connection.readyState === 1) {
+        await seedDefaultCategories();
+    } else {
+        console.error('⚠️ Database not connected, skipping category seed. Will retry on next request.');
+    }
+});
 
 // Get all maintenance categories
 exports.getAllCategories = async (req, res) => {

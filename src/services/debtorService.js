@@ -6,21 +6,32 @@ const Lease = require('../models/Lease');
 const Payment = require('../models/Payment');
 const Account = require('../models/Account');
 
-async function ensureStudentARAccount(studentId, studentName) {
+/**
+ * CRITICAL: Create AR account using Debtor ID instead of User ID
+ * This ensures AR codes persist even after User is deleted (when student expires)
+ * @param {string} debtorId - Debtor ID (stable, never deleted)
+ * @param {string} studentName - Student name for display
+ * @param {string} originalUserId - Original User ID (for reference, optional)
+ * @returns {Promise<Object>} Account object
+ */
+async function ensureStudentARAccount(debtorId, studentName, originalUserId = null) {
     const mainAR = await Account.findOne({ code: '1100' });
     if (!mainAR) {
         throw new Error('Main AR account (1100) not found');
     }
-    const code = `1100-${studentId}`;
+    
+    // Use Debtor ID for AR code - this is stable and never gets deleted
+    const code = `1100-${debtorId}`;
     let acc = await Account.findOne({ code });
     if (acc) return acc;
+    
     acc = new Account({
         code,
-        name: `Accounts Receivable - ${studentName || studentId}`,
+        name: `Accounts Receivable - ${studentName || debtorId}`,
         type: 'Asset',
         category: 'Current Assets',
         subcategory: 'Accounts Receivable',
-        description: 'Student-specific AR control account',
+        description: 'Student-specific AR control account (uses Debtor ID for persistence)',
         isActive: true,
         parentAccount: mainAR._id,
         level: 2,
@@ -28,7 +39,8 @@ async function ensureStudentARAccount(studentId, studentName) {
         metadata: new Map([
             ['parent', '1100'],
             ['hasParent', 'true'],
-            ['studentId', String(studentId)]
+            ['debtorId', String(debtorId)], // Store Debtor ID (stable)
+            ...(originalUserId ? [['originalUserId', String(originalUserId)]] : []) // Store original User ID for reference
         ])
     });
     await acc.save();
@@ -38,7 +50,8 @@ async function ensureStudentARAccount(studentId, studentName) {
     await logSystemOperation('create', 'Account', acc._id, {
         source: 'Debtor Service',
         type: 'student_ar_account',
-        studentId: studentId,
+        debtorId: debtorId,
+        originalUserId: originalUserId,
         studentName: studentName,
         parentAccount: '1100',
         accountCode: code
@@ -397,21 +410,15 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         // Generate debtor code
         const debtorCode = await Debtor.generateDebtorCode();
         
-        // Get the correct AR account code for this student
-        const arAccount = await Account.findOne({
-            code: `1100-${actualUser._id.toString()}`
-        });
-        
-        if (!arAccount) {
-            throw new Error(`AR account not found for student ${actualUser.email}. Account code should be: 1100-${actualUser._id.toString()}`);
-        }
-        
-        const accountCode = arAccount.code;
+        // CRITICAL: We'll use a temporary accountCode initially, then update it after debtor creation
+        // This ensures AR codes use Debtor ID (stable, never deleted) instead of User ID
+        // The accountCode will be set to `1100-${debtorId}` after the debtor is saved
+        const accountCode = `1100-TEMP-${Date.now()}`; // Temporary, will be updated after save
         
         console.log(`   🔢 Generated debtor code: ${debtorCode}`);
-        console.log(`   🔢 Using existing AR account code: ${accountCode}`);
+        console.log(`   🔢 Will use Debtor ID for AR account code (persists after User deletion)`);
 
-        // Prepare contact info
+        // Prepare contact info - CRITICAL: Always populate this for expired students
         const contactInfo = {
             name: `${actualUser.firstName} ${actualUser.lastName}`,
             email: actualUser.email,
@@ -639,7 +646,20 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         // Create the debtor
         const debtor = new Debtor(debtorData);
         try {
-        await debtor.save();
+            await debtor.save();
+            
+            // CRITICAL: Now update accountCode to use Debtor ID (stable, never deleted)
+            const finalAccountCode = `1100-${debtor._id.toString()}`;
+            debtor.accountCode = finalAccountCode;
+            
+            // Create AR account using Debtor ID
+            await ensureStudentARAccount(debtor._id.toString(), contactInfo.name, actualUser._id.toString());
+            
+            // Save updated accountCode
+            await debtor.save();
+            
+            console.log(`   ✅ Updated accountCode to use Debtor ID: ${finalAccountCode}`);
+            
         } catch (saveError) {
             // If duplicate key error (race condition), find and return existing debtor
             if (saveError.code === 11000 || saveError.message.includes('duplicate key')) {

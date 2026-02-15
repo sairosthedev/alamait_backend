@@ -27,9 +27,18 @@ class SimpleBalanceSheetService {
     try {
       console.log(`📊 Generating Simple Monthly Balance Sheet for ${year}${residence ? ` (residence: ${residence})` : ''} (${type})`);
       
-      // Ensure database connection
+      // Ensure database connection - wait for connection instead of creating new one
       if (mongoose.connection.readyState !== 1) {
-        await mongoose.connect(MONGODB_URI);
+        console.log('⚠️ Database not connected, waiting for connection...');
+        let attempts = 0;
+        const maxAttempts = 30;
+        while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+        if (mongoose.connection.readyState !== 1) {
+          throw new Error('Database connection timeout - please ensure database is connected');
+        }
       }
       
       const monthlyData = {};
@@ -2246,9 +2255,18 @@ if (apAccount) {
     try {
       console.log(`📊 Calculating retained earnings up to ${asOfDate.toISOString().split('T')[0]}...`);
       
-      // Ensure database connection
+      // Ensure database connection - wait for connection instead of creating new one
       if (mongoose.connection.readyState !== 1) {
-        await mongoose.connect(MONGODB_URI);
+        console.log('⚠️ Database not connected, waiting for connection...');
+        let attempts = 0;
+        const maxAttempts = 30;
+        while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+        if (mongoose.connection.readyState !== 1) {
+          throw new Error('Database connection timeout - please ensure database is connected');
+        }
       }
       
       // Use the exact same logic as accountingService.getRetainedEarnings
@@ -2340,9 +2358,18 @@ if (apAccount) {
       const year = asOfDate.getFullYear();
       console.log(`📊 Calculating retained earnings for ${month}/${year}...`);
       
-      // Ensure database connection
+      // Ensure database connection - wait for connection instead of creating new one
       if (mongoose.connection.readyState !== 1) {
-        await mongoose.connect(MONGODB_URI);
+        console.log('⚠️ Database not connected, waiting for connection...');
+        let attempts = 0;
+        const maxAttempts = 30;
+        while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+        if (mongoose.connection.readyState !== 1) {
+          throw new Error('Database connection timeout - please ensure database is connected');
+        }
       }
       
       // Get transactions for this specific month
@@ -2432,9 +2459,18 @@ if (apAccount) {
     try {
       console.log(`📊 Calculating retained earnings up to ${asOfDate.toISOString().split('T')[0]}...`);
       
-      // Ensure database connection
+      // Ensure database connection - wait for connection instead of creating new one
       if (mongoose.connection.readyState !== 1) {
-        await mongoose.connect(MONGODB_URI);
+        console.log('⚠️ Database not connected, waiting for connection...');
+        let attempts = 0;
+        const maxAttempts = 30;
+        while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+        if (mongoose.connection.readyState !== 1) {
+          throw new Error('Database connection timeout - please ensure database is connected');
+        }
       }
       
       // Get all transactions up to the as-of date
@@ -2517,9 +2553,18 @@ if (apAccount) {
     try {
       console.log(`📊 Calculating retained earnings for ${year}...`);
       
-      // Ensure database connection
+      // Ensure database connection - wait for connection instead of creating new one
       if (mongoose.connection.readyState !== 1) {
-        await mongoose.connect(MONGODB_URI);
+        console.log('⚠️ Database not connected, waiting for connection...');
+        let attempts = 0;
+        const maxAttempts = 30;
+        while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+        if (mongoose.connection.readyState !== 1) {
+          throw new Error('Database connection timeout - please ensure database is connected');
+        }
       }
       
       // Get all transactions for the year

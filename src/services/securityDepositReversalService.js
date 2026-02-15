@@ -371,9 +371,49 @@ class SecurityDepositReversalService {
             const studentIdSet = new Set();
             const normalizeId = (value) => {
                 if (!value) return null;
-                if (typeof value === 'string') return value;
-                if (value._id) return value._id.toString();
-                if (value.toString) return value.toString();
+                
+                // If it's already a string, validate it's a proper ObjectId string
+                if (typeof value === 'string') {
+                    // Check if it looks like a stringified object (contains newlines or ObjectId constructor)
+                    if (value.includes('\n') || value.includes('ObjectId') || value.includes('{')) {
+                        console.warn(`⚠️  Skipping invalid ID format (appears to be stringified object): ${value.substring(0, 100)}`);
+                        return null;
+                    }
+                    // Validate it's a proper ObjectId format
+                    if (mongoose.Types.ObjectId.isValid(value)) {
+                        return value;
+                    }
+                    return null;
+                }
+                
+                // If it's an ObjectId, convert to string
+                if (mongoose.Types.ObjectId.isValid(value)) {
+                    return value.toString();
+                }
+                
+                // If it's an object with _id, extract the _id
+                if (value && typeof value === 'object') {
+                    // Check if it's a Mongoose ObjectId
+                    if (value.constructor && value.constructor.name === 'ObjectId') {
+                        return value.toString();
+                    }
+                    // Check if it has an _id property
+                    if (value._id) {
+                        const idValue = value._id;
+                        // Recursively check if _id is an ObjectId or string
+                        if (mongoose.Types.ObjectId.isValid(idValue)) {
+                            return idValue.toString();
+                        }
+                        if (typeof idValue === 'string' && mongoose.Types.ObjectId.isValid(idValue)) {
+                            return idValue;
+                        }
+                    }
+                    // If the object itself looks like a student object with _id, extract it
+                    if (value._id && mongoose.Types.ObjectId.isValid(value._id)) {
+                        return value._id.toString();
+                    }
+                }
+                
                 return null;
             };
 

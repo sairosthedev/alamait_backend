@@ -3065,8 +3065,16 @@ exports.uploadExcelStudents = async (req, res) => {
             // Ensure MongoDB connection is available for lease start process
             const mongoose = require('mongoose');
             if (mongoose.connection.readyState !== 1) {
-                console.log('🔄 Reconnecting to MongoDB for lease start process...');
-                await mongoose.connect(process.env.MONGODB_URI);
+                console.log('⚠️ Database not connected, waiting for connection...');
+                let attempts = 0;
+                const maxAttempts = 30;
+                while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    attempts++;
+                }
+                if (mongoose.connection.readyState !== 1) {
+                    throw new Error('Database connection timeout - please ensure database is connected');
+                }
             }
             
             const RentalAccrualService = require('../../services/rentalAccrualService');

@@ -1171,8 +1171,46 @@ class EnhancedPaymentAllocationService {
         console.log('⚠️ Could not fetch student details, using default name');
       }
       
+      // CRITICAL: Ensure userId is converted to string to prevent wrong AR codes
+      let userIdStr = userId;
+      if (userId && typeof userId === 'object') {
+        userIdStr = userId.toString();
+      } else {
+        userIdStr = String(userId);
+      }
+      
+      // CRITICAL: Verify this is a student ID, not an application ID
+      // First check if it's an Application ID
+      const Application = require('../models/Application');
+      const application = await Application.findById(userIdStr);
+      if (application) {
+        // This is an Application ID - get the student ID from the application
+        if (application.student) {
+          const correctStudentId = application.student.toString ? application.student.toString() : String(application.student);
+          console.log(`⚠️  userId ${userIdStr} is an Application ID (${application.applicationCode || 'N/A'}), using student from application: ${correctStudentId}`);
+          userIdStr = correctStudentId;
+        } else {
+          throw new Error(`Application ${userIdStr} has no student field`);
+        }
+      }
+      
+      // Verify this is a student ID
+      const student = await User.findById(userIdStr);
+      if (!student) {
+        // If userId doesn't match a student, try to get student from payment
+        const Payment = require('../models/Payment');
+        const payment = await Payment.findById(paymentId);
+        if (payment && payment.student) {
+          const correctStudentId = payment.student.toString ? payment.student.toString() : String(payment.student);
+          console.log(`⚠️  userId ${userIdStr} is not a valid student ID, using student from payment: ${correctStudentId}`);
+          userIdStr = correctStudentId;
+        } else {
+          throw new Error(`Invalid userId: ${userIdStr} - not a valid student ID and cannot find student from payment ${paymentId}`);
+        }
+      }
+      
       // Ensure student AR account exists
-      const studentARCode = `1100-${userId}`;
+      const studentARCode = `1100-${userIdStr}`;
       let studentARAccount = await Account.findOne({ code: studentARCode });
       if (!studentARAccount) {
         const mainAR = await Account.findOne({ code: '1100' });
@@ -1304,7 +1342,8 @@ class EnhancedPaymentAllocationService {
         status: 'posted',
         metadata: {
           paymentId: paymentId,
-          studentId: userId,
+          studentId: userIdStr, // Use verified student ID (for reference)
+          debtorId: debtorId, // CRITICAL: Store Debtor ID (stable, persists after User deletion)
           amount: amount,
           paymentType: paymentType,
           advanceType: 'future_payment',
@@ -1445,10 +1484,61 @@ class EnhancedPaymentAllocationService {
         console.log('⚠️ Could not fetch student details, using default name');
       }
 
-      // Ensure student AR account exists
-      const studentARCode = `1100-${userId}`;
+      // CRITICAL: Ensure userId is converted to string to prevent wrong AR codes
+      let userIdStr = userId;
+      if (userId && typeof userId === 'object') {
+        userIdStr = userId.toString();
+      } else {
+        userIdStr = String(userId);
+      }
+      
+      // CRITICAL: Verify this is a student ID, not an application ID
+      // First check if it's an Application ID
+      const Application = require('../models/Application');
+      const application = await Application.findById(userIdStr);
+      if (application) {
+        // This is an Application ID - get the student ID from the application
+        if (application.student) {
+          const correctStudentId = application.student.toString ? application.student.toString() : String(application.student);
+          console.log(`⚠️  userId ${userIdStr} is an Application ID (${application.applicationCode || 'N/A'}), using student from application: ${correctStudentId}`);
+          userIdStr = correctStudentId;
+        } else {
+          throw new Error(`Application ${userIdStr} has no student field`);
+        }
+      }
+      
+      // Verify this is a student ID
+      const student = await User.findById(userIdStr);
+      if (!student) {
+        // If userId doesn't match a student, try to get student from payment
+        const Payment = require('../models/Payment');
+        const payment = await Payment.findById(paymentId);
+        if (payment && payment.student) {
+          const correctStudentId = payment.student.toString ? payment.student.toString() : String(payment.student);
+          console.log(`⚠️  userId ${userIdStr} is not a valid student ID, using student from payment: ${correctStudentId}`);
+          userIdStr = correctStudentId;
+        } else {
+          throw new Error(`Invalid userId: ${userIdStr} - not a valid student ID and cannot find student from payment ${paymentId}`);
+        }
+      }
+      
+      // CRITICAL: Get Debtor to use Debtor ID for AR code (persists after User deletion)
+      const Debtor = require('../models/Debtor');
+      const debtor = await Debtor.findOne({ user: userIdStr }).lean();
+      if (!debtor) {
+        throw new Error(`Debtor not found for user: ${userIdStr}. Please create debtor account first.`);
+      }
+      
+      // Use Debtor's accountCode (uses Debtor ID, stable and persistent)
+      const studentARCode = debtor.accountCode || `1100-${debtor._id.toString()}`;
+      const debtorId = debtor._id.toString();
+      
+      console.log(`✅ Using Debtor ID AR code: ${studentARCode} (Debtor: ${debtor.debtorCode})`);
+      
+      // Ensure AR account exists (should already exist from debtor creation)
       let studentARAccount = await Account.findOne({ code: studentARCode });
       if (!studentARAccount) {
+        // Account should exist, but create it if missing
         const mainAR = await Account.findOne({ code: '1100' });
         if (!mainAR) {
           throw new Error('Main AR account (1100) not found');
@@ -1459,7 +1549,7 @@ class EnhancedPaymentAllocationService {
           type: 'Asset',
           category: 'Current Assets',
           subcategory: 'Accounts Receivable',
-          description: 'Student-specific AR control account',
+          description: 'Student-specific AR control account (uses Debtor ID for persistence)',
           isActive: true,
           parentAccount: mainAR._id,
           level: 2,
@@ -1467,7 +1557,8 @@ class EnhancedPaymentAllocationService {
           metadata: new Map([
             ['parent', '1100'],
             ['hasParent', 'true'],
-            ['studentId', String(userId)]
+            ['debtorId', debtorId],
+            ['originalUserId', userIdStr]
           ])
         });
         await studentARAccount.save();
@@ -1580,7 +1671,8 @@ class EnhancedPaymentAllocationService {
         status: 'posted',
         metadata: {
           paymentId: paymentId,
-          studentId: userId,
+          studentId: userIdStr, // Use verified student ID (for reference)
+          debtorId: debtorId, // CRITICAL: Store Debtor ID (stable, persists after User deletion)
           amount: amount,
           paymentType: paymentType,
           monthSettled: monthSettled,
@@ -1630,7 +1722,7 @@ class EnhancedPaymentAllocationService {
           monthKey,
           {
             paymentId: paymentId,
-            studentId: userId,
+            studentId: userIdStr, // Use verified student ID
             amount: amount,
             paymentType: paymentType,
             monthSettled: monthSettled,

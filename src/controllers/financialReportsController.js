@@ -3701,12 +3701,12 @@ class FinancialReportsController {
                                             if (debtor) {
                                                 // First try populated user (if student is still active)
                                                 if (debtor.user && debtor.user.firstName) {
-                                                    studentName = `${debtor.user.firstName || ''} ${debtor.user.lastName || ''}`.trim();
+                                                studentName = `${debtor.user.firstName || ''} ${debtor.user.lastName || ''}`.trim();
                                                     console.log(`✅ Found student name from Debtor.user for ID ${studentId}: ${studentName}`);
                                                 } 
                                                 // If user is null (expired student), use contactInfo
                                                 else if (debtor.contactInfo && debtor.contactInfo.name) {
-                                                    studentName = debtor.contactInfo.name;
+                                                studentName = debtor.contactInfo.name;
                                                     console.log(`✅ Found expired student name from Debtor contactInfo for ID ${studentId}: ${studentName}`);
                                                 } else if (debtor.debtorCode) {
                                                     // Last resort: use debtor code

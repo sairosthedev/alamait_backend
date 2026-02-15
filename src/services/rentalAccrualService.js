@@ -303,7 +303,10 @@ class RentalAccrualService {
             }
             
             // Check if lease start entries already exist for THIS SPECIFIC APPLICATION
-            // Allow multiple lease starts for the same student (re-applications)
+            // Also check by student ID and date to prevent duplicates from race conditions
+            const studentId = application.student?.toString() || application.student;
+            const leaseStartDateStr = leaseStartDate.toISOString().split('T')[0]; // YYYY-MM-DD
+            
             const existingEntries = await TransactionEntry.findOne({
                 $or: [
                     // Check for transactions specific to this application
@@ -311,8 +314,20 @@ class RentalAccrualService {
                     { 'metadata.applicationCode': application.applicationCode, 'metadata.type': 'lease_start' },
                     // Check for transactions with this specific debtor (if it exists)
                     { source: 'rental_accrual', sourceModel: 'Application', sourceId: application._id },
-                    { description: { $regex: new RegExp(`Lease start.*${application.applicationCode}`) } }
-                ]
+                    { description: { $regex: new RegExp(`Lease start.*${application.applicationCode}`) } },
+                    // 🆕 CRITICAL: Also check by student ID and date to catch race condition duplicates
+                    ...(studentId ? [{
+                        source: 'rental_accrual',
+                        'metadata.type': 'lease_start',
+                        'metadata.studentId': studentId,
+                        date: {
+                            $gte: new Date(leaseStartDateStr),
+                            $lt: new Date(new Date(leaseStartDateStr).setDate(new Date(leaseStartDateStr).getDate() + 1))
+                        },
+                        status: { $ne: 'deleted' }
+                    }] : [])
+                ],
+                status: { $ne: 'deleted' } // Exclude deleted transactions
             });
             
             if (existingEntries) {
@@ -568,6 +583,30 @@ class RentalAccrualService {
                 }
             });
             
+            // 🆕 CRITICAL: Final duplicate check right before save to prevent race conditions
+            // This catches duplicates created by concurrent processes
+            const finalDuplicateCheck = await TransactionEntry.findOne({
+                source: 'rental_accrual',
+                'metadata.type': 'lease_start',
+                'metadata.studentId': application.student.toString(),
+                date: {
+                    $gte: new Date(leaseStartDateStr),
+                    $lt: new Date(new Date(leaseStartDateStr).setDate(new Date(leaseStartDateStr).getDate() + 1))
+                },
+                status: { $ne: 'deleted' },
+                _id: { $ne: transactionEntry._id } // Exclude this transaction if it already has an ID
+            });
+            
+            if (finalDuplicateCheck) {
+                console.log(`   ⚠️ Final duplicate check: Lease start already exists for ${application.firstName} ${application.lastName} on ${leaseStartDateStr} - aborting`);
+                console.log(`   Existing transaction: ${finalDuplicateCheck.transactionId} (${finalDuplicateCheck.createdAt})`);
+                return { 
+                    success: false, 
+                    error: 'Duplicate lease start detected in final check', 
+                    existingTransaction: finalDuplicateCheck._id 
+                };
+            }
+            
             await transactionEntry.save();
             
             // Log transaction creation
@@ -809,6 +848,12 @@ class RentalAccrualService {
                 let year = checkYear;
 
                 while (year < endCheckYear || (year === endCheckYear && month <= endCheckMonth)) {
+                    // 🆕 CRITICAL: Skip future months - only create accruals up to current month
+                    if (year > currentYear || (year === currentYear && month > currentMonth)) {
+                        console.log(`   ⏭️ Skipping future month ${month}/${year} for ${app.student?.firstName || app.firstName} - will be created when month arrives`);
+                        break; // Stop at current month boundary
+                    }
+
                     // Skip lease start month (handled by lease_start process)
                     if (month === leaseStartMonth && year === leaseStartYear) {
                         month++;
@@ -1358,13 +1403,25 @@ class RentalAccrualService {
             // 🆕 CRITICAL: Check for advance payments (deferred income) for this month and apply them automatically
             // monthKey is already declared at the top of the function
             try {
-                console.log(`🔍 Checking for advance payments for ${monthKey} (student: ${student.student.toString()})`);
+                // Get Debtor to use correct AR code (Debtor ID format)
+                const Debtor = require('../models/Debtor');
+                const debtor = await Debtor.findOne({ user: student.student }).lean();
+                const debtorId = debtor?._id?.toString();
+                const arAccountCode = debtor?.accountCode || (debtorId ? `1100-${debtorId}` : `1100-${student.student.toString()}`);
+                const studentIdStr = student.student.toString();
+                
+                console.log(`🔍 Checking for advance payments for ${monthKey} (student: ${studentIdStr}, AR: ${arAccountCode})`);
                 
                 // Strategy 1: Find advance payment transactions with monthSettled matching this month
                 // OR paymentMonth/intendedLeaseStartMonth matching this month (for payments made before lease start)
+                // Check by both studentId and AR account code to catch all formats
                 let advancePayments = await TransactionEntry.find({
                     source: 'advance_payment',
-                    'metadata.studentId': student.student.toString(),
+                    $or: [
+                        { 'metadata.studentId': studentIdStr },
+                        { 'metadata.debtorId': debtorId },
+                        { 'entries.accountCode': arAccountCode }
+                    ],
                     $or: [
                         { 'metadata.monthSettled': monthKey },
                         { 'metadata.paymentMonth': monthKey },
@@ -1379,7 +1436,11 @@ class RentalAccrualService {
                 if (advancePayments.length === 0) {
                     advancePayments = await TransactionEntry.find({
                         source: 'advance_payment',
-                        'metadata.studentId': student.student.toString(),
+                        $or: [
+                            { 'metadata.studentId': studentIdStr },
+                            { 'metadata.debtorId': debtorId },
+                            { 'entries.accountCode': arAccountCode }
+                        ],
                         $or: [
                             { 'metadata.monthSettled': null },
                             { 'metadata.monthSettled': { $exists: false } }
@@ -1397,8 +1458,10 @@ class RentalAccrualService {
                     advancePayments = await TransactionEntry.find({
                         source: 'advance_payment',
                         $or: [
-                            { 'metadata.studentId': student.student.toString() },
-                            { 'entries.accountCode': `1100-${student.student.toString()}` }
+                            { 'metadata.studentId': studentIdStr },
+                            { 'metadata.debtorId': debtorId },
+                            { 'entries.accountCode': arAccountCode },
+                            { 'entries.accountCode': `1100-${studentIdStr}` } // Fallback for old format
                         ],
                         $or: [
                             { description: { $regex: new RegExp(monthKey, 'i') } },
@@ -1427,8 +1490,10 @@ class RentalAccrualService {
                             }
                         ],
                         $or: [
-                            { 'metadata.studentId': student.student.toString() },
-                            { 'entries.accountCode': `1100-${student.student.toString()}` }
+                            { 'metadata.studentId': studentIdStr },
+                            { 'metadata.debtorId': debtorId },
+                            { 'entries.accountCode': arAccountCode },
+                            { 'entries.accountCode': `1100-${studentIdStr}` } // Fallback for old format
                         ],
                         status: 'posted',
                         date: { $lt: monthStart }
@@ -1462,7 +1527,7 @@ class RentalAccrualService {
                         let advanceAmount = 0;
                         const deferredEntry = advancePayment.entries.find(e => e.accountCode === '2200');
                         const studentAREntry = advancePayment.entries.find(e => 
-                            e.accountCode === `1100-${student.student.toString()}` && e.credit > 0
+                            (e.accountCode === arAccountCode || e.accountCode === `1100-${studentIdStr}`) && e.credit > 0
                         );
                         
                         if (deferredEntry) {

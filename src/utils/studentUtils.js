@@ -282,31 +282,55 @@ async function isStudentExpired(studentId) {
  */
 async function resolveStudentIdentifier(studentId) {
     if (!studentId) return null;
-    const idString = studentId.toString();
+    
+    // CRITICAL: Validate that studentId is not a stringified object
+    let idString;
+    if (typeof studentId === 'string') {
+        // Check if it looks like a stringified object (contains newlines, ObjectId constructor, or braces)
+        if (studentId.includes('\n') || studentId.includes('ObjectId') || 
+            (studentId.includes('{') && studentId.includes('}'))) {
+            console.warn(`⚠️  Invalid studentId format (appears to be stringified object): ${studentId.substring(0, 100)}`);
+            return null;
+        }
+        idString = studentId;
+    } else if (studentId && typeof studentId === 'object') {
+        // If it's an object, try to extract the _id
+        if (studentId._id && mongoose.Types.ObjectId.isValid(studentId._id)) {
+            idString = studentId._id.toString();
+        } else if (mongoose.Types.ObjectId.isValid(studentId)) {
+            idString = studentId.toString();
+        } else {
+            console.warn(`⚠️  Invalid studentId object format: ${JSON.stringify(studentId).substring(0, 100)}`);
+            return null;
+        }
+    } else {
+        idString = studentId.toString();
+    }
+
+    // Validate it's a proper ObjectId format before using
+    if (!mongoose.Types.ObjectId.isValid(idString)) {
+        console.warn(`⚠️  Invalid ObjectId format: ${idString}`);
+        return null;
+    }
 
     // If this is a valid ObjectId and matches an active user, return it immediately
-    if (mongoose.Types.ObjectId.isValid(idString)) {
-        const user = await User.findById(idString).select('_id');
-        if (user) {
-            return user._id.toString();
-        }
+    const user = await User.findById(idString).select('_id');
+    if (user) {
+        return user._id.toString();
     }
 
     // Build OR conditions to find matching expired student records
     const orConditions = [
-        { _id: idString },
         { 'student._id': idString },
         { 'application.student._id': idString },
         { studentId: idString }
     ];
 
-    if (mongoose.Types.ObjectId.isValid(idString)) {
-        const objectId = new mongoose.Types.ObjectId(idString);
-        orConditions.push({ _id: objectId });
-        orConditions.push({ 'student._id': objectId });
-        orConditions.push({ 'application.student._id': objectId });
-        orConditions.push({ student: objectId });
-    }
+    // Only add _id condition if it's a valid ObjectId (don't use stringified objects)
+    const objectId = new mongoose.Types.ObjectId(idString);
+    orConditions.push({ 'student._id': objectId });
+    orConditions.push({ 'application.student._id': objectId });
+    orConditions.push({ student: objectId });
 
     const expiredStudent = await ExpiredStudent.findOne({ $or: orConditions }).lean();
 

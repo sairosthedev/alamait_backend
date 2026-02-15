@@ -29,13 +29,40 @@ const auth = async (req, res, next) => {
             console.error('Auth middleware - Invalid token payload:', decoded);
             return res.status(401).json({ error: 'Please authenticate' });
         }
+        // Check database connection before querying
+        if (mongoose.connection.readyState !== 1) {
+            console.error('Auth middleware - Database not connected, readyState:', mongoose.connection.readyState);
+            return res.status(503).json({ 
+                error: 'Database connection issue. Please try again.',
+                code: 'DB_CONNECTION_ERROR',
+                retry: true
+            });
+        }
+        
         // Try both ObjectId and string for user lookup
         let user = null;
-        if (mongoose.Types.ObjectId.isValid(userId)) {
-            user = await User.findOne({ _id: new mongoose.Types.ObjectId(userId) });
-        }
-        if (!user) {
-            user = await User.findOne({ _id: userId });
+        try {
+            if (mongoose.Types.ObjectId.isValid(userId)) {
+                user = await User.findOne({ _id: new mongoose.Types.ObjectId(userId) });
+            }
+            if (!user) {
+                user = await User.findOne({ _id: userId });
+            }
+        } catch (dbError) {
+            // If database query fails, check if it's a connection issue
+            if (dbError.name === 'MongoNetworkError' || 
+                dbError.name === 'MongooseError' ||
+                dbError.message?.includes('buffering timed out') ||
+                dbError.message?.includes('connection')) {
+                console.error('Auth middleware - Database query failed due to connection issue');
+                return res.status(503).json({ 
+                    error: 'Database connection issue. Please try again.',
+                    code: 'DB_CONNECTION_ERROR',
+                    retry: true
+                });
+            }
+            // Re-throw other database errors
+            throw dbError;
         }
         console.log('Auth middleware - User found:', {
             found: !!user,
@@ -54,9 +81,44 @@ const auth = async (req, res, next) => {
     } catch (error) {
         console.error('Auth middleware - Error:', {
             error: error.message,
+            errorName: error.name,
             stack: error.stack
         });
-        return res.status(401).json({ error: 'Please authenticate' });
+        
+        // Handle specific error types differently
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({ 
+                error: 'Token expired. Please login again.',
+                code: 'TOKEN_EXPIRED'
+            });
+        }
+        
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({ 
+                error: 'Invalid token. Please login again.',
+                code: 'INVALID_TOKEN'
+            });
+        }
+        
+        // Handle database connection errors - don't log user out for these
+        if (error.name === 'MongoNetworkError' || 
+            error.name === 'MongooseError' ||
+            error.message?.includes('buffering timed out') ||
+            error.message?.includes('connection') ||
+            mongoose.connection.readyState !== 1) {
+            console.error('Auth middleware - Database connection issue, returning 503 instead of 401');
+            return res.status(503).json({ 
+                error: 'Database connection issue. Please try again.',
+                code: 'DB_CONNECTION_ERROR',
+                retry: true
+            });
+        }
+        
+        // For other errors, return 401 but with more context
+        return res.status(401).json({ 
+            error: 'Authentication failed. Please login again.',
+            code: 'AUTH_ERROR'
+        });
     }
 };
 

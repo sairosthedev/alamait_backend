@@ -339,6 +339,135 @@ class TransactionController {
     /**
      * Get transaction entries with filters
      */
+    /**
+     * Get transactions by account code
+     * GET /api/finance/transactions/account/:accountCode?debtorId=xxx&includeEntries=true
+     */
+    static async getTransactionsByAccount(req, res) {
+        try {
+            const { accountCode } = req.params;
+            const { debtorId, includeEntries, startDate, endDate, limit = 100 } = req.query;
+            
+            console.log(`🔍 Fetching transactions for account ${accountCode}`, { debtorId, includeEntries });
+            
+            // Build query for transactions with this account code
+            let query = {
+                status: { $nin: ['reversed', 'draft', 'deleted'] }
+            };
+            
+            // If debtorId is provided, also filter by debtor/student
+            if (debtorId) {
+                const Debtor = require('../../models/Debtor');
+                const debtor = await Debtor.findById(debtorId).populate('user', '_id');
+                
+                if (debtor && debtor.user) {
+                    const studentId = debtor.user._id.toString();
+                    const studentARCode = `1100-${studentId}`;
+                    
+                    // If account code is 1100 (parent AR), filter by student-specific AR
+                    if (accountCode === '1100') {
+                        // For parent AR account (1100), find transactions for this student's specific AR account
+                        query.$or = [
+                            { 'entries.accountCode': studentARCode },
+                            { 'metadata.studentId': studentId },
+                            { 'metadata.debtorId': debtorId.toString() },
+                            { sourceId: studentId },
+                            { sourceId: debtorId }
+                        ];
+                    } else {
+                        // For specific account codes, match exactly
+                        query.$or = [
+                            { 'entries.accountCode': accountCode },
+                            { 'metadata.studentId': studentId },
+                            { 'metadata.debtorId': debtorId.toString() }
+                        ];
+                    }
+                } else {
+                    // No debtor found, just query by account code
+                    query['entries.accountCode'] = accountCode;
+                }
+            } else {
+                // No debtorId provided, query by account code only
+                query['entries.accountCode'] = accountCode;
+            }
+            
+            // Add date filters
+            if (startDate || endDate) {
+                query.date = {};
+                if (startDate) query.date.$gte = new Date(startDate);
+                if (endDate) query.date.$lte = new Date(endDate);
+            }
+            
+            // Fetch transactions
+            const transactions = await TransactionEntry.find(query)
+                .sort({ date: -1 })
+                .limit(parseInt(limit))
+                .lean();
+            
+            // Process transactions
+            const processedTransactions = transactions.map(tx => {
+                const accountEntry = tx.entries.find(e => 
+                    e.accountCode === accountCode || 
+                    (accountCode === '1100' && e.accountCode && e.accountCode.startsWith('1100-'))
+                );
+                
+                const result = {
+                    id: tx._id,
+                    transactionId: tx.transactionId,
+                    date: tx.date,
+                    description: tx.description,
+                    source: tx.source,
+                    status: tx.status,
+                    amount: accountEntry ? (accountEntry.debit || accountEntry.credit || 0) : 0,
+                    type: accountEntry && accountEntry.debit > 0 ? 'debit' : 'credit',
+                    reference: tx.reference
+                };
+                
+                // Include entries if requested
+                if (includeEntries === 'true') {
+                    result.entries = tx.entries.filter(e => 
+                        e.accountCode === accountCode || 
+                        (accountCode === '1100' && e.accountCode && e.accountCode.startsWith('1100-'))
+                    );
+                }
+                
+                return result;
+            });
+            
+            res.status(200).json({
+                success: true,
+                account: {
+                    code: accountCode,
+                    name: accountCode === '1100' ? 'Accounts Receivable' : `Account ${accountCode}`
+                },
+                transactions: processedTransactions,
+                summary: {
+                    totalTransactions: processedTransactions.length,
+                    totalDebit: processedTransactions
+                        .filter(t => t.type === 'debit')
+                        .reduce((sum, t) => sum + t.amount, 0),
+                    totalCredit: processedTransactions
+                        .filter(t => t.type === 'credit')
+                        .reduce((sum, t) => sum + t.amount, 0),
+                    netAmount: processedTransactions
+                        .filter(t => t.type === 'debit')
+                        .reduce((sum, t) => sum + t.amount, 0) -
+                        processedTransactions
+                        .filter(t => t.type === 'credit')
+                        .reduce((sum, t) => sum + t.amount, 0)
+                }
+            });
+            
+        } catch (error) {
+            console.error('❌ Error getting transactions by account:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error fetching transactions by account',
+                error: error.message
+            });
+        }
+    }
+
     static async getTransactionEntries(req, res) {
         try {
             const { page = 1, limit = 50, startDate, endDate, type, account, status, residence } = req.query;

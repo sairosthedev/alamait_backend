@@ -200,13 +200,18 @@ class BalanceSheetService {
     try {
       console.log(`📊 Generating Balance Sheet as of ${asOfDate}`);
       
-      // Ensure we're connected to the correct Atlas database
+      // Ensure we're connected to the correct Atlas database - wait instead of creating new connection
       if (mongoose.connection.readyState !== 1) {
-        console.log('🔌 Connecting to Atlas database...');
-        await mongoose.connect(MONGODB_URI, {
-          useNewUrlParser: true,
-          useUnifiedTopology: true,
-        });
+        console.log('⚠️ Database not connected, waiting for connection...');
+        let attempts = 0;
+        const maxAttempts = 30;
+        while (mongoose.connection.readyState !== 1 && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+        if (mongoose.connection.readyState !== 1) {
+          throw new Error('Database connection timeout - please ensure database is connected');
+        }
       }
       console.log(`🗄️ Using database: ${mongoose.connection.db.databaseName}`);
       
