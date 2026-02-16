@@ -51,6 +51,18 @@ class AccrualCorrectionService {
             const actualStudentIdString = application.student ? application.student.toString() : null;
             const actualStudentIdObj = application.student ? new mongoose.Types.ObjectId(application.student) : null;
             
+            // 🆕 CRITICAL: Also find debtor to get debtor ID for account code lookup
+            const Debtor = require('../models/Debtor');
+            let debtor = null;
+            let debtorIdString = null;
+            if (actualStudentIdObj) {
+                debtor = await Debtor.findOne({ user: actualStudentIdObj }).session(session).lean();
+                if (debtor) {
+                    debtorIdString = debtor._id.toString();
+                    console.log(`   Found debtor: ${debtor.debtorCode} (ID: ${debtorIdString})`);
+                }
+            }
+            
             // Find all accrual transactions for this student - check multiple ID formats
             const accrualQueryConditions = [
                 // By sourceId (application ID)
@@ -65,10 +77,16 @@ class AccrualCorrectionService {
                 ...(actualStudentIdString ? [{ source: 'rental_accrual', 'metadata.studentId': actualStudentIdString }] : []),
                 // By metadata.userId
                 ...(actualStudentIdString ? [{ source: 'rental_accrual', 'metadata.userId': actualStudentIdString }] : []),
-                // By account code pattern (1100-{applicationId})
+                // By metadata.debtorId (CRITICAL: accruals now use debtor ID)
+                ...(debtorIdString ? [{ source: 'rental_accrual', 'metadata.debtorId': debtorIdString }] : []),
+                // By account code pattern (1100-{applicationId}) - legacy
                 { source: 'rental_accrual', 'entries.accountCode': `1100-${applicationIdString}` },
-                // By account code pattern (1100-{studentId})
-                ...(actualStudentIdString ? [{ source: 'rental_accrual', 'entries.accountCode': `1100-${actualStudentIdString}` }] : [])
+                // By account code pattern (1100-{studentId}) - legacy
+                ...(actualStudentIdString ? [{ source: 'rental_accrual', 'entries.accountCode': `1100-${actualStudentIdString}` }] : []),
+                // 🆕 CRITICAL: By account code pattern (1100-{debtorId}) - current format
+                ...(debtorIdString ? [{ source: 'rental_accrual', 'entries.accountCode': `1100-${debtorIdString}` }] : []),
+                // Also check by debtor accountCode if available
+                ...(debtor && debtor.accountCode ? [{ source: 'rental_accrual', 'entries.accountCode': debtor.accountCode }] : [])
             ];
             
             const accrualQuery = {
@@ -86,7 +104,10 @@ class AccrualCorrectionService {
                 console.log(`   ⚠️ No accruals found via query, trying account code pattern fallback...`);
                 const accountCodePatterns = [
                     `1100-${applicationIdString}`,
-                    ...(actualStudentIdString ? [`1100-${actualStudentIdString}`] : [])
+                    ...(actualStudentIdString ? [`1100-${actualStudentIdString}`] : []),
+                    // 🆕 CRITICAL: Also check debtor ID format
+                    ...(debtorIdString ? [`1100-${debtorIdString}`] : []),
+                    ...(debtor && debtor.accountCode ? [debtor.accountCode] : [])
                 ];
                 
                 const fallbackQuery = {
@@ -99,6 +120,45 @@ class AccrualCorrectionService {
                 
                 allAccruals = await TransactionEntry.find(fallbackQuery).session(session);
                 console.log(`   Found ${allAccruals.length} accruals via account code pattern fallback`);
+            }
+            
+            // 🆕 ENHANCED FALLBACK: If still no accruals found, search for any accruals with account codes
+            // that might belong to this student (handles cases where accruals use old account codes)
+            if (allAccruals.length === 0 && actualStudentIdString) {
+                console.log(`   ⚠️ Still no accruals found, trying comprehensive account code search...`);
+                
+                // Find all accruals for this student by searching for any account codes
+                // that might be associated with this student (from any application or debtor)
+                const allStudentApplications = await Application.find({
+                    student: actualStudentIdObj
+                }).session(session).select('_id').lean();
+                
+                const allStudentDebtors = await Debtor.find({
+                    user: actualStudentIdObj
+                }).session(session).select('_id accountCode').lean();
+                
+                // Build comprehensive list of possible account codes
+                const allPossibleAccountCodes = [
+                    ...allStudentApplications.map(app => `1100-${app._id.toString()}`),
+                    ...allStudentDebtors.map(d => d.accountCode).filter(code => code),
+                    ...allStudentDebtors.map(d => `1100-${d._id.toString()}`),
+                    ...(actualStudentIdString ? [`1100-${actualStudentIdString}`] : [])
+                ];
+                
+                // Remove duplicates
+                const uniqueAccountCodes = [...new Set(allPossibleAccountCodes)];
+                
+                if (uniqueAccountCodes.length > 0) {
+                    console.log(`   Searching with ${uniqueAccountCodes.length} possible account codes...`);
+                    const comprehensiveQuery = {
+                        source: 'rental_accrual',
+                        status: 'posted',
+                        'entries.accountCode': { $in: uniqueAccountCodes }
+                    };
+                    
+                    allAccruals = await TransactionEntry.find(comprehensiveQuery).session(session);
+                    console.log(`   Found ${allAccruals.length} accruals via comprehensive account code search`);
+                }
             }
             
             // 🔄 Check if there's a renewed/active application that covers months after the expired lease
@@ -202,22 +262,49 @@ class AccrualCorrectionService {
                     }
                 }
                 
-                // Also check if it's a lease start transaction (should not be reversed unless it's after lease end)
+                // Also check if it's a lease start transaction
                 const isLeaseStart = accrual.metadata?.type === 'lease_start' || 
                                     (accrual.description && /lease start/i.test(accrual.description));
                 
-                console.log(`  📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Covered by renewal: ${isCoveredByRenewedLease} | Is lease start: ${isLeaseStart}`);
+                // 🆕 CRITICAL: Check if lease was cancelled before it started
+                // If end date is before start date, the lease never actually started, so lease start should be reversed
+                const leaseStartDate = application.startDate ? new Date(application.startDate) : null;
+                const leaseWasCancelledBeforeStart = leaseStartDate && leaseEndDate < leaseStartDate;
                 
-                // Only reverse if:
-                // 1. It's after the lease end date, AND
-                // 2. It's NOT covered by a renewed lease, AND
-                // 3. It's NOT a lease start transaction
-                if (isAfterLeaseEnd && !isCoveredByRenewedLease && !isLeaseStart) {
+                // Check if this accrual is for the lease start month
+                let isLeaseStartMonth = false;
+                if (leaseStartDate && isLeaseStart) {
+                    const startYear = leaseStartDate.getFullYear();
+                    const startMonth = leaseStartDate.getMonth() + 1;
+                    isLeaseStartMonth = (accrualYear === startYear && accrualMonth === startMonth);
+                }
+                
+                console.log(`  📊 Accrual ${accrual._id}: ${accrualMonth}/${accrualYear} | After lease end: ${isAfterLeaseEnd} | Covered by renewal: ${isCoveredByRenewedLease} | Is lease start: ${isLeaseStart} | Cancelled before start: ${leaseWasCancelledBeforeStart} | Is lease start month: ${isLeaseStartMonth}`);
+                
+                // Determine if this accrual should be reversed
+                let shouldReverse = false;
+                let reversalReason = '';
+                
+                if (leaseWasCancelledBeforeStart && isLeaseStart && isLeaseStartMonth) {
+                    // 🆕 CRITICAL: If lease was cancelled before start, reverse the lease start accrual
+                    shouldReverse = true;
+                    reversalReason = `Lease start accrual reversed - lease was cancelled before start date (end date ${leaseEndDate.toISOString().split('T')[0]} is before start date ${leaseStartDate.toISOString().split('T')[0]})`;
+                } else if (isAfterLeaseEnd && !isCoveredByRenewedLease && !isLeaseStart) {
+                    // Regular monthly accrual after lease end (but not lease start)
+                    shouldReverse = true;
+                    reversalReason = `Accrual for ${accrualMonth}/${accrualYear} is after lease end date (${leaseEndMonth}/${leaseEndYear}) and not covered by renewed lease`;
+                } else if (isAfterLeaseEnd && !isCoveredByRenewedLease && isLeaseStart) {
+                    // Lease start that occurred after the (early) lease end date
+                    shouldReverse = true;
+                    reversalReason = `Lease start accrual reversed - lease end date (${leaseEndDate.toISOString().split('T')[0]}) is before or same as accrual date`;
+                }
+                
+                if (shouldReverse) {
                     incorrectAccruals.push({
                         accrual,
                         accrualMonth,
                         accrualYear,
-                        reason: `Accrual for ${accrualMonth}/${accrualYear} is after lease end date (${leaseEndMonth}/${leaseEndYear}) and not covered by renewed lease`
+                        reason: reversalReason
                     });
                 }
             }
@@ -242,14 +329,42 @@ class AccrualCorrectionService {
                 try {
                     console.log(`🔄 Reversing accrual: ${accrual._id} (${accrualMonth}/${accrualYear})`);
                     
+                    // 🆕 CRITICAL: Get debtor account code for AR entries
+                    // Reversals should always use the current debtor account code, not the old one from the accrual
+                    let debtorAccountCode = null;
+                    if (debtor && debtor.accountCode) {
+                        debtorAccountCode = debtor.accountCode;
+                        console.log(`   Using debtor account code: ${debtorAccountCode}`);
+                    } else if (actualStudentIdString) {
+                        // Fallback to student ID format if no debtor found
+                        debtorAccountCode = `1100-${actualStudentIdString}`;
+                        console.log(`   Using fallback account code: ${debtorAccountCode}`);
+                    }
+                    
                     // Create reversal transaction entry directly
                     const reversalTransactionId = `REVERSE-ACCrual-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
                     
                     // Build reversal entries - reverse all entries from the original accrual
+                    // 🆕 CRITICAL: Use debtor account code for AR entries (1100-*), keep other account codes as-is
                     const reversalEntries = accrual.entries.map(entry => {
+                        // If this is an AR account (starts with 1100-), use the debtor account code
+                        const accountCode = (entry.accountCode && entry.accountCode.startsWith('1100-') && debtorAccountCode) 
+                            ? debtorAccountCode 
+                            : entry.accountCode;
+                        
+                        // Update account name if we changed the account code
+                        let accountName = entry.accountName;
+                        if (accountCode !== entry.accountCode && accountCode && accountCode.startsWith('1100-')) {
+                            // Extract student name from original account name or use debtor info
+                            const studentName = accrual.metadata?.studentName || 
+                                              `${application.firstName} ${application.lastName}` ||
+                                              'Student';
+                            accountName = `Accounts Receivable - ${studentName}`;
+                        }
+                        
                         return {
-                            accountCode: entry.accountCode,
-                            accountName: entry.accountName,
+                            accountCode: accountCode,
+                            accountName: accountName,
                             accountType: entry.accountType,
                             debit: entry.credit, // Original credit becomes debit
                             credit: entry.debit, // Original debit becomes credit
@@ -285,11 +400,15 @@ class AccrualCorrectionService {
                             correctedBy: adminUser._id,
                             correctedByEmail: adminUser.email,
                             correctedAt: new Date(),
-                            studentId: accrual.metadata?.studentId || studentIdString,
+                            studentId: actualStudentIdString || accrual.metadata?.studentId || studentIdString,
+                            applicationId: applicationIdString,
+                            debtorId: debtorIdString || (debtor ? debtor._id.toString() : null),
                             studentName: accrual.metadata?.studentName || `${application.firstName} ${application.lastName}`,
                             accrualMonth: accrualMonth,
                             accrualYear: accrualYear,
-                            correctionType: 'early_lease_end'
+                            correctionType: 'early_lease_end',
+                            // Store the account code used for AR entries
+                            arAccountCode: debtorAccountCode
                         }
                     });
                     
@@ -305,14 +424,15 @@ class AccrualCorrectionService {
                             reason: `Accrual correction: ${reason} - Accrual for ${accrualMonth}/${accrualYear} reversed`,
                             context: 'accrual_correction',
                             metadata: {
-                                studentId: studentIdString,
+                                studentId: actualStudentIdString || applicationIdString,
+                                applicationId: applicationIdString,
                                 studentName: `${application.firstName} ${application.lastName}`,
                                 accrualMonth,
                                 accrualYear,
                                 originalLeaseEndDate: application.endDate,
                                 actualLeaseEndDate: leaseEndDate,
                                 correctionType: 'early_lease_end',
-                                reversalEntryId: reversalResult?.reversalEntry?._id
+                                reversalEntryId: reversalEntry._id
                             },
                             session: session
                         });
@@ -342,6 +462,7 @@ class AccrualCorrectionService {
             
             // Update application end date if requested
             let leaseEndDateUpdated = false;
+            let applicationExpired = false;
             if (updateLeaseEndDate && application.endDate) {
                 const originalEndDate = application.endDate;
                 const newEndDate = new Date(leaseEndDate);
@@ -351,10 +472,66 @@ class AccrualCorrectionService {
                     application.endDate = newEndDate;
                     application.updatedBy = adminUser._id;
                     application.updatedAt = new Date();
+                    
+                    // 🆕 CRITICAL: If the new end date is in the past, automatically expire the application
+                    const now = new Date();
+                    if (newEndDate <= now && application.status !== 'expired') {
+                        application.status = 'expired';
+                        application.rejectionReason = reason || 'Lease ended early - student left';
+                        application.actionDate = new Date();
+                        applicationExpired = true;
+                        console.log(`✅ Application automatically expired (end date ${newEndDate.toISOString().split('T')[0]} is in the past)`);
+                    }
+                    
                     await application.save({ session });
                     leaseEndDateUpdated = true;
                     
                     console.log(`✅ Updated lease end date: ${originalEndDate} → ${newEndDate}`);
+                }
+            } else if (!updateLeaseEndDate) {
+                // Even if not updating end date, check if current end date is in the past and expire if needed
+                const now = new Date();
+                if (application.endDate && new Date(application.endDate) <= now && application.status !== 'expired') {
+                    application.status = 'expired';
+                    application.rejectionReason = reason || 'Lease ended early - student left';
+                    application.actionDate = new Date();
+                    application.updatedBy = adminUser._id;
+                    application.updatedAt = new Date();
+                    await application.save({ session });
+                    applicationExpired = true;
+                    console.log(`✅ Application automatically expired (end date ${application.endDate.toISOString().split('T')[0]} is in the past)`);
+                }
+            }
+            
+            // 🆕 CRITICAL: Update debtor status if application is expired
+            if (applicationExpired && debtorIdString) {
+                try {
+                    // Fetch debtor document (not lean) so we can save it
+                    const Debtor = require('../models/Debtor');
+                    const debtorDoc = await Debtor.findById(debtorIdString).session(session);
+                    if (debtorDoc) {
+                        debtorDoc.status = 'expired';
+                        debtorDoc.isExpired = true;
+                        await debtorDoc.save({ session });
+                        console.log(`✅ Debtor ${debtorDoc.debtorCode} status updated to expired`);
+                    }
+                } catch (debtorError) {
+                    console.error(`⚠️ Error updating debtor status: ${debtorError.message}`);
+                }
+            }
+            
+            // 🆕 CRITICAL: Update room status if application is expired
+            if (applicationExpired && application.residence && application.allocatedRoom) {
+                try {
+                    const RoomStatusManager = require('../utils/roomStatusManager');
+                    const roomResult = await RoomStatusManager.updateRoomOnStatusChange(
+                        application._id,
+                        'expired',
+                        reason || 'Lease ended early - student left'
+                    );
+                    console.log(`✅ Room status updated: ${roomResult.success ? 'Success' : 'Failed'}`);
+                } catch (roomError) {
+                    console.error(`⚠️ Error updating room status: ${roomError.message}`);
                 }
             }
             

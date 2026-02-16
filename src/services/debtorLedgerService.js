@@ -57,10 +57,78 @@ class DebtorLedgerService {
                     },
                     {
                         'metadata.debtorId': debtorId
+                    },
+                    // 🆕 CRITICAL: Include reversal transactions by sourceId (original accrual ID)
+                    // Reversals reference the original accrual transaction, so we need to find them
+                    {
+                        source: 'rental_accrual_reversal',
+                        'metadata.debtorId': debtorId.toString()
+                    },
+                    {
+                        source: 'rental_accrual_reversal',
+                        'metadata.studentId': studentId?.toString()
+                    },
+                    {
+                        source: 'rental_accrual_reversal',
+                        'metadata.studentId': studentId
                     }
                 ],
                 status: { $nin: ['reversed', 'draft', 'deleted'] }
             };
+            
+            // 🆕 ENHANCED: Also find reversal transactions by looking up the original accruals
+            // This handles cases where reversals use old account codes
+            try {
+                // Find all accruals for this student (including those with old account codes)
+                const originalAccruals = await TransactionEntry.find({
+                    source: 'rental_accrual',
+                    $or: [
+                        { 'entries.accountCode': arAccountCode },
+                        ...(arAccountCode !== `1100-${studentId}` ? [{ 'entries.accountCode': `1100-${studentId}` }] : []),
+                        { 'metadata.debtorId': debtorId.toString() },
+                        { 'metadata.studentId': studentId?.toString() },
+                        { 'metadata.studentId': studentId }
+                    ],
+                    status: 'posted'
+                }).select('_id transactionId entries.accountCode').lean();
+                
+                if (originalAccruals.length > 0) {
+                    const accrualIds = originalAccruals.map(a => a._id);
+                    transactionQuery.$or.push({
+                        source: 'rental_accrual_reversal',
+                        sourceId: { $in: accrualIds }
+                    });
+                    transactionQuery.$or.push({
+                        source: 'rental_accrual_reversal',
+                        'metadata.originalAccrualId': { $in: accrualIds }
+                    });
+                    transactionQuery.$or.push({
+                        source: 'rental_accrual_reversal',
+                        'metadata.originalTransactionId': { $in: originalAccruals.map(a => a.transactionId) }
+                    });
+                    
+                    // Also check for reversals that use the same account codes as the original accruals
+                    const accountCodesFromAccruals = new Set();
+                    originalAccruals.forEach(accrual => {
+                        if (accrual.entries) {
+                            accrual.entries.forEach(entry => {
+                                if (entry.accountCode && entry.accountCode.startsWith('1100-')) {
+                                    accountCodesFromAccruals.add(entry.accountCode);
+                                }
+                            });
+                        }
+                    });
+                    
+                    if (accountCodesFromAccruals.size > 0) {
+                        transactionQuery.$or.push({
+                            source: 'rental_accrual_reversal',
+                            'entries.accountCode': { $in: Array.from(accountCodesFromAccruals) }
+                        });
+                    }
+                }
+            } catch (lookupError) {
+                console.log(`⚠️ Could not lookup original accruals for reversals: ${lookupError.message}`);
+            }
             
             // Also check for advance payments via Payment model (by sourceId)
             const Payment = require('../models/Payment');
@@ -122,6 +190,10 @@ class DebtorLedgerService {
                         if (procTx.type === 'accrual') {
                             ledgerData.monthlyBreakdown[monthKey].expected += procTx.amount;
                             ledgerData.totalExpected += procTx.amount;
+                        } else if (procTx.type === 'accrual_reversal') {
+                            // Reversals reduce the expected amount (negative accrual)
+                            ledgerData.monthlyBreakdown[monthKey].expected -= procTx.amount;
+                            ledgerData.totalExpected -= procTx.amount;
                         } else if (procTx.type === 'payment') {
                             ledgerData.monthlyBreakdown[monthKey].paid += procTx.amount;
                             ledgerData.totalPaid += procTx.amount;
@@ -184,6 +256,49 @@ class DebtorLedgerService {
             const totalDebit = arEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
             const totalCredit = arEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
             const netAmount = totalDebit - totalCredit;
+            
+            // 🆕 CRITICAL FIX: Handle reversal transactions specially
+            // Reversal transactions reverse an accrual, so they should reduce expected amount
+            if (transaction.source === 'rental_accrual_reversal') {
+                // Reversals have AR credits (reversing the original debit)
+                // They should show as reducing the expected amount (negative accrual)
+                if (totalCredit > 0) {
+                    const transactionDate = new Date(transaction.date);
+                    const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
+                    
+                    // Try to get the original accrual month from metadata
+                    let accrualMonthKey = monthKey;
+                    if (transaction.metadata?.accrualMonth && transaction.metadata?.accrualYear) {
+                        const year = transaction.metadata.accrualYear;
+                        const month = String(transaction.metadata.accrualMonth).padStart(2, '0');
+                        accrualMonthKey = `${year}-${month}`;
+                    }
+                    
+                    return {
+                        transactionId: transaction.transactionId,
+                        date: transaction.date,
+                        monthKey: accrualMonthKey, // Use original accrual month for proper grouping
+                        type: 'accrual_reversal',
+                        category: 'rent',
+                        amount: totalCredit,
+                        description: transaction.description || 'Accrual reversal',
+                        source: transaction.source,
+                        metadata: {
+                            ...transaction.metadata,
+                            isReversal: true,
+                            originalTransactionId: transaction.metadata?.originalTransactionId,
+                            originalAccrualId: transaction.metadata?.originalAccrualId
+                        },
+                        arEntry: {
+                            accountCode: arAccountCode,
+                            accountName: arEntries.find(e => e.credit > 0)?.accountName || `Accounts Receivable`,
+                            debit: 0,
+                            credit: totalCredit
+                        }
+                    };
+                }
+                return null;
+            }
             
             // 🆕 CRITICAL FIX: Handle advance_payment transactions specially
             // Advance payments have AR entries that cancel out (debit and credit)

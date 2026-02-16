@@ -908,6 +908,11 @@ exports.updateApplicationData = async (req, res) => {
 
         console.log('📝 Updating fields:', updateFields);
 
+        // Get original application to check if endDate is being moved earlier
+        const originalApplication = await Application.findById(applicationId);
+        const originalEndDate = originalApplication?.endDate;
+        const newEndDate = updateFields.endDate ? new Date(updateFields.endDate) : null;
+
         // Update the application
         const updatedApplication = await Application.findByIdAndUpdate(
             applicationId,
@@ -920,6 +925,36 @@ exports.updateApplicationData = async (req, res) => {
             studentName: `${updatedApplication.firstName} ${updatedApplication.lastName}`,
             email: updatedApplication.email
         });
+
+        // 🆕 CRITICAL: If end date was moved earlier, automatically reverse accruals for months after new end date
+        if (originalEndDate && newEndDate && newEndDate < new Date(originalEndDate)) {
+            console.log(`⚠️ Application end date moved earlier - automatically reversing accruals...`);
+            console.log(`   Original end date: ${originalEndDate.toISOString().split('T')[0]}`);
+            console.log(`   New end date: ${newEndDate.toISOString().split('T')[0]}`);
+            
+            try {
+                const AccrualCorrectionService = require('../../services/accrualCorrectionService');
+                const adminUser = req.user || { _id: req.user?._id, email: req.user?.email || 'system' };
+                
+                const correctionResult = await AccrualCorrectionService.correctAccrualsForEarlyLeaseEnd(
+                    applicationId,
+                    newEndDate,
+                    adminUser,
+                    `Application end date updated - student left early`,
+                    false // Don't update lease end date again (already updated)
+                );
+                
+                if (correctionResult.success) {
+                    console.log(`✅ Automatically reversed ${correctionResult.reversedCount || 0} accrual(s) for months after new end date`);
+                    console.log(`   Reversed transactions: ${correctionResult.reversedTransactions?.length || 0}`);
+                } else {
+                    console.error(`❌ Failed to automatically reverse accruals: ${correctionResult.error}`);
+                }
+            } catch (accrualError) {
+                console.error(`❌ Error automatically reversing accruals: ${accrualError.message}`);
+                // Don't throw - application update should still succeed even if accrual reversal fails
+            }
+        }
 
         res.json({
             success: true,

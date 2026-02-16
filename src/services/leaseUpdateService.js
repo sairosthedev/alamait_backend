@@ -68,6 +68,42 @@ class LeaseUpdateService {
                 console.log(`   Start: ${originalStartDate?.toISOString().split('T')[0]} → ${application.startDate.toISOString().split('T')[0]}`);
                 console.log(`   End: ${originalEndDate?.toISOString().split('T')[0]} → ${application.endDate.toISOString().split('T')[0]}`);
                 
+                // 🆕 CRITICAL: If end date was moved earlier, automatically reverse accruals for months after new end date
+                // Do this BEFORE updating debtor so we have the correct end date
+                if (originalEndDate && new Date(leaseUpdates.endDate) < new Date(originalEndDate)) {
+                    console.log(`⚠️ Application end date moved earlier - automatically reversing accruals...`);
+                    console.log(`   Original end date: ${originalEndDate.toISOString().split('T')[0]}`);
+                    console.log(`   New end date: ${leaseUpdates.endDate}`);
+                    
+                    try {
+                        const AccrualCorrectionService = require('./accrualCorrectionService');
+                        const User = require('../models/User');
+                        const adminUser = await User.findById(updatedBy).session(session).lean();
+                        
+                        if (adminUser) {
+                            const correctionResult = await AccrualCorrectionService.correctAccrualsForEarlyLeaseEnd(
+                                application._id.toString(),
+                                leaseUpdates.endDate,
+                                adminUser,
+                                `Lease end date updated - student left early`,
+                                false // Don't update lease end date again (already updated)
+                            );
+                            
+                            if (correctionResult.success) {
+                                console.log(`✅ Automatically reversed ${correctionResult.reversedCount || 0} accrual(s) for months after new lease end date`);
+                                console.log(`   Reversed transactions: ${correctionResult.reversedTransactions?.length || 0}`);
+                            } else {
+                                console.error(`❌ Failed to automatically reverse accruals: ${correctionResult.error}`);
+                            }
+                        } else {
+                            console.warn(`⚠️ Could not find admin user ${updatedBy} for accrual reversal`);
+                        }
+                    } catch (accrualError) {
+                        console.error(`❌ Error automatically reversing accruals: ${accrualError.message}`);
+                        // Don't throw - lease update should still succeed even if accrual reversal fails
+                    }
+                }
+                
                 // Find and update debtor record
                 const debtor = await Debtor.findOne({ user: studentId }).session(session);
                 
@@ -99,6 +135,41 @@ class LeaseUpdateService {
                     console.log(`   Start: ${originalDebtorStartDate?.toISOString().split('T')[0]} → ${debtor.leaseInfo.startDate.toISOString().split('T')[0]}`);
                     console.log(`   End: ${originalDebtorEndDate?.toISOString().split('T')[0]} → ${debtor.leaseInfo.endDate.toISOString().split('T')[0]}`);
                     console.log(`   Total Owed: $${originalTotalOwed} → $${debtor.totalOwed}`);
+                    
+                    // 🆕 CRITICAL: If end date was moved earlier, reverse accruals for months after new end date
+                    if (originalDebtorEndDate && new Date(leaseUpdates.endDate) < new Date(originalDebtorEndDate)) {
+                        console.log(`⚠️ Lease end date moved earlier - checking for accruals to reverse...`);
+                        console.log(`   Original end date: ${originalDebtorEndDate.toISOString().split('T')[0]}`);
+                        console.log(`   New end date: ${leaseUpdates.endDate}`);
+                        
+                        try {
+                            const AccrualCorrectionService = require('./accrualCorrectionService');
+                            const User = require('../models/User');
+                            const adminUser = await User.findById(updatedBy).lean();
+                            
+                            if (adminUser) {
+                                const correctionResult = await AccrualCorrectionService.correctAccrualsForEarlyLeaseEnd(
+                                    application._id.toString(),
+                                    leaseUpdates.endDate,
+                                    adminUser,
+                                    `Lease end date updated - student left early`,
+                                    false // Don't update lease end date again (already updated)
+                                );
+                                
+                                if (correctionResult.success) {
+                                    console.log(`✅ Reversed ${correctionResult.reversedCount || 0} accrual(s) for months after new lease end date`);
+                                    console.log(`   Reversed transactions: ${correctionResult.reversedTransactions?.length || 0}`);
+                                } else {
+                                    console.error(`❌ Failed to reverse accruals: ${correctionResult.error}`);
+                                }
+                            } else {
+                                console.warn(`⚠️ Could not find admin user ${updatedBy} for accrual reversal`);
+                            }
+                        } catch (accrualError) {
+                            console.error(`❌ Error reversing accruals: ${accrualError.message}`);
+                            // Don't throw - lease update should still succeed even if accrual reversal fails
+                        }
+                    }
                     
                     // TODO: Create audit log for debtor update
                     console.log(`📝 Audit: Debtor ${debtor.debtorCode} updated by user ${updatedBy}`);
