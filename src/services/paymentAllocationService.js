@@ -1042,14 +1042,27 @@ class PaymentAllocationService {
           status: 'pending'
         };
         
-        await Debtor.findOneAndUpdate(
-          { user: studentId },
-          { 
-            $inc: { 'deferredIncome.totalAmount': amount },
-            $push: { 'deferredIncome.prepayments': prepayment }
-          },
-          { upsert: false } // Don't create if doesn't exist
-        );
+        // Check if prepayment already exists to prevent duplicates
+        const debtor = await Debtor.findOne({ user: studentId });
+        if (debtor) {
+          const existingPrepayment = debtor.deferredIncome?.prepayments?.find(
+            p => p.paymentId?.toString() === paymentId.toString()
+          );
+          
+          if (existingPrepayment) {
+            console.log(`⚠️ Prepayment already exists for payment ${paymentId} - skipping duplicate`);
+            console.log(`   Existing prepayment: Amount $${existingPrepayment.amount}, Status: ${existingPrepayment.status}`);
+          } else {
+            await Debtor.findOneAndUpdate(
+              { user: studentId },
+              { 
+                $inc: { 'deferredIncome.totalAmount': amount },
+                $push: { 'deferredIncome.prepayments': prepayment }
+              },
+              { upsert: false } // Don't create if doesn't exist
+            );
+          }
+        }
         
         console.log(`✅ Updated debtor deferred income for student ${studentId}: +$${amount}`);
       } catch (debtorError) {

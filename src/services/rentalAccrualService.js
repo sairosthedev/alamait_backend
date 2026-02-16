@@ -1552,87 +1552,64 @@ class RentalAccrualService {
                             console.log(`      monthSettled: ${advancePayment.metadata?.monthSettled || 'null'}`);
                             console.log(`      Source: ${advancePayment.source}`);
                             
-                            // 🆕 CRITICAL: Create a transaction to apply deferred income to AR WITHOUT touching cash
-                            // Cash was already received when the advance payment was made
-                            // We just need to: DR Deferred Income (2200), CR AR (1100-studentId)
-                            const Transaction = require('../models/Transaction');
-                            const applyTransaction = new Transaction({
-                                transactionId: `TXN${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-                                date: transactionEntry.date, // Use accrual date
-                                description: `Apply advance payment to ${monthKey} accrual`,
-                                reference: advancePayment.transactionId,
-                                residence: student.residence,
-                                createdBy: '68b7909295210ad2fa2c5dcf',
-                                metadata: {
-                                    type: 'advance_payment_application',
-                                    originalAdvancePaymentId: advancePayment._id.toString(),
-                                    accrualId: transactionEntry._id.toString(),
-                                    monthSettled: monthKey
-                                }
-                            });
-                            await applyTransaction.save();
+                            // 🆕 CRITICAL: Add advance payment allocation directly to accrual transaction
+                            // Don't create a separate transaction - add entries to the accrual itself
+                            // This ensures the payment shows with the original payment date, not the accrual date
                             
-                            const applyTransactionEntry = new TransactionEntry({
-                                transactionId: applyTransaction.transactionId,
-                                date: transactionEntry.date,
-                                description: `Apply advance payment to ${monthKey} accrual`,
-                                reference: advancePayment.transactionId,
-                                entries: [
-                                    // DR Deferred Income (2200) - reduce the liability
-                                    {
-                                        accountCode: '2200',
-                                        accountName: 'Advance Payment Liability',
-                                        accountType: 'Liability',
-                                        debit: advanceAmount,
-                                        credit: 0,
-                                        description: `Advance payment applied to ${monthKey} accrual`
-                                    },
-                                    // CR Accounts Receivable (1100-studentId) - reduce the receivable
-                                    {
-                                        accountCode: accountsReceivable.code,
-                                        accountName: accountsReceivable.name,
-                                        accountType: accountsReceivable.type,
-                                        debit: 0,
-                                        credit: advanceAmount,
-                                        description: `Advance payment applied to ${monthKey} accrual`
-                                    }
-                                ],
-                                totalDebit: advanceAmount,
-                                totalCredit: advanceAmount,
-                                source: 'advance_payment_application',
-                                sourceId: advancePayment._id,
-                                sourceModel: 'TransactionEntry',
-                                residence: student.residence,
-                                createdBy: '68b7909295210ad2fa2c5dcf',
-                                status: 'posted',
-                                metadata: {
-                                    studentId: student.student.toString(),
-                                    studentName: `${student.firstName} ${student.lastName}`,
-                                    originalAdvancePaymentId: advancePayment._id.toString(),
-                                    accrualId: transactionEntry._id.toString(),
-                                    monthSettled: monthKey,
-                                    amount: advanceAmount
-                                }
-                            });
+                            // Check if allocation already exists in accrual
+                            const hasAllocation = transactionEntry.entries?.some(e => 
+                                e.accountCode === '2200' && e.debit > 0
+                            ) && transactionEntry.entries?.some(e => 
+                                e.accountCode === accountsReceivable.code && e.credit > 0
+                            );
                             
-                            // 🆕 Check if this advance payment was already applied to avoid duplicates
-                            const existingApplication = await TransactionEntry.findOne({
-                                source: 'advance_payment_application',
-                                'metadata.originalAdvancePaymentId': advancePayment._id.toString(),
-                                'metadata.accrualId': transactionEntry._id.toString(),
-                                status: 'posted'
-                            });
-                            
-                            if (existingApplication) {
-                                console.log(`   ⚠️ Advance payment ${advancePayment.transactionId} already applied - skipping duplicate application`);
-                                continue; // Skip to next advance payment
+                            if (hasAllocation) {
+                                console.log(`   ⚠️ Accrual already has advance payment allocation - skipping`);
+                                continue;
                             }
                             
-                            await applyTransactionEntry.save();
-                            applyTransaction.entries = [applyTransactionEntry._id];
-                            await applyTransaction.save();
+                            // Add deferred income debit entry
+                            transactionEntry.entries.push({
+                                accountCode: '2200',
+                                accountName: 'Advance Payment Liability',
+                                accountType: 'Liability',
+                                debit: advanceAmount,
+                                credit: 0,
+                                description: `Advance payment applied to ${monthKey} accrual`
+                            });
                             
-                            console.log(`   ✅ Created advance payment application transaction: ${applyTransactionEntry.transactionId}`);
+                            // Add AR credit entry
+                            transactionEntry.entries.push({
+                                accountCode: accountsReceivable.code,
+                                accountName: accountsReceivable.name,
+                                accountType: accountsReceivable.type,
+                                debit: 0,
+                                credit: advanceAmount,
+                                description: `Advance payment applied to ${monthKey} accrual`
+                            });
+                            
+                            // Update totals
+                            transactionEntry.totalDebit = transactionEntry.entries.reduce((sum, e) => sum + (e.debit || 0), 0);
+                            transactionEntry.totalCredit = transactionEntry.entries.reduce((sum, e) => sum + (e.credit || 0), 0);
+                            
+                            // Store payment date in metadata so ledger can use it
+                            if (!transactionEntry.metadata) {
+                                transactionEntry.metadata = {};
+                            }
+                            transactionEntry.metadata.advancePaymentApplied = true;
+                            transactionEntry.metadata.advancePaymentDate = new Date(advancePayment.date); // Store original payment date
+                            transactionEntry.metadata.advanceAmount = advanceAmount;
+                            transactionEntry.metadata.originalAdvancePaymentId = advancePayment._id.toString();
+                            
+                            // Mark metadata as modified
+                            transactionEntry.markModified('metadata');
+                            
+                            // Save the accrual transaction with the new allocation entries
+                            await transactionEntry.save();
+                            
+                            console.log(`   ✅ Added advance payment allocation directly to accrual transaction`);
+                            console.log(`   ✅ Stored payment date: ${new Date(advancePayment.date).toLocaleDateString()}`);
+                            console.log(`   ✅ Updated accrual totals: DR $${transactionEntry.totalDebit}, CR $${transactionEntry.totalCredit}`);
                             
                             // Update the advance payment metadata to mark it as allocated
                             if (!advancePayment.metadata) {

@@ -159,31 +159,55 @@ transactionEntrySchema.post('save', async function(doc) {
     
     // Process AR transactions (debtors)
     if (arEntries.length > 0) {
-      // Extract student ID from AR account code (1100-{studentId})
-      const studentIds = new Set();
+      const Debtor = require('./Debtor');
+      const debtorIds = new Set();
+      
+      // Extract account codes and find debtors
       arEntries.forEach(entry => {
         const accountCode = entry.accountCode;
-        if (accountCode.startsWith('1100-')) {
-          const studentId = accountCode.replace('1100-', '');
-          if (studentId) {
-            studentIds.add(studentId);
+        if (accountCode && accountCode.startsWith('1100-')) {
+          const idFromCode = accountCode.replace('1100-', '');
+          if (idFromCode) {
+            debtorIds.add(idFromCode);
           }
         }
       });
       
-      // Update each affected debtor using the real-time update method
-      for (const studentId of studentIds) {
+      // Also check metadata for debtorId
+      if (doc.metadata && doc.metadata.debtorId) {
+        debtorIds.add(doc.metadata.debtorId.toString());
+      }
+      
+      // Update each affected debtor
+      for (const idFromCode of debtorIds) {
         try {
-          // Use the new real-time update method
-          const result = await debtorService.updateDebtorFromARTransaction(studentId, doc);
+          // Try to find debtor by accountCode first (handles debtor ID format)
+          let debtor = await Debtor.findOne({ accountCode: `1100-${idFromCode}` });
           
-          if (result.success) {
-            console.log(`   ✅ Real-time debtor update successful for user ${studentId}`);
+          // If not found, try finding by user ID (handles legacy student ID format)
+          if (!debtor) {
+            debtor = await Debtor.findOne({ user: idFromCode });
+          }
+          
+          // If still not found, try finding by debtor _id
+          if (!debtor && mongoose.Types.ObjectId.isValid(idFromCode)) {
+            debtor = await Debtor.findById(idFromCode);
+          }
+          
+          if (debtor && debtor.user) {
+            // Use the new real-time update method with student ID
+            const result = await debtorService.updateDebtorFromARTransaction(debtor.user.toString(), doc);
+            
+            if (result.success) {
+              console.log(`   ✅ Real-time debtor update successful for debtor ${debtor.debtorCode}`);
+            } else {
+              console.log(`   ⚠️ Real-time debtor update failed for debtor ${debtor.debtorCode}: ${result.message}`);
+            }
           } else {
-            console.log(`   ⚠️ Real-time debtor update failed for user ${studentId}: ${result.message}`);
+            console.log(`   ⚠️ No debtor found for account code: 1100-${idFromCode}`);
           }
         } catch (error) {
-          console.error(`   ❌ Error in real-time debtor update for user ${studentId}:`, error.message);
+          console.error(`   ❌ Error in real-time debtor update for account 1100-${idFromCode}:`, error.message);
         }
       }
     }

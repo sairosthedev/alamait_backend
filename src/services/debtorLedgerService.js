@@ -96,38 +96,62 @@ class DebtorLedgerService {
             };
             
             // Process each transaction
-            transactions.forEach(transaction => {
-                const processedTransaction = this.processTransactionForLedger(transaction, arAccountCode);
+            for (const transaction of transactions) {
+                const processedTransaction = await this.processTransactionForLedger(transaction, arAccountCode);
                 if (processedTransaction) {
-                    ledgerData.transactions.push(processedTransaction);
+                    // Handle case where processTransactionForLedger returns an array (mixed transaction)
+                    const transactionsToProcess = Array.isArray(processedTransaction) ? processedTransaction : [processedTransaction];
                     
-                    // Add to monthly breakdown
-                    const monthKey = processedTransaction.monthKey;
-                    if (!ledgerData.monthlyBreakdown[monthKey]) {
-                        ledgerData.monthlyBreakdown[monthKey] = {
-                            month: monthKey,
-                            expected: 0,
-                            paid: 0,
-                            owing: 0,
-                            transactions: []
-                        };
-                    }
-                    
-                    ledgerData.monthlyBreakdown[monthKey].transactions.push(processedTransaction);
-                    
-                    if (processedTransaction.type === 'accrual') {
-                        ledgerData.monthlyBreakdown[monthKey].expected += processedTransaction.amount;
-                        ledgerData.totalExpected += processedTransaction.amount;
-                    } else if (processedTransaction.type === 'payment') {
-                        ledgerData.monthlyBreakdown[monthKey].paid += processedTransaction.amount;
-                        ledgerData.totalPaid += processedTransaction.amount;
-                    }
+                    transactionsToProcess.forEach(procTx => {
+                        ledgerData.transactions.push(procTx);
+                        
+                        // Add to monthly breakdown
+                        const monthKey = procTx.monthKey;
+                        if (!ledgerData.monthlyBreakdown[monthKey]) {
+                            ledgerData.monthlyBreakdown[monthKey] = {
+                                month: monthKey,
+                                expected: 0,
+                                paid: 0,
+                                owing: 0,
+                                transactions: []
+                            };
+                        }
+                        
+                        ledgerData.monthlyBreakdown[monthKey].transactions.push(procTx);
+                        
+                        if (procTx.type === 'accrual') {
+                            ledgerData.monthlyBreakdown[monthKey].expected += procTx.amount;
+                            ledgerData.totalExpected += procTx.amount;
+                        } else if (procTx.type === 'payment') {
+                            ledgerData.monthlyBreakdown[monthKey].paid += procTx.amount;
+                            ledgerData.totalPaid += procTx.amount;
+                        }
+                    });
                 }
-            });
+            }
             
-            // Calculate owing amounts
-            Object.values(ledgerData.monthlyBreakdown).forEach(month => {
-                month.owing = Math.max(month.expected - month.paid, 0);
+            // Calculate owing amounts with carry-forward logic
+            // If a month has no accrual but has payments, those payments reduce the next month's balance
+            const sortedMonths = Object.keys(ledgerData.monthlyBreakdown).sort();
+            let carryForwardCredit = 0; // Excess payments from months without accruals (negative = credit available)
+            
+            sortedMonths.forEach(monthKey => {
+                const month = ledgerData.monthlyBreakdown[monthKey];
+                
+                if (month.expected > 0) {
+                    // Month has an accrual - calculate owing considering carry-forward credit
+                    // carryForwardCredit is negative when we have credit, so subtract it (which adds it)
+                    month.owing = Math.max(month.expected - month.paid + carryForwardCredit, 0);
+                    // Update carry-forward: if payment + credit exceeds expected, carry forward the excess as credit
+                    carryForwardCredit = Math.min(carryForwardCredit + month.expected - month.paid, 0);
+                } else if (month.paid > 0) {
+                    // Month has no accrual but has payments - these create credit for future months
+                    month.owing = 0; // No accrual means nothing owed for this month
+                    carryForwardCredit = carryForwardCredit - month.paid; // Increase credit (more negative)
+                } else {
+                    // No accrual and no payment
+                    month.owing = 0;
+                }
             });
             
             ledgerData.totalOwing = Math.max(ledgerData.totalExpected - ledgerData.totalPaid, 0);
@@ -146,32 +170,120 @@ class DebtorLedgerService {
      * Process a single transaction for ledger computation
      * @param {Object} transaction - Transaction entry
      * @param {string} arAccountCode - AR account code to filter by
-     * @returns {Object|null} Processed transaction data
+     * @returns {Promise<Object|Array|null>} Processed transaction data
      */
-    static processTransactionForLedger(transaction, arAccountCode) {
+    static async processTransactionForLedger(transaction, arAccountCode) {
         try {
-            // Find the AR account entry in this transaction
-            const arEntry = transaction.entries.find(entry => entry.accountCode === arAccountCode);
-            if (!arEntry) {
+            // Find ALL AR account entries in this transaction (there may be multiple)
+            const arEntries = transaction.entries.filter(entry => entry.accountCode === arAccountCode);
+            if (arEntries.length === 0) {
                 return null;
             }
+            
+            // Sum all AR entries to get net effect
+            const totalDebit = arEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+            const totalCredit = arEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
+            const netAmount = totalDebit - totalCredit;
             
             const transactionDate = new Date(transaction.date);
             const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
             
-            // Determine transaction type and amount
-            let type = 'unknown';
-            let amount = 0;
             let description = transaction.description || 'Transaction';
             
-            if (arEntry.debit > 0) {
-                // Debit to AR = Accrual (student owes money)
+            // Check if this is a mixed transaction (has both debit and credit)
+            // For mixed transactions, return both entries separately so ledger shows both accrual and payment
+            if (totalDebit > 0 && totalCredit > 0) {
+                // Try to find the original advance payment transaction to get the payment date
+                let advancePaymentDate = transaction.date; // Default to accrual date
+                let advancePaymentMonthKey = monthKey; // Default to accrual month
+                
+                // Look for advance payment transaction in metadata or by finding the original payment
+                if (transaction.metadata?.advancePaymentDate) {
+                    advancePaymentDate = new Date(transaction.metadata.advancePaymentDate);
+                    const paymentDate = new Date(advancePaymentDate);
+                    advancePaymentMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
+                } else {
+                    // Try to find the advance payment transaction by looking for deferred income entries
+                    // and matching by amount and student
+                    try {
+                        const TransactionEntry = require('../models/TransactionEntry');
+                        const advancePayment = await TransactionEntry.findOne({
+                            source: 'advance_payment',
+                            'metadata.debtorId': transaction.metadata?.debtorId || transaction.metadata?.studentId,
+                            'entries.accountCode': '2200',
+                            'entries.credit': totalCredit,
+                            status: { $ne: 'reversed' }
+                        })
+                        .sort({ date: 1 })
+                        .lean();
+                        
+                        if (advancePayment) {
+                            advancePaymentDate = new Date(advancePayment.date);
+                            const paymentDate = new Date(advancePaymentDate);
+                            advancePaymentMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
+                        }
+                    } catch (lookupError) {
+                        // If lookup fails, use accrual date
+                        console.log(`⚠️ Could not find advance payment transaction: ${lookupError.message}`);
+                    }
+                }
+                
+                // Mixed transaction - has both accrual and payment
+                // Return both as separate entries so ledger shows both accrual and payment
+                return [
+                    {
+                        transactionId: transaction.transactionId,
+                        date: transaction.date,
+                        monthKey,
+                        type: 'accrual',
+                        category: 'rent',
+                        amount: totalDebit,
+                        description: description,
+                        source: transaction.source,
+                        metadata: transaction.metadata,
+                        arEntry: {
+                            accountCode: arAccountCode,
+                            accountName: arEntries[0]?.accountName || `Accounts Receivable`,
+                            debit: totalDebit,
+                            credit: 0
+                        }
+                    },
+                    {
+                        transactionId: transaction.transactionId,
+                        date: advancePaymentDate, // Use original payment date, not accrual date
+                        monthKey: advancePaymentMonthKey, // Use payment month for proper sorting
+                        type: 'payment',
+                        category: 'rent',
+                        amount: totalCredit,
+                        description: description + ' (advance payment applied)',
+                        source: transaction.source,
+                        metadata: {
+                            ...transaction.metadata,
+                            originalPaymentDate: advancePaymentDate,
+                            isAdvancePaymentAllocation: true
+                        },
+                        arEntry: {
+                            accountCode: arAccountCode,
+                            accountName: arEntries[0]?.accountName || `Accounts Receivable`,
+                            debit: 0,
+                            credit: totalCredit
+                        }
+                    }
+                ];
+            }
+            
+            // Determine transaction type and amount for single-type transactions
+            let type = 'unknown';
+            let amount = 0;
+            
+            if (netAmount > 0) {
+                // Net debit to AR = Accrual (student owes money)
                 type = 'accrual';
-                amount = arEntry.debit;
-            } else if (arEntry.credit > 0) {
-                // Credit to AR = Payment (student paid money)
+                amount = netAmount;
+            } else if (netAmount < 0) {
+                // Net credit to AR = Payment (student paid money)
                 type = 'payment';
-                amount = arEntry.credit;
+                amount = Math.abs(netAmount);
             }
             
             // Determine what type of accrual/payment this is
@@ -205,10 +317,10 @@ class DebtorLedgerService {
                 source: transaction.source,
                 metadata: transaction.metadata,
                 arEntry: {
-                    accountCode: arEntry.accountCode,
-                    accountName: arEntry.accountName,
-                    debit: arEntry.debit,
-                    credit: arEntry.credit
+                    accountCode: arAccountCode,
+                    accountName: arEntries[0]?.accountName || `Accounts Receivable`,
+                    debit: totalDebit,
+                    credit: totalCredit
                 }
             };
             

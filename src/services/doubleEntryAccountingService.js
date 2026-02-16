@@ -3763,10 +3763,20 @@ class DoubleEntryAccountingService {
             // Create transaction entries
             const entries = [];
 
+            // Get debtor to use correct AR account code (Debtor ID format, not User ID)
+            const Debtor = require('../models/Debtor');
+            const studentObjectId = mongoose.Types.ObjectId.isValid(studentIdStr) 
+                ? new mongoose.Types.ObjectId(studentIdStr) 
+                : studentIdStr;
+            const debtor = await Debtor.findOne({ user: studentObjectId }).lean();
+            const arAccountCode = debtor?.accountCode || `1100-${debtor?._id?.toString() || studentIdStr}`;
+
             if (isAdvancePayment && deferredIncomeAccount) {
-                // Refund of advance payment - reverse deferred income
+                // Refund of advance payment - reverse deferred income and affect AR
                 console.log(`   📊 Creating advance payment refund entries:`);
                 console.log(`      DR Deferred Income (${deferredIncomeAccount}) - $${amount}`);
+                console.log(`      DR AR (${arAccountCode}) - $${amount} (to reverse allocation)`);
+                console.log(`      CR Deferred Income (${deferredIncomeAccount}) - $${amount} (to reverse allocation)`);
                 console.log(`      CR Cash/Bank (${refundAccountCode}) - $${amount}`);
 
                 // Entry 1: Debit Deferred Income (reduces liability)
@@ -3779,7 +3789,27 @@ class DoubleEntryAccountingService {
                     description: `Refund of advance payment to ${studentName} - ${reason || 'Cancelled lease'}`
                 });
 
-                // Entry 2: Credit Cash/Bank (reduces cash)
+                // Entry 2: Debit AR (to reverse the AR credit from allocation - increases what they owe)
+                entries.push({
+                    accountCode: arAccountCode,
+                    accountName: `Accounts Receivable - ${studentName}`,
+                    accountType: 'Asset',
+                    debit: amount,
+                    credit: 0,
+                    description: `Refund of advance payment to ${studentName} - ${reason || 'Cancelled lease'}`
+                });
+
+                // Entry 3: Credit Deferred Income (to reverse the deferred income debit from allocation)
+                entries.push({
+                    accountCode: deferredIncomeAccount,
+                    accountName: 'Advance Payments Liability',
+                    accountType: 'Liability',
+                    debit: 0,
+                    credit: amount,
+                    description: `Reverse deferred income allocation for refund to ${studentName}`
+                });
+
+                // Entry 4: Credit Cash/Bank (reduces cash)
                 entries.push({
                     accountCode: refundAccountCode,
                     accountName: this.getPaymentAccountName(method),
@@ -3789,16 +3819,14 @@ class DoubleEntryAccountingService {
                     description: `Refund payment to ${studentName} via ${method} - ${reason || 'Cancelled lease'}`
                 });
             } else {
-                // Regular refund - reverse accounts receivable or income
+                // Regular refund - reverse accounts receivable
                 console.log(`   📊 Creating regular refund entries:`);
-                console.log(`      DR Accounts Receivable/Income - $${amount}`);
+                console.log(`      DR AR (${arAccountCode}) - $${amount}`);
                 console.log(`      CR Cash/Bank (${refundAccountCode}) - $${amount}`);
-
-                const studentARCode = `1100-${studentIdStr}`;
                 
-                // Entry 1: Debit Accounts Receivable (if payment settled AR) or Income
+                // Entry 1: Debit Accounts Receivable (increases what they owe)
                 entries.push({
-                    accountCode: studentARCode,
+                    accountCode: arAccountCode,
                     accountName: `Accounts Receivable - ${studentName}`,
                     accountType: 'Asset',
                     debit: amount,

@@ -1874,6 +1874,17 @@ class EnhancedPaymentAllocationService {
         return; // Don't throw, just log and return
       }
       
+      // Check if prepayment already exists to prevent duplicates
+      const existingPrepayment = debtor.deferredIncome?.prepayments?.find(
+        p => p.paymentId?.toString() === paymentIdStr
+      );
+      
+      if (existingPrepayment) {
+        console.log(`⚠️ Prepayment already exists for payment ${paymentIdStr} - skipping duplicate`);
+        console.log(`   Existing prepayment: Amount $${existingPrepayment.amount}, Status: ${existingPrepayment.status}`);
+        return; // Don't add duplicate
+      }
+      
       // Update debtor: increment deferred income AND totalPaid
       // This ensures the advance payment shows in the debtor account even though there's no debt
       const updateResult = await Debtor.findOneAndUpdate(

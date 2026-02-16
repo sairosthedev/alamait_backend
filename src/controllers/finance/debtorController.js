@@ -458,6 +458,18 @@ exports.getDebtorById = async (req, res) => {
                         }
                     }
                 }
+                
+                // 🆕 CRITICAL: Always override debtor totals with ledger totals in response
+                // This ensures the API always returns ledger-based totals, regardless of debtor record state
+                if (transactionBasedTotals) {
+                    debtor.totalOwed = transactionBasedTotals.totalExpected || 0;
+                    debtor.totalPaid = transactionBasedTotals.totalPaid || 0;
+                    debtor.currentBalance = transactionBasedTotals.totalOwing || 0;
+                    debtor.overdueAmount = Math.max(0, transactionBasedTotals.totalOwing || 0);
+                    
+                    console.log(`✅ Overriding debtor totals in response with ledger values:`);
+                    console.log(`   totalOwed: $${debtor.totalOwed}, totalPaid: $${debtor.totalPaid}, currentBalance: $${debtor.currentBalance}`);
+                }
             } else {
                 console.log(`⚠️ No student ID found for debtor ${id}`);
             }
@@ -1949,6 +1961,29 @@ exports.getDebtorDetails = async (req, res) => {
     const studentId = debtor.user.toString();
     const monthsBreakdown = await DebtorTransactionSyncService.getDetailedMonthsBreakdown(studentId);
     
+    // 🆕 CRITICAL: Get ledger totals and sync debtor record
+    let ledgerTotals = null;
+    try {
+        const DebtorLedgerService = require('../../services/debtorLedgerService');
+        const ledgerData = await DebtorLedgerService.getDebtorLedger(debtorId, studentId);
+        ledgerTotals = {
+            totalExpected: ledgerData.totalExpected || 0,
+            totalPaid: ledgerData.totalPaid || 0,
+            totalOwing: ledgerData.totalOwing || 0
+        };
+        
+        // Sync debtor totals with ledger
+        const syncResult = await DebtorTransactionSyncService.recalculateDebtorTotalsFromTransactionEntries(
+            debtor,
+            studentId
+        );
+        await debtor.save();
+        
+        console.log(`✅ Synced debtor totals from ledger: Owed=$${syncResult.totalOwed}, Paid=$${syncResult.totalPaid}, Balance=$${syncResult.currentBalance}`);
+    } catch (ledgerError) {
+        console.log('⚠️ Could not get ledger totals:', ledgerError.message);
+    }
+    
     // Get payments and transactions
     const payments = await Payment.find({ student: studentId }).sort({ date: -1 });
     
@@ -1977,11 +2012,22 @@ exports.getDebtorDetails = async (req, res) => {
     // Get allocation data for transaction history
     const allocationData = debtor.allocation || {};
     
+    // Prepare debtor object with ledger totals overridden
+    const debtorObject = debtor.toObject();
+    
+    // 🆕 CRITICAL: Always override totals with ledger values
+    if (ledgerTotals) {
+        debtorObject.totalOwed = ledgerTotals.totalExpected;
+        debtorObject.totalPaid = ledgerTotals.totalPaid;
+        debtorObject.currentBalance = ledgerTotals.totalOwing;
+        debtorObject.overdueAmount = Math.max(0, ledgerTotals.totalOwing);
+    }
+    
     // Prepare response with enhanced months tracking
     const response = {
       success: true,
       debtor: {
-        ...debtor.toObject(),
+        ...debtorObject,
         // Include enhanced months tracking data
         monthsAccrued: debtor.monthsAccrued || [],
         monthsPaid: debtor.monthsPaid || [],

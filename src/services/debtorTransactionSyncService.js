@@ -12,9 +12,10 @@ class DebtorTransactionSyncService {
         try {
             console.log(`🔄 Recalculating totals from transaction entries for debtor: ${debtor.debtorCode}`);
             
-            // Get all transaction entries for this debtor's account
+            // Get all transaction entries for this debtor's account (exclude reversed)
             const transactionEntries = await TransactionEntry.find({
-                'entries.accountCode': debtor.accountCode
+                'entries.accountCode': debtor.accountCode,
+                status: { $ne: 'reversed' }
             }).sort({ date: 1 });
             
             let totalOwed = 0;
@@ -28,6 +29,12 @@ class DebtorTransactionSyncService {
                         if (transaction.source === 'rental_accrual') {
                             // This is expected amount (accrual) - increases total owed
                             totalOwed += entry.debit || 0;
+                            // 🆕 CRITICAL: Also count AR credits in accrual transactions as payments
+                            // This handles advance payment allocations that are integrated into accrual transactions
+                            if (entry.credit > 0) {
+                                totalPaid += entry.credit;
+                                console.log(`   💳 Advance payment allocation in accrual: +$${entry.credit} to totalPaid`);
+                            }
                         } else if (transaction.source === 'payment') {
                             // This is payment received - increases total paid
                             totalPaid += entry.credit || 0;
