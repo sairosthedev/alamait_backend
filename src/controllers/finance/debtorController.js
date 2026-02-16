@@ -287,12 +287,27 @@ exports.getDebtorById = async (req, res) => {
         // First get the debtor without population to preserve the original user ObjectId
         const debtorRaw = await Debtor.findById(id).lean();
         
+        // 🆕 CRITICAL FIX: If user is null, try to fix it from application
+        if (!debtorRaw.user && debtorRaw.application) {
+            console.log(`⚠️ Debtor ${id} has null user field, attempting to fix from application...`);
+            const Application = require('../../models/Application');
+            const application = await Application.findById(debtorRaw.application).lean();
+            if (application && application.student) {
+                console.log(`   Found student ID in application: ${application.student}`);
+                // Update debtor to link to user
+                await Debtor.findByIdAndUpdate(id, { user: application.student });
+                console.log(`   ✅ Updated debtor to link to user ${application.student}`);
+                // Reload debtorRaw with updated user
+                Object.assign(debtorRaw, await Debtor.findById(id).lean());
+            }
+        }
+        
         // Optimize: Use lean() and select only needed fields
         const debtor = await Debtor.findById(id)
             .select('user residence application payments createdBy updatedBy accountCode debtorCode status currentBalance')
             .populate('user', 'firstName lastName email phone')
             .populate('residence', 'name address roomPrice')
-            .populate('application', 'startDate endDate roomNumber status')
+            .populate('application', 'startDate endDate roomNumber status student')
             .populate('payments', 'date amount rentAmount adminFee deposit status')
             .populate('createdBy', 'firstName lastName email')
             .populate('updatedBy', 'firstName lastName email')
@@ -303,6 +318,17 @@ exports.getDebtorById = async (req, res) => {
                 success: false,
                 message: 'Debtor not found'
             });
+        }
+        
+        // 🆕 CRITICAL FIX: If user is still null after population, try to get it from application
+        if (!debtor.user && debtor.application && debtor.application.student) {
+            console.log(`⚠️ Debtor ${id} user is null after population, using application.student...`);
+            const User = require('../../models/User');
+            const user = await User.findById(debtor.application.student).select('firstName lastName email phone').lean();
+            if (user) {
+                debtor.user = user;
+                console.log(`   ✅ Set user from application: ${user.firstName} ${user.lastName}`);
+            }
         }
 
         // Get recent transactions
@@ -375,11 +401,24 @@ exports.getDebtorById = async (req, res) => {
             console.log(`✅ DebtorLedgerService loaded successfully`);
             
             // Get student ID for ledger calculation
+            // 🆕 CRITICAL FIX: Try multiple sources for student ID
             let studentId = null;
             if (debtor.user && debtor.user._id) {
                 studentId = debtor.user._id.toString();
             } else if (debtorRaw.user && typeof debtorRaw.user === 'object' && debtorRaw.user.toString) {
                 studentId = debtorRaw.user.toString();
+            } else if (debtor.application && debtor.application.student) {
+                // Fallback to application.student if user is null
+                studentId = debtor.application.student.toString();
+                console.log(`   ⚠️ Using student ID from application: ${studentId}`);
+            } else if (debtorRaw.application) {
+                // Try to get student from application directly
+                const Application = require('../../models/Application');
+                const application = await Application.findById(debtorRaw.application).select('student').lean();
+                if (application && application.student) {
+                    studentId = application.student.toString();
+                    console.log(`   ⚠️ Using student ID from application (direct query): ${studentId}`);
+                }
             }
             
             console.log(`🔍 Student ID for ledger calculation: ${studentId}`);

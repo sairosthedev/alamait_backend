@@ -32,9 +32,78 @@ const getStudentARBalances = async (req, res) => {
 
         console.log(`🔍 Getting AR balances for user: ${studentId}`);
 
+        // 🆕 CRITICAL FIX: Find debtor first - handle user ID, application ID, or debtor ID
+        const Debtor = require('../../models/Debtor');
+        const Application = require('../../models/Application');
+        const mongoose = require('mongoose');
+        let actualUserId = studentId;
+        let debtor = null;
+        
+        // 🆕 CRITICAL: First check if the provided ID is a debtor ID (from account code)
+        // Account codes are in format 1100-{debtorId}, so if someone provides the debtor ID directly, use it
+        if (mongoose.Types.ObjectId.isValid(studentId)) {
+            debtor = await Debtor.findById(studentId).select('accountCode _id user debtorCode application').lean();
+            if (debtor) {
+                console.log(`✅ Found debtor by debtor ID: ${debtor.debtorCode}`);
+                console.log(`   Account Code: ${debtor.accountCode} (format: 1100-{debtorId})`);
+                actualUserId = debtor.user?.toString() || studentId;
+            }
+        }
+        
+        // If not found by debtor ID, check if it's an application ID
+        if (!debtor) {
+            const application = await Application.findById(studentId).select('student').lean();
+            if (application && application.student) {
+                actualUserId = application.student.toString();
+                console.log(`📋 Provided ID is an Application ID, using student ID: ${actualUserId}`);
+                
+                // Find debtor by user ID
+                debtor = await Debtor.findOne({ user: actualUserId }).select('accountCode _id user debtorCode application').lean();
+                
+                // Also try finding by application ID
+                if (!debtor) {
+                    debtor = await Debtor.findOne({ application: studentId }).select('accountCode _id user debtorCode application').lean();
+                }
+            } else {
+                // Try finding by user ID directly
+                debtor = await Debtor.findOne({ user: studentId }).select('accountCode _id user debtorCode application').lean();
+            }
+        }
+        
+        // Try fuzzy matching as last resort
+        if (!debtor) {
+            const allDebtors = await Debtor.find({}).select('accountCode _id user debtorCode application').lean();
+            for (const d of allDebtors) {
+                if (d.user && d.user.toString() === actualUserId) {
+                    debtor = d;
+                    break;
+                }
+                if (d.application && d.application.toString() === studentId) {
+                    debtor = d;
+                    break;
+                }
+            }
+        }
+        
+        if (debtor) {
+            console.log(`✅ Found debtor: ${debtor.debtorCode}`);
+            console.log(`   Account Code: ${debtor.accountCode} (format: 1100-{debtorId})`);
+            console.log(`   Debtor ID: ${debtor._id}`);
+            console.log(`   User ID: ${debtor.user}`);
+            console.log(`   Using debtor account code for AR balance queries`);
+            
+            // 🆕 CRITICAL: Use the actual user ID from debtor for queries
+            actualUserId = debtor.user.toString();
+        } else {
+            console.warn(`⚠️ No debtor found for student ${studentId} (actualUserId: ${actualUserId})`);
+            console.warn(`   Will attempt to find via transactions or create debtor`);
+        }
+
         // Get user's AR balances using the enhanced service
         // Force fresh data fetch - no caching
-        const arBalances = await EnhancedPaymentAllocationService.getDetailedOutstandingBalances(studentId);
+        // The service will use debtor.accountCode (1100-{debtorId}) to find accruals
+        // Use actualUserId (from debtor if found, otherwise original studentId)
+        const arBalances = await EnhancedPaymentAllocationService.getDetailedOutstandingBalances(actualUserId);
         
         console.log(`📊 AR Balances result:`, {
             found: arBalances ? arBalances.length : 0,
@@ -43,11 +112,21 @@ const getStudentARBalances = async (req, res) => {
         });
 
         if (!arBalances || arBalances.length === 0) {
+            // 🆕 Include debtor info in response even if no balances found
+            const debtorInfo = debtor ? {
+                debtorId: debtor._id.toString(),
+                debtorCode: debtor.debtorCode,
+                accountCode: debtor.accountCode,
+                userId: debtor.user?.toString()
+            } : null;
+            
             return res.status(200).json({
                 success: true,
                 message: 'No outstanding balances found for this student',
                 data: {
                     studentId,
+                    actualUserId: actualUserId !== studentId ? actualUserId : undefined,
+                    debtor: debtorInfo,
                     totalBalance: 0,
                     monthlyBalances: [],
                     summary: {
@@ -62,6 +141,21 @@ const getStudentARBalances = async (req, res) => {
         // Calculate total balance from enhanced service format
         const totalBalance = arBalances.reduce((sum, item) => sum + item.totalOutstanding, 0);
 
+        // 🆕 CRITICAL FIX: Get debtor account code (use debtor ID format, not student ID)
+        // Use the debtor we already found, or try to find it again
+        const finalDebtor = debtor || await Debtor.findOne({ user: actualUserId }).select('accountCode _id debtorCode').lean();
+        const debtorAccountCode = finalDebtor?.accountCode || `1100-${actualUserId}`;
+        const debtorId = finalDebtor?._id?.toString() || null;
+        
+        console.log(`📊 Using debtor account code in response: ${debtorAccountCode}`);
+        if (debtorId) {
+            console.log(`   Debtor ID: ${debtorId}`);
+            console.log(`   Account Code Format: 1100-{debtorId} (correct)`);
+            console.log(`   This matches accrual account codes`);
+        } else {
+            console.warn(`⚠️ No debtor found - using fallback account code format`);
+        }
+
         // Convert enhanced service format to API response format
         const monthlyBalances = arBalances.map(item => ({
             monthKey: item.monthKey,
@@ -73,8 +167,9 @@ const getStudentARBalances = async (req, res) => {
             paidAmount: item.rent.paid + item.adminFee.paid + item.deposit.paid,
             transactionId: item.transactionId,
             date: item.date,
-            accountCode: `1100-${studentId}`,
-            accountName: `Accounts Receivable - Student`,
+            accountCode: debtorAccountCode, // 🆕 CRITICAL: Use debtor account code (1100-{debtorId})
+            accountName: `Accounts Receivable - ${finalDebtor?.debtorCode || 'Student'}`,
+            debtorId: debtorId, // Include debtor ID in response
             source: item.source,
             metadata: item.metadata
         }));

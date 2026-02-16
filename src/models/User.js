@@ -197,14 +197,52 @@ userSchema.pre('save', async function(next) {
 // Pre-save middleware removed - no more auto-creation of StudentAccount or TenantAccount
 // We now use the Debtor system for students, created only when applications are approved
 
-// Post-save middleware to create debtor account for students
-// REMOVED: Auto-creation of debtor - now only created when application is approved
-// This ensures proper linking between application → debtor → residence → room
-
-// 🆕 NEW: Auto-link user to existing applications when user is created
+// 🆕 CRITICAL FIX: Post-save middleware to ensure ALL students have debtor accounts
+// This ensures payments, accruals, and refunds can always find the debtor account
 userSchema.post('save', async function(doc) {
     console.log('🔍 POST-SAVE MIDDLEWARE EXECUTING for:', this.firstName, this.lastName);
     try {
+        // 🆕 CRITICAL: Ensure ALL students have debtor accounts (not just when applications are approved)
+        if (this.role === 'student' && this.isNew) {
+            console.log(`🏗️  New student created - ensuring debtor account exists...`);
+            
+            try {
+                const Debtor = require('./Debtor');
+                const existingDebtor = await Debtor.findOne({ user: this._id });
+                
+                if (!existingDebtor) {
+                    console.log(`   ⚠️  No debtor account found for new student, creating one...`);
+                    
+                    const { createDebtorForStudent } = require('../services/debtorService');
+                    
+                    // Create debtor account with minimal information (can be updated later when application is approved)
+                    const debtor = await createDebtorForStudent(this, {
+                        createdBy: this._id,
+                        residenceId: this.residence || null,
+                        roomNumber: null, // Will be set when application is approved
+                        startDate: null,  // Will be set when application is approved
+                        endDate: null,    // Will be set when application is approved
+                        roomPrice: 0,     // Will be set when application is approved
+                        notes: 'Debtor account created automatically when student account was created'
+                    });
+                    
+                    if (debtor) {
+                        console.log(`   ✅ Debtor account created automatically: ${debtor.debtorCode}`);
+                        console.log(`      Account Code: ${debtor.accountCode}`);
+                        console.log(`      This ensures payments, accruals, and refunds can be processed`);
+                    }
+                } else {
+                    console.log(`   ✅ Debtor account already exists: ${existingDebtor.debtorCode}`);
+                }
+            } catch (debtorError) {
+                console.error(`   ❌ Error creating debtor account for new student:`, debtorError.message);
+                console.error(`      Student account was created, but debtor creation failed`);
+                console.error(`      Manual intervention may be needed to create debtor account`);
+                // Don't throw - student account was created successfully
+            }
+        }
+        
+        // Auto-link user to existing applications when user is created
         // Run this for newly created users OR when application code exists
         console.log(`🔍 Checking middleware conditions:`);
         console.log(`   isNew: ${this.isNew}`);

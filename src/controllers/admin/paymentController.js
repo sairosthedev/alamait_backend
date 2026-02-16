@@ -823,6 +823,11 @@ const createPayment = async (req, res) => {
         }
 
         // 🎯 Use Smart FIFO allocation service for proper payment allocation
+        // 🆕 CRITICAL: Ensure debtor exists before allocation
+        if (!debtor) {
+            console.warn('⚠️ No debtor found - allocation may fail, but post-save hook will create fallback transaction');
+        }
+        
         try {
             const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
             
@@ -834,6 +839,7 @@ const createPayment = async (req, res) => {
             console.log(`   Amount: $${payment.totalAmount}`);
             console.log(`   Method: ${payment.method}`);
             console.log(`   Date: ${payment.date}`);
+            console.log(`   Debtor: ${debtor ? debtor.debtorCode : 'Not found - will be created if needed'}`);
             
             // Prepare data for Smart FIFO allocation
             // Ensure each payment component has a paid date; default to top-level payment.date
@@ -844,7 +850,7 @@ const createPayment = async (req, res) => {
 
             const allocationData = {
                 paymentId: payment._id.toString(),
-                studentId: payment.student,
+                studentId: payment.student || payment.user,
                 totalAmount: payment.totalAmount,
                 payments: normalizedPayments,
                 residence: payment.residence,
@@ -862,25 +868,30 @@ const createPayment = async (req, res) => {
                 console.log('✅ Smart FIFO allocation completed successfully');
                 console.log('📊 Allocation summary:', allocationResult.allocation.summary);
                 
+                // 🆕 CRITICAL FIX: Only set flag AFTER successful allocation
+                // This prevents the post-save hook from skipping fallback if allocation fails
+                payment.metadata = payment.metadata || {};
+                payment.metadata.smartFIFOAllocationCalled = true;
+                payment.metadata.smartFIFOAllocationCalledAt = new Date();
+                
                 // Update payment with allocation results
                 payment.allocation = allocationResult.allocation;
                 await payment.save();
                 
                 console.log('✅ Payment updated with allocation breakdown');
+                console.log(`   ✅ Flagged payment to prevent duplicate transaction creation`);
             } else {
                 console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
                 console.error('   This payment may not have a transaction entry');
                 console.error('   The Payment post-save hook will create a fallback transaction if needed');
-                // Don't fail payment creation, but log the allocation error
-                // The Payment model's post-save hook will create a fallback transaction
+                // Don't set flag if allocation failed - let hook create fallback
             }
         } catch (allocationError) {
             console.error('❌ Error in Smart FIFO allocation:', allocationError);
             console.error('   Error details:', allocationError.message);
             console.error('   Stack trace:', allocationError.stack);
             console.error('   The Payment post-save hook will create a fallback transaction if needed');
-            // Don't fail the payment creation, but log the allocation error
-            // The Payment model's post-save hook will create a fallback transaction
+            // Don't set flag if allocation errored - let hook create fallback
         }
         
         // 🆕 CRITICAL FIX: Verify transaction was created, create fallback if needed
@@ -1397,16 +1408,37 @@ const createPayment = async (req, res) => {
             .populate('student', 'firstName lastName email')
             .populate('residence', 'name');
 
-        // Include accounting information in response
+        // 🆕 CRITICAL FIX: Actually verify if transaction was created before claiming it was
+        const TransactionEntry = require('../../models/TransactionEntry');
+        const existingTx = await TransactionEntry.findOne({
+            $or: [
+                { sourceId: payment._id },
+                { 'metadata.paymentId': payment._id.toString() },
+                { reference: payment._id.toString() },
+                { 'metadata.paymentId': payment.paymentId }
+            ],
+            source: { $in: ['payment', 'advance_payment'] },
+            status: { $ne: 'reversed' }
+        });
+
+        // Include accounting information in response (reflect actual state)
         const response = {
             success: true,
             message: 'Payment created successfully with double-entry accounting',
             payment: populatedPayment,
             accounting: {
-                transactionCreated: true,
-                message: 'Double-entry accounting transaction created'
+                transactionCreated: !!existingTx,
+                transactionId: existingTx?.transactionId || null,
+                message: existingTx 
+                    ? 'Double-entry accounting transaction created'
+                    : 'Transaction will be created by post-save hook if needed'
             }
         };
+
+        if (!existingTx) {
+            console.warn(`⚠️ Payment ${payment.paymentId} created but no transaction found yet`);
+            console.warn(`   Post-save hook will create fallback transaction if smartFIFOAllocation didn't create one`);
+        }
 
         res.status(201).json(response);
     } catch (error) {

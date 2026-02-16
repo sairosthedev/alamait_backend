@@ -579,7 +579,49 @@ class EnhancedPaymentAllocationService {
       
       // Resolve debtor to get exact AR account code - use User ID consistently
       const Debtor = require('../models/Debtor');
-      let debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode _id');
+      let debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode _id user');
+      
+      // 🆕 CRITICAL FIX: If not found by exact match, try fuzzy matching for common ID typos
+      if (!debtorDoc) {
+        console.log(`⚠️ Debtor not found by exact user ID match, trying fuzzy match...`);
+        
+        // Try finding debtors with similar user IDs using similarity percentage
+        const allDebtors = await Debtor.find({}).select('accountCode _id user debtorCode').lean();
+        let bestMatch = null;
+        let bestSimilarity = 0;
+        
+        for (const d of allDebtors) {
+          if (d.user) {
+            const dUserId = d.user.toString();
+            // Check if IDs are same length
+            if (dUserId.length === userIdString.length) {
+              // Calculate similarity percentage
+              let matches = 0;
+              for (let i = 0; i < dUserId.length; i++) {
+                if (dUserId[i] === userIdString[i]) matches++;
+              }
+              const similarity = matches / dUserId.length;
+              
+              // If similarity is high enough (90%+), consider it a match
+              if (similarity > 0.9 && similarity > bestSimilarity) {
+                bestMatch = d;
+                bestSimilarity = similarity;
+              }
+            }
+          }
+        }
+        
+        if (bestMatch) {
+          console.log(`✅ Found debtor via fuzzy user ID match (${(bestSimilarity * 100).toFixed(1)}% similar):`);
+          console.log(`   Query ID: ${userIdString}`);
+          console.log(`   Debtor User ID: ${bestMatch.user.toString()}`);
+          console.log(`   Debtor Code: ${bestMatch.debtorCode || bestMatch._id}`);
+          console.log(`   Account Code: ${bestMatch.accountCode}`);
+          debtorDoc = bestMatch;
+        } else {
+          console.log(`⚠️ No debtor found via fuzzy matching (tried ${allDebtors.length} debtors)`);
+        }
+      }
       
       // 🆕 CRITICAL: If debtor not found by user ID, try to find by transactions' sourceId or metadata.debtorId
       if (!debtorDoc) {
@@ -605,33 +647,62 @@ class EnhancedPaymentAllocationService {
         }
         
         // 2b. If still not found, try to find transactions with AR account codes and extract debtor IDs
-        // Then check if any of those debtors have a user that matches (allowing for slight ID mismatches)
+        // Then check if any of those debtors have a user that matches (with similarity matching)
         if (!sampleTx) {
           // Find transactions with AR account codes (debtor ID format: 1100-{debtorId})
           const arTransactions = await TransactionEntry.find({
             'entries.accountCode': { $regex: /^1100-[a-f0-9]{24}$/i },
-            sourceModel: 'Debtor'
+            source: 'rental_accrual',
+            status: { $ne: 'reversed' }
           })
-          .select('sourceId metadata.debtorId entries.accountCode')
-          .limit(50)
+          .select('sourceId metadata.debtorId entries.accountCode description')
+          .limit(100)
           .lean();
           
-          // Check each transaction's debtor to see if user matches (with fuzzy matching)
+          console.log(`🔍 Checking ${arTransactions.length} accrual transactions for matching debtor...`);
+          
+          // Check each transaction's debtor to see if user matches (with similarity matching)
+          let bestTxMatch = null;
+          let bestTxSimilarity = 0;
+          
           for (const tx of arTransactions) {
-            const txDebtorId = tx.sourceId || tx.metadata?.debtorId;
-            if (txDebtorId) {
-              const txDebtor = await Debtor.findById(txDebtorId).select('user').lean();
-              if (txDebtor && txDebtor.user) {
-                const txUserId = txDebtor.user.toString();
-                // Check if user IDs are similar (allowing for last character differences - common typo)
-                if (txUserId === userIdString || 
-                    txUserId.slice(0, -1) === userIdString.slice(0, -1) ||
-                    txUserId.slice(0, -2) === userIdString.slice(0, -2)) {
-                  sampleTx = tx;
-                  console.log(`✅ Found matching debtor via fuzzy user ID match: ${txDebtorId}`);
-                  break;
+            // Extract debtor ID from account code
+            const arCode = tx.entries?.find(e => e.accountCode?.startsWith('1100-'))?.accountCode;
+            if (!arCode) continue;
+            
+            const txDebtorId = arCode.replace('1100-', '');
+            if (!mongoose.Types.ObjectId.isValid(txDebtorId)) continue;
+            
+            const txDebtor = await Debtor.findById(txDebtorId).select('user accountCode').lean();
+            if (txDebtor && txDebtor.user) {
+              const txUserId = txDebtor.user.toString();
+              // Calculate similarity percentage
+              if (txUserId.length === userIdString.length) {
+                let matches = 0;
+                for (let i = 0; i < txUserId.length; i++) {
+                  if (txUserId[i] === userIdString[i]) matches++;
+                }
+                const similarity = matches / txUserId.length;
+                
+                if (similarity > 0.9 && similarity > bestTxSimilarity) {
+                  bestTxMatch = { tx, debtor: txDebtor, debtorId: txDebtorId };
+                  bestTxSimilarity = similarity;
                 }
               }
+            }
+          }
+          
+          if (bestTxMatch) {
+            console.log(`✅ Found matching debtor via transaction lookup (${(bestTxSimilarity * 100).toFixed(1)}% similar):`);
+            console.log(`   Transaction: ${bestTxMatch.tx._id}`);
+            console.log(`   Description: ${bestTxMatch.tx.description}`);
+            console.log(`   Debtor ID: ${bestTxMatch.debtorId}`);
+            console.log(`   Account Code: ${bestTxMatch.debtor.accountCode}`);
+            sampleTx = bestTxMatch.tx;
+            // Also set debtorDoc directly from the match
+            debtorDoc = await Debtor.findById(bestTxMatch.debtorId).select('accountCode _id user').lean();
+            if (debtorDoc) {
+              console.log(`✅ Set debtorDoc from transaction match: ${debtorDoc.debtorCode || debtorDoc._id}`);
             }
           }
         }
@@ -674,31 +745,121 @@ class EnhancedPaymentAllocationService {
         }
       }
       
-      const arAccountCode = debtorDoc?.accountCode || `1100-${userIdString}`;
+      // 🆕 CRITICAL FIX: Always prioritize debtor account code over user ID format
+      // Accruals use debtor.accountCode (1100-{debtorId}), so we MUST use that format
+      let arAccountCode;
+      if (debtorDoc?.accountCode) {
+        // Use debtor's account code (this is what accruals use)
+        arAccountCode = debtorDoc.accountCode;
+        console.log(`✅ Using debtor account code: ${arAccountCode} (from debtor record)`);
+      } else {
+        // 🆕 CRITICAL: If no debtor found, try to create one or find via transactions
+        // Don't fall back to user ID format - accruals use debtor ID format!
+        console.warn(`⚠️ No debtor found for user ${userIdString}`);
+        console.warn(`   Attempting to find debtor via accrual transactions...`);
+        
+        // Try to find accrual transactions and extract debtor ID from account codes
+        const accrualTx = await TransactionEntry.findOne({
+          source: 'rental_accrual',
+          status: { $ne: 'reversed' },
+          $or: [
+            { 'metadata.studentId': userIdString },
+            { 'metadata.userId': userIdString },
+            { 'sourceId': userIdString }
+          ]
+        }).select('entries.accountCode').lean();
+        
+        if (accrualTx?.entries) {
+          const arCode = accrualTx.entries.find(e => e.accountCode?.startsWith('1100-') && e.accountCode !== '1100');
+          if (arCode) {
+            const debtorIdFromCode = arCode.accountCode.replace('1100-', '');
+            if (mongoose.Types.ObjectId.isValid(debtorIdFromCode)) {
+              debtorDoc = await Debtor.findById(debtorIdFromCode).select('accountCode _id user').lean();
+              if (debtorDoc?.accountCode) {
+                arAccountCode = debtorDoc.accountCode;
+                console.log(`✅ Found debtor via accrual transaction: ${debtorDoc.debtorCode || debtorDoc._id}`);
+                console.log(`✅ Using debtor account code from accrual: ${arAccountCode}`);
+              }
+            }
+          }
+        }
+        
+        // If still no debtor found, try to create one
+        if (!arAccountCode) {
+          console.warn(`⚠️ No debtor found and no accruals found for user ${userIdString}`);
+          console.warn(`   Attempting to create debtor account...`);
+          
+          try {
+            const User = require('../models/User');
+            const user = await User.findById(userIdString);
+            if (user && user.role === 'student') {
+              const { createDebtorForStudent } = require('../services/debtorService');
+              const newDebtor = await createDebtorForStudent(user, {
+                createdBy: userIdString,
+                notes: 'Debtor created automatically when checking outstanding balances'
+              });
+              
+              if (newDebtor?.accountCode) {
+                arAccountCode = newDebtor.accountCode;
+                debtorDoc = newDebtor;
+                console.log(`✅ Created debtor account: ${newDebtor.debtorCode}`);
+                console.log(`✅ Using newly created debtor account code: ${arAccountCode}`);
+              }
+            }
+          } catch (createError) {
+            console.error(`❌ Error creating debtor account:`, createError.message);
+          }
+        }
+        
+        // Last resort: use user ID format (but warn that this may not match accruals)
+        if (!arAccountCode) {
+          arAccountCode = `1100-${userIdString}`;
+          console.error(`❌ CRITICAL: No debtor found and could not create one`);
+          console.error(`   Using fallback account code: ${arAccountCode}`);
+          console.error(`   This may not match accruals which use debtor ID format!`);
+          console.error(`   Please ensure debtor account exists for this student`);
+        }
+      }
+      
       const debtorId = debtorDoc?._id?.toString();
+      const actualUserId = debtorDoc?.user?.toString() || userIdString; // Use actual user ID from debtor if found
       
       console.log(`🔍 Debtor found: ${!!debtorDoc}, AR Account Code: ${arAccountCode}, Debtor ID: ${debtorId || 'N/A'}`);
+      console.log(`🔍 Query User ID: ${userIdString}, Actual User ID: ${actualUserId}`);
+      if (actualUserId !== userIdString) {
+        console.log(`⚠️ User ID mismatch detected - using actual user ID for queries`);
+      }
       
-      // 🆕 FIX: Force fresh data by using lean() and ensuring we get the latest transactions
-      // Try multiple approaches to find user transactions - include debtor ID checks
+      // 🆕 CRITICAL FIX: Always search by debtor account code FIRST (this is what accruals use)
+      // Accruals use debtor.accountCode format (1100-{debtorId}), not user ID format
       const queryConditions = [
-        { 'entries.accountCode': arAccountCode },
-        { 'entries.accountCode': { $regex: `^1100-${userIdString}` }},
-        { 'metadata.userId': userIdString },
-        { 'metadata.studentId': userIdString }, // Keep for backward compatibility
-        { 'sourceId': userIdString },
-        { 'reference': { $regex: userIdString }},
-        { 'description': { $regex: userIdString, $options: 'i' }}
+        { 'entries.accountCode': arAccountCode } // PRIMARY: Use debtor account code (what accruals use)
       ];
       
-      // 🆕 CRITICAL: Also check by debtor ID if available
+      // Add debtor ID checks if available (accruals may reference debtor ID)
       if (debtorId) {
         queryConditions.push(
-          { 'sourceId': debtorId },
+          { 'sourceId': debtorId }, // Accruals may have sourceId = debtor._id
           { 'metadata.debtorId': debtorId },
-          { 'entries.accountCode': { $regex: `^1100-${debtorId}` }}
+          { 'entries.accountCode': { $regex: `^1100-${debtorId}` }} // Also check debtor ID format explicitly
         );
       }
+      
+      // Add user ID checks (for legacy transactions and metadata) - use BOTH query ID and actual ID
+      queryConditions.push(
+        { 'metadata.userId': actualUserId }, // Use actual user ID from debtor
+        { 'metadata.studentId': actualUserId }, // Keep for backward compatibility
+        { 'metadata.userId': userIdString }, // Also check query user ID in case of typos
+        { 'metadata.studentId': userIdString },
+        { 'sourceId': actualUserId },
+        { 'sourceId': userIdString },
+        { 'entries.accountCode': { $regex: `^1100-${actualUserId}` }}, // Legacy user ID format (actual)
+        { 'entries.accountCode': { $regex: `^1100-${userIdString}` }}, // Query user ID format (fallback)
+        { 'reference': { $regex: actualUserId }},
+        { 'reference': { $regex: userIdString }},
+        { 'description': { $regex: actualUserId, $options: 'i' }},
+        { 'description': { $regex: userIdString, $options: 'i' }}
+      );
       
       const allUserTransactions = await TransactionEntry.find({
         $or: queryConditions
@@ -756,7 +917,17 @@ class EnhancedPaymentAllocationService {
           console.log(`🔍 Alternative query found ${alternativeQuery.length} transactions`);
           
           if (alternativeQuery.length === 0) {
-            console.log(`ℹ️ No transactions found for user ${userId} with any approach, returning empty array`);
+            console.log(`ℹ️ No transactions found for user ${userId} with any approach`);
+            
+            // 🆕 CRITICAL FIX: Check if this is a new student with no accruals yet
+            // If they have a debtor record but no transactions, return empty array gracefully
+            if (debtorDoc) {
+              console.log(`✅ Debtor exists (${debtorDoc.debtorCode}) but no transactions yet - student may be new`);
+              console.log(`   This is normal for new students before accruals are created`);
+            } else {
+              console.log(`⚠️ No debtor found for user ${userId} - student may need debtor creation`);
+            }
+            
             return [];
           } else {
             console.log(`✅ Found ${alternativeQuery.length} transactions with alternative query`);
@@ -1277,6 +1448,7 @@ class EnhancedPaymentAllocationService {
       console.log(`💳 Creating advance payment transaction for $${amount} ${paymentType}`);
       
       const mongoose = require('mongoose');
+      const TransactionEntry = require('../models/TransactionEntry');
       const Account = require('../models/Account');
       const User = require('../models/User');
       
@@ -1284,6 +1456,30 @@ class EnhancedPaymentAllocationService {
       let paymentObjectId = paymentId;
       if (typeof paymentId === 'string' && mongoose.Types.ObjectId.isValid(paymentId)) {
         paymentObjectId = new mongoose.Types.ObjectId(paymentId);
+      }
+      
+      // 🆕 CRITICAL FIX: Check if advance payment transaction already exists
+      // This prevents duplicate transactions if called multiple times
+      // Check with multiple query patterns to catch all possible matches
+      const paymentIdStr = paymentId?.toString ? paymentId.toString() : String(paymentId);
+      const existingAdvanceTx = await TransactionEntry.findOne({
+        $or: [
+          { sourceId: paymentObjectId },
+          { sourceId: paymentIdStr },
+          { 'metadata.paymentId': paymentIdStr },
+          { 'metadata.paymentId': paymentId },
+          { reference: paymentIdStr },
+          { reference: paymentId }
+        ],
+        source: 'advance_payment',
+        status: { $ne: 'reversed' }
+      });
+      
+      if (existingAdvanceTx) {
+        console.log(`⚠️ Advance payment transaction already exists for payment ${paymentId}: ${existingAdvanceTx.transactionId}`);
+        console.log(`   Skipping duplicate creation - returning existing transaction`);
+        console.log(`   🚨 Creating duplicate would overstate cash received`);
+        return existingAdvanceTx;
       }
       
       // Get student name for AR account
@@ -1335,8 +1531,27 @@ class EnhancedPaymentAllocationService {
         }
       }
       
+      // 🆕 CRITICAL FIX: Always use debtor account code (1100-{debtorId} format)
+      // Get Debtor to use correct AR code (use userIdStr which is the corrected student ID)
+      const Debtor = require('../models/Debtor');
+      const debtor = await Debtor.findOne({ user: userIdStr }).select('accountCode _id').lean();
+      
+      let studentARCode;
+      if (debtor?.accountCode) {
+        // Use debtor's account code (1100-{debtorId} format)
+        studentARCode = debtor.accountCode;
+        console.log(`✅ Using debtor account code for advance payment: ${studentARCode}`);
+      } else if (debtor?._id) {
+        // Fallback: use debtor ID format if accountCode not set
+        studentARCode = `1100-${debtor._id.toString()}`;
+        console.log(`⚠️ Debtor exists but no accountCode, using debtor ID: ${studentARCode}`);
+      } else {
+        // Last resort: use user ID (should not happen)
+        studentARCode = `1100-${userIdStr}`;
+        console.warn(`⚠️ No debtor found, using user ID format: ${studentARCode} (this should be fixed)`);
+      }
+      
       // Ensure student AR account exists
-      const studentARCode = `1100-${userIdStr}`;
       let studentARAccount = await Account.findOne({ code: studentARCode });
       if (!studentARAccount) {
         const mainAR = await Account.findOne({ code: '1100' });
@@ -1349,7 +1564,7 @@ class EnhancedPaymentAllocationService {
           type: 'Asset',
           category: 'Current Assets',
           subcategory: 'Accounts Receivable',
-          description: 'Student-specific AR control account',
+          description: 'Student-specific AR control account (uses Debtor ID for persistence)',
           isActive: true,
           parentAccount: mainAR._id,
           level: 2,
@@ -1357,11 +1572,13 @@ class EnhancedPaymentAllocationService {
           metadata: new Map([
             ['parent', '1100'],
             ['hasParent', 'true'],
-            ['studentId', String(userId)]
+            ['studentId', String(userId)],
+            ['debtorId', debtor?._id?.toString() || ''],
+            ['accountCodeFormat', debtor?._id ? 'debtor_id' : 'user_id']
           ])
         });
         await studentARAccount.save();
-        console.log(`✅ Created student AR account: ${studentARCode}`);
+        console.log(`✅ Created student AR account: ${studentARCode} (${debtor?._id ? 'debtor ID format' : 'user ID format'})`);
       }
       
       // Determine liability account based on type
@@ -1379,7 +1596,7 @@ class EnhancedPaymentAllocationService {
           const leaseStartAccrual = await TransactionEntry.findOne({
             source: 'rental_accrual',
             'metadata.type': 'lease_start',
-            'metadata.studentId': userId
+            'metadata.studentId': userIdStr
           }).sort({ date: 1 }).lean();
           if (leaseStartAccrual) {
             const d = new Date(leaseStartAccrual.date);
@@ -1395,7 +1612,7 @@ class EnhancedPaymentAllocationService {
         try {
           const Application = require('../models/Application');
           const application = await Application.findOne({
-            student: userId,
+            student: userIdStr,
             status: 'approved'
           }).sort({ applicationDate: -1 }).lean();
           
@@ -1469,7 +1686,7 @@ class EnhancedPaymentAllocationService {
         metadata: {
           paymentId: paymentId,
           studentId: userIdStr, // Use verified student ID (for reference)
-          debtorId: debtorId, // CRITICAL: Store Debtor ID (stable, persists after User deletion)
+          debtorId: debtor?._id?.toString() || null, // CRITICAL: Store Debtor ID (stable, persists after User deletion)
           amount: amount,
           paymentType: paymentType,
           advanceType: 'future_payment',
@@ -1491,7 +1708,7 @@ class EnhancedPaymentAllocationService {
         source: 'Enhanced Payment Allocation Service',
         type: 'advance_payment',
         paymentId: paymentId,
-        studentId: userId,
+        studentId: userIdStr,
         amount: amount,
         paymentType: paymentType,
         isAdvancePayment: true,
@@ -1502,8 +1719,8 @@ class EnhancedPaymentAllocationService {
       // This ensures advance payments are reflected in the debtor account
       if (paymentType !== 'deposit' && paymentType !== 'admin') {
         try {
-          await this.updateDebtorDeferredIncome(userId, paymentId, amount, paymentType);
-          console.log(`✅ Updated debtor deferred income for advance payment: ${userId} - $${amount} ${paymentType}`);
+          await this.updateDebtorDeferredIncome(userIdStr, paymentId, amount, paymentType);
+          console.log(`✅ Updated debtor deferred income for advance payment: ${userIdStr} - $${amount} ${paymentType}`);
         } catch (debtorError) {
           console.error(`❌ Error updating debtor deferred income: ${debtorError.message}`);
           // Don't fail the transaction if debtor update fails, but log it

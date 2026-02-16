@@ -185,6 +185,43 @@ class DebtorLedgerService {
             const totalCredit = arEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
             const netAmount = totalDebit - totalCredit;
             
+            // 🆕 CRITICAL FIX: Handle advance_payment transactions specially
+            // Advance payments have AR entries that cancel out (debit and credit)
+            // But we want to show them as payments in the ledger (when payment was made)
+            // The actual allocation happens when accrual is created, so we only show the payment side
+            if (transaction.source === 'advance_payment') {
+                // For advance payments, only show the credit side (payment received)
+                // The debit side is just transferring to deferred income, which doesn't affect AR balance
+                if (totalCredit > 0) {
+                    const transactionDate = new Date(transaction.date);
+                    const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
+                    
+                    return {
+                        transactionId: transaction.transactionId,
+                        date: transaction.date,
+                        monthKey,
+                        type: 'payment',
+                        category: 'rent',
+                        amount: totalCredit,
+                        description: transaction.description || 'Advance rent payment for future periods',
+                        source: transaction.source,
+                        metadata: {
+                            ...transaction.metadata,
+                            isAdvancePayment: true,
+                            note: 'Advance payment - will be allocated when accrual is created'
+                        },
+                        arEntry: {
+                            accountCode: arAccountCode,
+                            accountName: arEntries.find(e => e.credit > 0)?.accountName || `Accounts Receivable`,
+                            debit: 0,
+                            credit: totalCredit
+                        }
+                    };
+                }
+                // If no credit, skip it (shouldn't happen for advance payments)
+                return null;
+            }
+            
             const transactionDate = new Date(transaction.date);
             const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
             

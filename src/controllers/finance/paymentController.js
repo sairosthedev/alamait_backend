@@ -799,12 +799,16 @@ exports.processPayment = async (req, res) => {
 
         // Ensure student has proper debtor setup before delegating to admin system
         const { student: studentIdForDebtor, residence, room, date, totalAmount } = req.body;
+        
+        // 🆕 CRITICAL FIX: Declare debtor outside if block to prevent "debtor is not defined" error
+        let debtor = null;
+        
         if (studentIdForDebtor) {
             const Debtor = require('../../models/Debtor');
             const User = require('../../models/User');
             
             // Check if student has a debtor record
-            let debtor = await Debtor.findOne({ user: studentIdForDebtor });
+            debtor = await Debtor.findOne({ user: studentIdForDebtor });
             
             if (!debtor) {
                 console.log('🏗️ No debtor record found - creating one like admin system does...');
@@ -950,11 +954,18 @@ exports.processPayment = async (req, res) => {
                             console.log('✅ Smart FIFO allocation completed successfully');
                             console.log('📊 Allocation summary:', allocationResult.allocation.summary);
                             
+                            // 🆕 CRITICAL FIX: Only set flag AFTER successful allocation
+                            // This prevents the post-save hook from skipping fallback if allocation fails
+                            payment.metadata = payment.metadata || {};
+                            payment.metadata.smartFIFOAllocationCalled = true;
+                            payment.metadata.smartFIFOAllocationCalledAt = new Date();
+                            
                             // Update payment with allocation results
                             payment.allocation = allocationResult.allocation;
                             await payment.save();
                             
                             console.log('✅ Payment updated with allocation breakdown');
+                            console.log(`   ✅ Flagged payment to prevent duplicate transaction creation`);
                             
                             // Update the response with the new allocation data
                             if (res.locals && res.locals.payment) {
@@ -963,6 +974,7 @@ exports.processPayment = async (req, res) => {
                         } else {
                             console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
                             console.error('   The Payment post-save hook will create a fallback transaction if needed');
+                            // Don't set flag if allocation failed - let hook create fallback
                         }
         } catch (allocationError) {
             console.error('❌ Error in Smart FIFO allocation:', allocationError.message);
@@ -1140,14 +1152,30 @@ exports.processPayment = async (req, res) => {
             }
         }, 1000); // Send email 1 second after response
         
-        // Return success response
+        // 🆕 CRITICAL FIX: Actually verify if transaction was created before claiming it was
+        const TransactionEntry = require('../../models/TransactionEntry');
+        const existingTx = await TransactionEntry.findOne({
+            $or: [
+                { sourceId: updatedPayment._id },
+                { 'metadata.paymentId': updatedPayment._id.toString() },
+                { reference: updatedPayment._id.toString() },
+                { 'metadata.paymentId': updatedPayment.paymentId }
+            ],
+            source: { $in: ['payment', 'advance_payment'] },
+            status: { $ne: 'reversed' }
+        });
+
+        // Return success response (reflect actual transaction state)
         return res.status(201).json({
             success: true,
             message: "Payment created successfully with double-entry accounting",
             payment: updatedPayment,
             accounting: {
-                transactionCreated: true,
-                message: "Double-entry accounting transaction created"
+                transactionCreated: !!existingTx,
+                transactionId: existingTx?.transactionId || null,
+                message: existingTx 
+                    ? "Double-entry accounting transaction created"
+                    : "Transaction will be created by post-save hook if needed"
             }
         });
 

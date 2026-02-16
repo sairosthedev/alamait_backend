@@ -228,7 +228,8 @@ class RentalAccrualService {
     }
 
     /**
-     * Ensure a student-specific AR child account exists and return it
+     * 🆕 CRITICAL FIX: Ensure a student-specific AR account exists using DEBTOR account code
+     * Always uses debtor.accountCode format (1100-{debtorId}) for consistency
      */
     static async ensureStudentARAccount(studentId, studentName) {
         const mainAR = await Account.findOne({ code: '1100' });
@@ -236,17 +237,41 @@ class RentalAccrualService {
             throw new Error('Main AR account (1100) not found');
         }
 
-        const childCode = `1100-${studentId}`;
+        // 🆕 CRITICAL: Always use debtor account code, not user ID
+        const Debtor = require('../models/Debtor');
+        const debtor = await Debtor.findOne({ user: studentId }).select('accountCode _id').lean();
+        
+        let childCode;
+        if (debtor?.accountCode) {
+            // Use debtor's account code (1100-{debtorId} format)
+            childCode = debtor.accountCode;
+            console.log(`✅ Using debtor account code: ${childCode} for student ${studentId}`);
+        } else {
+            // Fallback: create using debtor ID if debtor exists but no accountCode
+            if (debtor?._id) {
+                childCode = `1100-${debtor._id.toString()}`;
+                console.log(`⚠️ Debtor exists but no accountCode, using debtor ID: ${childCode}`);
+            } else {
+                // Last resort: use user ID (should not happen if debtor exists)
+                childCode = `1100-${studentId}`;
+                console.warn(`⚠️ No debtor found, using user ID format: ${childCode} (this should be fixed)`);
+            }
+        }
+        
         let child = await Account.findOne({ code: childCode });
-        if (child) return child;
+        if (child) {
+            console.log(`✅ AR account already exists: ${childCode}`);
+            return child;
+        }
 
+        // Create account with debtor account code format
         child = new Account({
             code: childCode,
             name: `Accounts Receivable - ${studentName || studentId}`,
             type: 'Asset',
             category: 'Current Assets',
             subcategory: 'Accounts Receivable',
-            description: 'Student-specific AR control account',
+            description: 'Student-specific AR control account (uses Debtor ID for persistence)',
             isActive: true,
             parentAccount: mainAR._id,
             level: 2,
@@ -254,10 +279,14 @@ class RentalAccrualService {
             metadata: new Map([
                 ['parent', '1100'],
                 ['hasParent', 'true'],
-                ['studentId', String(studentId)]
+                ['studentId', String(studentId)],
+                ['debtorId', debtor?._id?.toString() || ''],
+                ['accountCodeFormat', debtor?._id ? 'debtor_id' : 'user_id']
             ])
         });
         await child.save();
+        
+        console.log(`✅ Created AR account: ${childCode} (${debtor?._id ? 'debtor ID format' : 'user ID format'})`);
         
         // Log account creation
         await logSystemOperation('create', 'Account', child._id, {
@@ -265,8 +294,10 @@ class RentalAccrualService {
             type: 'student_ar_account',
             studentId: studentId,
             studentName: studentName,
+            debtorId: debtor?._id?.toString(),
             parentAccount: '1100',
-            accountCode: childCode
+            accountCode: childCode,
+            format: debtor?._id ? 'debtor_id' : 'user_id'
         });
         
         return child;

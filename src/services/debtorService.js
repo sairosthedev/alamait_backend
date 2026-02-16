@@ -227,10 +227,33 @@ exports.createDebtorForStudent = async (user, options = {}) => {
         }
 
         // Check if debtor already exists for this user
-        const actualUser = user.student ? await User.findById(user.student) : user;
-        if (!actualUser) {
-            throw new Error('User not found');
+        // 🆕 CRITICAL FIX: Properly resolve user from application or user object
+        let actualUser = null;
+        
+        // If user has a student field (it's an Application), find the User
+        if (user.student) {
+            actualUser = await User.findById(user.student);
+            if (!actualUser) {
+                throw new Error(`User not found for student ID: ${user.student}`);
+            }
+        } else if (user._id && user.email) {
+            // It's already a User object
+            actualUser = user;
+        } else if (user._id) {
+            // Might be a User object without email, try to find it
+            actualUser = await User.findById(user._id);
+            if (!actualUser) {
+                throw new Error(`User not found for ID: ${user._id}`);
+            }
+        } else {
+            throw new Error('Invalid user object: must be a User or Application with student field');
         }
+        
+        if (!actualUser || !actualUser._id) {
+            throw new Error('User not found or invalid');
+        }
+        
+        console.log(`✅ Resolved user: ${actualUser.firstName} ${actualUser.lastName} (${actualUser._id})`);
         
         // Check for existing debtor - use multiple queries to catch all cases
         let existingDebtor = await Debtor.findOne({ user: actualUser._id });

@@ -285,15 +285,122 @@ paymentSchema.methods.validateMapping = async function() {
 
 // 🆕 CRITICAL FIX: Ensure double-entry transaction exists after save
 // This acts as a safety net to ensure transactions are always created, even if smartFIFOAllocation fails
+// BUT: We must be careful not to create duplicates if smartFIFOAllocation already created a transaction
 paymentSchema.post('save', async function(doc) {
     try {
-        // Always check if transaction exists, but for new documents, wait a bit to let controller's allocation run first
+        // 🆕 CRITICAL FIX: Check if smartFIFOAllocation will be used BEFORE doing anything
+        // This prevents duplicate transactions that would overstate cash received
+        const Payment = require('./Payment');
+        const TransactionEntry = require('./TransactionEntry');
+        
+        // Check both the doc passed to hook AND reload from database
+        const hasPaymentsInDoc = doc.payments && Array.isArray(doc.payments) && doc.payments.length > 0;
+        const hasAllocationFlagInDoc = doc.metadata?.smartFIFOAllocationCalled === true;
+        const hasAllocationDataInDoc = doc.allocation && Object.keys(doc.allocation || {}).length > 0;
+        
+        // Check if ANY transaction already exists (advance_payment OR payment)
+        const paymentIdObj = doc._id;
+        const paymentIdStr = doc._id.toString();
+        const existingTx = await TransactionEntry.findOne({
+            $or: [
+                { sourceId: paymentIdObj },
+                { sourceId: paymentIdStr },
+                { 'metadata.paymentId': paymentIdStr },
+                { 'metadata.paymentId': doc.paymentId },
+                { reference: paymentIdStr },
+                { reference: doc.paymentId }
+            ],
+            status: { $ne: 'reversed' }
+        });
+        
+        // Reload payment to get latest data
+        let latestPayment = doc;
+        try {
+            const reloaded = await Payment.findById(doc._id).select('payments metadata allocation').lean();
+            if (reloaded) {
+                latestPayment = { ...doc, ...reloaded };
+            }
+        } catch (reloadError) {
+            console.warn(`⚠️ Could not reload payment in hook: ${reloadError.message}`);
+        }
+        
+        const hasPaymentsArray = latestPayment.payments && Array.isArray(latestPayment.payments) && latestPayment.payments.length > 0;
+        const hasAllocationFlag = latestPayment.metadata?.smartFIFOAllocationCalled === true;
+        const hasAllocationData = latestPayment.allocation && Object.keys(latestPayment.allocation || {}).length > 0;
+        
+        // 🆕 CRITICAL: If transaction already exists, skip hook entirely
+        if (existingTx) {
+            console.log(`✅ Payment ${doc.paymentId} already has transaction: ${existingTx.transactionId} (${existingTx.source})`);
+            console.log(`   ✅ NOT creating fallback transaction - transaction already exists`);
+            return; // Skip hook entirely if transaction exists
+        }
+        
+        // 🆕 CRITICAL: If smartFIFOAllocation was called AND succeeded (has allocation data), skip hook
+        // But if it was called but failed (no transaction, no allocation data), we need to create fallback
+        if (hasAllocationFlag && hasAllocationData) {
+            console.log(`✅ Payment ${doc.paymentId} - smartFIFOAllocation completed successfully`);
+            console.log(`   ✅ NOT creating fallback transaction - smartFIFOAllocation handled it`);
+            return; // Skip hook if allocation completed successfully
+        }
+        
+        // 🆕 CRITICAL: If payments array exists but smartFIFOAllocation hasn't been called yet,
+        // we need to wait for it to run, then check if transaction was created
+        // If it fails, we'll create a fallback
+        if (hasPaymentsInDoc || hasPaymentsArray) {
+            console.log(`⏳ Payment ${doc.paymentId} has payments array - smartFIFOAllocation will be called`);
+            console.log(`   ⏳ Waiting for smartFIFOAllocation to complete, then checking if transaction exists...`);
+            
+            // For new payments with payments array, wait for smartFIFOAllocation to complete
+            if (this.isNew) {
+                setImmediate(async () => {
+                    // Wait longer for smartFIFOAllocation to complete (it can take time)
+                    const initialWait = 15000; // 15 seconds
+                    
+                    console.log(`⏳ Payment ${doc.paymentId} post-save hook: waiting ${initialWait/1000}s for smartFIFOAllocation`);
+                    
+                    await new Promise(resolve => setTimeout(resolve, initialWait));
+                    
+                    // After waiting, check if transaction was created
+                    const finalCheckTx = await TransactionEntry.findOne({
+                        $or: [
+                            { sourceId: paymentIdObj },
+                            { sourceId: paymentIdStr },
+                            { 'metadata.paymentId': paymentIdStr },
+                            { 'metadata.paymentId': doc.paymentId },
+                            { reference: paymentIdStr },
+                            { reference: doc.paymentId }
+                        ],
+                        status: { $ne: 'reversed' }
+                    });
+                    
+                    if (finalCheckTx) {
+                        console.log(`✅ Payment ${doc.paymentId} - Transaction found after wait: ${finalCheckTx.transactionId} (${finalCheckTx.source})`);
+                        console.log(`   ✅ NOT creating fallback - smartFIFOAllocation created transaction`);
+                        return; // Transaction exists, skip fallback
+                    }
+                    
+                    // No transaction found - create fallback
+                    console.log(`⚠️ Payment ${doc.paymentId} - No transaction found after smartFIFOAllocation wait`);
+                    console.log(`   🔄 Creating fallback transaction...`);
+                    await ensurePaymentTransaction(doc);
+                });
+                return;
+            }
+        }
+        
+        // Only run hook for payments that DON'T use smartFIFOAllocation
+        // Always check if transaction exists, but for new documents, wait longer to let controller's allocation run first
         if (this.isNew) {
-            // For new payments, wait a bit to let the controller's smartFIFOAllocation run first
+            // For new payments, wait longer to let the controller's smartFIFOAllocation run first
             // Use setImmediate to run after current execution completes, then setTimeout for additional delay
             setImmediate(async () => {
-                // Wait 3 seconds to give allocation service time to complete
-                await new Promise(resolve => setTimeout(resolve, 3000));
+                // Wait before checking to give any allocation process time to complete
+                const initialWait = 10000; // 10 seconds
+                
+                console.log(`⏳ Payment ${doc.paymentId} post-save hook: waiting ${initialWait/1000}s before checking for transactions`);
+                console.log(`   ℹ️ This payment does NOT use smartFIFOAllocation - will create fallback if needed`);
+                
+                await new Promise(resolve => setTimeout(resolve, initialWait));
                 await ensurePaymentTransaction(doc);
             });
             return;
@@ -312,24 +419,186 @@ async function ensurePaymentTransaction(payment) {
     try {
         const TransactionEntry = require('./TransactionEntry');
         const Debtor = require('./Debtor');
+        const Payment = require('./Payment');
         
-        // Check if transaction already exists for this payment
-        const existingTx = await TransactionEntry.findOne({
-            $or: [
-                { sourceId: payment._id },
-                { 'metadata.paymentId': payment._id.toString() },
-                { reference: payment._id.toString() }
-            ],
-            source: { $in: ['payment', 'advance_payment'] }
-        });
-        
-        if (existingTx) {
-            console.log(`✅ Payment ${payment.paymentId} already has transaction: ${existingTx.transactionId}`);
-            return;
+        // 🆕 CRITICAL FIX: Reload payment from database to get latest metadata flag
+        // The payment object passed to this function may be stale (from first save)
+        // We need to check the latest version in the database
+        let latestPayment = payment;
+        try {
+            const reloaded = await Payment.findById(payment._id).select('metadata allocation payments').lean();
+            if (reloaded) {
+                latestPayment = { ...payment, ...reloaded }; // Merge to keep all fields
+                console.log(`🔄 Reloaded payment ${payment.paymentId} to check for smartFIFOAllocation flag`);
+            }
+        } catch (reloadError) {
+            console.warn(`⚠️ Could not reload payment: ${reloadError.message}`);
+            // Continue with original payment object
         }
         
-        // If no transaction exists, create a basic payment transaction
-        console.log(`⚠️ No transaction found for payment ${payment.paymentId}, creating basic transaction...`);
+        // 🆕 CRITICAL FIX: Check if smartFIFOAllocation was actually called (not just might be called)
+        // Only skip fallback if smartFIFOAllocation was definitely called:
+        // 1. Metadata flag set (smartFIFOAllocationCalled = true) - means controller called it
+        // 2. Allocation field exists (smartFIFOAllocation completed successfully)
+        // DO NOT check for payments array - that's not reliable (allocation might fail or not be called)
+        const smartFIFOCalled = latestPayment.metadata?.smartFIFOAllocationCalled === true;
+        const hasAllocation = latestPayment.allocation && Object.keys(latestPayment.allocation || {}).length > 0;
+        const willCallSmartFIFO = smartFIFOCalled || hasAllocation; // Only if actually called, not just might be called
+        
+        if (willCallSmartFIFO) {
+            console.log(`✅ Payment ${payment.paymentId} has smartFIFOAllocation - will NOT create fallback transaction`);
+            if (smartFIFOCalled) {
+                console.log(`   smartFIFOAllocation flag set at: ${latestPayment.metadata?.smartFIFOAllocationCalledAt}`);
+            }
+            if (hasAllocation) {
+                console.log(`   Allocation data exists (smartFIFOAllocation completed)`);
+            }
+            console.log(`   Will only check if transaction exists, not create fallback`);
+        } else {
+            const hasPaymentsArray = latestPayment.payments && Array.isArray(latestPayment.payments) && latestPayment.payments.length > 0;
+            if (hasPaymentsArray) {
+                console.log(`ℹ️ Payment ${payment.paymentId} has payments array but smartFIFOAllocation was not called`);
+                console.log(`   This may indicate smartFIFOAllocation failed or was skipped`);
+                console.log(`   Will create fallback transaction if no transaction exists`);
+            }
+        }
+        
+        const baseRetries = 7;
+        const maxRetries = willCallSmartFIFO ? 15 : baseRetries; // Many more retries if smartFIFO will be called
+        const retryDelay = 2000; // 2 seconds between retries
+        
+        if (hasAllocation) {
+            console.log(`ℹ️ Payment ${payment.paymentId} has allocation data - smartFIFOAllocation was called`);
+            console.log(`   Will check more carefully for advance_payment transactions (${maxRetries} retries)`);
+        }
+        
+        // 🆕 CRITICAL FIX: Check for ANY transaction related to this payment, including advance payments
+        // Priority: Check for advance_payment FIRST (created by smartFIFOAllocation)
+        // If advance_payment exists, DO NOT create a fallback payment transaction
+        // Check multiple times with increasing delays to catch transactions created by allocation service
+        let existingTx = null;
+        
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            // 🆕 CRITICAL FIX: Check for advance_payment transactions FIRST (these are created by smartFIFOAllocation)
+            // If an advance_payment exists, we should NOT create a fallback payment transaction
+            // Check with multiple query patterns to catch all possible matches
+            const paymentIdStr = payment._id.toString();
+            const paymentIdObj = payment._id;
+            
+            existingTx = await TransactionEntry.findOne({
+                $or: [
+                    // Match by sourceId (ObjectId or string)
+                    { sourceId: paymentIdObj },
+                    { sourceId: paymentIdStr },
+                    // Match by metadata.paymentId
+                    { 'metadata.paymentId': paymentIdStr },
+                    { 'metadata.paymentId': payment.paymentId },
+                    // Match by reference
+                    { reference: paymentIdStr },
+                    { reference: payment.paymentId },
+                    // Match by sourceModel + sourceId
+                    { sourceModel: 'Payment', sourceId: paymentIdObj },
+                    { sourceModel: 'Payment', sourceId: paymentIdStr }
+                ],
+                source: { $in: ['payment', 'advance_payment'] },
+                status: { $ne: 'reversed' } // Don't count reversed transactions
+            });
+            
+            if (existingTx) {
+                console.log(`✅ Payment ${payment.paymentId} already has transaction: ${existingTx.transactionId} (source: ${existingTx.source})`);
+                if (existingTx.source === 'advance_payment') {
+                    console.log(`   ℹ️ Advance payment transaction exists - this will be allocated when accruals are created`);
+                    console.log(`   ℹ️ No fallback payment transaction needed`);
+                    console.log(`   ✅ Skipping fallback payment transaction creation`);
+                } else {
+                    console.log(`   ℹ️ Payment transaction already exists - no fallback needed`);
+                }
+                return; // Don't create fallback if any transaction exists
+            }
+            
+            // If not found and not last attempt, wait before retrying
+            if (attempt < maxRetries - 1) {
+                console.log(`⏳ Transaction not found for payment ${payment.paymentId}, waiting ${retryDelay}ms before retry ${attempt + 2}/${maxRetries}...`);
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
+            }
+        }
+        
+        // 🆕 CRITICAL FIX: Final check specifically for advance_payment (in case it was created between retries)
+        // This is critical because advance_payment transactions are created by smartFIFOAllocation
+        // and we should NEVER create a duplicate payment transaction if an advance_payment exists
+        console.warn(`⚠️ No transaction found for payment ${payment.paymentId} after ${maxRetries} attempts`);
+        console.warn(`   Performing final check for advance_payment before creating fallback...`);
+        
+        // Final check with comprehensive query patterns
+        const paymentIdStr = payment._id.toString();
+        const paymentIdObj = payment._id;
+        
+        const finalAdvanceCheck = await TransactionEntry.findOne({
+            $or: [
+                // Match by sourceId (ObjectId or string)
+                { sourceId: paymentIdObj },
+                { sourceId: paymentIdStr },
+                // Match by metadata.paymentId
+                { 'metadata.paymentId': paymentIdStr },
+                { 'metadata.paymentId': payment.paymentId },
+                // Match by reference
+                { reference: paymentIdStr },
+                { reference: payment.paymentId },
+                // Match by sourceModel + sourceId
+                { sourceModel: 'Payment', sourceId: paymentIdObj },
+                { sourceModel: 'Payment', sourceId: paymentIdStr }
+            ],
+            source: 'advance_payment',
+            status: { $ne: 'reversed' }
+        });
+        
+        if (finalAdvanceCheck) {
+            console.log(`✅ Found advance_payment transaction ${finalAdvanceCheck.transactionId} - skipping fallback payment transaction`);
+            console.log(`   ℹ️ Advance payment will be allocated when accruals are created`);
+            console.log(`   ℹ️ Only ONE transaction should exist (the advance_payment)`);
+            return; // Don't create fallback if advance_payment exists
+        }
+        
+        // 🆕 CRITICAL FIX: If smartFIFOAllocation will be called, DO NOT create fallback transaction
+        // smartFIFOAllocation handles transaction creation, and creating a fallback would cause duplicates
+        // This is CRITICAL: Creating both would overstate cash received (double-counting)
+        if (willCallSmartFIFO) {
+            console.log(`⚠️ No transaction found for payment ${payment.paymentId}, but smartFIFOAllocation will be called`);
+            console.log(`   ⚠️ This may indicate smartFIFOAllocation failed or is still processing`);
+            console.log(`   ⚠️ NOT creating fallback transaction to avoid duplicates and overstating cash`);
+            console.log(`   ⚠️ If no transaction appears, check smartFIFOAllocation logs for errors`);
+            return; // Don't create fallback if smartFIFOAllocation will be called
+        }
+        
+        // 🆕 CRITICAL: One more check for advance_payment before creating fallback
+        // This is the absolute last check - if advance_payment exists, NEVER create fallback
+        // Creating both would overstate cash received (both would debit cash)
+        const absoluteFinalCheck = await TransactionEntry.findOne({
+            $or: [
+                { sourceId: paymentIdObj },
+                { sourceId: paymentIdStr },
+                { 'metadata.paymentId': paymentIdStr },
+                { 'metadata.paymentId': payment.paymentId },
+                { reference: paymentIdStr },
+                { reference: payment.paymentId },
+                { sourceModel: 'Payment', sourceId: paymentIdObj },
+                { sourceModel: 'Payment', sourceId: paymentIdStr }
+            ],
+            source: 'advance_payment',
+            status: { $ne: 'reversed' }
+        });
+        
+        if (absoluteFinalCheck) {
+            console.log(`🚨 CRITICAL: Found advance_payment transaction ${absoluteFinalCheck.transactionId} in absolute final check`);
+            console.log(`   🚨 NOT creating fallback - this would overstate cash received`);
+            console.log(`   🚨 Only ONE transaction should exist (the advance_payment)`);
+            return; // NEVER create fallback if advance_payment exists
+        }
+        
+        // Only create fallback if NO transaction exists AND smartFIFOAllocation was NOT called
+        // AND no advance_payment exists (triple-checked)
+        console.warn(`   No advance_payment found after all checks - creating fallback transaction`);
+        console.warn(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
         
         // Find debtor to get account code
         const userId = payment.user || payment.student;
@@ -338,24 +607,195 @@ async function ensurePaymentTransaction(payment) {
             return;
         }
         
-        const debtor = await Debtor.findOne({ user: userId });
+        let debtor = await Debtor.findOne({ user: userId });
+        
+        // 🆕 CRITICAL FIX: If no debtor exists, try to create one from payment data
         if (!debtor) {
-            console.warn(`⚠️ No debtor found for user ${userId}, cannot create transaction for payment ${payment.paymentId}`);
-            return;
+            console.log(`⚠️ No debtor found for user ${userId}, attempting to create one...`);
+            
+            try {
+                const User = require('./User');
+                const user = await User.findById(userId);
+                
+                if (user) {
+                    const { createDebtorForStudent } = require('../services/debtorService');
+                    
+                    debtor = await createDebtorForStudent(user, {
+                        residenceId: payment.residence,
+                        roomNumber: payment.room || 'TBD',
+                        createdBy: payment.createdBy || 'system',
+                        startDate: payment.date || new Date(),
+                        roomPrice: payment.totalAmount,
+                        notes: 'Created automatically from payment transaction creation'
+                    });
+                    
+                    console.log(`✅ Created debtor ${debtor.debtorCode} for payment transaction`);
+                    
+                    // Update payment to match debtor user ID
+                    if (debtor.user && debtor.user.toString() !== userId.toString()) {
+                        payment.user = debtor.user;
+                        payment.student = debtor.user;
+                        await payment.save();
+                        console.log(`✅ Updated payment to match debtor user ID`);
+                    }
+                } else {
+                    console.warn(`⚠️ User ${userId} not found, cannot create debtor or transaction`);
+                    return;
+                }
+            } catch (debtorError) {
+                console.error(`❌ Error creating debtor for payment ${payment.paymentId}:`, debtorError.message);
+                // Continue anyway - we'll try to create transaction with basic account code
+            }
         }
+        
+        // 🆕 CRITICAL: Final check RIGHT BEFORE creating transaction
+        // This is the absolute last chance to prevent duplicate - check one more time
+        // Creating both advance_payment and payment would overstate cash received
+        const lastSecondCheck = await TransactionEntry.findOne({
+            $or: [
+                { sourceId: paymentIdObj },
+                { sourceId: paymentIdStr },
+                { 'metadata.paymentId': paymentIdStr },
+                { 'metadata.paymentId': payment.paymentId },
+                { reference: paymentIdStr },
+                { reference: payment.paymentId },
+                { sourceModel: 'Payment', sourceId: paymentIdObj },
+                { sourceModel: 'Payment', sourceId: paymentIdStr }
+            ],
+            source: { $in: ['payment', 'advance_payment'] },
+            status: { $ne: 'reversed' }
+        });
+        
+        if (lastSecondCheck) {
+            console.log(`🚨 CRITICAL: Found existing transaction ${lastSecondCheck.transactionId} (source: ${lastSecondCheck.source}) RIGHT BEFORE creating fallback`);
+            console.log(`   🚨 NOT creating fallback - this would overstate cash received`);
+            console.log(`   🚨 Only ONE transaction should exist`);
+            return; // NEVER create fallback if any transaction exists
+        }
+        
+        // 🆕 CRITICAL: Determine if this should be an advance payment transaction
+        // Check if payment has payments array (indicates it should use smartFIFOAllocation)
+        // If smartFIFOAllocation failed or wasn't called, create advance_payment transaction
+        const hasPaymentsArray = payment.payments && Array.isArray(payment.payments) && payment.payments.length > 0;
+        const isAdvancePayment = hasPaymentsArray; // If payments array exists, treat as advance payment
         
         // Determine payment account
         const paymentMethod = payment.method || 'Cash';
         const paymentAccountCode = paymentMethod === 'Bank' || paymentMethod === 'Bank Transfer' ? '1001' : '1000';
         const paymentAccountName = paymentMethod === 'Bank' || paymentMethod === 'Bank Transfer' ? 'Bank Account' : 'Cash';
         
-        // Create basic payment transaction
+        // Create transaction ID
         const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+        
+        // 🆕 CRITICAL: Use debtor account code (1100-{debtorId} format) if available
+        const arAccountCode = debtor?.accountCode || `1100-${userId.toString()}`;
+        const arAccountName = debtor?.contactInfo?.name 
+            ? `Accounts Receivable - ${debtor.contactInfo.name}` 
+            : `Accounts Receivable - Student`;
+        
+        const studentName = debtor?.contactInfo?.name || 'Student';
+        
+        if (isAdvancePayment) {
+            console.log(`💳 Creating fallback ADVANCE PAYMENT transaction for ${payment.paymentId}`);
+            console.log(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
+            console.log(`   💳 Amount: $${payment.totalAmount || 0}`);
+            console.log(`   💳 This will be treated as advance payment (deferred income)`);
+            
+            // Create advance payment transaction (same structure as createAdvancePaymentTransaction)
+            const advanceTransaction = new TransactionEntry({
+                transactionId,
+                date: payment.date || new Date(),
+                description: `Advance rent payment for future periods`,
+                reference: payment._id.toString(),
+                entries: [
+                    // Entry 1: Debit Cash/Bank (we receive money)
+                    {
+                        accountCode: paymentAccountCode,
+                        accountName: paymentAccountName,
+                        accountType: 'Asset',
+                        debit: payment.totalAmount || 0,
+                        credit: 0,
+                        description: `Advance rent payment received`
+                    },
+                    // Entry 2: Credit AR (shows payment from student, but will be reversed)
+                    {
+                        accountCode: arAccountCode,
+                        accountName: arAccountName,
+                        accountType: 'Asset',
+                        debit: 0,
+                        credit: payment.totalAmount || 0,
+                        description: `Advance rent payment from Student (${payment._id.toString()}) - shows as credit temporarily`
+                    },
+                    // Entry 3: Debit AR (transfer to deferred income)
+                    {
+                        accountCode: arAccountCode,
+                        accountName: arAccountName,
+                        accountType: 'Asset',
+                        debit: payment.totalAmount || 0,
+                        credit: 0,
+                        description: `Transfer advance payment to deferred income for future periods`
+                    },
+                    // Entry 4: Credit Deferred Income (liability for future periods)
+                    {
+                        accountCode: '2200',
+                        accountName: 'Advance Payment Liability',
+                        accountType: 'Liability',
+                        debit: 0,
+                        credit: payment.totalAmount || 0,
+                        description: `Advance rent payment from Student (${payment._id.toString()})`
+                    }
+                ],
+                totalDebit: (payment.totalAmount || 0) * 2,
+                totalCredit: (payment.totalAmount || 0) * 2,
+                source: 'advance_payment',
+                sourceId: payment._id,
+                sourceModel: 'Payment',
+                residence: payment.residence || null,
+                createdBy: 'system',
+                status: 'posted',
+                metadata: {
+                    paymentId: payment._id.toString(),
+                    studentId: userId.toString(),
+                    debtorId: debtor?._id?.toString() || null,
+                    amount: payment.totalAmount || 0,
+                    paymentType: 'rent',
+                    isAdvancePayment: true,
+                    description: `Advance rent payment for future periods`,
+                    createdByFallback: true // Flag to indicate this was created by fallback hook
+                }
+            });
+            
+            await advanceTransaction.save();
+            console.log(`✅ Fallback advance payment transaction created: ${advanceTransaction.transactionId}`);
+            
+            // Update debtor deferred income
+            if (debtor && payment.totalAmount > 0) {
+                try {
+                    const EnhancedPaymentAllocationService = require('../services/enhancedPaymentAllocationService');
+                    await EnhancedPaymentAllocationService.updateDebtorDeferredIncome(
+                        userId.toString(),
+                        payment._id.toString(),
+                        payment.totalAmount,
+                        'rent'
+                    );
+                    console.log(`✅ Updated debtor deferred income for fallback advance payment`);
+                } catch (deferredError) {
+                    console.error(`❌ Error updating debtor deferred income: ${deferredError.message}`);
+                }
+            }
+            
+            return; // Done - advance payment transaction created
+        }
+        
+        // Regular payment transaction (no payments array)
+        console.log(`⚠️ Creating fallback payment transaction for ${payment.paymentId}`);
+        console.log(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
+        console.log(`   ⚠️ Amount: $${payment.totalAmount || 0}`);
         
         const paymentTransaction = new TransactionEntry({
             transactionId,
             date: payment.date || new Date(),
-            description: `Payment from ${debtor.contactInfo?.name || 'Student'} - ${paymentMethod}`,
+            description: `Payment from ${studentName} - ${paymentMethod}`,
             reference: payment._id.toString(),
             entries: [
                 // Entry 1: Debit Cash/Bank
@@ -365,16 +805,16 @@ async function ensurePaymentTransaction(payment) {
                     accountType: 'Asset',
                     debit: payment.totalAmount || 0,
                     credit: 0,
-                    description: `Payment received from ${debtor.contactInfo?.name || 'Student'} via ${paymentMethod}`
+                    description: `Payment received from ${debtor?.contactInfo?.name || 'Student'} via ${paymentMethod}`
                 },
                 // Entry 2: Credit AR
                 {
-                    accountCode: debtor.accountCode,
-                    accountName: `Accounts Receivable - ${debtor.contactInfo?.name || 'Student'}`,
+                    accountCode: arAccountCode,
+                    accountName: arAccountName,
                     accountType: 'Asset',
                     debit: 0,
                     credit: payment.totalAmount || 0,
-                    description: `Payment allocated to ${debtor.contactInfo?.name || 'Student'} - ${paymentMethod}`
+                    description: `Payment allocated to ${debtor?.contactInfo?.name || 'Student'} - ${paymentMethod}`
                 }
             ],
             totalDebit: payment.totalAmount || 0,
@@ -382,13 +822,13 @@ async function ensurePaymentTransaction(payment) {
             source: 'payment',
             sourceId: payment._id,
             sourceModel: 'Payment',
-            residence: payment.residence || debtor.residence,
+            residence: payment.residence || debtor?.residence,
             createdBy: payment.createdBy || 'system',
             status: 'posted',
             metadata: {
                 paymentId: payment._id.toString(),
                 studentId: userId.toString(),
-                debtorId: debtor._id.toString(),
+                debtorId: debtor?._id?.toString() || null,
                 paymentType: payment.paymentType || 'rent',
                 method: paymentMethod,
                 createdByHook: true, // Flag to indicate this was created by the post-save hook
