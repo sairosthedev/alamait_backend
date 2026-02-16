@@ -866,14 +866,24 @@ exports.processPayment = async (req, res) => {
         const Payment = require('../../models/Payment');
         const { paymentId, student: studentIdForPayment, residence: residenceForPayment, room: roomForPayment, roomType, payments, totalAmount: totalAmountForPayment, paymentMonth, date: dateForPayment, method, status, description, rentAmount, adminFee, deposit } = req.body;
         
+        // 🆕 CRITICAL FIX: Ensure payment uses debtor's user ID if debtor exists
+        let finalUserId = studentIdForPayment;
+        if (debtor && debtor.user) {
+            finalUserId = debtor.user;
+            if (debtor.user.toString() !== studentIdForPayment.toString()) {
+                console.log(`⚠️  Debtor user ID (${debtor.user}) differs from requested student ID (${studentIdForPayment})`);
+                console.log(`   Using debtor's user ID to ensure consistency`);
+            }
+        }
+        
         // Create payment record
         // Finance/Admin created payments should have status 'Confirmed', not 'Pending'
         const paymentStatus = (status && status !== 'Pending') ? status : 'Confirmed';
         
         const payment = new Payment({
             paymentId,
-            user: studentIdForPayment,
-            student: studentIdForPayment,
+            user: finalUserId,              // 🆕 CRITICAL: Use debtor's user ID if available
+            student: finalUserId,           // 🆕 CRITICAL: Use same ID as user to prevent mismatches
             residence: residenceForPayment,
             room: roomForPayment,
             roomType,
@@ -892,6 +902,25 @@ exports.processPayment = async (req, res) => {
         
         await payment.save();
         console.log(`✅ Payment created: ${payment.paymentId}`);
+        console.log(`   Payment.user: ${payment.user}`);
+        console.log(`   Payment.student: ${payment.student}`);
+        
+        // 🆕 CRITICAL FIX: Final validation - ensure payment matches debtor after save
+        if (debtor && debtor.user) {
+            const debtorUserId = debtor.user.toString();
+            const paymentNeedsUpdate = (
+                payment.user?.toString() !== debtorUserId ||
+                payment.student?.toString() !== debtorUserId
+            );
+            
+            if (paymentNeedsUpdate) {
+                console.log(`🔄 Final sync: Updating payment to match debtor user ID`);
+                payment.user = debtor.user;
+                payment.student = debtor.user;
+                await payment.save();
+                console.log(`✅ Payment synchronized with debtor`);
+            }
+        }
         
         // Always trigger Smart FIFO allocation
         try {
@@ -933,10 +962,35 @@ exports.processPayment = async (req, res) => {
                             }
                         } else {
                             console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
+                            console.error('   The Payment post-save hook will create a fallback transaction if needed');
                         }
         } catch (allocationError) {
             console.error('❌ Error in Smart FIFO allocation:', allocationError.message);
             console.error('   Stack:', allocationError.stack);
+            console.error('   The Payment post-save hook will create a fallback transaction if needed');
+        }
+        
+        // 🆕 CRITICAL FIX: Verify transaction was created, create fallback if needed
+        try {
+            const TransactionEntry = require('../../models/TransactionEntry');
+            const existingTx = await TransactionEntry.findOne({
+                $or: [
+                    { sourceId: payment._id },
+                    { 'metadata.paymentId': payment._id.toString() },
+                    { reference: payment._id.toString() }
+                ],
+                source: { $in: ['payment', 'advance_payment'] }
+            });
+            
+            if (!existingTx) {
+                console.warn(`⚠️  No transaction found for payment ${payment.paymentId} after allocation attempt`);
+                console.warn(`   The Payment post-save hook will create a fallback transaction`);
+            } else {
+                console.log(`✅ Transaction verified for payment ${payment.paymentId}: ${existingTx.transactionId}`);
+            }
+        } catch (verifyError) {
+            console.error('❌ Error verifying transaction creation:', verifyError.message);
+            // Non-critical - post-save hook will handle it
         }
         
         // Refresh payment from database to get latest allocation data

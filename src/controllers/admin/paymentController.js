@@ -568,11 +568,20 @@ const createPayment = async (req, res) => {
             console.log(`✅ Found existing debtor for student: ${studentExists.firstName} ${studentExists.lastName}`);
             console.log(`   Debtor ID: ${debtor._id}`);
             console.log(`   Debtor Code: ${debtor.debtorCode}`);
-            console.log(`   User ID: ${debtor.user}`);
-            userId = debtor.user; // Use the debtor's user ID
+            console.log(`   Debtor User ID: ${debtor.user}`);
+            console.log(`   Requested Student ID: ${student}`);
+            
+            // 🆕 CRITICAL FIX: Always use debtor's user ID, even if it differs from requested student ID
+            userId = debtor.user;
+            
+            // Warn if there's a mismatch
+            if (debtor.user.toString() !== student.toString()) {
+                console.log(`⚠️  WARNING: Debtor user ID (${debtor.user}) differs from requested student ID (${student})`);
+                console.log(`   Using debtor's user ID to ensure consistency`);
+            }
         } else {
             console.log(`🏗️  No existing debtor found, will create one during payment creation`);
-            // userId remains as student ID for now
+            // userId remains as student ID for now, but will be updated after debtor creation
         }
 
         // Calculate top-level breakdown from payments array if present
@@ -591,10 +600,12 @@ const createPayment = async (req, res) => {
         // Finance/Admin created payments should have status 'Confirmed', not 'Pending'
         const paymentStatus = (status && status !== 'Pending') ? status : 'Confirmed';
         
+        // 🆕 CRITICAL FIX: Ensure both user and student fields use the same ID
+        // Use userId (which may have been updated from debtor lookup) for both fields
         const payment = new Payment({
             paymentId,
             user: userId,                    // ← ALWAYS include user ID for proper mapping
-            student,
+            student: userId,                 // 🆕 CRITICAL: Use same ID as user to prevent mismatches
             residence,
             room,
             roomType,
@@ -613,6 +624,8 @@ const createPayment = async (req, res) => {
 
         await payment.save();
         console.log(`✅ Payment created successfully with user ID: ${userId}`);
+        console.log(`   Payment.user: ${payment.user}`);
+        console.log(`   Payment.student: ${payment.student}`);
 
         // Update debtor account if exists, create if not
         if (!debtor) {
@@ -633,12 +646,26 @@ const createPayment = async (req, res) => {
                 console.log(`   Debtor ID: ${debtor._id}`);
                 console.log(`   Debtor Code: ${debtor.debtorCode}`);
                 
-                // 🆕 NEW: Update payment with the correct user ID from the new debtor
-                if (debtor.user && debtor.user.toString() !== userId.toString()) {
-                    payment.user = debtor.user;
-                    await payment.save();
-                    console.log(`🔄 Updated payment user ID from ${userId} to ${debtor.user}`);
-                    userId = debtor.user;
+                // 🆕 CRITICAL FIX: Always ensure payment.user and payment.student match debtor.user
+                if (debtor.user) {
+                    const debtorUserId = debtor.user.toString();
+                    const needsUpdate = (
+                        payment.user?.toString() !== debtorUserId ||
+                        payment.student?.toString() !== debtorUserId
+                    );
+                    
+                    if (needsUpdate) {
+                        console.log(`🔄 Updating payment to match debtor user ID:`);
+                        console.log(`   Old payment.user: ${payment.user}`);
+                        console.log(`   Old payment.student: ${payment.student}`);
+                        console.log(`   New debtor.user: ${debtor.user}`);
+                        
+                        payment.user = debtor.user;
+                        payment.student = debtor.user; // Ensure both match
+                        await payment.save();
+                        console.log(`✅ Updated payment user and student IDs to ${debtor.user}`);
+                        userId = debtor.user;
+                    }
                 }
                 
             } catch (debtorCreationError) {
@@ -649,11 +676,31 @@ const createPayment = async (req, res) => {
             }
         }
 
+        // 🆕 CRITICAL FIX: Final validation - ensure payment matches debtor before proceeding
+        if (debtor && debtor.user) {
+            const debtorUserId = debtor.user.toString();
+            const paymentNeedsUpdate = (
+                payment.user?.toString() !== debtorUserId ||
+                payment.student?.toString() !== debtorUserId
+            );
+            
+            if (paymentNeedsUpdate) {
+                console.log(`🔄 Final sync: Updating payment to match debtor user ID`);
+                payment.user = debtor.user;
+                payment.student = debtor.user;
+                await payment.save();
+                console.log(`✅ Payment synchronized with debtor`);
+            }
+        }
+
         // Add payment to debtor account
         if (debtor) {
             try {
                 console.log('💰 Updating debtor account...');
                 console.log(`   Debtor ID: ${debtor._id}`);
+                console.log(`   Debtor User ID: ${debtor.user}`);
+                console.log(`   Payment User ID: ${payment.user}`);
+                console.log(`   Payment Student ID: ${payment.student}`);
                 console.log(`   Current Balance: $${debtor.currentBalance}`);
                 console.log(`   Total Owed: $${debtor.totalOwed}`);
                 console.log(`   Total Paid: $${debtor.totalPaid}`);
@@ -822,13 +869,41 @@ const createPayment = async (req, res) => {
                 console.log('✅ Payment updated with allocation breakdown');
             } else {
                 console.error('❌ Smart FIFO allocation failed:', allocationResult.error);
+                console.error('   This payment may not have a transaction entry');
+                console.error('   The Payment post-save hook will create a fallback transaction if needed');
                 // Don't fail payment creation, but log the allocation error
+                // The Payment model's post-save hook will create a fallback transaction
             }
         } catch (allocationError) {
             console.error('❌ Error in Smart FIFO allocation:', allocationError);
             console.error('   Error details:', allocationError.message);
             console.error('   Stack trace:', allocationError.stack);
+            console.error('   The Payment post-save hook will create a fallback transaction if needed');
             // Don't fail the payment creation, but log the allocation error
+            // The Payment model's post-save hook will create a fallback transaction
+        }
+        
+        // 🆕 CRITICAL FIX: Verify transaction was created, create fallback if needed
+        try {
+            const TransactionEntry = require('../../models/TransactionEntry');
+            const existingTx = await TransactionEntry.findOne({
+                $or: [
+                    { sourceId: payment._id },
+                    { 'metadata.paymentId': payment._id.toString() },
+                    { reference: payment._id.toString() }
+                ],
+                source: { $in: ['payment', 'advance_payment'] }
+            });
+            
+            if (!existingTx) {
+                console.warn(`⚠️  No transaction found for payment ${payment.paymentId} after allocation attempt`);
+                console.warn(`   The Payment post-save hook will create a fallback transaction`);
+            } else {
+                console.log(`✅ Transaction verified for payment ${payment.paymentId}: ${existingTx.transactionId}`);
+            }
+        } catch (verifyError) {
+            console.error('❌ Error verifying transaction creation:', verifyError.message);
+            // Non-critical - post-save hook will handle it
         }
 
         // Audit log

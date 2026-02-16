@@ -579,23 +579,129 @@ class EnhancedPaymentAllocationService {
       
       // Resolve debtor to get exact AR account code - use User ID consistently
       const Debtor = require('../models/Debtor');
-      const debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode');
-      const arAccountCode = debtorDoc?.accountCode || `1100-${userIdString}`;
+      let debtorDoc = await Debtor.findOne({ user: userIdString }).select('accountCode _id');
       
-      console.log(`🔍 Debtor found: ${!!debtorDoc}, AR Account Code: ${arAccountCode}`);
+      // 🆕 CRITICAL: If debtor not found by user ID, try to find by transactions' sourceId or metadata.debtorId
+      if (!debtorDoc) {
+        console.log(`⚠️ Debtor not found by user ID, trying to find via transactions...`);
+        
+        // Try multiple approaches to find the debtor
+        // 1. Try to find a transaction with this studentId in metadata
+        let sampleTx = await TransactionEntry.findOne({
+          $or: [
+            { 'metadata.studentId': userIdString },
+            { 'metadata.userId': userIdString }
+          ]
+        }).select('sourceId metadata.debtorId entries.accountCode').lean();
+        
+        // 2. If not found, try to find by any transaction that might reference this user
+        if (!sampleTx) {
+          sampleTx = await TransactionEntry.findOne({
+            $or: [
+              { 'description': { $regex: userIdString, $options: 'i' }},
+              { 'entries.description': { $regex: userIdString, $options: 'i' }}
+            ]
+          }).select('sourceId metadata.debtorId entries.accountCode sourceModel').lean();
+        }
+        
+        // 2b. If still not found, try to find transactions with AR account codes and extract debtor IDs
+        // Then check if any of those debtors have a user that matches (allowing for slight ID mismatches)
+        if (!sampleTx) {
+          // Find transactions with AR account codes (debtor ID format: 1100-{debtorId})
+          const arTransactions = await TransactionEntry.find({
+            'entries.accountCode': { $regex: /^1100-[a-f0-9]{24}$/i },
+            sourceModel: 'Debtor'
+          })
+          .select('sourceId metadata.debtorId entries.accountCode')
+          .limit(50)
+          .lean();
+          
+          // Check each transaction's debtor to see if user matches (with fuzzy matching)
+          for (const tx of arTransactions) {
+            const txDebtorId = tx.sourceId || tx.metadata?.debtorId;
+            if (txDebtorId) {
+              const txDebtor = await Debtor.findById(txDebtorId).select('user').lean();
+              if (txDebtor && txDebtor.user) {
+                const txUserId = txDebtor.user.toString();
+                // Check if user IDs are similar (allowing for last character differences - common typo)
+                if (txUserId === userIdString || 
+                    txUserId.slice(0, -1) === userIdString.slice(0, -1) ||
+                    txUserId.slice(0, -2) === userIdString.slice(0, -2)) {
+                  sampleTx = tx;
+                  console.log(`✅ Found matching debtor via fuzzy user ID match: ${txDebtorId}`);
+                  break;
+                }
+              }
+            }
+          }
+        }
+        
+        // 3. Try to extract debtor ID from transaction's sourceId (if sourceModel is Debtor)
+        if (sampleTx?.sourceId) {
+          debtorDoc = await Debtor.findById(sampleTx.sourceId).select('accountCode _id user');
+          if (debtorDoc) {
+            console.log(`✅ Found debtor via transaction sourceId: ${debtorDoc.debtorCode}`);
+            // Verify the user matches (or is close)
+            if (debtorDoc.user && debtorDoc.user.toString() !== userIdString) {
+              console.log(`⚠️ User ID mismatch: Expected ${userIdString}, Found ${debtorDoc.user.toString()}`);
+            }
+          }
+        }
+        
+        // 4. Try metadata.debtorId
+        if (!debtorDoc && sampleTx?.metadata?.debtorId) {
+          debtorDoc = await Debtor.findById(sampleTx.metadata.debtorId).select('accountCode _id user');
+          if (debtorDoc) {
+            console.log(`✅ Found debtor via transaction metadata.debtorId: ${debtorDoc.debtorCode}`);
+          }
+        }
+        
+        // 5. Try to extract from AR account code in transaction entries
+        if (!debtorDoc && sampleTx?.entries) {
+          const arAccountCode = sampleTx.entries.find(e => 
+            e.accountCode && e.accountCode.startsWith('1100-') && e.accountCode !== '1100'
+          )?.accountCode;
+          
+          if (arAccountCode) {
+            const debtorIdFromCode = arAccountCode.replace('1100-', '');
+            if (mongoose.Types.ObjectId.isValid(debtorIdFromCode)) {
+              debtorDoc = await Debtor.findById(debtorIdFromCode).select('accountCode _id user');
+              if (debtorDoc) {
+                console.log(`✅ Found debtor via AR account code in transaction: ${debtorDoc.debtorCode}`);
+              }
+            }
+          }
+        }
+      }
+      
+      const arAccountCode = debtorDoc?.accountCode || `1100-${userIdString}`;
+      const debtorId = debtorDoc?._id?.toString();
+      
+      console.log(`🔍 Debtor found: ${!!debtorDoc}, AR Account Code: ${arAccountCode}, Debtor ID: ${debtorId || 'N/A'}`);
       
       // 🆕 FIX: Force fresh data by using lean() and ensuring we get the latest transactions
-      // Try multiple approaches to find user transactions - use User ID consistently
+      // Try multiple approaches to find user transactions - include debtor ID checks
+      const queryConditions = [
+        { 'entries.accountCode': arAccountCode },
+        { 'entries.accountCode': { $regex: `^1100-${userIdString}` }},
+        { 'metadata.userId': userIdString },
+        { 'metadata.studentId': userIdString }, // Keep for backward compatibility
+        { 'sourceId': userIdString },
+        { 'reference': { $regex: userIdString }},
+        { 'description': { $regex: userIdString, $options: 'i' }}
+      ];
+      
+      // 🆕 CRITICAL: Also check by debtor ID if available
+      if (debtorId) {
+        queryConditions.push(
+          { 'sourceId': debtorId },
+          { 'metadata.debtorId': debtorId },
+          { 'entries.accountCode': { $regex: `^1100-${debtorId}` }}
+        );
+      }
+      
       const allUserTransactions = await TransactionEntry.find({
-        $or: [
-          { 'entries.accountCode': arAccountCode },
-          { 'entries.accountCode': { $regex: `^1100-${userIdString}` }},
-          { 'metadata.userId': userIdString },
-          { 'metadata.studentId': userIdString }, // Keep for backward compatibility
-          { 'sourceId': userIdString },
-          { 'reference': { $regex: userIdString }},
-          { 'description': { $regex: userIdString, $options: 'i' }}
-        ]
+        $or: queryConditions
       }).lean().sort({ date: 1 });
 
       console.log(`📊 Found ${allUserTransactions.length} total transactions for user ${userId}`);
@@ -621,49 +727,49 @@ class EnhancedPaymentAllocationService {
       if (allUserTransactions.length === 0) {
         console.log(`ℹ️ No transactions found with primary query, trying alternative approaches...`);
         
+        // 🆕 CRITICAL: If we found a debtor via transaction lookup, use its account code
+        if (debtorDoc && debtorDoc.accountCode && debtorDoc.accountCode !== arAccountCode) {
+          console.log(`🔍 Trying to find transactions using debtor account code: ${debtorDoc.accountCode}`);
+          const txByDebtorAccount = await TransactionEntry.find({
+            'entries.accountCode': debtorDoc.accountCode
+          }).lean().sort({ date: 1 });
+          
+          if (txByDebtorAccount.length > 0) {
+            console.log(`✅ Found ${txByDebtorAccount.length} transactions using debtor account code`);
+            allUserTransactions.push(...txByDebtorAccount);
+          }
+        }
+        
         // Try finding transactions by student ID in different fields
-        const alternativeQuery = await TransactionEntry.find({
-          $or: [
-            { 'metadata.studentId': userIdString },
-            { 'metadata.userId': userIdString },
-            { 'sourceId': userIdString },
-            { 'reference': userIdString },
-            { 'description': { $regex: userIdString, $options: 'i' }},
-            { 'entries.description': { $regex: userIdString, $options: 'i' }}
-          ]
-        }).lean().sort({ date: 1 });
-        
-        console.log(`🔍 Alternative query found ${alternativeQuery.length} transactions`);
-        
-        if (alternativeQuery.length === 0) {
-          console.log(`ℹ️ No transactions found for user ${userId} with any approach, returning empty array`);
-          return [];
-        } else {
-          console.log(`✅ Found ${alternativeQuery.length} transactions with alternative query`);
-          // Use the alternative results
-          allUserTransactions.push(...alternativeQuery);
+        if (allUserTransactions.length === 0) {
+          const alternativeQuery = await TransactionEntry.find({
+            $or: [
+              { 'metadata.studentId': userIdString },
+              { 'metadata.userId': userIdString },
+              { 'sourceId': userIdString },
+              { 'reference': userIdString },
+              { 'description': { $regex: userIdString, $options: 'i' }},
+              { 'entries.description': { $regex: userIdString, $options: 'i' }}
+            ]
+          }).lean().sort({ date: 1 });
+          
+          console.log(`🔍 Alternative query found ${alternativeQuery.length} transactions`);
+          
+          if (alternativeQuery.length === 0) {
+            console.log(`ℹ️ No transactions found for user ${userId} with any approach, returning empty array`);
+            return [];
+          } else {
+            console.log(`✅ Found ${alternativeQuery.length} transactions with alternative query`);
+            // Use the alternative results
+            allUserTransactions.push(...alternativeQuery);
+          }
         }
       }
       
       // Separate different types of transactions
       const accruals = allUserTransactions.filter(tx => {
-        // For lease start transactions, also check if they have the correct account code
-        if (tx.metadata?.type === 'lease_start' || tx.source === 'lease_start') {
-          // Check if any entry has the correct student account code
-          const hasStudentAccount = tx.entries.some(entry => 
-            entry.accountCode === `1100-${userIdString}`
-          );
-          if (hasStudentAccount) {
-            return true;
-          }
-        }
-        
-        // Include rental accruals (both lease start and monthly) regardless of sourceId
-        if (tx.source === 'rental_accrual') {
-          return true;
-        }
-        
-        // 🆕 FIX: Also check for accruals by looking for AR debit entries
+        // 🆕 CRITICAL: Always use the debtor's accountCode (could be debtor ID or user ID format)
+        // Check if transaction has AR debit entry matching the debtor's account code
         const hasARDebit = tx.entries && tx.entries.some(entry => 
           entry.accountCode === arAccountCode && 
           entry.accountType === 'Asset' && 
@@ -671,8 +777,28 @@ class EnhancedPaymentAllocationService {
         );
         
         if (hasARDebit) {
-          console.log(`🔍 Found AR debit transaction: ${tx.transactionId} - ${tx.description}`);
+          console.log(`🔍 Found AR debit transaction: ${tx.transactionId} - ${tx.description} (AR: ${arAccountCode})`);
           return true;
+        }
+        
+        // Include rental accruals that match the account code
+        if (tx.source === 'rental_accrual') {
+          const hasMatchingAccount = tx.entries && tx.entries.some(entry => 
+            entry.accountCode === arAccountCode
+          );
+          if (hasMatchingAccount) {
+            return true;
+          }
+        }
+        
+        // For lease start transactions, check if they have the correct account code
+        if (tx.metadata?.type === 'lease_start' || tx.source === 'lease_start') {
+          const hasMatchingAccount = tx.entries && tx.entries.some(entry => 
+            entry.accountCode === arAccountCode
+          );
+          if (hasMatchingAccount) {
+            return true;
+          }
         }
         
         return false;
