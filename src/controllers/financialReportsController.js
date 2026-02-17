@@ -2401,6 +2401,19 @@ class FinancialReportsController {
                         category: 'Income',
                         isVirtual: true
                     };
+                } else if (accountCode && accountCode.includes('refund')) {
+                    // 🆕 CRITICAL: Handle refund virtual account codes
+                    // Refunds use associated accounts: 2200 (Advance Payments Liability) for advance refunds,
+                    // AR accounts (1100-*) for regular refunds, and cash accounts (1000) for cash outflows
+                    // Map refund virtual accounts to query refund transactions by their associated accounts
+                    account = {
+                        code: accountCode,
+                        name: accountCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                        type: 'Expense', // Refunds are cash outflows (expenses in cash flow)
+                        category: 'Operating Activities',
+                        isVirtual: true,
+                        isRefundAccount: true
+                    };
                 } else {
                     account = await Account.findOne({ code: accountCode });
                     if (!account) {
@@ -2733,69 +2746,76 @@ class FinancialReportsController {
                         status: { $nin: ['reversed', 'draft'] }
                     };
                 } else if (accountCode === '4003') {
-                    // For deposits (4003), fetch cash receipt transactions (DR Cash CR Debtor)
-                    // These are the actual cash receipts, not the accounting entries that credit account 4003
+                    // 🆕 CRITICAL: Account 4003 is "Forfeited Deposits Income" - only forfeited deposits, NOT regular deposit receipts
+                    // Regular deposit receipts are liabilities (2020, 2028, etc.) and should NOT appear here
                     query = {
                         $or: [
                             {
-                                // Cash debit transactions (cash received) - DR Cash CR Debtor pattern
-                                'entries.accountCode': { $regex: '^100' }, // Has cash account entry (1000, 1001, etc.)
-                                'entries.debit': { $gt: 0 }, // Cash is debited (money coming in)
-                                source: { 
-                                    $in: [
-                                        'payment', 
-                                        'expense_payment', 
-                                        'rental_payment', 
-                                        'manual', 
-                                        'payment_collection', 
-                                        'bank_transfer', 
-                                        'advance_payment', 
-                                        'debt_settlement', 
-                                        'current_payment',
-                                        'accounts_receivable_collection',
-                                        'payment_allocation'
-                                    ] 
-                                }
+                                // Transactions with account code 4003 (Forfeited Deposits Income) in entries
+                                'entries.accountCode': '4003',
+                                'entries.accountType': 'Income'
                             },
                             {
-                                // Manual transactions with cash debit (DR Cash CR Debtor, etc.)
-                                source: 'manual',
-                                'entries.accountCode': { $regex: '^100' }, // Has cash account entry
-                                'entries.debit': { $gt: 0 } // Cash is debited
+                                // Forfeiture transactions (metadata flag)
+                                'metadata.isForfeiture': true
+                            },
+                            {
+                                // Transactions with forfeiture descriptions
+                                description: { 
+                                    $regex: /forfeit|no-show|no show|breach.*contract/i 
+                                },
+                                // Must have account 4003 entry OR forfeiture metadata
+                                $or: [
+                                    { 'entries.accountCode': '4003' },
+                                    { 'metadata.isForfeiture': true }
+                                ]
                             }
                         ],
                         status: { $nin: ['reversed', 'draft'] }
                     };
                 } else {
                     // For other income accounts (rental, admin), use standard query
+                    // 🆕 CRITICAL: Exclude advance_payment source - advance payments are liabilities, not income
                     query = {
-                        $or: [
+                        $and: [
                             {
-                                // Payment transactions: cash received (match cash flow service sources)
-                                'entries.accountCode': { $regex: '^1000' }, // Has cash account entry
-                                source: { 
-                                    $in: [
-                                        'payment', 
-                                        'expense_payment', 
-                                        'rental_payment', 
-                                        'manual', 
-                                        'payment_collection', 
-                                        'bank_transfer', 
-                                        'advance_payment', 
-                                        'debt_settlement', 
-                                        'current_payment',
-                                        'accounts_receivable_collection'
-                                    ] 
-                                }
+                                $or: [
+                                    {
+                                        // Payment transactions: cash received (match cash flow service sources)
+                                        // EXCLUDE advance_payment - those belong in liability account 2200
+                                        'entries.accountCode': { $regex: '^1000' }, // Has cash account entry
+                                        source: { 
+                                            $in: [
+                                                'payment', 
+                                                'expense_payment', 
+                                                'rental_payment', 
+                                                'manual', 
+                                                'payment_collection', 
+                                                'bank_transfer', 
+                                                // 'advance_payment', // ❌ REMOVED - advance payments are liabilities, not income
+                                                'debt_settlement', 
+                                                'current_payment',
+                                                'accounts_receivable_collection',
+                                                'payment_allocation' // Payment allocations for current/past periods
+                                            ] 
+                                        }
+                                    },
+                                    {
+                                        // Accrual transactions: income earned (lease start, monthly accruals)
+                                        // Note: These will be filtered out later for cash flow, but included here for query completeness
+                                        'entries.accountCode': accountCode, // Has the income account code directly
+                                        source: { $in: ['rental_accrual', 'expense_accrual'] }
+                                    }
+                                ]
                             },
-                            {
-                                // Accrual transactions: income earned (lease start, monthly accruals)
-                                // Note: These will be filtered out later for cash flow, but included here for query completeness
-                                'entries.accountCode': accountCode, // Has the income account code directly
-                                source: { $in: ['rental_accrual', 'expense_accrual'] }
-                            }
-                        ],
-                        status: { $nin: ['reversed', 'draft'] }
+                            // 🆕 Exclude advance payment transactions by source
+                            { source: { $ne: 'advance_payment' } },
+                            // 🆕 Exclude transactions with advance payment descriptions
+                            { description: { $not: { $regex: /advance.*payment|future.*period|prepaid.*rent/i } } },
+                            // 🆕 Exclude transactions that have account 2200 (Advance Payments Liability) entries
+                            { 'entries.accountCode': { $ne: '2200' } },
+                            { status: { $nin: ['reversed', 'draft'] } }
+                        ]
                     };
                 }
             } else if (account.type === 'Expense') {
@@ -2837,6 +2857,35 @@ class FinancialReportsController {
                             'entries.accountCode': { $regex: '^1000' }, // Payment transactions with cash
                             source: { $in: ['payment', 'accounts_receivable_collection'] },
                             description: { $regex: /deposit|security/i }
+                        }
+                    ],
+                    status: { $nin: ['reversed', 'draft'] }
+                };
+            } else if (account && account.isRefundAccount) {
+                // 🆕 CRITICAL: For refund virtual accounts, query refund transactions by their associated accounts
+                // Refunds can affect multiple accounts:
+                // 1. Advance payment refunds: account 2200 (Advance Payments Liability)
+                // 2. Regular refunds: AR accounts (1100-*)
+                // 3. All refunds: cash accounts (1000 series) for cash outflows
+                query = {
+                    $or: [
+                        {
+                            // Refund transactions by source type
+                            source: { 
+                                $in: ['refund', 'advance_payment_refund', 'regular_payment_refund'] 
+                            }
+                        },
+                        {
+                            // Transactions with refund descriptions (including "cancelled lease - not coming")
+                            description: { 
+                                $regex: /refund.*student|refund.*cancelled|refund.*lease|refund.*not.*coming/i 
+                            },
+                            // Must have cash account credited (cash outflow) OR refund-related accounts
+                            $or: [
+                                { 'entries.accountCode': { $regex: '^100' }, 'entries.credit': { $gt: 0 } }, // Cash credited
+                                { 'entries.accountCode': '2200' }, // Advance Payments Liability
+                                { 'entries.accountCode': { $regex: '^1100-' } } // AR accounts
+                            ]
                         }
                     ],
                     status: { $nin: ['reversed', 'draft'] }
@@ -2986,9 +3035,24 @@ class FinancialReportsController {
                                    description.includes('administrative') || 
                                    description.includes('fee');
                         } else if (accountCode === '4003') {
-                            // Deposits - match cash flow service logic
-                            return description.includes('deposit') || 
-                                   description.includes('security');
+                            // 🆕 CRITICAL: Account 4003 is "Forfeited Deposits Income" - only forfeited deposits
+                            // Regular deposit receipts are liabilities (2020, 2028, etc.) and should NOT appear here
+                            // Only include forfeited deposits (forfeiture transactions)
+                            const isForfeiture = description.includes('forfeit') || 
+                                               description.includes('no-show') || 
+                                               description.includes('no show') ||
+                                               tx.metadata?.isForfeiture === true ||
+                                               tx.entries?.some(e => e.accountCode === '4003' && e.accountType === 'Income');
+                            
+                            // EXCLUDE regular deposit receipts (they have deposit liability accounts)
+                            const hasDepositLiability = tx.entries?.some(e => {
+                                const code = String(e.accountCode || '').trim();
+                                const depositLiabilityCodes = ['2028', '20002', '2020', '2002', '20020', '2201'];
+                                return depositLiabilityCodes.includes(code) && (e.credit || 0) > 0;
+                            });
+                            
+                            // Only include if it's a forfeiture AND doesn't have deposit liability accounts
+                            return isForfeiture && !hasDepositLiability;
                         } else if (accountCode === '4006' || accountCode === 'other_income') {
                             // Other income - ONLY transactions that debited cash (1000) and credited debtors (1100 series)
                             // Must be DR Cash CR Debtor pattern - NOT account code 4003 or deposit liability accounts
@@ -3444,6 +3508,22 @@ class FinancialReportsController {
             };
             }
             
+            // 🆕 CRITICAL: Filter out advance payments for income accounts BEFORE processing
+            // Advance payments should only appear in liability account 2200, not income accounts
+            if (account.type === 'Income' && accountCode !== '4006' && accountCode !== 'other_income') {
+                transactions = transactions.filter(tx => {
+                    const isAdvancePayment = tx.source === 'advance_payment' || 
+                                            (tx.description && /advance.*payment|future.*period|prepaid.*rent/i.test(tx.description)) ||
+                                            (tx.entries && tx.entries.some(e => e.accountCode === '2200' && e.accountType === 'Liability'));
+                    
+                    if (isAdvancePayment) {
+                        console.log(`🚫 Filtering out advance payment transaction ${tx.transactionId} from income account ${accountCode}`);
+                        return false;
+                    }
+                    return true;
+                });
+            }
+            
             const response = {
                 success: true,
                 account: {
@@ -3472,11 +3552,21 @@ class FinancialReportsController {
                     let type = 'credit';
                     
                     if (account.type === 'Income') {
-                        // For income accounts in cash flow, only show cash received (payment transactions)
-                        // Cash received is when cash account is debited
-                        if (cashEntry && cashEntry.debit > 0) {
+                        // 🆕 CRITICAL: Exclude advance payments from income accounts
+                        // Advance payments should only appear in liability account 2200, not income accounts
+                        const isAdvancePayment = tx.source === 'advance_payment' || 
+                                                (tx.description && /advance.*payment|future.*period/i.test(tx.description)) ||
+                                                tx.entries.some(e => e.accountCode === '2200' && e.accountType === 'Liability');
+                        
+                        if (isAdvancePayment) {
+                            // Skip advance payments for income accounts - they belong in liability account 2200
+                            amount = 0;
+                            type = 'credit';
+                        } else if (cashEntry && cashEntry.debit > 0) {
+                            // For income accounts in cash flow, only show cash received (payment transactions)
+                            // Cash received is when cash account is debited
                             // Cash is debited (money coming in) - this is the cash received amount
-                        amount = cashEntry.debit || 0;
+                            amount = cashEntry.debit || 0;
                             type = 'debit'; // Cash debit means cash received
                         }
                     } else if (depositAccountCodes.includes(accountCode)) {
@@ -3516,6 +3606,31 @@ class FinancialReportsController {
                                 amount = accountEntry.credit || 0;
                                 type = 'credit';
                             }
+                        }
+                    } else if (account && account.isRefundAccount) {
+                        // 🆕 CRITICAL: For refund virtual accounts, show refund transactions with their associated accounts
+                        // Refunds affect multiple accounts - show the cash outflow (credit to cash) as the amount
+                        // But include all associated account entries in the response
+                        const isRefund = tx.source === 'refund' || 
+                                       tx.source === 'advance_payment_refund' || 
+                                       tx.source === 'regular_payment_refund' ||
+                                       (tx.description && /refund.*student|refund.*cancelled|refund.*lease/i.test(tx.description));
+                        
+                        if (isRefund) {
+                            // For refunds, show cash outflow (credit to cash account)
+                            if (cashEntry && cashEntry.credit > 0) {
+                                amount = cashEntry.credit || 0;
+                                type = 'credit'; // Cash credited = cash outflow
+                            } else {
+                                // Fallback: sum all cash credits in refund transactions
+                                const cashCredits = tx.entries
+                                    .filter(e => e.accountCode.match(/^100/) && e.credit > 0)
+                                    .reduce((sum, e) => sum + (e.credit || 0), 0);
+                                amount = cashCredits;
+                                type = 'credit';
+                            }
+                        } else {
+                            amount = 0;
                         }
                     } else {
                         // For all other accounts (expenses, assets, liabilities, equity, etc.), use account entry directly
@@ -3564,10 +3679,24 @@ class FinancialReportsController {
                     let studentId = null;
                     
                     try {
-                        // Method 1: Look for student ID in AR account entries (1100-<studentId>)
+                        // Method 1: Look for student ID in AR account entries (1100-<studentId> or 1100-<debtorId>)
                         const arEntry = tx.entries.find(e => e.accountCode.match(/^1100-/));
                         if (arEntry) {
-                            studentId = arEntry.accountCode.replace('1100-', '');
+                            const arAccountCode = arEntry.accountCode;
+                            studentId = arAccountCode.replace('1100-', '');
+                            
+                            // 🆕 ENHANCED: Extract student name from account name if available
+                            // Account names like "Accounts Receivable - Tanatswa Mumba" contain the name
+                            if (arEntry.accountName && arEntry.accountName.includes('-')) {
+                                const nameParts = arEntry.accountName.split('-');
+                                if (nameParts.length > 1) {
+                                    const extractedName = nameParts.slice(1).join('-').trim();
+                                    if (extractedName && extractedName !== 'Student' && extractedName.length > 2) {
+                                        studentName = extractedName;
+                                        console.log(`✅ Extracted student name from AR account name: ${studentName}`);
+                                    }
+                                }
+                            }
                         }
                         
                         // Method 2: Check transaction metadata for studentId
@@ -3664,10 +3793,12 @@ class FinancialReportsController {
                             }
                         }
                         
-                        // If we have studentId but no studentName, fetch it
+                        // If we have studentId but no studentName, fetch it with comprehensive fallback
                         if (studentId && !studentName) {
                             try {
                                 const User = require('../models/User');
+                                const Application = require('../models/Application');
+                                const Debtor = require('../models/Debtor');
                                 const mongoose = require('mongoose');
                                 
                                 // Validate ObjectId format and convert if needed
@@ -3680,7 +3811,9 @@ class FinancialReportsController {
                                 }
                                 
                                 if (studentIdToUse && mongoose.Types.ObjectId.isValid(studentIdToUse)) {
-                                    // Try User collection first
+                                    // 🆕 ENHANCED: Try multiple lookup strategies for expired students
+                                    
+                                    // Strategy 1: Try User collection first (active students)
                                     const student = await User.findById(studentIdToUse).select('firstName lastName email').lean();
                                     if (student) {
                                         studentName = `${student.firstName || ''} ${student.lastName || ''}`.trim();
@@ -3688,25 +3821,67 @@ class FinancialReportsController {
                                     } else {
                                         console.log(`⚠️ Student not found in User collection for ID: ${studentId}`);
                                         
-                                        // If still no name, try Application collection as fallback
-                                        const Application = require('../models/Application');
-                                        const application = await Application.findOne({ student: studentIdToUse }).select('firstName lastName email').lean();
-                                        if (application) {
-                                            studentName = `${application.firstName || ''} ${application.lastName || ''}`.trim();
-                                            console.log(`✅ Found student name from Application for ID ${studentId}: ${studentName}`);
-                                        } else {
-                                            // If still no name, try Debtor collection (for expired students)
-                                            const Debtor = require('../models/Debtor');
-                                            const debtor = await Debtor.findOne({ user: studentIdToUse }).populate('user', 'firstName lastName').lean();
+                                        // Strategy 2: Check if studentId is actually a debtor ID
+                                        const debtorById = await Debtor.findById(studentIdToUse).lean();
+                                        if (debtorById) {
+                                            // This is a debtor ID, not a user ID
+                                            // Try to get name from linked application
+                                            if (debtorById.application) {
+                                                const app = await Application.findById(debtorById.application)
+                                                    .select('firstName lastName student').lean();
+                                                if (app) {
+                                                    studentName = `${app.firstName || ''} ${app.lastName || ''}`.trim();
+                                                    console.log(`✅ Found student name from Debtor's Application for debtor ID ${studentId}: ${studentName}`);
+                                                }
+                                            }
+                                            
+                                            // If still no name, try contactInfo
+                                            if (!studentName && debtorById.contactInfo && debtorById.contactInfo.name) {
+                                                studentName = debtorById.contactInfo.name;
+                                                console.log(`✅ Found expired student name from Debtor contactInfo for debtor ID ${studentId}: ${studentName}`);
+                                            }
+                                            
+                                            // If still no name and debtor has a user field, try that user
+                                            if (!studentName && debtorById.user) {
+                                                const userFromDebtor = await User.findById(debtorById.user)
+                                                    .select('firstName lastName').lean();
+                                                if (userFromDebtor) {
+                                                    studentName = `${userFromDebtor.firstName || ''} ${userFromDebtor.lastName || ''}`.trim();
+                                                    console.log(`✅ Found student name from Debtor.user for debtor ID ${studentId}: ${studentName}`);
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Strategy 3: Try Application collection by student field
+                                        if (!studentName) {
+                                            const application = await Application.findOne({ student: studentIdToUse })
+                                                .select('firstName lastName email').lean();
+                                            if (application) {
+                                                studentName = `${application.firstName || ''} ${application.lastName || ''}`.trim();
+                                                console.log(`✅ Found student name from Application.student for ID ${studentId}: ${studentName}`);
+                                            }
+                                        }
+                                        
+                                        // Strategy 4: Try Debtor collection by user field (for expired students)
+                                        if (!studentName) {
+                                            const debtor = await Debtor.findOne({ user: studentIdToUse })
+                                                .populate('user', 'firstName lastName')
+                                                .populate('application', 'firstName lastName')
+                                                .lean();
                                             if (debtor) {
                                                 // First try populated user (if student is still active)
                                                 if (debtor.user && debtor.user.firstName) {
-                                                studentName = `${debtor.user.firstName || ''} ${debtor.user.lastName || ''}`.trim();
+                                                    studentName = `${debtor.user.firstName || ''} ${debtor.user.lastName || ''}`.trim();
                                                     console.log(`✅ Found student name from Debtor.user for ID ${studentId}: ${studentName}`);
                                                 } 
-                                                // If user is null (expired student), use contactInfo
+                                                // If user is null (expired student), try application
+                                                else if (debtor.application && debtor.application.firstName) {
+                                                    studentName = `${debtor.application.firstName || ''} ${debtor.application.lastName || ''}`.trim();
+                                                    console.log(`✅ Found expired student name from Debtor.application for ID ${studentId}: ${studentName}`);
+                                                }
+                                                // If application is also null, use contactInfo
                                                 else if (debtor.contactInfo && debtor.contactInfo.name) {
-                                                studentName = debtor.contactInfo.name;
+                                                    studentName = debtor.contactInfo.name;
                                                     console.log(`✅ Found expired student name from Debtor contactInfo for ID ${studentId}: ${studentName}`);
                                                 } else if (debtor.debtorCode) {
                                                     // Last resort: use debtor code
@@ -3715,17 +3890,34 @@ class FinancialReportsController {
                                                 }
                                             }
                                         }
-                                    }
-                                }
-                                
-                                // Last resort: try to get name from account name if it contains a name
-                                if (!studentName && arEntry && arEntry.accountName) {
-                                    const accountNameParts = arEntry.accountName.split('-');
-                                    if (accountNameParts.length > 1) {
-                                        const nameFromAccount = accountNameParts.slice(1).join('-').trim();
-                                        if (nameFromAccount && nameFromAccount !== 'Student' && nameFromAccount.length > 2) {
-                                            studentName = nameFromAccount;
+                                        
+                                        // Strategy 5: Try Application collection by _id (if studentId is actually an application ID)
+                                        if (!studentName) {
+                                            const applicationById = await Application.findById(studentIdToUse)
+                                                .select('firstName lastName student').lean();
+                                            if (applicationById) {
+                                                studentName = `${applicationById.firstName || ''} ${applicationById.lastName || ''}`.trim();
+                                                console.log(`✅ Found student name from Application._id for ID ${studentId}: ${studentName}`);
+                                            }
                                         }
+                                    }
+                                    
+                                    // Last resort: try to get name from account name if it contains a name
+                                    if (!studentName && arEntry && arEntry.accountName) {
+                                        const accountNameParts = arEntry.accountName.split('-');
+                                        if (accountNameParts.length > 1) {
+                                            const nameFromAccount = accountNameParts.slice(1).join('-').trim();
+                                            if (nameFromAccount && nameFromAccount !== 'Student' && nameFromAccount.length > 2) {
+                                                studentName = nameFromAccount;
+                                                console.log(`✅ Extracted student name from account name: ${studentName}`);
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Also check transaction metadata for student name
+                                    if (!studentName && tx.metadata && tx.metadata.studentName) {
+                                        studentName = tx.metadata.studentName;
+                                        console.log(`✅ Found student name from transaction metadata: ${studentName}`);
                                     }
                                 }
                             } catch (fetchError) {

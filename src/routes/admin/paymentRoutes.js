@@ -5,6 +5,7 @@ const { auth, checkRole } = require('../../middleware/auth');
 const {
     getPayments,
     createPayment,
+    updatePayment,
     updatePaymentStatus,
     uploadProofOfPayment,
     verifyProofOfPayment,
@@ -123,6 +124,7 @@ router.post('/', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), asy
     }
 });
 router.put('/:paymentId/status', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), updateStatusValidation, updatePaymentStatus);
+router.put('/:id', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), updatePayment);
 router.delete('/:id', checkRole('admin', 'finance_admin', 'ceo'), deletePayment);
 router.get('/total', checkRole('admin', 'finance_admin', 'finance_user', 'ceo'), getPaymentTotals);
 

@@ -1462,6 +1462,9 @@ class EnhancedPaymentAllocationService {
       // This prevents duplicate transactions if called multiple times
       // Check with multiple query patterns to catch all possible matches
       const paymentIdStr = paymentId?.toString ? paymentId.toString() : String(paymentId);
+      const paymentDate = paymentData.date ? new Date(paymentData.date) : new Date();
+      
+      // Check 1: By payment ID (primary check)
       const existingAdvanceTx = await TransactionEntry.findOne({
         $or: [
           { sourceId: paymentObjectId },
@@ -1480,6 +1483,31 @@ class EnhancedPaymentAllocationService {
         console.log(`   Skipping duplicate creation - returning existing transaction`);
         console.log(`   🚨 Creating duplicate would overstate cash received`);
         return existingAdvanceTx;
+      }
+      
+      // 🆕 Check 2: By student + amount + date (catches potential duplicates with different payment IDs)
+      // This prevents creating multiple advance payments for the same student/amount/date combination
+      const existingByStudentAmountDate = await TransactionEntry.findOne({
+        $or: [
+          { 'metadata.studentId': userIdStr },
+          { 'metadata.debtorId': debtor?._id?.toString() }
+        ],
+        'entries.accountCode': { $regex: '^100' }, // Has cash entry
+        'entries.debit': amount, // Same amount
+        date: {
+          $gte: new Date(paymentDate.getFullYear(), paymentDate.getMonth(), paymentDate.getDate()),
+          $lt: new Date(paymentDate.getFullYear(), paymentDate.getMonth(), paymentDate.getDate() + 1)
+        },
+        source: 'advance_payment',
+        status: { $ne: 'reversed' }
+      });
+      
+      if (existingByStudentAmountDate) {
+        console.log(`⚠️ Advance payment transaction already exists for student ${userIdStr} with amount $${amount} on ${paymentDate.toISOString().split('T')[0]}`);
+        console.log(`   Existing transaction: ${existingByStudentAmountDate.transactionId}`);
+        console.log(`   Skipping duplicate creation - returning existing transaction`);
+        console.log(`   🚨 Creating duplicate would overstate cash received`);
+        return existingByStudentAmountDate;
       }
       
       // Get student name for AR account

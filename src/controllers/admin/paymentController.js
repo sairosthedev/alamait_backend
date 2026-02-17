@@ -144,6 +144,253 @@ const getPaymentById = async (req, res) => {
     }
 };
 
+// Update payment (general update endpoint)
+const updatePayment = async (req, res) => {
+    const session = await mongoose.startSession();
+    
+    try {
+        await session.startTransaction();
+        
+        const { id } = req.params;
+        const updateData = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            await session.abortTransaction();
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid payment ID format'
+            });
+        }
+
+        const payment = await Payment.findById(id).session(session);
+        if (!payment) {
+            await session.abortTransaction();
+            return res.status(404).json({
+                success: false,
+                message: 'Payment not found'
+            });
+        }
+
+        const before = payment.toObject();
+        
+        // Track what changed for transaction updates
+        const amountChanged = updateData.totalAmount && updateData.totalAmount !== payment.totalAmount;
+        const dateChanged = updateData.date && new Date(updateData.date).getTime() !== new Date(payment.date).getTime();
+        const paymentsChanged = updateData.payments && JSON.stringify(updateData.payments) !== JSON.stringify(payment.payments);
+        
+        // Update payment fields
+        const allowedFields = [
+            'totalAmount', 'amount', 'date', 'method', 'status', 'description',
+            'paymentMonth', 'payments', 'rentAmount', 'adminFee', 'deposit',
+            'room', 'roomType', 'residence', 'student', 'user'
+        ];
+        
+        allowedFields.forEach(field => {
+            if (updateData[field] !== undefined) {
+                payment[field] = updateData[field];
+            }
+        });
+        
+        payment.updatedBy = req.user._id;
+        payment.updatedAt = new Date();
+        
+        await payment.save({ session });
+
+        // Find and update associated transaction entries if amount or date changed
+        if (amountChanged || dateChanged || paymentsChanged) {
+            console.log('🔄 Updating associated transaction entries...');
+            
+            // Find all transaction entries linked to this payment
+            const transactionEntries = await TransactionEntry.find({
+                $or: [
+                    { sourceId: payment._id },
+                    { 'metadata.paymentId': payment._id.toString() },
+                    { 'metadata.paymentId': payment.paymentId },
+                    { reference: payment.paymentId },
+                    { reference: payment._id.toString() }
+                ],
+                source: { $in: ['payment', 'advance_payment'] },
+                status: { $ne: 'reversed' }
+            }).session(session);
+
+            console.log(`📊 Found ${transactionEntries.length} transaction entries to update`);
+
+            if (transactionEntries.length > 0) {
+                const newTotalAmount = updateData.totalAmount || payment.totalAmount;
+                const newDate = updateData.date ? new Date(updateData.date) : payment.date;
+                
+                for (const entry of transactionEntries) {
+                    // Update date if changed
+                    if (dateChanged) {
+                        entry.date = newDate;
+                        entry.description = entry.description.replace(
+                            /(\d{4}-\d{2}-\d{2})/,
+                            newDate.toISOString().split('T')[0]
+                        );
+                    }
+
+                    // Update amounts if changed
+                    if (amountChanged || paymentsChanged) {
+                        const oldTotalDebit = entry.totalDebit;
+                        const oldTotalCredit = entry.totalCredit;
+                        
+                        // Calculate new amounts based on payment breakdown
+                        let newTotalDebit = 0;
+                        let newTotalCredit = 0;
+                        
+                        if (updateData.payments && Array.isArray(updateData.payments)) {
+                            // Update entries based on payment breakdown
+                            const cashEntry = entry.entries.find(e => 
+                                e.accountCode === '1000' || e.accountCode === '1015'
+                            );
+                            if (cashEntry) {
+                                cashEntry.debit = newTotalAmount;
+                                cashEntry.credit = 0;
+                                newTotalDebit = newTotalAmount;
+                            }
+                            
+                            // Update AR entries
+                            const arEntries = entry.entries.filter(e => 
+                                e.accountCode.startsWith('1100-')
+                            );
+                            arEntries.forEach(arEntry => {
+                                arEntry.credit = 0; // Reset first
+                            });
+                            
+                            // Update deferred income entries
+                            const deferredEntries = entry.entries.filter(e => 
+                                e.accountCode === '2200'
+                            );
+                            deferredEntries.forEach(defEntry => {
+                                defEntry.credit = 0; // Reset first
+                            });
+                            
+                            // Recalculate based on payment breakdown
+                            let rentAmount = 0;
+                            let adminAmount = 0;
+                            let depositAmount = 0;
+                            
+                            updateData.payments.forEach(p => {
+                                if (p.type === 'rent') rentAmount += p.amount;
+                                if (p.type === 'admin') adminAmount += p.amount;
+                                if (p.type === 'deposit') depositAmount += p.amount;
+                            });
+                            
+                            // Update AR credit for rent
+                            if (rentAmount > 0 && arEntries.length > 0) {
+                                arEntries[0].credit = rentAmount;
+                                newTotalCredit += rentAmount;
+                            }
+                            
+                            // Update deferred income for advance payments
+                            if (entry.source === 'advance_payment' && deferredEntries.length > 0 && rentAmount > 0) {
+                                deferredEntries[0].credit = rentAmount;
+                                newTotalCredit += rentAmount;
+                            }
+                            
+                            // Update admin fee entry
+                            const adminEntry = entry.entries.find(e => 
+                                e.accountCode === '4100'
+                            );
+                            if (adminEntry && adminAmount > 0) {
+                                adminEntry.credit = adminAmount;
+                                newTotalCredit += adminAmount;
+                            }
+                            
+                            // Update deposit entry
+                            const depositEntry = entry.entries.find(e => 
+                                e.accountCode === '2020'
+                            );
+                            if (depositEntry && depositAmount > 0) {
+                                depositEntry.credit = depositAmount;
+                                newTotalCredit += depositAmount;
+                            }
+                            
+                        } else {
+                            // Simple amount update - maintain proportions
+                            const ratio = newTotalAmount / (oldTotalDebit || oldTotalCredit || 1);
+                            
+                            entry.entries.forEach(e => {
+                                if (e.debit > 0) {
+                                    e.debit = Math.round(e.debit * ratio * 100) / 100;
+                                    newTotalDebit += e.debit;
+                                }
+                                if (e.credit > 0) {
+                                    e.credit = Math.round(e.credit * ratio * 100) / 100;
+                                    newTotalCredit += e.credit;
+                                }
+                            });
+                        }
+                        
+                        // Ensure debits equal credits
+                        if (Math.abs(newTotalDebit - newTotalCredit) > 0.01) {
+                            const diff = newTotalDebit - newTotalCredit;
+                            // Adjust cash entry to balance
+                            const cashEntry = entry.entries.find(e => 
+                                (e.accountCode === '1000' || e.accountCode === '1015') && e.debit > 0
+                            );
+                            if (cashEntry) {
+                                cashEntry.debit = Math.round((cashEntry.debit - diff) * 100) / 100;
+                                newTotalDebit = newTotalCredit;
+                            }
+                        }
+                        
+                        entry.totalDebit = Math.round(newTotalDebit * 100) / 100;
+                        entry.totalCredit = Math.round(newTotalCredit * 100) / 100;
+                        
+                        // Update description with new amount
+                        entry.description = entry.description.replace(
+                            /\$[\d,]+\.?\d*/g,
+                            `$${newTotalAmount.toFixed(2)}`
+                        );
+                    }
+                    
+                    await entry.save({ session });
+                    console.log(`✅ Updated transaction entry ${entry.transactionId}`);
+                }
+            }
+        }
+
+        await session.commitTransaction();
+
+        const updatedPayment = await Payment.findById(id)
+            .populate('residence', 'name')
+            .populate('student', 'firstName lastName email')
+            .populate('user', 'firstName lastName email');
+
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'update',
+            collection: 'Payment',
+            recordId: payment._id,
+            before,
+            after: updatedPayment.toObject(),
+            changes: {
+                amountChanged,
+                dateChanged,
+                paymentsChanged
+            }
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Payment and associated transactions updated successfully',
+            payment: updatedPayment
+        });
+        
+    } catch (error) {
+        await session.abortTransaction();
+        console.error('Error updating payment:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    } finally {
+        await session.endSession();
+    }
+};
+
 // Update payment status
 const updatePaymentStatus = async (req, res) => {
     try {
@@ -1994,6 +2241,7 @@ const deletePayment = async (req, res) => {
 module.exports = {
     getPayments,
     getPaymentById,
+    updatePayment,
     updatePaymentStatus,
     uploadProofOfPayment,
     verifyProofOfPayment,

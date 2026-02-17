@@ -1480,35 +1480,118 @@ class TransactionController {
             // Get the entry to be deleted for logging
             const deletedEntry = transactionEntry.entries[entryIndex].toObject();
             
+            // 🆕 CRITICAL: Check if removing this entry would cause imbalance or leave insufficient entries
+            // If so, delete the entire transaction entry instead
+            const remainingEntries = transactionEntry.entries.filter((_, idx) => idx !== entryIndex);
+            
             // Check if removing this entry would leave less than 2 entries (minimum for double-entry)
-            if (transactionEntry.entries.length <= 2) {
-                await session.abortTransaction();
-                return res.status(400).json({
-                    success: false,
-                    message: 'Cannot delete entry: Transaction entry must have at least 2 entries for double-entry accounting. Delete the entire transaction entry instead.'
+            if (remainingEntries.length < 2) {
+                console.log(`⚠️ Removing entry would leave ${remainingEntries.length} entry(ies). Deleting entire transaction entry instead.`);
+                
+                // Log deletion before deleting
+                const DeletionLogService = require('../../services/deletionLogService');
+                try {
+                    await DeletionLogService.logDeletion({
+                        modelName: 'TransactionEntry',
+                        documentId: id,
+                        deletedData: originalData,
+                        deletedBy: userId,
+                        reason: 'Entry deletion would leave insufficient entries. Entire transaction deleted.',
+                        context: 'delete_entry_cascade',
+                        metadata: {
+                            transactionId: transactionEntry.transactionId,
+                            deletedEntryId: entryId,
+                            deletedEntry: deletedEntry,
+                            reason: 'Removing entry would leave insufficient entries for double-entry accounting',
+                            deletionType: 'cascade_delete_entire_transaction'
+                        },
+                        session: session
+                    });
+                } catch (logError) {
+                    console.error(`⚠️ Error logging deletion for transaction entry (${id}):`, logError.message);
+                }
+                
+                // Delete the entire transaction entry
+                await TransactionEntry.findByIdAndDelete(id).session(session);
+                
+                // Also delete the parent Transaction if it exists
+                const Transaction = require('../../models/Transaction');
+                await Transaction.findOneAndDelete({ transactionId: transactionEntry.transactionId }).session(session);
+                
+                await session.commitTransaction();
+                
+                return res.status(200).json({
+                    success: true,
+                    message: 'Entry deletion would leave insufficient entries. Entire transaction entry deleted instead.',
+                    deletedEntireTransaction: true,
+                    data: {
+                        deletedTransactionEntry: originalData,
+                        reason: 'Removing entry would leave insufficient entries for double-entry accounting'
+                    }
                 });
             }
             
-            // Remove the entry from the array
-            transactionEntry.entries.splice(entryIndex, 1);
-            
-            // Recalculate totalDebit and totalCredit
+            // Calculate what the totals would be after removing this entry
             let newTotalDebit = 0;
             let newTotalCredit = 0;
             
-            for (const entry of transactionEntry.entries) {
+            for (const entry of remainingEntries) {
                 newTotalDebit += entry.debit || 0;
                 newTotalCredit += entry.credit || 0;
             }
             
-            // Validate that debits still equal credits
+            // 🆕 CRITICAL: If removing this entry would make the transaction unbalanced, delete the entire transaction
             if (Math.abs(newTotalDebit - newTotalCredit) > 0.01) {
-                await session.abortTransaction();
-                return res.status(400).json({
-                    success: false,
-                    message: `Cannot delete entry: Removing this entry would make the transaction unbalanced (Debits: ${newTotalDebit}, Credits: ${newTotalCredit}). Transaction must remain balanced.`
+                console.log(`⚠️ Removing entry would make transaction unbalanced (Debits: ${newTotalDebit}, Credits: ${newTotalCredit}). Deleting entire transaction entry instead.`);
+                
+                // Log deletion before deleting
+                const DeletionLogService = require('../../services/deletionLogService');
+                try {
+                    await DeletionLogService.logDeletion({
+                        modelName: 'TransactionEntry',
+                        documentId: id,
+                        deletedData: originalData,
+                        deletedBy: userId,
+                        reason: 'Entry deletion would cause imbalance. Entire transaction deleted.',
+                        context: 'delete_entry_cascade',
+                        metadata: {
+                            transactionId: transactionEntry.transactionId,
+                            deletedEntryId: entryId,
+                            deletedEntry: deletedEntry,
+                            reason: `Removing entry would make transaction unbalanced (Debits: ${newTotalDebit}, Credits: ${newTotalCredit})`,
+                            deletionType: 'cascade_delete_entire_transaction',
+                            wouldBeDebits: newTotalDebit,
+                            wouldBeCredits: newTotalCredit
+                        },
+                        session: session
+                    });
+                } catch (logError) {
+                    console.error(`⚠️ Error logging deletion for transaction entry (${id}):`, logError.message);
+                }
+                
+                // Delete the entire transaction entry
+                await TransactionEntry.findByIdAndDelete(id).session(session);
+                
+                // Also delete the parent Transaction if it exists
+                const Transaction = require('../../models/Transaction');
+                await Transaction.findOneAndDelete({ transactionId: transactionEntry.transactionId }).session(session);
+                
+                await session.commitTransaction();
+                
+                return res.status(200).json({
+                    success: true,
+                    message: 'Entry deletion would cause imbalance. Entire transaction entry deleted instead.',
+                    deletedEntireTransaction: true,
+                    data: {
+                        deletedTransactionEntry: originalData,
+                        reason: `Removing entry would make transaction unbalanced (Debits: ${newTotalDebit}, Credits: ${newTotalCredit})`
+                    }
                 });
             }
+            
+            // If we get here, it's safe to remove just the entry
+            // Remove the entry from the array
+            transactionEntry.entries.splice(entryIndex, 1);
             
             // Update totals
             transactionEntry.totalDebit = newTotalDebit;
