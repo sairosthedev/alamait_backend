@@ -868,7 +868,26 @@ exports.processPayment = async (req, res) => {
         console.log('🏗️ Creating payment directly in finance endpoint...');
         
         const Payment = require('../../models/Payment');
-        const { paymentId, student: studentIdForPayment, residence: residenceForPayment, room: roomForPayment, roomType, payments, totalAmount: totalAmountForPayment, paymentMonth, date: dateForPayment, method, status, description, rentAmount, adminFee, deposit } = req.body;
+        const { paymentId: requestedPaymentId, student: studentIdForPayment, residence: residenceForPayment, room: roomForPayment, roomType, payments, totalAmount: totalAmountForPayment, paymentMonth, date: dateForPayment, method, status, description, rentAmount, adminFee, deposit } = req.body;
+        
+        // 🆕 DUPLICATE PREVENTION: Check if paymentId already exists
+        let finalPaymentId = requestedPaymentId;
+        if (finalPaymentId) {
+            const existingPayment = await Payment.findOne({ paymentId: finalPaymentId });
+            if (existingPayment) {
+                console.log(`⚠️ Payment with ID ${finalPaymentId} already exists. Returning existing payment.`);
+                return res.json({
+                    success: true,
+                    message: 'Payment already exists',
+                    payment: existingPayment,
+                    isDuplicate: true
+                });
+            }
+        } else {
+            // Generate unique paymentId if not provided
+            finalPaymentId = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+            console.log(`📝 Generated paymentId: ${finalPaymentId}`);
+        }
         
         // 🆕 CRITICAL FIX: Ensure payment uses debtor's user ID if debtor exists
         let finalUserId = studentIdForPayment;
@@ -885,7 +904,7 @@ exports.processPayment = async (req, res) => {
         const paymentStatus = (status && status !== 'Pending') ? status : 'Confirmed';
         
         const payment = new Payment({
-            paymentId,
+            paymentId: finalPaymentId,
             user: finalUserId,              // 🆕 CRITICAL: Use debtor's user ID if available
             student: finalUserId,           // 🆕 CRITICAL: Use same ID as user to prevent mismatches
             residence: residenceForPayment,
@@ -904,10 +923,34 @@ exports.processPayment = async (req, res) => {
             createdBy: req.user._id
         });
         
-        await payment.save();
-        console.log(`✅ Payment created: ${payment.paymentId}`);
-        console.log(`   Payment.user: ${payment.user}`);
-        console.log(`   Payment.student: ${payment.student}`);
+        try {
+            await payment.save();
+            console.log(`✅ Payment created: ${payment.paymentId}`);
+            console.log(`   Payment.user: ${payment.user}`);
+            console.log(`   Payment.student: ${payment.student}`);
+        } catch (saveError) {
+            // Handle duplicate key error (race condition)
+            if (saveError.code === 11000 && saveError.keyPattern?.paymentId) {
+                console.log(`⚠️ Duplicate paymentId detected (race condition). Checking for existing payment...`);
+                const existingPayment = await Payment.findOne({ paymentId: finalPaymentId });
+                if (existingPayment) {
+                    console.log(`✅ Found existing payment with ID ${finalPaymentId}`);
+                    return res.json({
+                        success: true,
+                        message: 'Payment already exists (duplicate request detected)',
+                        payment: existingPayment,
+                        isDuplicate: true
+                    });
+                }
+                // If payment doesn't exist, generate a new unique ID and retry
+                finalPaymentId = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+                payment.paymentId = finalPaymentId;
+                await payment.save();
+                console.log(`✅ Payment created with new ID after retry: ${payment.paymentId}`);
+            } else {
+                throw saveError; // Re-throw if it's a different error
+            }
+        }
         
         // 🆕 CRITICAL FIX: Final validation - ensure payment matches debtor after save
         if (debtor && debtor.user) {
