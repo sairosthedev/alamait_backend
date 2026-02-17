@@ -49,33 +49,125 @@ class EnhancedPaymentAllocationService {
       const outstandingBalances = await this.getDetailedOutstandingBalances(userId);
       
       if (!outstandingBalances || outstandingBalances.length === 0) {
-        console.log('ℹ️ No outstanding balances found for student - treating all payments as advance payments');
+        console.log('ℹ️ No outstanding balances found for student');
         
-        // Handle all payments as advance payments when no outstanding balances
-        const allocationResults = [];
-        let totalAllocated = 0;
+        // 🆕 CRITICAL FIX: Check if payment is for current month before treating as advance
+        // If payment has paymentMonth or monthAllocated matching payment date, wait for accrual
+        const paymentDate = new Date(paymentData.date);
+        const paymentMonthKey = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
         
-        // Group payment components by type for efficient allocation
-        const paymentByType = {};
-        payments.forEach(payment => {
-          if (!paymentByType[payment.type]) {
-            paymentByType[payment.type] = 0;
+        // Check if any payment has monthAllocated matching payment month
+        const hasCurrentMonthPayment = payments.some(p => {
+          if (p.monthAllocated === paymentMonthKey) {
+            return true;
           }
-          paymentByType[payment.type] += payment.amount;
+          // Also check paymentMonth from paymentData
+          if (paymentData.paymentMonth === paymentMonthKey) {
+            return true;
+          }
+          return false;
         });
         
-        console.log('📊 Payment breakdown by type:', paymentByType);
-        
-        // Process each payment type as advance payment
-        for (const [paymentType, totalAmount] of Object.entries(paymentByType)) {
-          console.log(`💳 Processing ${paymentType} payment as advance: $${totalAmount}`);
+        if (hasCurrentMonthPayment) {
+          console.log(`⚠️ Payment is for current month (${paymentMonthKey}) but no accrual found yet`);
+          console.log(`   ⏳ Waiting briefly to check if accrual is being created...`);
           
-          const advanceResult = await this.handleAdvancePayment(
-            paymentData.paymentId, userId, totalAmount, paymentData, paymentType
-          );
-          allocationResults.push(advanceResult);
-          totalAllocated += totalAmount;
-        }
+          // Wait a bit and check again for accruals (in case accrual is being created concurrently)
+          await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+          
+          // Re-check for outstanding balances
+          const recheckBalances = await this.getDetailedOutstandingBalances(userId);
+          if (recheckBalances && recheckBalances.length > 0) {
+            console.log(`✅ Found accruals after waiting - processing as regular payment allocation`);
+            // Continue with normal allocation flow (will fall through to next section)
+            outstandingBalances = recheckBalances;
+          } else {
+            console.log(`⚠️ Still no accruals found - treating as advance payment`);
+            console.log(`   ⚠️ Note: This may create both advance_payment and payment_allocation if accrual is created later`);
+            console.log(`   ⚠️ Consider creating accrual before processing payment for current month`);
+            
+            // Handle all payments as advance payments when no outstanding balances
+            const allocationResults = [];
+            let totalAllocated = 0;
+            
+            // Group payment components by type for efficient allocation
+            const paymentByType = {};
+            payments.forEach(payment => {
+              if (!paymentByType[payment.type]) {
+                paymentByType[payment.type] = 0;
+              }
+              paymentByType[payment.type] += payment.amount;
+            });
+            
+            console.log('📊 Payment breakdown by type:', paymentByType);
+            
+            // Process each payment type as advance payment
+            for (const [paymentType, totalAmount] of Object.entries(paymentByType)) {
+              console.log(`💳 Processing ${paymentType} payment as advance: $${totalAmount}`);
+              
+              const advanceResult = await this.handleAdvancePayment(
+                paymentData.paymentId, userId, totalAmount, paymentData, paymentType
+              );
+              allocationResults.push(advanceResult);
+              totalAllocated += totalAmount;
+            }
+            
+            // Create allocation record
+            const allocationRecord = await this.createAllocationRecord(
+              paymentData.paymentId,
+              userId,
+              allocationResults,
+              paymentData
+            );
+            
+            console.log('✅ All payments processed as advance payments');
+            
+            return {
+              success: true,
+              allocation: {
+                monthlyBreakdown: allocationResults,
+                summary: {
+                  totalAllocated: totalAllocated,
+                  remainingBalance: 0,
+                  monthsCovered: 0,
+                  advancePaymentAmount: totalAllocated,
+                  allocationMethod: 'Advance Payment (No Outstanding Balances)',
+                  oldestMonthSettled: null,
+                  newestMonthSettled: null
+                }
+              },
+              allocationRecord,
+              message: `All payments processed as advance payments: $${totalAllocated} total`
+            };
+          }
+        } else {
+          console.log('ℹ️ No outstanding balances and payment is not for current month - treating all payments as advance payments');
+          
+          // Handle all payments as advance payments when no outstanding balances
+          const allocationResults = [];
+          let totalAllocated = 0;
+          
+          // Group payment components by type for efficient allocation
+          const paymentByType = {};
+          payments.forEach(payment => {
+            if (!paymentByType[payment.type]) {
+              paymentByType[payment.type] = 0;
+            }
+            paymentByType[payment.type] += payment.amount;
+          });
+          
+          console.log('📊 Payment breakdown by type:', paymentByType);
+          
+          // Process each payment type as advance payment
+          for (const [paymentType, totalAmount] of Object.entries(paymentByType)) {
+            console.log(`💳 Processing ${paymentType} payment as advance: $${totalAmount}`);
+            
+            const advanceResult = await this.handleAdvancePayment(
+              paymentData.paymentId, userId, totalAmount, paymentData, paymentType
+            );
+            allocationResults.push(advanceResult);
+            totalAllocated += totalAmount;
+          }
         
         // Create allocation record
         const allocationRecord = await this.createAllocationRecord(
@@ -104,6 +196,7 @@ class EnhancedPaymentAllocationService {
           allocationRecord,
           message: `All payments processed as advance payments: $${totalAllocated} total`
         };
+        }
       }
       
       console.log(`📊 Found ${outstandingBalances.length} months with outstanding balances`);
@@ -1777,6 +1870,68 @@ class EnhancedPaymentAllocationService {
   static async createPaymentAllocationTransaction(paymentId, userId, amount, paymentData, paymentType, monthSettled, arTransactionId) {
     try {
       console.log(`💳 Creating payment allocation transaction for $${amount} ${paymentType} to ${monthSettled}`);
+      
+      // 🆕 CRITICAL FIX: Check if payment allocation transaction already exists
+      // This prevents duplicate transactions if called multiple times
+      const mongoose = require('mongoose');
+      const TransactionEntry = require('../models/TransactionEntry');
+      const paymentIdStr = paymentId?.toString ? paymentId.toString() : String(paymentId);
+      const paymentIdObj = mongoose.Types.ObjectId.isValid(paymentIdStr) ? new mongoose.Types.ObjectId(paymentIdStr) : null;
+      
+      // Check for existing payment allocation transaction
+      const existingPaymentAllocation = await TransactionEntry.findOne({
+        $or: [
+          { sourceId: paymentIdObj },
+          { sourceId: paymentIdStr },
+          { 'metadata.paymentId': paymentIdStr },
+          { 'metadata.paymentId': paymentId },
+          { reference: paymentIdStr },
+          { reference: paymentId }
+        ],
+        $or: [
+          { source: 'payment' },
+          { source: 'payment_allocation' },
+          { 'metadata.allocationType': 'payment_allocation' }
+        ],
+        'metadata.monthSettled': monthSettled,
+        'metadata.paymentType': paymentType,
+        status: { $ne: 'reversed' }
+      });
+      
+      if (existingPaymentAllocation) {
+        console.log(`⚠️ Payment allocation transaction already exists for payment ${paymentId} to ${monthSettled}: ${existingPaymentAllocation.transactionId}`);
+        console.log(`   Skipping duplicate creation - returning existing transaction`);
+        console.log(`   🚨 Creating duplicate would overstate cash received`);
+        return existingPaymentAllocation;
+      }
+      
+      // 🆕 CRITICAL FIX: Check if there's an advance payment transaction for this payment/month
+      // If an advance payment exists and we're now creating a payment allocation (accrual found),
+      // we should NOT create a duplicate - the advance payment should be converted or reversed
+      const existingAdvancePayment = await TransactionEntry.findOne({
+        $or: [
+          { sourceId: paymentIdObj },
+          { sourceId: paymentIdStr },
+          { 'metadata.paymentId': paymentIdStr },
+          { 'metadata.paymentId': paymentId },
+          { reference: paymentIdStr },
+          { reference: paymentId }
+        ],
+        source: 'advance_payment',
+        'metadata.monthSettled': monthSettled,
+        'metadata.paymentType': paymentType,
+        status: { $ne: 'reversed' }
+      });
+      
+      if (existingAdvancePayment) {
+        console.log(`⚠️ Advance payment transaction already exists for payment ${paymentId} to ${monthSettled}: ${existingAdvancePayment.transactionId}`);
+        console.log(`   ⚠️ This payment was previously treated as advance payment, but accrual now exists`);
+        console.log(`   ⚠️ NOT creating duplicate payment allocation - advance payment should be reversed/converted`);
+        console.log(`   🚨 Creating both would overstate cash received`);
+        // Return the advance payment transaction but log a warning
+        // TODO: Consider reversing the advance payment and creating payment allocation instead
+        return existingAdvancePayment;
+      }
       
       // Determine cash account based on payment method
       let cashAccountCode = '1000'; // Default to Cash

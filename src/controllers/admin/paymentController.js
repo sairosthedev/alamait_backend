@@ -907,11 +907,11 @@ const createPayment = async (req, res) => {
                         console.log(`   Old payment.student: ${payment.student}`);
                         console.log(`   New debtor.user: ${debtor.user}`);
                         
-                        payment.user = debtor.user;
+                    payment.user = debtor.user;
                         payment.student = debtor.user; // Ensure both match
-                        await payment.save();
+                    await payment.save();
                         console.log(`✅ Updated payment user and student IDs to ${debtor.user}`);
-                        userId = debtor.user;
+                    userId = debtor.user;
                     }
                 }
                 
@@ -2190,7 +2190,7 @@ const deletePayment = async (req, res) => {
         
         // Log the deletion for audit purposes
         await AuditLog.create([{
-            action: 'DELETE_PAYMENT',
+            action: 'delete',
             collection: 'Payment',
             recordId: payment._id,
             before: {
