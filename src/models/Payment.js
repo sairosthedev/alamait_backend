@@ -673,12 +673,6 @@ async function ensurePaymentTransaction(payment) {
             return; // NEVER create fallback if any transaction exists
         }
         
-        // 🆕 CRITICAL: Determine if this should be an advance payment transaction
-        // Check if payment has payments array (indicates it should use smartFIFOAllocation)
-        // If smartFIFOAllocation failed or wasn't called, create advance_payment transaction
-        const hasPaymentsArray = payment.payments && Array.isArray(payment.payments) && payment.payments.length > 0;
-        const isAdvancePayment = hasPaymentsArray; // If payments array exists, treat as advance payment
-        
         // Determine payment account
         const paymentMethod = payment.method || 'Cash';
         const paymentAccountCode = paymentMethod === 'Bank' || paymentMethod === 'Bank Transfer' ? '1001' : '1000';
@@ -709,48 +703,124 @@ async function ensurePaymentTransaction(payment) {
         
         const studentName = debtor?.contactInfo?.name || 'Student';
         
-        // 🆕 CRITICAL FIX: Check for accruals BEFORE determining payment type
-        // If accrual exists for payment month, this should be a regular payment, not advance
-        let shouldCreateAdvancePayment = isAdvancePayment;
-        if (isAdvancePayment && arAccountCode && payment.paymentMonth) {
-            console.log(`🔍 Checking for accruals for payment month: ${payment.paymentMonth}`);
-            console.log(`   Using account code: ${arAccountCode}`);
+        // 🆕 CRITICAL: Determine payment type and month FIRST
+        let paymentType = 'rent'; // Default to rent
+        if (payment.payments && payment.payments.length > 0) {
+            const firstPayment = payment.payments[0];
+            paymentType = firstPayment.type || 'rent';
+        } else if (payment.metadata?.paymentType) {
+            paymentType = payment.metadata.paymentType;
+        } else if (payment.paymentType) {
+            paymentType = payment.paymentType;
+        }
+        
+        // Determine month settled from paymentMonth or payment date
+        let monthSettled = payment.paymentMonth; // Format: "2026-01"
+        if (!monthSettled && payment.date) {
+            const paymentDate = new Date(payment.date);
+            const year = paymentDate.getFullYear();
+            const month = String(paymentDate.getMonth() + 1).padStart(2, '0');
+            monthSettled = `${year}-${month}`;
+        } else if (!monthSettled) {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            monthSettled = `${year}-${month}`;
+        }
+        
+        // 🆕 CRITICAL: Check if payment date is before payment month - if so, treat as advance payment
+        // BUT FIRST: Check if an accrual exists for the payment month - if it does, this should be a regular payment
+        const paymentDate = new Date(payment.date || new Date());
+        const paymentMonthDate = monthSettled ? new Date(monthSettled + '-01') : null;
+        const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
+        const isPaymentDateBeforeMonth = paymentMonthDate && paymentDateMonth < paymentMonthDate;
+        
+        // 🆕 CRITICAL: Payment date BEFORE payment month = ALWAYS advance payment (regardless of accrual)
+        // This is because the payment is made before the month it's allocated to, so it's prepayment
+        let hasAccrualForMonth = false;
+        let shouldCreateAdvancePayment = false;
+        
+        // 🆕 PRIORITY 1: If payment date is before payment month, it's ALWAYS an advance payment
+        if (isPaymentDateBeforeMonth) {
+            console.log(`✅ Payment date (${paymentDate.toISOString().split('T')[0]}) is BEFORE payment month (${monthSettled})`);
+            console.log(`   ✅ This is ALWAYS an advance payment, regardless of accrual status`);
+            shouldCreateAdvancePayment = true; // Always advance payment if date is before month
             
-            try {
-                const TransactionEntry = require('./TransactionEntry');
-                const paymentMonthDate = new Date(payment.paymentMonth + '-01'); // Parse YYYY-MM format
-                const paymentMonthStart = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth(), 1);
-                const paymentMonthEnd = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth() + 1, 0, 23, 59, 59, 999);
-                
-                // Check for accrual in payment month
-                const accrualForMonth = await TransactionEntry.findOne({
-                    'entries.accountCode': arAccountCode,
-                    source: { $in: ['rental_accrual', 'lease_start'] },
-                    status: { $ne: 'reversed' },
-                    voided: { $ne: true },
-                    date: {
-                        $gte: paymentMonthStart,
-                        $lte: paymentMonthEnd
-                    }
-                }).lean();
-                
-                if (accrualForMonth) {
-                    console.warn(`⚠️  WARNING: Accrual found for payment month ${payment.paymentMonth}!`);
-                    console.warn(`   Accrual ID: ${accrualForMonth._id}`);
-                    console.warn(`   Accrual Date: ${accrualForMonth.date}`);
-                    console.warn(`   This payment should NOT be an advance payment - it should settle the accrual!`);
-                    console.warn(`   ⚠️ Creating REGULAR payment transaction instead of advance payment`);
-                    console.warn(`   ⚠️ Please check why smartFIFOAllocation didn't allocate this payment correctly`);
+            // Still check for accrual for logging purposes
+            if (arAccountCode && monthSettled) {
+                try {
+                    const TransactionEntry = require('./TransactionEntry');
+                    const paymentMonthDateCheck = new Date(monthSettled + '-01');
+                    const paymentMonthStart = new Date(paymentMonthDateCheck.getFullYear(), paymentMonthDateCheck.getMonth(), 1);
+                    const paymentMonthEnd = new Date(paymentMonthDateCheck.getFullYear(), paymentMonthDateCheck.getMonth() + 1, 0, 23, 59, 59, 999);
                     
-                    // 🆕 FIX: Create regular payment transaction to settle accrual (not advance payment)
-                    shouldCreateAdvancePayment = false; // Change to regular payment
-                    console.log(`   ✅ Changed to regular payment transaction to settle accrual`);
-                } else {
-                    console.log(`✅ No accrual found for payment month ${payment.paymentMonth} - proceeding with advance payment`);
+                    const accrualForMonth = await TransactionEntry.findOne({
+                        'entries.accountCode': arAccountCode,
+                        source: { $in: ['rental_accrual', 'lease_start'] },
+                        status: { $ne: 'reversed' },
+                        voided: { $ne: true },
+                        date: {
+                            $gte: paymentMonthStart,
+                            $lte: paymentMonthEnd
+                        }
+                    }).lean();
+                    
+                    if (accrualForMonth) {
+                        hasAccrualForMonth = true;
+                        console.log(`   ℹ️ Note: Accrual exists for ${monthSettled}, but payment is still advance (paid before month)`);
+                    } else {
+                        console.log(`   ℹ️ No accrual exists for ${monthSettled} - advance payment confirmed`);
+                    }
+                } catch (accrualCheckError) {
+                    console.error(`   ⚠️ Error checking accrual: ${accrualCheckError.message}`);
                 }
-            } catch (accrualCheckError) {
-                console.error(`❌ Error checking for accruals: ${accrualCheckError.message}`);
-                console.error(`   Proceeding with advance payment creation (may be incorrect)`);
+            }
+        } else {
+            // 🆕 PRIORITY 2: Payment date is on/after payment month - check accrual to determine type
+            console.log(`ℹ️ Payment date (${paymentDate.toISOString().split('T')[0]}) is on/after payment month (${monthSettled})`);
+            
+            if (arAccountCode && monthSettled) {
+                try {
+                    const TransactionEntry = require('./TransactionEntry');
+                    const paymentMonthDateCheck = new Date(monthSettled + '-01');
+                    const paymentMonthStart = new Date(paymentMonthDateCheck.getFullYear(), paymentMonthDateCheck.getMonth(), 1);
+                    const paymentMonthEnd = new Date(paymentMonthDateCheck.getFullYear(), paymentMonthDateCheck.getMonth() + 1, 0, 23, 59, 59, 999);
+                    
+                    // Check for accrual in payment month
+                    const accrualForMonth = await TransactionEntry.findOne({
+                        'entries.accountCode': arAccountCode,
+                        source: { $in: ['rental_accrual', 'lease_start'] },
+                        status: { $ne: 'reversed' },
+                        voided: { $ne: true },
+                        date: {
+                            $gte: paymentMonthStart,
+                            $lte: paymentMonthEnd
+                        }
+                    }).lean();
+                    
+                    if (accrualForMonth) {
+                        hasAccrualForMonth = true;
+                        console.log(`✅ Accrual found for payment month ${monthSettled}`);
+                        console.log(`   Accrual ID: ${accrualForMonth._id}`);
+                        console.log(`   Accrual Date: ${accrualForMonth.date}`);
+                        console.log(`   ✅ Creating REGULAR payment transaction to settle accrual`);
+                        shouldCreateAdvancePayment = false; // Regular payment to settle accrual
+                    } else {
+                        console.log(`ℹ️ No accrual found for payment month ${monthSettled}`);
+                        console.log(`   💡 Likely reason: Accrual was already paid up or doesn't exist yet`);
+                        console.log(`   ✅ Creating ADVANCE PAYMENT transaction (no accrual exists)`);
+                        shouldCreateAdvancePayment = true; // Advance payment - no accrual means it was probably paid up
+                    }
+                } catch (accrualCheckError) {
+                    console.error(`❌ Error checking for accruals: ${accrualCheckError.message}`);
+                    console.error(`   Defaulting to advance payment (safer assumption)`);
+                    shouldCreateAdvancePayment = true; // Default to advance payment if we can't check
+                }
+            } else {
+                // If we can't check accruals, default to advance payment
+                console.log(`⚠️ Cannot check accruals (missing arAccountCode or monthSettled)`);
+                console.log(`   Defaulting to advance payment`);
+                shouldCreateAdvancePayment = true; // Advance payment
             }
         }
         
@@ -846,45 +916,14 @@ async function ensurePaymentTransaction(payment) {
             return; // Done - advance payment transaction created
         }
         
-        // Regular payment transaction (no payments array)
-        console.log(`⚠️ Creating fallback payment transaction for ${payment.paymentId}`);
-        console.log(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
-        console.log(`   ⚠️ Amount: $${payment.totalAmount || 0}`);
-        
-        // 🆕 Determine payment type and month for proper description format
-        let paymentType = 'rent'; // Default to rent
-        if (payment.payments && payment.payments.length > 0) {
-            const firstPayment = payment.payments[0];
-            paymentType = firstPayment.type || 'rent';
-        } else if (payment.metadata?.paymentType) {
-            paymentType = payment.metadata.paymentType;
-        } else if (payment.paymentType) {
-            paymentType = payment.paymentType;
-        }
-        
-        // 🆕 Determine month settled from paymentMonth or payment date
-        let monthSettled = payment.paymentMonth; // Format: "2026-01"
-        if (!monthSettled && payment.date) {
-            const paymentDate = new Date(payment.date);
-            const year = paymentDate.getFullYear();
-            const month = String(paymentDate.getMonth() + 1).padStart(2, '0');
-            monthSettled = `${year}-${month}`;
-        } else if (!monthSettled) {
-            const now = new Date();
-            const year = now.getFullYear();
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            monthSettled = `${year}-${month}`;
-        }
-        
-        // 🆕 CRITICAL: Check if payment date is before payment month - if so, treat as advance payment
-        const paymentDate = new Date(payment.date || new Date());
-        const paymentMonthDate = monthSettled ? new Date(monthSettled + '-01') : null;
-        const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
-        const isAdvancePaymentByDate = paymentMonthDate && paymentDateMonth < paymentMonthDate;
-        
-        if (isAdvancePaymentByDate) {
-            console.log(`⚠️ Payment date (${paymentDate.toISOString().split('T')[0]}) is before payment month (${monthSettled})`);
-            console.log(`   ✅ Creating ADVANCE PAYMENT transaction instead of regular payment allocation`);
+        // Now create the appropriate transaction based on shouldCreateAdvancePayment
+        if (shouldCreateAdvancePayment) {
+            console.log(`💳 Creating fallback ADVANCE PAYMENT transaction for ${payment.paymentId}`);
+            console.log(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
+            console.log(`   💳 Amount: $${payment.totalAmount || 0}`);
+            console.log(`   💳 Payment date: ${paymentDate.toISOString().split('T')[0]}`);
+            console.log(`   💳 Payment month: ${monthSettled}`);
+            console.log(`   💳 This will be treated as advance payment (deferred income)`);
             
             // Create advance payment transaction (4-entry structure: Cash, AR Credit, AR Debit, Deferred Income)
             const deferredIncomeAccountCode = '2200';
@@ -958,6 +997,15 @@ async function ensurePaymentTransaction(payment) {
             console.log(`✅ Created advance payment transaction: ${advancePaymentTransaction.transactionId} for payment ${payment.paymentId}`);
             return; // Exit early - advance payment created
         }
+        
+        // Regular payment transaction (to settle accrual)
+        console.log(`💰 Creating fallback REGULAR PAYMENT transaction for ${payment.paymentId}`);
+        console.log(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
+        console.log(`   💰 Amount: $${payment.totalAmount || 0}`);
+        console.log(`   💰 Payment date: ${paymentDate.toISOString().split('T')[0]}`);
+        console.log(`   💰 Payment month: ${monthSettled}`);
+        console.log(`   💰 Accrual exists: ${hasAccrualForMonth ? 'YES' : 'NO'}`);
+        console.log(`   💰 This will settle an accrual (regular payment)`);
         
         // 🆕 Use consistent description format matching enhancedPaymentAllocationService
         const transactionDescription = `Payment allocation: ${paymentType} for ${monthSettled}`;

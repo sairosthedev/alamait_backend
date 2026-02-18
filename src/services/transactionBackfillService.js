@@ -112,9 +112,71 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
         const getName = (res) => (res?.name ? res.name : (debtor.residenceName || 'Unknown'));
         
         // Get debtor's AR account
-        const debtorAccount = await Account.findOne({ code: debtor.accountCode });
+        // 🆕 CRITICAL FIX: Ensure accountCode is a string, not an object
+        let arAccountCode = debtor.accountCode;
+        if (typeof arAccountCode !== 'string') {
+            console.error(`❌ CRITICAL: debtor.accountCode is not a string! Type: ${typeof arAccountCode}, Value:`, arAccountCode);
+            // If accountCode is an object, extract the debtor ID
+            if (typeof arAccountCode === 'object' && arAccountCode !== null) {
+                // If it's an object, try to extract the _id
+                const debtorIdFromObject = arAccountCode._id || debtor._id;
+                if (debtorIdFromObject) {
+                    arAccountCode = `1100-${debtorIdFromObject.toString()}`;
+                    console.warn(`⚠️ Debtor accountCode was an object (bug), extracted ID: ${arAccountCode}`);
+                } else {
+                    // Fallback to debtor._id
+                    arAccountCode = `1100-${debtor._id.toString()}`;
+                    console.warn(`⚠️ Debtor accountCode was an object but no _id found, using debtor._id: ${arAccountCode}`);
+                }
+            } else {
+                // Unexpected type, use debtor ID
+                arAccountCode = `1100-${debtor._id.toString()}`;
+                console.warn(`⚠️ Debtor accountCode has unexpected type (${typeof arAccountCode}), using debtor ID: ${arAccountCode}`);
+            }
+        }
+        
+        // 🆕 FINAL SAFETY CHECK: Ensure arAccountCode is always a string
+        if (typeof arAccountCode !== 'string') {
+            console.error(`❌ CRITICAL: arAccountCode is still not a string! Type: ${typeof arAccountCode}, Value:`, arAccountCode);
+            arAccountCode = `1100-${debtor._id.toString()}`;
+            console.log(`   ✅ Fixed: Using debtor ID as account code: ${arAccountCode}`);
+        }
+        
+        const debtorAccount = await Account.findOne({ code: arAccountCode });
         if (!debtorAccount) {
-            throw new Error(`Debtor account not found: ${debtor.accountCode}`);
+            // Try to find or create the account with the correct code
+            console.log(`⚠️ Account not found with code: ${arAccountCode}, attempting to create...`);
+            const RentalAccrualService = require('./rentalAccrualService');
+            try {
+                const createdAccount = await RentalAccrualService.ensureStudentARAccount(
+                    debtor.user._id || debtor.user,
+                    `${debtor.user.firstName} ${debtor.user.lastName}`
+                );
+                arAccountCode = createdAccount.code;
+                console.log(`✅ Created/found account with code: ${arAccountCode}`);
+            } catch (accountError) {
+                throw new Error(`Debtor account not found and could not be created: ${arAccountCode} - ${accountError.message}`);
+            }
+        } else {
+            // 🆕 SAFETY CHECK: Ensure the account's code is a string
+            if (typeof debtorAccount.code !== 'string') {
+                console.error(`❌ CRITICAL: Account code is not a string! Type: ${typeof debtorAccount.code}, Value:`, debtorAccount.code);
+                // Fix the account code in the database
+                if (typeof debtorAccount.code === 'object' && debtorAccount.code !== null) {
+                    const debtorIdFromObject = debtorAccount.code._id || debtor._id;
+                    if (debtorIdFromObject) {
+                        const fixedCode = `1100-${debtorIdFromObject.toString()}`;
+                        console.log(`   🔧 Fixing account code from object to string: ${fixedCode}`);
+                        debtorAccount.code = fixedCode;
+                        await debtorAccount.save();
+                        arAccountCode = fixedCode;
+                        console.log(`   ✅ Fixed account code in database`);
+                    }
+                }
+            } else {
+                // Use the account's code (might be different from debtor.accountCode if it was fixed)
+                arAccountCode = debtorAccount.code;
+            }
         }
         
         // Get financial data from debtor
@@ -210,7 +272,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
             // 1. Prorated Rent Accrual
             if (proratedRent > 0) {
                 entries.push({
-                    accountCode: debtor.accountCode,
+                    accountCode: String(arAccountCode), // Explicitly convert to string
                     accountName: debtorAccount.name,
                     accountType: debtorAccount.type,
                     debit: proratedRent,
@@ -231,7 +293,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
             // 2. Admin Fee Accrual (if applicable)
             if (adminFee > 0) {
                 entries.push({
-                    accountCode: debtor.accountCode,
+                    accountCode: String(arAccountCode), // Explicitly convert to string
                     accountName: debtorAccount.name,
                     accountType: debtorAccount.type,
                     debit: adminFee,
@@ -252,7 +314,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
             // 3. Security Deposit Liability
             if (depositAmount > 0) {
                 entries.push({
-                    accountCode: debtor.accountCode,
+                    accountCode: String(arAccountCode), // Explicitly convert to string
                     accountName: debtorAccount.name,
                     accountType: debtorAccount.type,
                     debit: depositAmount,
@@ -376,7 +438,7 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
                 reference: `MONTHLY_ACCRUAL_${monthKey}_${applicationCode}`,
                 entries: [
                     {
-                        accountCode: debtor.accountCode,
+                        accountCode: String(arAccountCode), // Explicitly convert to string
                         accountName: debtorAccount.name,
                         accountType: debtorAccount.type,
 							debit: monthlyRent,

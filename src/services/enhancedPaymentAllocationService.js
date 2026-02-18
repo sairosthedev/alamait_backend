@@ -1389,12 +1389,20 @@ class EnhancedPaymentAllocationService {
       });
       
       // 🆕 Include payment and allocation transactions linked by studentId, sourceId, or AR account credit
+      // 🆕 CRITICAL: Exclude advance_payment transactions - they net to zero in AR and should not affect outstanding balances
       const payments = allUserTransactions.filter(tx => {
+        // 🆕 EXCLUDE advance payment transactions - they have AR entries that net to zero
+        // Advance payments: DR Cash, CR AR, DR AR, CR Deferred Income (AR nets to zero)
+        if (tx.source === 'advance_payment') {
+          console.log(`⏭️ Skipping advance payment transaction: ${tx.transactionId} - AR entries net to zero`);
+          return false;
+        }
+        
         const isAllocation = tx.metadata?.allocationType === 'payment_allocation';
-        const isPayment = tx.source === 'payment' || tx.source === 'advance_payment';
+        const isPayment = tx.source === 'payment';
         const matchesStudent = tx.metadata?.studentId?.toString() === userIdString || tx.metadata?.userId?.toString() === userIdString || (tx.sourceId && tx.sourceId.toString() === userIdString);
         const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
-        // Include if it's a payment allocation, or if it's a payment/advance_payment that matches student or touches AR
+        // Include if it's a payment allocation, or if it's a payment (NOT advance_payment) that matches student or touches AR
         return isAllocation || (isPayment && (matchesStudent || touchesAR));
       });
       
@@ -1512,21 +1520,32 @@ class EnhancedPaymentAllocationService {
         // Do NOT process AR debit entries for lease_start as they may contain totals that need to be broken down
         if (accrual.metadata?.type === 'lease_start') {
           console.log(`🔍 Processing lease start transaction breakdown: ${accrual._id}`);
+          console.log(`   Transaction totalDebit: ${accrual.totalDebit}, totalCredit: ${accrual.totalCredit}`);
+          console.log(`   Metadata proratedRent: ${accrual.metadata?.proratedRent}, adminFee: ${accrual.metadata?.adminFee}, securityDeposit: ${accrual.metadata?.securityDeposit}`);
           
           // For lease_start, categorize based ONLY on the income/liability entries (not AR debit entries)
           // This ensures we get the correct breakdown: rent from 4001, admin fee from 4002, deposit from 2020
+          // 🆕 CRITICAL: Skip AR debit entries entirely for lease_start transactions
           accrual.entries.forEach(entry => {
             const description = (entry.description || '').toLowerCase();
+            
+            // 🆕 SKIP AR debit entries for lease_start - they are totals, not individual components
+            if (entry.accountCode.startsWith('1100-') && entry.accountType === 'Asset' && entry.debit > 0) {
+              console.log(`  ⏭️ Skipping AR debit entry: $${entry.debit} (this is a total, not a component)`);
+              return;
+            }
             
             // Admin fee entry (account 4002) - Income account
             if (entry.accountCode === '4002' && entry.accountType === 'Income' && entry.credit > 0) {
               monthlyOutstanding[monthKey].adminFee.owed += entry.credit;
+              monthlyOutstanding[monthKey].adminFee.originalOwed = (monthlyOutstanding[monthKey].adminFee.originalOwed || 0) + entry.credit; // 🆕 Track original admin fee
               console.log(`  → Found admin fee in lease start: $${entry.credit}`);
             }
             
             // Deposit entry (account 2020) - Liability account
             if (entry.accountCode === '2020' && entry.accountType === 'Liability' && entry.credit > 0) {
               monthlyOutstanding[monthKey].deposit.owed += entry.credit;
+              monthlyOutstanding[monthKey].deposit.originalOwed = (monthlyOutstanding[monthKey].deposit.originalOwed || 0) + entry.credit; // 🆕 Track original deposit
               console.log(`  → Found deposit in lease start: $${entry.credit}`);
             }
             
@@ -1538,7 +1557,8 @@ class EnhancedPaymentAllocationService {
             }
           });
           
-          console.log(`  ✅ Lease start breakdown: Rent=$${monthlyOutstanding[monthKey].rent.owed}, AdminFee=$${monthlyOutstanding[monthKey].adminFee.owed}, Deposit=$${monthlyOutstanding[monthKey].deposit.owed}`);
+          console.log(`  ✅ Lease start breakdown: Rent=$${monthlyOutstanding[monthKey].rent.originalOwed || monthlyOutstanding[monthKey].rent.owed}, AdminFee=$${monthlyOutstanding[monthKey].adminFee.originalOwed || monthlyOutstanding[monthKey].adminFee.owed}, Deposit=$${monthlyOutstanding[monthKey].deposit.originalOwed || monthlyOutstanding[monthKey].deposit.owed}`);
+          console.log(`  ✅ Original Owed: Rent=$${monthlyOutstanding[monthKey].rent.originalOwed}, AdminFee=$${monthlyOutstanding[monthKey].adminFee.originalOwed}, Deposit=$${monthlyOutstanding[monthKey].deposit.originalOwed}`);
         } else {
           // For monthly_rent_accrual and other accrual types, categorize by AR debit entry description
           accrual.entries.forEach(entry => {

@@ -3235,12 +3235,40 @@ class TransactionController {
                 totalCredit: originalTransaction.totalCredit
             });
 
-            // Create reversal transaction that reverses ALL accrual entries
+            // Create reversal transaction that reverses ONLY accrual entries (not advance payments)
             const reversalDate = date ? new Date(date) : new Date();
             const reversalTransactionId = `REVERSE-LEASE-START-${Date.now()}`;
             
-            // Build reversal entries - reverse ALL entries from the original transaction
-            const reversalEntries = originalTransaction.entries.map(entry => {
+            // 🆕 CRITICAL: Filter to only reverse ACCRUAL entries, NOT advance payment entries
+            // Advance payments use account 2200 (Deferred Income) and should NOT be reversed
+            // Only reverse: AR entries (1100-*), Income entries (4001, 4002), and Deposit entries (2020)
+            // DO NOT reverse: Deferred Income entries (2200) - these are from advance payments
+            const accrualEntries = originalTransaction.entries.filter(entry => {
+                const accountCode = entry.accountCode;
+                const isAR = accountCode && accountCode.startsWith('1100');
+                const isIncome = accountCode === '4001' || accountCode === '4002'; // Rent, Admin Fee
+                const isDeposit = accountCode === '2020'; // Security Deposit
+                const isDeferredIncome = accountCode === '2200'; // Advance Payment Liability
+                
+                // Include AR, Income, and Deposit entries (these are accruals)
+                // Exclude Deferred Income entries (these are from advance payments, not accruals)
+                const isAccrualEntry = (isAR || isIncome || isDeposit) && !isDeferredIncome;
+                
+                if (!isAccrualEntry) {
+                    console.log(`⏭️ Skipping non-accrual entry: ${accountCode} - ${entry.description}`);
+                    console.log(`   This entry is related to advance payments and should NOT be reversed`);
+                }
+                
+                return isAccrualEntry;
+            });
+            
+            console.log(`📊 Filtering entries for reversal:`);
+            console.log(`   Total entries in original transaction: ${originalTransaction.entries.length}`);
+            console.log(`   Accrual entries to reverse: ${accrualEntries.length}`);
+            console.log(`   Entries skipped (advance payments): ${originalTransaction.entries.length - accrualEntries.length}`);
+            
+            // Build reversal entries - reverse ONLY accrual entries
+            const reversalEntries = accrualEntries.map(entry => {
                 // Reverse the debit/credit amounts
                 return {
                     accountCode: entry.accountCode,
@@ -3263,16 +3291,20 @@ class TransactionController {
                     }
                 };
             });
+            
+            // Calculate totals from only the accrual entries being reversed
+            const totalAccrualDebit = accrualEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
+            const totalAccrualCredit = accrualEntries.reduce((sum, e) => sum + (e.credit || 0), 0);
 
-            // Create the comprehensive reversal transaction
+            // Create the reversal transaction - only reverses accrual entries, NOT advance payments
             const reversalTransaction = new TransactionEntry({
                 transactionId: reversalTransactionId,
                 date: reversalDate,
-                description: `Complete lease start accrual reversal for forfeiture: ${studentName}`,
+                description: `Lease start accrual reversal for forfeiture: ${studentName} (advance payments preserved)`,
                 reference: `FORFEIT-REVERSE-${studentId}`,
                 entries: reversalEntries,
-                totalDebit: originalTransaction.totalCredit, // Reversed
-                totalCredit: originalTransaction.totalDebit, // Reversed
+                totalDebit: totalAccrualCredit, // Reversed: original credit becomes debit
+                totalCredit: totalAccrualDebit, // Reversed: original debit becomes credit
                 source: 'rental_accrual_reversal',
                 sourceId: originalTransaction._id,
                 sourceModel: 'TransactionEntry',
@@ -3287,35 +3319,40 @@ class TransactionController {
                     originalTransactionId: transactionId,
                     originalTransaction: originalTransaction._id,
                     reason: reason,
-                    transactionType: 'lease_start_complete_reversal',
+                    transactionType: 'lease_start_accrual_reversal',
                     residence: originalTransaction.residence,
                     createdBy: 'system',
                     createdByEmail: 'system@alamait.com',
-                    isCompleteReversal: true,
+                    isAccrualReversal: true, // Only accruals reversed
                     isForfeiture: true,
                     originalEntriesCount: originalTransaction.entries.length,
-                    reversalEntriesCount: reversalEntries.length,
+                    accrualEntriesReversed: reversalEntries.length,
+                    advancePaymentEntriesPreserved: originalTransaction.entries.length - accrualEntries.length,
                     originalTotalDebit: originalTransaction.totalDebit,
                     originalTotalCredit: originalTransaction.totalCredit,
-                    reversalTotalDebit: originalTransaction.totalCredit,
-                    reversalTotalCredit: originalTransaction.totalDebit
+                    accrualDebitReversed: totalAccrualDebit,
+                    accrualCreditReversed: totalAccrualCredit,
+                    reversalTotalDebit: totalAccrualCredit,
+                    reversalTotalCredit: totalAccrualDebit,
+                    note: 'Only accrual entries reversed. Advance payment entries (2200) preserved.'
                 }
             });
 
             // Save the reversal transaction
             await reversalTransaction.save();
 
-            console.log('✅ Complete lease start accrual reversal created:', {
+            console.log('✅ Lease start accrual reversal created (advance payments preserved):', {
                 reversalId: reversalTransaction._id,
                 reversalTransactionId: reversalTransactionId,
-                entriesReversed: reversalEntries.length,
-                totalReversed: originalTransaction.totalDebit + originalTransaction.totalCredit
+                accrualEntriesReversed: reversalEntries.length,
+                advancePaymentEntriesPreserved: originalTransaction.entries.length - accrualEntries.length,
+                accrualAmountReversed: totalAccrualDebit + totalAccrualCredit
             });
 
             // Return comprehensive response
             return res.status(200).json({
                 success: true,
-                message: 'All lease start accrual entries reversed successfully for forfeiture',
+                message: 'Lease start accrual entries reversed successfully (advance payments preserved)',
                 data: {
                     originalTransaction: {
                         id: originalTransaction._id,
@@ -3338,16 +3375,18 @@ class TransactionController {
                         name: studentName
                     },
                     accounting: {
-                        entriesReversed: reversalEntries.length,
-                        totalAmountReversed: originalTransaction.totalDebit + originalTransaction.totalCredit,
-                        netEffect: 0, // Complete reversal means net effect is zero
-                        reversalType: 'complete_accrual_reversal'
+                        accrualEntriesReversed: reversalEntries.length,
+                        advancePaymentEntriesPreserved: originalTransaction.entries.length - accrualEntries.length,
+                        accrualAmountReversed: totalAccrualDebit + totalAccrualCredit,
+                        netEffect: 0, // Accrual reversal means net effect is zero for accruals
+                        reversalType: 'accrual_only_reversal',
+                        note: 'Only accrual entries were reversed. Advance payment entries (deferred income 2200) were preserved.'
                     },
                     summary: {
                         reason: reason,
                         date: reversalDate,
-                        completeReversal: true,
-                        allAccrualsReversed: true
+                        accrualsReversed: true,
+                        advancePaymentsPreserved: true
                     }
                 }
             });
