@@ -1323,6 +1323,103 @@ class EnhancedCashFlowService {
                         hasCorrespondingPayment: !!correspondingPayment
                     });
                     
+                    // 🆕 NEW: Check payment's payments array and allocation data to determine if it's a rent payment (before checking advance payments)
+                    if (correspondingPayment && category === 'other_income') {
+                        let isRentPayment = false;
+                        let isAdvanceRent = false;
+                        
+                        // Check payments array
+                        if (correspondingPayment.payments && correspondingPayment.payments.length > 0) {
+                            const hasRentPayment = correspondingPayment.payments.some(p => 
+                                p.type === 'rent' || p.type === 'Rent' || (p.paymentType && p.paymentType.toLowerCase() === 'rent')
+                            );
+                            
+                            if (hasRentPayment) {
+                                isRentPayment = true;
+                                const paymentDate = new Date(correspondingPayment.date);
+                                
+                                // Check if any rent payment is for a future month
+                                const hasFutureRent = correspondingPayment.payments.some(p => {
+                                    if ((p.type === 'rent' || p.type === 'Rent') && p.month && p.year) {
+                                        const allocationDate = new Date(p.year, p.month - 1);
+                                        return allocationDate > paymentDate;
+                                    }
+                                    return false;
+                                });
+                                
+                                if (hasFutureRent) {
+                                    isAdvanceRent = true;
+                                }
+                            }
+                        }
+                        
+                        // Check allocation monthlyBreakdown
+                        if (!isRentPayment && correspondingPayment.allocation && correspondingPayment.allocation.monthlyBreakdown) {
+                            const rentAllocations = correspondingPayment.allocation.monthlyBreakdown.filter(
+                                allocation => allocation.paymentType === 'rent' || allocation.paymentType === 'Rent'
+                            );
+                            
+                            if (rentAllocations.length > 0) {
+                                isRentPayment = true;
+                                const paymentDate = new Date(correspondingPayment.date);
+                                
+                                // Check if any rent allocation is for a future month
+                                const hasFutureRentAllocation = rentAllocations.some(allocation => {
+                                    if (allocation.month) {
+                                        const [year, month] = allocation.month.split('-').map(n => parseInt(n));
+                                        const allocationDate = new Date(year, month - 1);
+                                        return allocationDate > paymentDate;
+                                    }
+                                    return false;
+                                });
+                                
+                                if (hasFutureRentAllocation) {
+                                    isAdvanceRent = true;
+                                }
+                            }
+                        }
+                        
+                        // Check monthlyBreakdown (alternative structure)
+                        if (!isRentPayment && correspondingPayment.monthlyBreakdown && correspondingPayment.monthlyBreakdown.length > 0) {
+                            const rentAllocations = correspondingPayment.monthlyBreakdown.filter(
+                                allocation => allocation.paymentType === 'rent' || allocation.paymentType === 'Rent'
+                            );
+                            
+                            if (rentAllocations.length > 0) {
+                                isRentPayment = true;
+                                const paymentDate = new Date(correspondingPayment.date);
+                                
+                                // Check if any rent allocation is for a future month
+                                const hasFutureRentAllocation = rentAllocations.some(allocation => {
+                                    if (allocation.month) {
+                                        const [year, month] = allocation.month.split('-').map(n => parseInt(n));
+                                        const allocationDate = new Date(year, month - 1);
+                                        return allocationDate > paymentDate;
+                                    }
+                                    return false;
+                                });
+                                
+                                if (hasFutureRentAllocation) {
+                                    isAdvanceRent = true;
+                                }
+                            }
+                        }
+                        
+                        // Apply categorization if rent payment detected
+                        if (isRentPayment) {
+                            if (isAdvanceRent) {
+                                category = 'advance_payments';
+                                description = 'Advance Rent Payments';
+                                isAdvancePayment = true;
+                                console.log(`🔍 Rent payment detected as advance (from payment data): ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                            } else {
+                                category = 'rental_income';
+                                description = 'Rental Income from Students';
+                                console.log(`🔍 Rent payment detected from payment data: ${incomeAmount} - Transaction: ${entry.transactionId}`);
+                            }
+                        }
+                    }
+                    
                     // Check if this is an advance payment by looking at payment details (only if not already categorized)
                     if (correspondingPayment && category === 'other_income') {
                         const paymentDate = correspondingPayment.date;

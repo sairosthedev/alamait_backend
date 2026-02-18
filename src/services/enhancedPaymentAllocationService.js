@@ -22,7 +22,7 @@ class EnhancedPaymentAllocationService {
       console.log('🚀 ENHANCED SMART FIFO PAYMENT ALLOCATION:', paymentData.paymentId);
       console.log('📋 Payment Data:', JSON.stringify(paymentData, null, 2));
       
-      const { studentId: userId, totalAmount, payments } = paymentData;
+      const { studentId: userId, totalAmount, payments, accountCode } = paymentData;
       
       // 🆕 FIX: Clear any potential caching issues by adding a small delay
       // This ensures we get the latest data from the database
@@ -33,20 +33,340 @@ class EnhancedPaymentAllocationService {
       }
       
       console.log(`🎯 Processing payment for user: ${userId}, total amount: $${totalAmount}`);
+      console.log(`📊 Account Code from payload: ${accountCode || 'Not provided'}`);
       
-      // 1. Get current debtor status and once-off charge flags
-      const debtor = await this.getDebtorStatus(userId);
-      if (!debtor) {
-        throw new Error(`Debtor not found for user: ${userId}`);
+      // 🆕 CRITICAL: Use accountCode from payload if provided (most reliable)
+      let finalAccountCode = accountCode;
+      let actualUserId = userId;
+      let debtorDoc = null;
+      
+      // STEP 1: If accountCode provided, extract debtor ID and find debtor
+      if (accountCode && accountCode.startsWith('1100-')) {
+        const Debtor = require('../models/Debtor');
+        const mongoose = require('mongoose');
+        const debtorIdFromCode = accountCode.replace('1100-', '');
+        
+        if (mongoose.Types.ObjectId.isValid(debtorIdFromCode)) {
+          debtorDoc = await Debtor.findById(debtorIdFromCode).select('accountCode _id user debtorCode application').lean();
+          if (debtorDoc) {
+            actualUserId = debtorDoc.user?.toString() || userId;
+            finalAccountCode = debtorDoc.accountCode || accountCode; // Use debtor's account code if different
+            console.log(`✅ Found debtor by account code from payload: ${debtorDoc.debtorCode}`);
+            console.log(`   Account Code: ${finalAccountCode}`);
+            console.log(`   User ID: ${actualUserId}`);
+          } else {
+            console.log(`⚠️ Account code provided but debtor not found: ${accountCode}`);
+            console.log(`   Will try to find debtor by user ID as fallback`);
+          }
+        }
       }
       
-      console.log(`📊 Current debtor status:`);
-      console.log(`   Admin Fee paid: ${debtor.onceOffCharges?.adminFee?.isPaid || false}`);
-      console.log(`   Deposit paid: ${debtor.onceOffCharges?.deposit?.isPaid || false}`);
-      console.log(`   Deferred Income: $${debtor.deferredIncome?.totalAmount || 0}`);
+      // STEP 2: If debtor not found by account code, find by user ID
+      if (!debtorDoc) {
+        const Debtor = require('../models/Debtor');
+        const Application = require('../models/Application');
+        const mongoose = require('mongoose');
+        
+        if (mongoose.Types.ObjectId.isValid(userId)) {
+          debtorDoc = await Debtor.findById(userId).select('accountCode _id user debtorCode application').lean();
+          if (debtorDoc) {
+            actualUserId = debtorDoc.user?.toString() || userId;
+            if (!finalAccountCode) {
+              finalAccountCode = debtorDoc.accountCode;
+            }
+          }
+        }
+        
+        if (!debtorDoc) {
+          const application = await Application.findById(userId).select('student').lean();
+          if (application && application.student) {
+            actualUserId = application.student.toString();
+            debtorDoc = await Debtor.findOne({ user: actualUserId }).select('accountCode _id user debtorCode application').lean();
+            if (!debtorDoc) {
+              debtorDoc = await Debtor.findOne({ application: userId }).select('accountCode _id user debtorCode application').lean();
+            }
+            if (debtorDoc && !finalAccountCode) {
+              finalAccountCode = debtorDoc.accountCode;
+            }
+          } else {
+            debtorDoc = await Debtor.findOne({ user: userId }).select('accountCode _id user debtorCode application').lean();
+            if (debtorDoc && !finalAccountCode) {
+              finalAccountCode = debtorDoc.accountCode;
+            }
+          }
+        }
+      }
       
-      // 2. Get detailed outstanding balances by month (FIFO order)
-      const outstandingBalances = await this.getDetailedOutstandingBalances(userId);
+      if (debtorDoc) {
+        actualUserId = debtorDoc.user.toString();
+        if (!finalAccountCode) {
+          finalAccountCode = debtorDoc.accountCode;
+        }
+        console.log(`✅ Using debtor: ${debtorDoc.debtorCode}, Account Code: ${finalAccountCode}`);
+      } else {
+        console.log(`⚠️ No debtor found - will use accountCode from payload: ${finalAccountCode || 'N/A'}`);
+      }
+      
+      // STEP 2: Get AR balances using same method as AR balances API
+      let outstandingBalances = await this.getDetailedOutstandingBalances(actualUserId);
+      console.log(`📊 Found ${outstandingBalances?.length || 0} months with outstanding balances`);
+      
+      // STEP 3: Determine payment month
+      const paymentDate = new Date(paymentData.date);
+      const paymentMonthKey = paymentData.paymentMonth || `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}`;
+      console.log(`📅 Payment month: ${paymentMonthKey}`);
+      console.log(`📅 Payment date: ${paymentDate.toISOString().split('T')[0]}`);
+      
+      // 🆕 CRITICAL: Check if payment date is before payment month (advance payment detection)
+      // If payment is made before the month it's allocated to, it's ALWAYS an advance payment
+      let isAdvancePaymentByDate = false;
+      if (paymentData.paymentMonth) {
+        const paymentMonthDate = new Date(paymentData.paymentMonth + '-01');
+        const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
+        
+        if (paymentDateMonth < paymentMonthDate) {
+          isAdvancePaymentByDate = true;
+          console.log(`⚠️ ADVANCE PAYMENT DETECTED: Payment date (${paymentDate.toISOString().split('T')[0]}) is before payment month (${paymentData.paymentMonth})`);
+          console.log(`   Payment Date Month: ${paymentDateMonth.toISOString().split('T')[0]}`);
+          console.log(`   Payment Month: ${paymentMonthDate.toISOString().split('T')[0]}`);
+          console.log(`   ✅ This will be treated as an ADVANCE PAYMENT - routing to deferred income`);
+        }
+      }
+      
+      // 🆕 CRITICAL: If payment date is before payment month, skip all accrual checks and treat as advance
+      // This must happen BEFORE checking for accruals to prevent override
+      if (isAdvancePaymentByDate) {
+        console.log(`⚠️ Payment date is before payment month - SKIPPING accrual checks and treating as ADVANCE PAYMENT`);
+        // Skip to advance payment handling (will be handled in the section below)
+      } else {
+        // STEP 4: Check if payment month has balance - with DIRECT FALLBACK if not found
+        let paymentMonthBalance = outstandingBalances?.find(b => b.monthKey === paymentMonthKey);
+        let hasPaymentMonthBalance = paymentMonthBalance && paymentMonthBalance.rent?.outstanding > 0;
+        
+        // 🆕 CRITICAL FALLBACK: If balance not found, directly query for accrual for payment month
+        // Use accountCode from payload if available, otherwise use debtor account code
+        const accountCodeForQuery = finalAccountCode || (debtorDoc && debtorDoc.accountCode);
+        if (!hasPaymentMonthBalance && accountCodeForQuery) {
+          console.log(`🔍 Balance not found in getDetailedOutstandingBalances - directly checking for accrual...`);
+          console.log(`   Using account code: ${accountCodeForQuery}`);
+          const TransactionEntry = require('../models/TransactionEntry');
+          const debtorAccountCode = accountCodeForQuery;
+          
+          // Query for accrual for payment month (not payment date month)
+          const paymentMonthDate = new Date(paymentData.paymentMonth + '-01');
+          const paymentMonthStart = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth(), 1);
+          const paymentMonthEnd = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth() + 1, 0, 23, 59, 59, 999);
+          
+          const accrualForMonth = await TransactionEntry.findOne({
+            'entries.accountCode': debtorAccountCode,
+            source: { $in: ['rental_accrual', 'lease_start'] },
+            status: { $ne: 'reversed' },
+            date: {
+              $gte: paymentMonthStart,
+              $lte: paymentMonthEnd
+            }
+          }).lean();
+          
+          if (accrualForMonth) {
+            console.log(`✅ Found accrual for payment month ${paymentMonthKey}: ${accrualForMonth.transactionId}`);
+            
+          // Calculate outstanding balance
+          const accrualEntry = accrualForMonth.entries.find(e => 
+            e.accountCode === debtorAccountCode && e.debit > 0
+          );
+          const accrualAmount = accrualEntry?.debit || 0;
+          
+          // Find all payment allocations for this month
+          const paymentAllocations = await TransactionEntry.find({
+            'entries.accountCode': debtorAccountCode,
+            source: 'payment',
+            status: { $ne: 'reversed' },
+            'metadata.monthSettled': paymentMonthKey
+          }).lean();
+          
+          let totalPaid = 0;
+          paymentAllocations.forEach(tx => {
+            const creditEntry = tx.entries.find(e => 
+              e.accountCode === debtorAccountCode && e.credit > 0
+            );
+            if (creditEntry) totalPaid += creditEntry.credit;
+          });
+          
+          // 🆕 CRITICAL: Find negotiated payment adjustments for this month and subtract from accrual
+          const [yearStr, monStr] = paymentMonthKey.split('-');
+          const negotiatedAdjustments = await TransactionEntry.find({
+            'entries.accountCode': debtorAccountCode,
+            source: 'manual',
+            status: { $ne: 'reversed' },
+            $and: [
+              {
+                $or: [
+                  { 'metadata.type': 'negotiated_payment_adjustment' },
+                  { 'metadata.transactionType': 'negotiated_payment_adjustment' },
+                  { description: { $regex: /negotiated|discount/i } }
+                ]
+              },
+              {
+                $or: [
+                  { 'metadata.accrualMonth': parseInt(monStr), 'metadata.accrualYear': parseInt(yearStr) },
+                  { 'metadata.monthSettled': paymentMonthKey },
+                  { 'metadata.month': paymentMonthKey }
+                ]
+              }
+            ]
+          }).lean();
+          
+          let totalNegotiatedDiscount = 0;
+          negotiatedAdjustments.forEach(adj => {
+            const creditEntry = adj.entries.find(e => 
+              e.accountCode === debtorAccountCode && e.credit > 0
+            );
+            if (creditEntry) {
+              totalNegotiatedDiscount += creditEntry.credit;
+              console.log(`   📉 Found negotiated discount for ${paymentMonthKey}: $${creditEntry.credit}`);
+            }
+          });
+          
+          // Calculate net accrual after negotiated adjustments
+          const netAccrualAmount = Math.max(0, accrualAmount - totalNegotiatedDiscount);
+          const outstanding = netAccrualAmount - totalPaid;
+          
+          console.log(`   📊 Accrual calculation for ${paymentMonthKey}:`);
+          console.log(`      Original Accrual: $${accrualAmount}`);
+          console.log(`      Negotiated Discounts: $${totalNegotiatedDiscount}`);
+          console.log(`      Net Accrual (after discounts): $${netAccrualAmount}`);
+          console.log(`      Payments Received: $${totalPaid}`);
+          console.log(`      Outstanding Balance: $${outstanding}`);
+            
+            if (outstanding > 0) {
+              console.log(`✅ Payment month ${paymentMonthKey} has outstanding balance: $${outstanding} (net accrual: $${netAccrualAmount}, paid: $${totalPaid}${totalNegotiatedDiscount > 0 ? `, negotiated discounts: $${totalNegotiatedDiscount}` : ''})`);
+              hasPaymentMonthBalance = true;
+              
+              // Add to outstandingBalances
+              if (!outstandingBalances) outstandingBalances = [];
+              paymentMonthBalance = {
+                monthKey: paymentMonthKey,
+                year: paymentMonthDate.getFullYear(),
+                month: paymentMonthDate.getMonth() + 1,
+                monthName: paymentMonthDate.toLocaleString('default', { month: 'long' }),
+                rent: { owed: netAccrualAmount, paid: totalPaid, outstanding: outstanding }, // Use net accrual after negotiated discounts
+                adminFee: { owed: 0, paid: 0, outstanding: 0 },
+                deposit: { owed: 0, paid: 0, outstanding: 0 },
+                totalOutstanding: outstanding,
+                transactionId: accrualForMonth._id,
+                date: accrualForMonth.date
+              };
+              outstandingBalances.push(paymentMonthBalance);
+            } else {
+              console.log(`ℹ️ Payment month ${paymentMonthKey} is fully paid (net accrual: $${netAccrualAmount}, paid: $${totalPaid}${totalNegotiatedDiscount > 0 ? `, negotiated discounts: $${totalNegotiatedDiscount}` : ''})`);
+            }
+          } else {
+            console.log(`ℹ️ No accrual found for payment month ${paymentMonthKey}`);
+          }
+        }
+      }
+      
+      // 🆕 CRITICAL FIX: If payment date is before payment month, treat as advance payment
+      // This takes priority over accrual checks - if payment is made before the month, it's advance
+      if (isAdvancePaymentByDate) {
+        console.log(`⚠️ Payment date is before payment month - treating as ADVANCE PAYMENT regardless of accrual status`);
+        console.log(`   Payment will be routed to deferred income (account 2200)`);
+        
+        // Handle all payments as advance payments when payment date is before payment month
+        const allocationResults = [];
+        let totalAllocated = 0;
+        
+        // Group payment components by type for efficient allocation
+        const paymentByType = {};
+        payments.forEach(payment => {
+          if (!paymentByType[payment.type]) {
+            paymentByType[payment.type] = 0;
+          }
+          paymentByType[payment.type] += payment.amount;
+        });
+        
+        console.log('📊 Payment breakdown by type:', paymentByType);
+        
+        // Process each payment type as advance payment
+        for (const [paymentType, totalAmount] of Object.entries(paymentByType)) {
+          console.log(`💳 Processing ${paymentType} payment as advance (payment date before payment month): $${totalAmount}`);
+          
+          const advanceResult = await this.handleAdvancePayment(
+            paymentData.paymentId, userId, totalAmount, paymentData, paymentType
+          );
+          allocationResults.push(advanceResult);
+          totalAllocated += totalAmount;
+        }
+        
+        // Create allocation record
+        const allocationRecord = await this.createAllocationRecord(
+          paymentData.paymentId,
+          userId,
+          allocationResults,
+          paymentData
+        );
+        
+        console.log('✅ All payments processed as advance payments (payment date before payment month)');
+        
+        return {
+          success: true,
+          allocation: {
+            monthlyBreakdown: allocationResults,
+            summary: {
+              totalAllocated,
+              remainingBalance: totalAmount - totalAllocated,
+              isAdvancePayment: true,
+              reason: 'Payment date is before payment month'
+            }
+          },
+          allocationRecord
+        };
+      }
+      
+      // 🆕 CRITICAL FIX: Before treating as advance payment, check if accrual exists for payment month
+      // Even if getDetailedOutstandingBalances returns empty, we should check directly for accruals
+      if ((!outstandingBalances || outstandingBalances.length === 0) && finalAccountCode && paymentData.paymentMonth) {
+        console.log(`🔍 Double-checking for accruals for payment month: ${paymentData.paymentMonth}`);
+        console.log(`   Using account code: ${finalAccountCode}`);
+        
+        try {
+          const paymentMonthDate = new Date(paymentData.paymentMonth + '-01'); // Parse YYYY-MM format
+          const paymentMonthStart = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth(), 1);
+          const paymentMonthEnd = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth() + 1, 0, 23, 59, 59, 999);
+          
+          const directAccrualCheck = await TransactionEntry.findOne({
+            'entries.accountCode': finalAccountCode,
+            source: { $in: ['rental_accrual', 'lease_start'] },
+            status: { $ne: 'reversed' },
+            voided: { $ne: true },
+            date: {
+              $gte: paymentMonthStart,
+              $lte: paymentMonthEnd
+            }
+          }).lean();
+          
+          if (directAccrualCheck) {
+            console.warn(`⚠️  CRITICAL: Found accrual for payment month ${paymentData.paymentMonth}!`);
+            console.warn(`   Accrual ID: ${directAccrualCheck._id}`);
+            console.warn(`   This payment should NOT be an advance payment - it should settle the accrual!`);
+            console.warn(`   Re-checking outstanding balances with direct accrual...`);
+            
+            // Re-check outstanding balances now that we know accrual exists
+            outstandingBalances = await this.getDetailedOutstandingBalances(actualUserId);
+            if (outstandingBalances && outstandingBalances.length > 0) {
+              console.log(`✅ Found outstanding balances after direct accrual check - processing as regular payment`);
+              // Continue with normal allocation flow below
+            } else {
+              console.error(`❌ Accrual exists but getDetailedOutstandingBalances returned empty - this is a bug!`);
+              console.error(`   Accrual: ${directAccrualCheck._id}, Account Code: ${finalAccountCode}`);
+            }
+          } else {
+            console.log(`✅ Confirmed: No accrual found for payment month ${paymentData.paymentMonth} - can proceed as advance payment`);
+          }
+        } catch (directCheckError) {
+          console.error(`❌ Error in direct accrual check: ${directCheckError.message}`);
+        }
+      }
       
       if (!outstandingBalances || outstandingBalances.length === 0) {
         console.log('ℹ️ No outstanding balances found for student');
@@ -76,7 +396,7 @@ class EnhancedPaymentAllocationService {
           await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
           
           // Re-check for outstanding balances
-          const recheckBalances = await this.getDetailedOutstandingBalances(userId);
+          const recheckBalances = await this.getDetailedOutstandingBalances(actualUserId);
           if (recheckBalances && recheckBalances.length > 0) {
             console.log(`✅ Found accruals after waiting - processing as regular payment allocation`);
             // Continue with normal allocation flow (will fall through to next section)
@@ -1149,7 +1469,7 @@ class EnhancedPaymentAllocationService {
             month: Number(monStr) || (accrualDate.getMonth() + 1),
             monthName: accrualDate.toLocaleString('default', { month: 'long' }),
             date: accrualDate,
-            rent: { owed: 0, paid: 0, outstanding: 0 },
+            rent: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0, negotiatedDiscount: 0 }, // 🆕 Track original and negotiated separately
             adminFee: { owed: 0, paid: 0, outstanding: 0 },
             deposit: { owed: 0, paid: 0, outstanding: 0 },
             totalOutstanding: 0,
@@ -1190,6 +1510,7 @@ class EnhancedPaymentAllocationService {
             // Rent entry (account 4001) - Income account (prorated or full month)
             if (entry.accountCode === '4001' && entry.accountType === 'Income' && entry.credit > 0) {
               monthlyOutstanding[monthKey].rent.owed += entry.credit;
+              monthlyOutstanding[monthKey].rent.originalOwed = (monthlyOutstanding[monthKey].rent.originalOwed || 0) + entry.credit; // 🆕 Track original accrual amount
               console.log(`  → Found rent in lease start: $${entry.credit} (${description.includes('prorated') ? 'prorated' : 'full month'})`);
             }
           });
@@ -1208,6 +1529,7 @@ class EnhancedPaymentAllocationService {
               } else {
                 // Default to rent for monthly accruals
                 monthlyOutstanding[monthKey].rent.owed += entry.debit;
+                monthlyOutstanding[monthKey].rent.originalOwed = (monthlyOutstanding[monthKey].rent.originalOwed || 0) + entry.debit; // 🆕 Track original accrual amount
               }
             }
           });
@@ -1361,7 +1683,8 @@ class EnhancedPaymentAllocationService {
             if (adjustment.metadata?.type === 'negotiated_payment_adjustment' || adjustment.metadata?.transactionType === 'negotiated_payment_adjustment') {
               // Negotiated payment reduces rent owed
               monthlyOutstanding[monthKey].rent.owed = Math.max(0, monthlyOutstanding[monthKey].rent.owed - amount);
-              console.log(`   📉 Negotiated payment: Reduced rent owed by $${amount}`);
+              monthlyOutstanding[monthKey].rent.negotiatedDiscount = (monthlyOutstanding[monthKey].rent.negotiatedDiscount || 0) + amount; // 🆕 Track negotiated discount separately
+              console.log(`   📉 Negotiated payment: Reduced rent owed by $${amount} (total negotiated: $${monthlyOutstanding[monthKey].rent.negotiatedDiscount})`);
             } else if (adjustment.metadata?.type === 'security_deposit_reversal') {
               // Security deposit reversal reduces deposit owed
               monthlyOutstanding[monthKey].deposit.owed = Math.max(0, monthlyOutstanding[monthKey].deposit.owed - amount);
@@ -1399,8 +1722,10 @@ class EnhancedPaymentAllocationService {
       
       console.log(`📅 Detailed outstanding balances for user ${userId} (FIFO order):`);
       outstandingArray.forEach(month => {
+        const originalRentOwed = month.rent.originalOwed || month.rent.owed;
+        const negotiatedDiscount = month.rent.negotiatedDiscount || 0;
         console.log(`  ${month.monthKey} (${month.monthName}):`);
-        console.log(`    Rent: Owed=$${month.rent.owed.toFixed(2)}, Paid=$${month.rent.paid.toFixed(2)}, Outstanding=$${month.rent.outstanding.toFixed(2)}`);
+        console.log(`    Rent: Original=$${originalRentOwed.toFixed(2)}, Negotiated Discount=$${negotiatedDiscount.toFixed(2)}, Net Owed=$${month.rent.owed.toFixed(2)}, Paid=$${month.rent.paid.toFixed(2)}, Outstanding=$${month.rent.outstanding.toFixed(2)}`);
         console.log(`    Admin Fee: Owed=$${month.adminFee.owed.toFixed(2)}, Paid=$${month.adminFee.paid.toFixed(2)}, Outstanding=$${month.adminFee.outstanding.toFixed(2)}`);
         console.log(`    Deposit: Owed=$${month.deposit.owed.toFixed(2)}, Paid=$${month.deposit.paid.toFixed(2)}, Outstanding=$${month.deposit.outstanding.toFixed(2)}`);
         console.log(`    Total Outstanding: $${month.totalOutstanding.toFixed(2)}`);
@@ -1652,24 +1977,36 @@ class EnhancedPaymentAllocationService {
         }
       }
       
-      // 🆕 CRITICAL FIX: Always use debtor account code (1100-{debtorId} format)
-      // Get Debtor to use correct AR code (use userIdStr which is the corrected student ID)
+      // 🆕 CRITICAL FIX: ALWAYS use debtor's account code (not payload)
+      // Accruals use debtor account codes (1100-{debtorId}), so payments must match
+      // Get Debtor first to use correct AR code (use userIdStr which is the corrected student ID)
       const Debtor = require('../models/Debtor');
       const debtor = await Debtor.findOne({ user: userIdStr }).select('accountCode _id').lean();
       
-      let studentARCode;
+      let studentARCode = null;
+      
       if (debtor?.accountCode) {
-        // Use debtor's account code (1100-{debtorId} format)
+        // ✅ CORRECT: Use debtor's account code (this is what accruals use)
         studentARCode = debtor.accountCode;
         console.log(`✅ Using debtor account code for advance payment: ${studentARCode}`);
+        
+        // Warn if payload account code doesn't match debtor account code
+        if (paymentData.accountCode && paymentData.accountCode !== debtor.accountCode) {
+          console.warn(`⚠️ Payload account code (${paymentData.accountCode}) doesn't match debtor account code (${debtor.accountCode})`);
+          console.warn(`   Using debtor account code to ensure it matches accruals`);
+        }
       } else if (debtor?._id) {
         // Fallback: use debtor ID format if accountCode not set
         studentARCode = `1100-${debtor._id.toString()}`;
         console.log(`⚠️ Debtor exists but no accountCode, using debtor ID: ${studentARCode}`);
+      } else if (paymentData.accountCode && paymentData.accountCode.startsWith('1100-')) {
+        // Last resort: use payload account code if debtor not found
+        studentARCode = paymentData.accountCode;
+        console.warn(`⚠️ No debtor found, using account code from payload: ${studentARCode} (this should be fixed)`);
       } else {
-        // Last resort: use user ID (should not happen)
+        // Absolute last resort: use user ID (should not happen)
         studentARCode = `1100-${userIdStr}`;
-        console.warn(`⚠️ No debtor found, using user ID format: ${studentARCode} (this should be fixed)`);
+        console.warn(`⚠️ No debtor found and no accountCode in payload, using user ID format: ${studentARCode} (this should be fixed)`);
       }
       
       // Ensure student AR account exists

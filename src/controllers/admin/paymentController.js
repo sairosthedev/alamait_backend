@@ -724,7 +724,10 @@ const createPayment = async (req, res) => {
             date,
             method,
             status,
-            description
+            description,
+            accountCode,        // 🆕 NEW: Debtor account code from payload
+            debtorAccountCode,  // 🆕 NEW: Alternative name for account code
+            debtorCode          // 🆕 NEW: Debtor code (e.g., "DR0006") from payload
         } = req.body;
 
         // Validate required fields
@@ -804,19 +807,59 @@ const createPayment = async (req, res) => {
             return res.status(404).json({ message: 'Residence not found' });
         }
 
-        // 🆕 NEW: Automatically fetch user ID for proper debtor mapping
+        // 🆕 CRITICAL FIX: Always find debtor FIRST, then use debtor's account code (not payload)
+        // Accruals use debtor account codes (1100-{debtorId}), so we MUST use debtor's account code
+        const providedAccountCode = accountCode || debtorAccountCode;
         let userId = student; // Default to student ID
         let debtor = null;
+        let finalAccountCode = null;
         
-        // Try to find existing debtor first
+        // STEP 1: Find debtor by user ID (most reliable)
         debtor = await Debtor.findOne({ user: student });
         
+        // STEP 2: If not found, try to find by account code from payload (if provided)
+        if (!debtor && providedAccountCode && providedAccountCode.startsWith('1100-')) {
+            const debtorIdFromCode = providedAccountCode.replace('1100-', '');
+            if (mongoose.Types.ObjectId.isValid(debtorIdFromCode)) {
+                debtor = await Debtor.findById(debtorIdFromCode);
+                if (debtor) {
+                    console.log(`✅ Found debtor by account code from payload: ${debtor.debtorCode}`);
+                }
+            }
+        }
+        
+        // STEP 3: Use debtor's account code (CRITICAL - this is what accruals use)
         if (debtor) {
             console.log(`✅ Found existing debtor for student: ${studentExists.firstName} ${studentExists.lastName}`);
             console.log(`   Debtor ID: ${debtor._id}`);
             console.log(`   Debtor Code: ${debtor.debtorCode}`);
+            console.log(`   Debtor Account Code: ${debtor.accountCode}`);
             console.log(`   Debtor User ID: ${debtor.user}`);
             console.log(`   Requested Student ID: ${student}`);
+            console.log(`   Account Code from Payload: ${providedAccountCode || 'Not provided'}`);
+            console.log(`   Debtor Code from Payload: ${debtorCode || 'Not provided'}`);
+            
+            // 🆕 Validate debtor code from payload matches debtor
+            if (debtorCode && debtorCode !== debtor.debtorCode) {
+                console.warn(`⚠️  WARNING: Payload debtor code (${debtorCode}) doesn't match debtor code (${debtor.debtorCode})`);
+                console.warn(`   Using debtor code from database: ${debtor.debtorCode}`);
+            }
+            
+            // 🆕 CRITICAL: ALWAYS use debtor's account code (not payload)
+            // Accruals use debtor account codes, so payments must match
+            if (debtor.accountCode) {
+                finalAccountCode = debtor.accountCode;
+                console.log(`✅ Using debtor account code: ${finalAccountCode} (this is what accruals use)`);
+                
+                // Warn if payload account code doesn't match debtor account code
+                if (providedAccountCode && providedAccountCode !== debtor.accountCode) {
+                    console.warn(`⚠️  WARNING: Payload account code (${providedAccountCode}) doesn't match debtor account code (${debtor.accountCode})`);
+                    console.warn(`   Using debtor account code to ensure it matches accruals`);
+                    console.warn(`   Frontend should send debtor account code, not student ID format`);
+                }
+            } else {
+                console.warn(`⚠️ Debtor found but has no accountCode - this should not happen`);
+            }
             
             // 🆕 CRITICAL FIX: Always use debtor's user ID, even if it differs from requested student ID
             userId = debtor.user;
@@ -828,8 +871,16 @@ const createPayment = async (req, res) => {
             }
         } else {
             console.log(`🏗️  No existing debtor found, will create one during payment creation`);
+            // If account code provided in payload, use it temporarily (will be updated after debtor creation)
+            if (providedAccountCode) {
+                finalAccountCode = providedAccountCode;
+                console.log(`   Using account code from payload temporarily: ${finalAccountCode}`);
+            }
             // userId remains as student ID for now, but will be updated after debtor creation
         }
+        
+        // Log final account code being used
+        console.log(`📊 Final Account Code for AR: ${finalAccountCode || 'Will be set after debtor creation'}`);
 
         // Calculate top-level breakdown from payments array if present
         let rent = 0, admin = 0, deposit = 0;
@@ -866,7 +917,10 @@ const createPayment = async (req, res) => {
             rentAmount: rent,
             adminFee: admin,
             deposit: deposit,
-            createdBy: req.user._id
+            createdBy: req.user._id,
+            accountCode: finalAccountCode,   // 🆕 CRITICAL: Store accountCode (debtor account code) for transaction creation
+            debtorAccountCode: finalAccountCode, // 🆕 Alternative field name for compatibility
+            debtorCode: debtor?.debtorCode || debtorCode // 🆕 Store debtor code for reference
         });
 
         await payment.save();
@@ -1075,6 +1129,36 @@ const createPayment = async (req, res) => {
             console.warn('⚠️ No debtor found - allocation may fail, but post-save hook will create fallback transaction');
         }
         
+        // 🆕 CRITICAL FIX: Check AR balances BEFORE processing payment to ensure accuracy
+        try {
+            const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
+            
+            // Get outstanding balances using the proper method (uses debtor account code)
+            const actualUserId = debtor?.user?.toString() || payment.user?.toString() || payment.student?.toString();
+            if (actualUserId) {
+                console.log('🔍 Checking AR balances before payment processing...');
+                const outstandingBalances = await EnhancedPaymentAllocationService.getDetailedOutstandingBalances(actualUserId);
+                
+                const totalOutstanding = outstandingBalances?.reduce((sum, month) => sum + month.totalOutstanding, 0) || 0;
+                console.log(`📊 AR Balance Summary:`);
+                console.log(`   Total Outstanding: $${totalOutstanding}`);
+                console.log(`   Months with Outstanding: ${outstandingBalances?.length || 0}`);
+                
+                // Validate payment amount
+                if (totalOutstanding === 0 && payment.totalAmount > 0) {
+                    console.log(`ℹ️ No outstanding balances - payment will be treated as advance payment`);
+                } else if (payment.totalAmount > totalOutstanding * 1.1) {
+                    console.warn(`⚠️ Payment amount ($${payment.totalAmount}) significantly exceeds outstanding balance ($${totalOutstanding})`);
+                    console.warn(`   This may be an advance payment or data error`);
+                } else {
+                    console.log(`✅ Payment amount ($${payment.totalAmount}) is reasonable compared to outstanding balance ($${totalOutstanding})`);
+                }
+            }
+        } catch (balanceCheckError) {
+            console.error('❌ Error checking AR balances before payment:', balanceCheckError.message);
+            // Don't fail payment creation, but log the error
+        }
+        
         try {
             const EnhancedPaymentAllocationService = require('../../services/enhancedPaymentAllocationService');
             
@@ -1087,6 +1171,9 @@ const createPayment = async (req, res) => {
             console.log(`   Method: ${payment.method}`);
             console.log(`   Date: ${payment.date}`);
             console.log(`   Debtor: ${debtor ? debtor.debtorCode : 'Not found - will be created if needed'}`);
+            console.log(`   Debtor Account Code: ${debtor ? debtor.accountCode : 'N/A'}`);
+            console.log(`   Debtor Code from Payment: ${payment.debtorCode || 'Not set'}`);
+            console.log(`   Account Code from Payment: ${payment.accountCode || 'Not set'}`);
             
             // Prepare data for Smart FIFO allocation
             // Ensure each payment component has a paid date; default to top-level payment.date
@@ -1106,8 +1193,14 @@ const createPayment = async (req, res) => {
                 adminFee: payment.adminFee || 0,
                 deposit: payment.deposit || 0,
                 method: payment.method,
-                date: payment.date
+                date: payment.date,
+                accountCode: finalAccountCode || (debtor && debtor.accountCode), // 🆕 CRITICAL: Pass account code to allocation service
+                debtorCode: payment.debtorCode || (debtor && debtor.debtorCode) // 🆕 NEW: Pass debtor code for reference
             };
+            
+            console.log(`📊 Allocation Data:`);
+            console.log(`   Account Code: ${allocationData.accountCode || 'N/A'}`);
+            console.log(`   Debtor Code: ${allocationData.debtorCode || 'N/A'}`);
             
             const allocationResult = await EnhancedPaymentAllocationService.smartFIFOAllocation(allocationData);
             
@@ -1257,21 +1350,101 @@ const createPayment = async (req, res) => {
             const schoolRent = await Account.findOne({ code: '4001' });
             if (schoolRent) rentAccount = schoolRent;
         }
-        const studentAccount = await Account.findOne({ code: '1100' }); // Accounts Receivable - Tenants
+        // 🆕 CRITICAL FIX: Use accountCode from payload or debtor account code for AR entries
+        // Accruals use debtor account codes (1100-{debtorId}), so payments must match
+        let arAccount = null;
+        // Use accountCode from payload first, then debtor account code, then fallback
+        let arAccountCode = finalAccountCode || (debtor && debtor.accountCode) || '1100';
+        
+        if (arAccountCode && arAccountCode !== '1100') {
+            // ✅ CORRECT: Use account code from payload or debtor to match accruals
+            // Try to find the account by code
+            arAccount = await Account.findOne({ code: arAccountCode });
+            if (!arAccount) {
+                // Account may not exist yet - will be created by transaction entry
+                console.log(`ℹ️ AR account ${arAccountCode} not found in Account collection - will be created by transaction`);
+                // Create a virtual account object for transaction entry
+                arAccount = {
+                    _id: new mongoose.Types.ObjectId(),
+                    code: arAccountCode,
+                    name: `Accounts Receivable - ${studentExists ? `${studentExists.firstName} ${studentExists.lastName}` : 'Tenant'}`,
+                    type: 'Asset'
+                };
+            }
+            console.log(`✅ Using AR account code: ${arAccountCode} (from ${finalAccountCode ? 'payload' : 'debtor'})`);
+        } else {
+            // Fallback to general AR account
+            arAccount = await Account.findOne({ code: '1100' });
+            console.log(`⚠️ No account code found - using general AR account (1100)`);
+        }
+        
+        const studentAccount = arAccount || await Account.findOne({ code: '1100' }); // Fallback
         const studentName = studentExists ? `${studentExists.firstName} ${studentExists.lastName}` : 'Student';
         
         if (receivingAccount && rentAccount && studentAccount && totalAmount > 0) {
-            // Check if student has accrued rental income (from rental accrual system)
-            const accruedRentals = await TransactionEntry.find({
-                source: 'rental_accrual',
-                'metadata.studentId': payment.student,
-                status: 'posted'
-            }).sort({ date: 1 });
+            // 🆕 CRITICAL FIX: Check AR balances using accountCode from payload or debtor account code
+            // Accruals use debtor account codes (1100-{debtorId}) in entries, not metadata
+            let accruedRentals = [];
+            let totalAccrued = 0;
+            let outstandingAccrued = 0;
+            
+            // Use accountCode from payload if provided, otherwise use debtor account code
+            const arAccountCodeForQuery = finalAccountCode || (debtor && debtor.accountCode);
+            
+            if (arAccountCodeForQuery) {
+                console.log(`🔍 Checking accruals using account code: ${arAccountCodeForQuery}`);
+                // ✅ CORRECT: Query by account code (what accruals actually use)
+                accruedRentals = await TransactionEntry.find({
+                    'entries.accountCode': arAccountCodeForQuery, // Use account code from payload or debtor
+                    source: { $in: ['rental_accrual', 'lease_start'] },
+                    status: { $ne: 'reversed' },
+                    voided: { $ne: true }
+                }).sort({ date: 1 });
 
-            // Calculate total accrued vs. total paid to determine payment type
-            const totalAccrued = accruedRentals.reduce((sum, entry) => sum + entry.totalDebit, 0);
-            const totalPaid = debtor ? debtor.totalPaid : 0;
-            const outstandingAccrued = totalAccrued - totalPaid;
+                // Calculate total accrued from AR debit entries
+                accruedRentals.forEach(tx => {
+                    tx.entries.forEach(entry => {
+                        if (entry.accountCode === arAccountCodeForQuery && entry.debit > 0) {
+                            totalAccrued += entry.debit || 0;
+                        }
+                    });
+                });
+
+                // Get total paid from AR credit entries (payments)
+                const paymentTransactions = await TransactionEntry.find({
+                    'entries.accountCode': arAccountCodeForQuery,
+                    source: { $in: ['payment', 'vendor_payment'] },
+                    status: { $ne: 'reversed' },
+                    voided: { $ne: true }
+                });
+
+                let totalPaid = 0;
+                paymentTransactions.forEach(tx => {
+                    tx.entries.forEach(entry => {
+                        if (entry.accountCode === arAccountCodeForQuery && entry.credit > 0) {
+                            totalPaid += entry.credit || 0;
+                        }
+                    });
+                });
+
+                outstandingAccrued = totalAccrued - totalPaid;
+                
+                console.log(`📊 AR Balance Check (using account code ${arAccountCodeForQuery}):`);
+                console.log(`   Total Accrued: $${totalAccrued}`);
+                console.log(`   Total Paid: $${totalPaid}`);
+                console.log(`   Outstanding: $${outstandingAccrued}`);
+            } else {
+                console.warn(`⚠️ No debtor account code found - cannot check AR balances accurately`);
+                // Fallback to old method (may not be accurate)
+                accruedRentals = await TransactionEntry.find({
+                    source: 'rental_accrual',
+                    'metadata.studentId': payment.student,
+                    status: 'posted'
+                }).sort({ date: 1 });
+                totalAccrued = accruedRentals.reduce((sum, entry) => sum + entry.totalDebit, 0);
+                const totalPaid = debtor ? debtor.totalPaid : 0;
+                outstandingAccrued = totalAccrued - totalPaid;
+            }
             
             // Analyze payment month vs current month to determine payment type
             const currentDate = new Date();
@@ -1433,27 +1606,29 @@ const createPayment = async (req, res) => {
                                 });
                                 console.log(`💰 ADVANCE RENT: $${amount.toFixed(2)} recorded as Deferred Income for ${payment.paymentMonth}`);
                             } else if (isPastDuePayment || (studentHasOutstandingDebt && !isAdvancePayment) || (hasAccruedRentals && !isAdvancePayment)) {
-                                // Past due rent - settle debt
+                                // Past due rent - settle debt using debtor account code
                                 entries.push({
                                     transaction: txn._id,
                                     account: studentAccount._id,
+                                    accountCode: arAccountCode, // 🆕 CRITICAL: Use debtor account code
                                     debit: 0,
                                     credit: amount,
                                     type: studentAccount.type || 'asset',
                                     description: `Rent payment settles debt from ${studentName} for ${payment.paymentMonth || 'past period'} (${payment.paymentId})`
                                 });
-                                console.log(`💰 PAST DUE RENT: $${amount.toFixed(2)} settles debt for ${payment.paymentMonth || 'past period'}`);
+                                console.log(`💰 PAST DUE RENT: $${amount.toFixed(2)} settles debt for ${payment.paymentMonth || 'past period'} (AR: ${arAccountCode})`);
                             } else {
-                                // Current period rent - reduce AR (ledger-style)
+                                // Current period rent - reduce AR using debtor account code
                                 entries.push({
                                     transaction: txn._id,
                                     account: studentAccount._id,
+                                    accountCode: arAccountCode, // 🆕 CRITICAL: Use debtor account code
                                     debit: 0,
                                     credit: amount,
                                     type: studentAccount.type || 'asset',
                                     description: `Rent payment applied to AR for ${payment.paymentMonth || 'current period'} (${payment.paymentId})`
                                 });
-                                console.log(`🏦 CURRENT RENT: $${amount.toFixed(2)} applied to Accounts Receivable`);
+                                console.log(`🏦 CURRENT RENT: $${amount.toFixed(2)} applied to Accounts Receivable (AR: ${arAccountCode})`);
                             }
                             break;
                             
@@ -1498,6 +1673,7 @@ const createPayment = async (req, res) => {
                         {
                             transaction: txn._id,
                             account: studentAccount._id,
+                            accountCode: arAccountCode, // 🆕 CRITICAL: Use debtor account code
                             debit: 0,
                             credit: totalAmount,
                             type: studentAccount.type || 'asset',
@@ -1521,9 +1697,13 @@ const createPayment = async (req, res) => {
                             });
 
                             // Adjust the Accounts Receivable entry to balance
-                            const arEntry = entries.find(e => e.account.toString() === studentAccount._id.toString());
+                            const arEntry = entries.find(e => 
+                                e.account.toString() === studentAccount._id.toString() || 
+                                e.accountCode === arAccountCode
+                            );
                             if (arEntry) {
                                 arEntry.credit = arEntry.credit - amountToRecognize;
+                                arEntry.accountCode = arAccountCode; // Ensure account code is set
                             }
 
                             console.log(`💰 Payment ${amountToRecognize.toFixed(2)} recognized as rental income from accrued rentals`);
@@ -1570,6 +1750,7 @@ const createPayment = async (req, res) => {
                         {
                             transaction: txn._id,
                             account: studentAccount._id,
+                            accountCode: arAccountCode, // 🆕 CRITICAL: Use debtor account code
                             debit: 0,
                             credit: totalAmount,
                             type: studentAccount.type || 'asset',
@@ -1577,7 +1758,7 @@ const createPayment = async (req, res) => {
                         }
                     ];
                     
-                    console.log(`🏦 CURRENT PERIOD PAYMENT: ${totalAmount.toFixed(2)} applied to Accounts Receivable`);
+                    console.log(`🏦 CURRENT PERIOD PAYMENT: ${totalAmount.toFixed(2)} applied to Accounts Receivable (AR: ${arAccountCode})`);
                 }
             }
 
@@ -2009,8 +2190,6 @@ const getAvailablePaymentMonths = async (req, res) => {
  * Delete payment and all associated transaction entries
  */
 const deletePayment = async (req, res) => {
-    const session = await mongoose.startSession();
-    
     try {
         const { id } = req.params;
         const { deleteRelatedEntries = true, deleteTransactionEntries = true, cascadeDelete = true } = req.body;
@@ -2021,219 +2200,233 @@ const deletePayment = async (req, res) => {
             cascadeDelete
         });
         
-        // Start transaction
-        await session.startTransaction();
-        
-        let deletionSummary = {
-            payment: null,
-            transactionEntries: 0,
-            accountingEntries: 0,
-            relatedRecords: 0
-        };
-        
-        // Find the payment
-        const payment = await Payment.findById(id).session(session);
+        // Find the payment first (without session to avoid conflicts)
+        const payment = await Payment.findById(id);
         if (!payment) {
-            await session.abortTransaction();
             return res.status(404).json({
                 success: false,
                 message: 'Payment not found'
             });
         }
         
-        deletionSummary.payment = {
-            paymentId: payment.paymentId,
-            amount: payment.totalAmount || payment.amount,
-            student: payment.student || payment.user,
-            residence: payment.residence
-        };
+        // 🆕 CRITICAL FIX: Check for transactions BEFORE starting session
+        // If no transactions exist, allow simple deletion without transaction session
+        console.log(`🔍 Checking for transaction entries for payment: ${payment.paymentId} (ID: ${payment._id})`);
         
-        // Delete related transaction entries if requested
-        if (deleteTransactionEntries || deleteRelatedEntries) {
-            console.log(`🔍 Searching for transaction entries for payment: ${payment.paymentId} (ID: ${payment._id})`);
+        const TransactionEntry = require('../../models/TransactionEntry');
+        const Transaction = require('../../models/Transaction');
+        
+        // Check for transaction entries
+        const transactionEntries = await TransactionEntry.find({
+            $or: [
+                { sourceId: payment._id },
+                { 'metadata.paymentId': payment.paymentId },
+                { 'metadata.paymentId': payment._id.toString() },
+                { reference: payment.paymentId },
+                { reference: payment._id.toString() },
+                { source: { $in: ['payment', 'advance_payment'] }, sourceId: payment._id },
+                { source: { $in: ['payment', 'advance_payment'] }, 'metadata.paymentId': payment.paymentId }
+            ],
+            status: { $ne: 'reversed' }
+        });
+        
+        // Check for transactions
+        const transactions = await Transaction.find({
+            $or: [
+                { 'metadata.paymentId': payment.paymentId },
+                { reference: payment.paymentId },
+                { reference: payment._id.toString() }
+            ]
+        });
+        
+        const hasTransactions = transactionEntries.length > 0 || transactions.length > 0;
+        
+        console.log(`📊 Found ${transactionEntries.length} transaction entries and ${transactions.length} transactions`);
+        
+        // 🆕 If no transactions exist, allow simple deletion (no session to avoid write conflicts)
+        if (!hasTransactions) {
+            console.log(`✅ No transactions found - allowing simple deletion without transaction session`);
             
-            // Find transaction entries related to this payment with comprehensive search
-            const transactionEntries = await TransactionEntry.find({
-                $or: [
-                    { 'metadata.paymentId': payment.paymentId },
-                    { 'metadata.sourceId': payment._id.toString() },
-                    { 'reference': payment.paymentId },
-                    { 'source': 'payment', 'sourceId': payment._id.toString() },
-                    { 'source': 'payment', 'sourceId': payment._id },
-                    { 'metadata.paymentId': payment._id.toString() },
-                    { 'metadata.paymentId': payment._id }
-                ]
-            }).session(session);
-            
-            console.log(`🔍 Found ${transactionEntries.length} transaction entries to delete`);
-            
-            // Log details of found entries for debugging
-            if (transactionEntries.length > 0) {
-                console.log('📋 Transaction entries found:');
-                transactionEntries.forEach((entry, index) => {
-                    console.log(`   ${index + 1}. ID: ${entry._id}`);
-                    console.log(`      Reference: ${entry.reference}`);
-                    console.log(`      Source: ${entry.source}`);
-                    console.log(`      SourceId: ${entry.sourceId}`);
-                    console.log(`      Metadata.paymentId: ${entry.metadata?.paymentId}`);
-                    console.log(`      Metadata.sourceId: ${entry.metadata?.sourceId}`);
-                });
-            } else {
-                console.log('⚠️ No transaction entries found. Trying alternative search patterns...');
-                
-                // Try searching by student ID as fallback
-                const studentId = payment.student || payment.user;
-                if (studentId) {
-                    console.log(`🔍 Searching by student ID: ${studentId}`);
-                    const studentEntries = await TransactionEntry.find({
-                        $or: [
-                            { 'metadata.studentId': studentId.toString() },
-                            { 'metadata.studentId': studentId },
-                            { 'student': studentId },
-                            { 'user': studentId }
-                        ]
-                    }).session(session);
-                    
-                    console.log(`🔍 Found ${studentEntries.length} transaction entries by student ID`);
-                    
-                    if (studentEntries.length > 0) {
-                        // Filter to only include entries that seem related to this payment
-                        const relatedEntries = studentEntries.filter(entry => {
-                            const entryDate = new Date(entry.date);
-                            const paymentDate = new Date(payment.paymentDate || payment.createdAt);
-                            const timeDiff = Math.abs(entryDate - paymentDate);
-                            const daysDiff = timeDiff / (1000 * 60 * 60 * 24);
-                            
-                            // If entry is within 7 days of payment and has similar amount, consider it related
-                            return daysDiff <= 7 && Math.abs((entry.debit || 0) + (entry.credit || 0) - (payment.totalAmount || payment.amount)) < 100;
-                        });
-                        
-                        console.log(`🔍 ${relatedEntries.length} entries appear related to this payment`);
-                        
-                        if (relatedEntries.length > 0) {
-                            const deleteResult = await TransactionEntry.deleteMany({
-                                _id: { $in: relatedEntries.map(te => te._id) }
-                            }).session(session);
-                            
-                            deletionSummary.transactionEntries = deleteResult.deletedCount;
-                            console.log(`✅ Deleted ${deleteResult.deletedCount} related transaction entries`);
-                        }
-                    }
-                }
-                
-                // Debug: Check if there are any transaction entries at all
-                const allEntries = await TransactionEntry.find({}).limit(5).session(session);
-                console.log(`📊 Total transaction entries in database: ${await TransactionEntry.countDocuments({}).session(session)}`);
-                if (allEntries.length > 0) {
-                    console.log('📋 Sample transaction entry structure:');
-                    console.log(JSON.stringify(allEntries[0], null, 2));
+            // Delete related records if cascade delete is requested
+            if (cascadeDelete) {
+                // Delete receipts
+                const receipts = await Receipt.find({ payment: payment._id });
+                if (receipts.length > 0) {
+                    await Receipt.deleteMany({ payment: payment._id });
+                    console.log(`✅ Deleted ${receipts.length} receipts`);
                 }
             }
             
-            // Delete transaction entries
-            if (transactionEntries.length > 0) {
-                const deleteResult = await TransactionEntry.deleteMany({
-                    _id: { $in: transactionEntries.map(te => te._id) }
-                }).session(session);
-                
-                deletionSummary.transactionEntries = deleteResult.deletedCount;
-                console.log(`✅ Deleted ${deleteResult.deletedCount} transaction entries`);
-            } else {
-                console.log('⚠️ No transaction entries to delete');
-            }
+            // Delete the payment
+            await Payment.findByIdAndDelete(id);
+            console.log(`✅ Deleted payment: ${payment.paymentId} (no transactions found)`);
             
-            // Also delete any transactions that reference this payment
-            const transactions = await Transaction.find({
-                $or: [
-                    { 'metadata.paymentId': payment.paymentId },
-                    { 'reference': payment.paymentId }
-                ]
-            }).session(session);
+            // Log the deletion
+            await AuditLog.create({
+                action: 'delete',
+                collection: 'Payment',
+                recordId: payment._id,
+                before: {
+                    paymentId: payment.paymentId,
+                    amount: payment.totalAmount || payment.amount,
+                    student: payment.student || payment.user,
+                    residence: payment.residence,
+                    status: payment.status
+                },
+                after: null,
+                user: req.user._id,
+                timestamp: new Date(),
+                details: `Payment ${payment.paymentId} deleted (no transactions found)`,
+                metadata: {
+                    hasTransactions: false,
+                    transactionEntriesCount: 0,
+                    transactionsCount: 0
+                }
+            });
             
-            if (transactions.length > 0) {
-                const deleteTransactionResult = await Transaction.deleteMany({
-                    _id: { $in: transactions.map(t => t._id) }
-                }).session(session);
-                
-                deletionSummary.accountingEntries = deleteTransactionResult.deletedCount;
-                console.log(`✅ Deleted ${deleteTransactionResult.deletedCount} transactions`);
-            }
+            return res.json({
+                success: true,
+                message: 'Payment deleted successfully (no transactions found)',
+                deletedData: {
+                    payment: {
+                        paymentId: payment.paymentId,
+                        amount: payment.totalAmount || payment.amount
+                    },
+                    transactionEntries: 0,
+                    accountingEntries: 0,
+                    relatedRecords: cascadeDelete ? (await Receipt.countDocuments({ payment: payment._id })) : 0
+                }
+            });
         }
         
-        // Delete related records if cascade delete is requested
-        if (cascadeDelete) {
-            // Delete receipts
-            const receipts = await Receipt.find({ payment: payment._id }).session(session);
-            if (receipts.length > 0) {
-                await Receipt.deleteMany({ payment: payment._id }).session(session);
-                deletionSummary.relatedRecords += receipts.length;
-                console.log(`✅ Deleted ${receipts.length} receipts`);
-            }
+        // 🆕 If transactions exist, use transaction session for safe deletion
+        console.log(`⚠️ Transactions found - using transaction session for safe deletion`);
+        const session = await mongoose.startSession();
+        
+        try {
+            await session.startTransaction();
             
-            // Update debtor accounts if they exist
-            if (payment.student || payment.user) {
-                const studentId = payment.student || payment.user;
-                const debtor = await Debtor.findOne({ user: studentId }).session(session);
-                if (debtor) {
-                    // Reduce debtor balance by payment amount
-                    const paymentAmount = payment.totalAmount || payment.amount || 0;
-                    debtor.balance = Math.max(0, debtor.balance - paymentAmount);
-                    await debtor.save({ session });
-                    console.log(`✅ Updated debtor balance for student ${studentId}`);
-                }
-            }
-        }
-        
-        // Finally, delete the payment itself
-        await Payment.findByIdAndDelete(id).session(session);
-        console.log(`✅ Deleted payment: ${payment.paymentId}`);
-        
-        // Log the deletion for audit purposes
-        await AuditLog.create([{
-            action: 'delete',
-            collection: 'Payment',
-            recordId: payment._id,
-            before: {
+            let deletionSummary = {
+                payment: null,
+                transactionEntries: 0,
+                accountingEntries: 0,
+                relatedRecords: 0
+            };
+            
+            deletionSummary.payment = {
                 paymentId: payment.paymentId,
                 amount: payment.totalAmount || payment.amount,
                 student: payment.student || payment.user,
-                residence: payment.residence,
-                status: payment.status
-            },
-            after: null, // After deletion, record is null
-            user: req.user._id,
-            timestamp: new Date(),
-            details: `Payment ${payment.paymentId} deleted with ${deletionSummary.transactionEntries} transaction entries`,
-            metadata: {
-                deletionSummary,
-                deleteOptions: {
-                    deleteRelatedEntries,
-                    deleteTransactionEntries,
-                    cascadeDelete
+                residence: payment.residence
+            };
+            
+            // Delete related transaction entries if requested
+            if (deleteTransactionEntries || deleteRelatedEntries) {
+                console.log(`🔍 Deleting ${transactionEntries.length} transaction entries...`);
+                
+                if (transactionEntries.length > 0) {
+                    const deleteResult = await TransactionEntry.deleteMany({
+                        _id: { $in: transactionEntries.map(te => te._id) }
+                    }).session(session);
+                    
+                    deletionSummary.transactionEntries = deleteResult.deletedCount;
+                    console.log(`✅ Deleted ${deleteResult.deletedCount} transaction entries`);
+                }
+                
+                // Delete transactions
+                if (transactions.length > 0) {
+                    const deleteTransactionResult = await Transaction.deleteMany({
+                        _id: { $in: transactions.map(t => t._id) }
+                    }).session(session);
+                    
+                    deletionSummary.accountingEntries = deleteTransactionResult.deletedCount;
+                    console.log(`✅ Deleted ${deleteTransactionResult.deletedCount} transactions`);
                 }
             }
-        }], { session });
-        
-        // Commit transaction
-        await session.commitTransaction();
-        
-        res.json({
-            success: true,
-            message: 'Payment and associated data deleted successfully',
-            deletedData: deletionSummary
-        });
-        
+            
+            // Delete related records if cascade delete is requested
+            if (cascadeDelete) {
+                // Delete receipts
+                const receipts = await Receipt.find({ payment: payment._id }).session(session);
+                if (receipts.length > 0) {
+                    await Receipt.deleteMany({ payment: payment._id }).session(session);
+                    deletionSummary.relatedRecords += receipts.length;
+                    console.log(`✅ Deleted ${receipts.length} receipts`);
+                }
+                
+                // Update debtor accounts if they exist
+                if (payment.student || payment.user) {
+                    const studentId = payment.student || payment.user;
+                    const debtor = await Debtor.findOne({ user: studentId }).session(session);
+                    if (debtor) {
+                        // Reduce debtor balance by payment amount
+                        const paymentAmount = payment.totalAmount || payment.amount || 0;
+                        debtor.balance = Math.max(0, debtor.balance - paymentAmount);
+                        await debtor.save({ session });
+                        console.log(`✅ Updated debtor balance for student ${studentId}`);
+                    }
+                }
+            }
+            
+            // Finally, delete the payment itself
+            await Payment.findByIdAndDelete(id).session(session);
+            console.log(`✅ Deleted payment: ${payment.paymentId}`);
+            
+            // Log the deletion for audit purposes
+            await AuditLog.create([{
+                action: 'delete',
+                collection: 'Payment',
+                recordId: payment._id,
+                before: {
+                    paymentId: payment.paymentId,
+                    amount: payment.totalAmount || payment.amount,
+                    student: payment.student || payment.user,
+                    residence: payment.residence,
+                    status: payment.status
+                },
+                after: null,
+                user: req.user._id,
+                timestamp: new Date(),
+                details: `Payment ${payment.paymentId} deleted with ${deletionSummary.transactionEntries} transaction entries`,
+                metadata: {
+                    deletionSummary,
+                    deleteOptions: {
+                        deleteRelatedEntries,
+                        deleteTransactionEntries,
+                        cascadeDelete
+                    }
+                }
+            }], { session });
+            
+            // Commit transaction
+            await session.commitTransaction();
+            
+            res.json({
+                success: true,
+                message: 'Payment and associated data deleted successfully',
+                deletedData: deletionSummary
+            });
+            
+        } catch (sessionError) {
+            console.error('❌ Error deleting payment with transactions:', sessionError);
+            await session.abortTransaction();
+            
+            res.status(500).json({
+                success: false,
+                message: 'Failed to delete payment',
+                error: sessionError.message
+            });
+        } finally {
+            await session.endSession();
+        }
     } catch (error) {
         console.error('❌ Error deleting payment:', error);
-        await session.abortTransaction();
         
         res.status(500).json({
             success: false,
             message: 'Failed to delete payment',
             error: error.message
         });
-    } finally {
-        await session.endSession();
     }
 };
 

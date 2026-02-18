@@ -157,22 +157,30 @@ const getStudentARBalances = async (req, res) => {
         }
 
         // Convert enhanced service format to API response format
-        const monthlyBalances = arBalances.map(item => ({
-            monthKey: item.monthKey,
-            year: item.year,
-            month: item.month,
-            monthName: item.monthName,
-            balance: item.totalOutstanding,
-            originalDebt: item.rent.owed + item.adminFee.owed + item.deposit.owed,
-            paidAmount: item.rent.paid + item.adminFee.paid + item.deposit.paid,
-            transactionId: item.transactionId,
-            date: item.date,
-            accountCode: debtorAccountCode, // 🆕 CRITICAL: Use debtor account code (1100-{debtorId})
-            accountName: `Accounts Receivable - ${finalDebtor?.debtorCode || 'Student'}`,
-            debtorId: debtorId, // Include debtor ID in response
-            source: item.source,
-            metadata: item.metadata
-        }));
+        const monthlyBalances = arBalances.map(item => {
+            // 🆕 Calculate original debt (before negotiated discounts) and negotiated discount
+            const originalRentOwed = item.rent.originalOwed || item.rent.owed; // Use originalOwed if available, fallback to owed
+            const negotiatedDiscount = item.rent.negotiatedDiscount || 0; // Get negotiated discount amount
+            const originalDebt = originalRentOwed + item.adminFee.owed + item.deposit.owed; // Original debt before discounts
+            
+            return {
+                monthKey: item.monthKey,
+                year: item.year,
+                month: item.month,
+                monthName: item.monthName,
+                balance: item.totalOutstanding, // Net balance after discounts and payments
+                originalDebt: originalDebt, // Original accrual amount (before negotiated discounts)
+                negotiatedDiscount: negotiatedDiscount, // 🆕 Negotiated discount amount
+                paidAmount: item.rent.paid + item.adminFee.paid + item.deposit.paid,
+                transactionId: item.transactionId,
+                date: item.date,
+                accountCode: debtorAccountCode, // 🆕 CRITICAL: Use debtor account code (1100-{debtorId})
+                accountName: `Accounts Receivable - ${finalDebtor?.debtorCode || 'Student'}`,
+                debtorId: debtorId, // Include debtor ID in response
+                source: item.source,
+                metadata: item.metadata
+            };
+        });
 
         res.status(200).json({
             success: true,

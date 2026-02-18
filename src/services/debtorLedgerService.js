@@ -71,6 +71,34 @@ class DebtorLedgerService {
                     {
                         source: 'rental_accrual_reversal',
                         'metadata.studentId': studentId
+                    },
+                    // 🆕 CRITICAL: Include manual transactions (negotiated payments, adjustments)
+                    // These reduce AR and should be included in ledger
+                    {
+                        source: 'manual',
+                        'entries.accountCode': arAccountCode,
+                        $or: [
+                            { 'metadata.type': 'negotiated_payment_adjustment' },
+                            { 'metadata.transactionType': 'negotiated_payment_adjustment' },
+                            { description: { $regex: /negotiated|discount/i } }
+                        ]
+                    },
+                    // Also check by studentId for manual transactions
+                    {
+                        source: 'manual',
+                        'metadata.studentId': studentId?.toString(),
+                        $or: [
+                            { 'metadata.type': 'negotiated_payment_adjustment' },
+                            { 'metadata.transactionType': 'negotiated_payment_adjustment' }
+                        ]
+                    },
+                    {
+                        source: 'manual',
+                        'metadata.studentId': studentId,
+                        $or: [
+                            { 'metadata.type': 'negotiated_payment_adjustment' },
+                            { 'metadata.transactionType': 'negotiated_payment_adjustment' }
+                        ]
                     }
                 ],
                 status: { $nin: ['reversed', 'draft', 'deleted'] }
@@ -422,6 +450,50 @@ class DebtorLedgerService {
                         }
                     }
                 ];
+            }
+            
+            // 🆕 CRITICAL FIX: Handle negotiated payment adjustments specially
+            // Negotiated payments reduce AR (credit to AR) and should reduce amount owing
+            if (transaction.source === 'manual' && 
+                (transaction.metadata?.type === 'negotiated_payment_adjustment' || 
+                 transaction.metadata?.transactionType === 'negotiated_payment_adjustment' ||
+                 transaction.description?.toLowerCase().includes('negotiated'))) {
+                // Negotiated payment adjustment - credit to AR reduces amount owing
+                if (totalCredit > 0) {
+                    const transactionDate = new Date(transaction.date);
+                    const monthKey = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
+                    
+                    // Try to get the accrual month from metadata
+                    let accrualMonthKey = monthKey;
+                    if (transaction.metadata?.accrualMonth && transaction.metadata?.accrualYear) {
+                        const year = transaction.metadata.accrualYear;
+                        const month = String(transaction.metadata.accrualMonth).padStart(2, '0');
+                        accrualMonthKey = `${year}-${month}`;
+                    }
+                    
+                    return {
+                        transactionId: transaction.transactionId,
+                        date: transaction.date,
+                        monthKey: accrualMonthKey,
+                        type: 'payment', // Treat as payment to reduce amount owing
+                        category: 'rent', // Default to rent, can be adjusted based on metadata
+                        amount: totalCredit,
+                        description: transaction.description || 'Negotiated payment discount',
+                        source: transaction.source,
+                        metadata: {
+                            ...transaction.metadata,
+                            isNegotiatedPayment: true,
+                            adjustmentType: 'negotiated_discount'
+                        },
+                        arEntry: {
+                            accountCode: arAccountCode,
+                            accountName: arEntries.find(e => e.credit > 0)?.accountName || `Accounts Receivable`,
+                            debit: 0,
+                            credit: totalCredit
+                        }
+                    };
+                }
+                return null;
             }
             
             // Determine transaction type and amount for single-type transactions

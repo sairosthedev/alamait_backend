@@ -687,15 +687,74 @@ async function ensurePaymentTransaction(payment) {
         // Create transaction ID
         const transactionId = `TXN${Date.now()}${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
         
-        // 🆕 CRITICAL: Use debtor account code (1100-{debtorId} format) if available
-        const arAccountCode = debtor?.accountCode || `1100-${userId.toString()}`;
+        // 🆕 CRITICAL FIX: Use accountCode from payment document if available (from payload)
+        // This ensures we use the correct account code that matches accruals
+        let arAccountCode = payment.accountCode || payment.debtorAccountCode; // Check payment document first
+        
+        if (!arAccountCode && debtor?.accountCode) {
+            // Fallback to debtor account code
+            arAccountCode = debtor.accountCode;
+            console.log(`✅ Using debtor account code: ${arAccountCode}`);
+        } else if (!arAccountCode) {
+            // Last resort: use user ID format
+            arAccountCode = `1100-${userId.toString()}`;
+            console.warn(`⚠️ No accountCode in payment or debtor - using user ID format: ${arAccountCode}`);
+        } else {
+            console.log(`✅ Using accountCode from payment document: ${arAccountCode}`);
+        }
+        
         const arAccountName = debtor?.contactInfo?.name 
             ? `Accounts Receivable - ${debtor.contactInfo.name}` 
             : `Accounts Receivable - Student`;
         
         const studentName = debtor?.contactInfo?.name || 'Student';
         
-        if (isAdvancePayment) {
+        // 🆕 CRITICAL FIX: Check for accruals BEFORE determining payment type
+        // If accrual exists for payment month, this should be a regular payment, not advance
+        let shouldCreateAdvancePayment = isAdvancePayment;
+        if (isAdvancePayment && arAccountCode && payment.paymentMonth) {
+            console.log(`🔍 Checking for accruals for payment month: ${payment.paymentMonth}`);
+            console.log(`   Using account code: ${arAccountCode}`);
+            
+            try {
+                const TransactionEntry = require('./TransactionEntry');
+                const paymentMonthDate = new Date(payment.paymentMonth + '-01'); // Parse YYYY-MM format
+                const paymentMonthStart = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth(), 1);
+                const paymentMonthEnd = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth() + 1, 0, 23, 59, 59, 999);
+                
+                // Check for accrual in payment month
+                const accrualForMonth = await TransactionEntry.findOne({
+                    'entries.accountCode': arAccountCode,
+                    source: { $in: ['rental_accrual', 'lease_start'] },
+                    status: { $ne: 'reversed' },
+                    voided: { $ne: true },
+                    date: {
+                        $gte: paymentMonthStart,
+                        $lte: paymentMonthEnd
+                    }
+                }).lean();
+                
+                if (accrualForMonth) {
+                    console.warn(`⚠️  WARNING: Accrual found for payment month ${payment.paymentMonth}!`);
+                    console.warn(`   Accrual ID: ${accrualForMonth._id}`);
+                    console.warn(`   Accrual Date: ${accrualForMonth.date}`);
+                    console.warn(`   This payment should NOT be an advance payment - it should settle the accrual!`);
+                    console.warn(`   ⚠️ Creating REGULAR payment transaction instead of advance payment`);
+                    console.warn(`   ⚠️ Please check why smartFIFOAllocation didn't allocate this payment correctly`);
+                    
+                    // 🆕 FIX: Create regular payment transaction to settle accrual (not advance payment)
+                    shouldCreateAdvancePayment = false; // Change to regular payment
+                    console.log(`   ✅ Changed to regular payment transaction to settle accrual`);
+                } else {
+                    console.log(`✅ No accrual found for payment month ${payment.paymentMonth} - proceeding with advance payment`);
+                }
+            } catch (accrualCheckError) {
+                console.error(`❌ Error checking for accruals: ${accrualCheckError.message}`);
+                console.error(`   Proceeding with advance payment creation (may be incorrect)`);
+            }
+        }
+        
+        if (shouldCreateAdvancePayment) {
             console.log(`💳 Creating fallback ADVANCE PAYMENT transaction for ${payment.paymentId}`);
             console.log(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
             console.log(`   💳 Amount: $${payment.totalAmount || 0}`);
@@ -792,10 +851,123 @@ async function ensurePaymentTransaction(payment) {
         console.log(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
         console.log(`   ⚠️ Amount: $${payment.totalAmount || 0}`);
         
+        // 🆕 Determine payment type and month for proper description format
+        let paymentType = 'rent'; // Default to rent
+        if (payment.payments && payment.payments.length > 0) {
+            const firstPayment = payment.payments[0];
+            paymentType = firstPayment.type || 'rent';
+        } else if (payment.metadata?.paymentType) {
+            paymentType = payment.metadata.paymentType;
+        } else if (payment.paymentType) {
+            paymentType = payment.paymentType;
+        }
+        
+        // 🆕 Determine month settled from paymentMonth or payment date
+        let monthSettled = payment.paymentMonth; // Format: "2026-01"
+        if (!monthSettled && payment.date) {
+            const paymentDate = new Date(payment.date);
+            const year = paymentDate.getFullYear();
+            const month = String(paymentDate.getMonth() + 1).padStart(2, '0');
+            monthSettled = `${year}-${month}`;
+        } else if (!monthSettled) {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            monthSettled = `${year}-${month}`;
+        }
+        
+        // 🆕 CRITICAL: Check if payment date is before payment month - if so, treat as advance payment
+        const paymentDate = new Date(payment.date || new Date());
+        const paymentMonthDate = monthSettled ? new Date(monthSettled + '-01') : null;
+        const paymentDateMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
+        const isAdvancePaymentByDate = paymentMonthDate && paymentDateMonth < paymentMonthDate;
+        
+        if (isAdvancePaymentByDate) {
+            console.log(`⚠️ Payment date (${paymentDate.toISOString().split('T')[0]}) is before payment month (${monthSettled})`);
+            console.log(`   ✅ Creating ADVANCE PAYMENT transaction instead of regular payment allocation`);
+            
+            // Create advance payment transaction (4-entry structure: Cash, AR Credit, AR Debit, Deferred Income)
+            const deferredIncomeAccountCode = '2200';
+            const deferredIncomeAccountName = 'Advance Payment Liability';
+            
+            const advancePaymentTransaction = new TransactionEntry({
+                transactionId,
+                date: payment.date || new Date(),
+                description: `Advance ${paymentType} payment for ${monthSettled} (no accrual yet)`,
+                reference: payment._id.toString(),
+                entries: [
+                    // Entry 1: Debit Cash (money received)
+                    {
+                        accountCode: paymentAccountCode,
+                        accountName: paymentAccountName,
+                        accountType: 'Asset',
+                        debit: payment.totalAmount || 0,
+                        credit: 0,
+                        description: `${paymentType} payment received for ${monthSettled}`
+                    },
+                    // Entry 2: Credit Student AR (shows student paid, creating credit/advance)
+                    {
+                        accountCode: arAccountCode,
+                        accountName: arAccountName,
+                        accountType: 'Asset',
+                        debit: 0,
+                        credit: payment.totalAmount || 0,
+                        description: `${paymentType} payment from ${debtor?.contactInfo?.name || 'Student'} for ${monthSettled} - shows as credit/advance`
+                    },
+                    // Entry 3: Debit Student AR (transfers credit to deferred income)
+                    {
+                        accountCode: arAccountCode,
+                        accountName: arAccountName,
+                        accountType: 'Asset',
+                        debit: payment.totalAmount || 0,
+                        credit: 0,
+                        description: `Transfer advance payment to deferred income for ${monthSettled}`
+                    },
+                    // Entry 4: Credit Deferred Income (liability for future periods)
+                    {
+                        accountCode: deferredIncomeAccountCode,
+                        accountName: deferredIncomeAccountName,
+                        accountType: 'Liability',
+                        debit: 0,
+                        credit: payment.totalAmount || 0,
+                        description: `Advance ${paymentType} payment from ${debtor?.contactInfo?.name || 'Student'} for ${monthSettled}`
+                    }
+                ],
+                totalDebit: (payment.totalAmount || 0) * 2,
+                totalCredit: (payment.totalAmount || 0) * 2,
+                source: 'advance_payment',
+                sourceId: payment._id,
+                sourceModel: 'Payment',
+                residence: payment.residence || debtor?.residence,
+                createdBy: payment.createdBy || 'system',
+                status: 'posted',
+                metadata: {
+                    paymentId: payment._id.toString(),
+                    studentId: userId.toString(),
+                    debtorId: debtor?._id?.toString() || null,
+                    paymentType: paymentType,
+                    monthSettled: monthSettled,
+                    method: paymentMethod,
+                    createdByHook: true,
+                    isAdvancePayment: true,
+                    note: 'Transaction created by Payment post-save hook (fallback) - advance payment (payment date before payment month)'
+                }
+            });
+            
+            await advancePaymentTransaction.save();
+            console.log(`✅ Created advance payment transaction: ${advancePaymentTransaction.transactionId} for payment ${payment.paymentId}`);
+            return; // Exit early - advance payment created
+        }
+        
+        // 🆕 Use consistent description format matching enhancedPaymentAllocationService
+        const transactionDescription = `Payment allocation: ${paymentType} for ${monthSettled}`;
+        const cashEntryDescription = `${paymentType} payment received for ${monthSettled}`;
+        const arEntryDescription = `${paymentType} payment applied to ${monthSettled}`;
+        
         const paymentTransaction = new TransactionEntry({
             transactionId,
             date: payment.date || new Date(),
-            description: `Payment from ${studentName} - ${paymentMethod}`,
+            description: transactionDescription,
             reference: payment._id.toString(),
             entries: [
                 // Entry 1: Debit Cash/Bank
@@ -805,7 +977,7 @@ async function ensurePaymentTransaction(payment) {
                     accountType: 'Asset',
                     debit: payment.totalAmount || 0,
                     credit: 0,
-                    description: `Payment received from ${debtor?.contactInfo?.name || 'Student'} via ${paymentMethod}`
+                    description: cashEntryDescription
                 },
                 // Entry 2: Credit AR
                 {
@@ -814,7 +986,7 @@ async function ensurePaymentTransaction(payment) {
                     accountType: 'Asset',
                     debit: 0,
                     credit: payment.totalAmount || 0,
-                    description: `Payment allocated to ${debtor?.contactInfo?.name || 'Student'} - ${paymentMethod}`
+                    description: arEntryDescription
                 }
             ],
             totalDebit: payment.totalAmount || 0,
@@ -829,7 +1001,8 @@ async function ensurePaymentTransaction(payment) {
                 paymentId: payment._id.toString(),
                 studentId: userId.toString(),
                 debtorId: debtor?._id?.toString() || null,
-                paymentType: payment.paymentType || 'rent',
+                paymentType: paymentType, // Use determined payment type
+                monthSettled: monthSettled, // Include month settled for consistency
                 method: paymentMethod,
                 createdByHook: true, // Flag to indicate this was created by the post-save hook
                 note: 'Transaction created by Payment post-save hook (fallback)'

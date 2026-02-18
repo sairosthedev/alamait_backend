@@ -1345,6 +1345,16 @@ exports.getDebtorTransactions = async (req, res) => {
         // Only add studentId query if user exists
         if (debtor.user && debtor.user._id) {
             transactionQuery.$or.push({ 'metadata.studentId': debtor.user._id.toString() });
+            // 🆕 CRITICAL: Include manual transactions (negotiated payments) by studentId
+            transactionQuery.$or.push({
+                source: 'manual',
+                'metadata.studentId': debtor.user._id.toString(),
+                $or: [
+                    { 'metadata.type': 'negotiated_payment_adjustment' },
+                    { 'metadata.transactionType': 'negotiated_payment_adjustment' },
+                    { description: { $regex: /negotiated|discount/i } }
+                ]
+            });
         }
 
         // CRITICAL: Also include payments by sourceId (Payment ID) to catch payments without transactions
@@ -1405,6 +1415,14 @@ exports.getDebtorTransactions = async (req, res) => {
                 totalAccruals += amount;
             } else if (transaction.source === 'payment') {
                 totalPayments += creditAmount;
+            } else if (transaction.source === 'manual') {
+                // 🆕 Include negotiated payment adjustments in totalPayments
+                // Negotiated payments reduce AR (credit to AR) and should be counted as payments
+                if (transaction.metadata?.type === 'negotiated_payment_adjustment' || 
+                    transaction.metadata?.transactionType === 'negotiated_payment_adjustment' ||
+                    transaction.description?.toLowerCase().includes('negotiated')) {
+                    totalPayments += creditAmount; // Count negotiated discounts as payments
+                }
             }
         });
 
@@ -1428,6 +1446,14 @@ exports.getDebtorTransactions = async (req, res) => {
                 acc[month].accruals += amount;
             } else if (transaction.source === 'payment') {
                 acc[month].payments += creditAmount;
+            } else if (transaction.source === 'manual') {
+                // 🆕 Include negotiated payment adjustments in monthly payments
+                // Negotiated payments reduce AR (credit to AR) and should be counted as payments
+                if (transaction.metadata?.type === 'negotiated_payment_adjustment' || 
+                    transaction.metadata?.transactionType === 'negotiated_payment_adjustment' ||
+                    transaction.description?.toLowerCase().includes('negotiated')) {
+                    acc[month].payments += creditAmount; // Count negotiated discounts as payments
+                }
             }
 
             acc[month].net = acc[month].accruals - acc[month].payments;
