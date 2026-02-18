@@ -919,7 +919,7 @@ async function ensurePaymentTransaction(payment) {
         // Now create the appropriate transaction based on shouldCreateAdvancePayment
         if (shouldCreateAdvancePayment) {
             console.log(`💳 Creating fallback ADVANCE PAYMENT transaction for ${payment.paymentId}`);
-            console.log(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
+        console.log(`   ⚠️ This should only happen if smartFIFOAllocation failed or was not called`);
             console.log(`   💳 Amount: $${payment.totalAmount || 0}`);
             console.log(`   💳 Payment date: ${paymentDate.toISOString().split('T')[0]}`);
             console.log(`   💳 Payment month: ${monthSettled}`);

@@ -63,33 +63,33 @@ class EnhancedPaymentAllocationService {
       
       // STEP 2: If debtor not found by account code, find by user ID
       if (!debtorDoc) {
-        const Debtor = require('../models/Debtor');
-        const Application = require('../models/Application');
-        const mongoose = require('mongoose');
-        
-        if (mongoose.Types.ObjectId.isValid(userId)) {
-          debtorDoc = await Debtor.findById(userId).select('accountCode _id user debtorCode application').lean();
-          if (debtorDoc) {
-            actualUserId = debtorDoc.user?.toString() || userId;
+      const Debtor = require('../models/Debtor');
+      const Application = require('../models/Application');
+      const mongoose = require('mongoose');
+      
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        debtorDoc = await Debtor.findById(userId).select('accountCode _id user debtorCode application').lean();
+        if (debtorDoc) {
+          actualUserId = debtorDoc.user?.toString() || userId;
             if (!finalAccountCode) {
               finalAccountCode = debtorDoc.accountCode;
             }
-          }
         }
-        
-        if (!debtorDoc) {
-          const application = await Application.findById(userId).select('student').lean();
-          if (application && application.student) {
-            actualUserId = application.student.toString();
-            debtorDoc = await Debtor.findOne({ user: actualUserId }).select('accountCode _id user debtorCode application').lean();
-            if (!debtorDoc) {
-              debtorDoc = await Debtor.findOne({ application: userId }).select('accountCode _id user debtorCode application').lean();
-            }
+      }
+      
+      if (!debtorDoc) {
+        const application = await Application.findById(userId).select('student').lean();
+        if (application && application.student) {
+          actualUserId = application.student.toString();
+          debtorDoc = await Debtor.findOne({ user: actualUserId }).select('accountCode _id user debtorCode application').lean();
+          if (!debtorDoc) {
+            debtorDoc = await Debtor.findOne({ application: userId }).select('accountCode _id user debtorCode application').lean();
+          }
             if (debtorDoc && !finalAccountCode) {
               finalAccountCode = debtorDoc.accountCode;
             }
-          } else {
-            debtorDoc = await Debtor.findOne({ user: userId }).select('accountCode _id user debtorCode application').lean();
+        } else {
+          debtorDoc = await Debtor.findOne({ user: userId }).select('accountCode _id user debtorCode application').lean();
             if (debtorDoc && !finalAccountCode) {
               finalAccountCode = debtorDoc.accountCode;
             }
@@ -139,37 +139,37 @@ class EnhancedPaymentAllocationService {
         console.log(`⚠️ Payment date is before payment month - SKIPPING accrual checks and treating as ADVANCE PAYMENT`);
         // Skip to advance payment handling (will be handled in the section below)
       } else {
-        // STEP 4: Check if payment month has balance - with DIRECT FALLBACK if not found
-        let paymentMonthBalance = outstandingBalances?.find(b => b.monthKey === paymentMonthKey);
-        let hasPaymentMonthBalance = paymentMonthBalance && paymentMonthBalance.rent?.outstanding > 0;
-        
-        // 🆕 CRITICAL FALLBACK: If balance not found, directly query for accrual for payment month
+      // STEP 4: Check if payment month has balance - with DIRECT FALLBACK if not found
+      let paymentMonthBalance = outstandingBalances?.find(b => b.monthKey === paymentMonthKey);
+      let hasPaymentMonthBalance = paymentMonthBalance && paymentMonthBalance.rent?.outstanding > 0;
+      
+      // 🆕 CRITICAL FALLBACK: If balance not found, directly query for accrual for payment month
         // Use accountCode from payload if available, otherwise use debtor account code
         const accountCodeForQuery = finalAccountCode || (debtorDoc && debtorDoc.accountCode);
         if (!hasPaymentMonthBalance && accountCodeForQuery) {
-          console.log(`🔍 Balance not found in getDetailedOutstandingBalances - directly checking for accrual...`);
+        console.log(`🔍 Balance not found in getDetailedOutstandingBalances - directly checking for accrual...`);
           console.log(`   Using account code: ${accountCodeForQuery}`);
-          const TransactionEntry = require('../models/TransactionEntry');
+        const TransactionEntry = require('../models/TransactionEntry');
           const debtorAccountCode = accountCodeForQuery;
-          
+        
           // Query for accrual for payment month (not payment date month)
           const paymentMonthDate = new Date(paymentData.paymentMonth + '-01');
           const paymentMonthStart = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth(), 1);
           const paymentMonthEnd = new Date(paymentMonthDate.getFullYear(), paymentMonthDate.getMonth() + 1, 0, 23, 59, 59, 999);
+        
+        const accrualForMonth = await TransactionEntry.findOne({
+          'entries.accountCode': debtorAccountCode,
+          source: { $in: ['rental_accrual', 'lease_start'] },
+          status: { $ne: 'reversed' },
+          date: {
+            $gte: paymentMonthStart,
+            $lte: paymentMonthEnd
+          }
+        }).lean();
+        
+        if (accrualForMonth) {
+          console.log(`✅ Found accrual for payment month ${paymentMonthKey}: ${accrualForMonth.transactionId}`);
           
-          const accrualForMonth = await TransactionEntry.findOne({
-            'entries.accountCode': debtorAccountCode,
-            source: { $in: ['rental_accrual', 'lease_start'] },
-            status: { $ne: 'reversed' },
-            date: {
-              $gte: paymentMonthStart,
-              $lte: paymentMonthEnd
-            }
-          }).lean();
-          
-          if (accrualForMonth) {
-            console.log(`✅ Found accrual for payment month ${paymentMonthKey}: ${accrualForMonth.transactionId}`);
-            
           // Calculate outstanding balance
           const accrualEntry = accrualForMonth.entries.find(e => 
             e.accountCode === debtorAccountCode && e.debit > 0
@@ -237,31 +237,31 @@ class EnhancedPaymentAllocationService {
           console.log(`      Net Accrual (after discounts): $${netAccrualAmount}`);
           console.log(`      Payments Received: $${totalPaid}`);
           console.log(`      Outstanding Balance: $${outstanding}`);
-            
-            if (outstanding > 0) {
+          
+          if (outstanding > 0) {
               console.log(`✅ Payment month ${paymentMonthKey} has outstanding balance: $${outstanding} (net accrual: $${netAccrualAmount}, paid: $${totalPaid}${totalNegotiatedDiscount > 0 ? `, negotiated discounts: $${totalNegotiatedDiscount}` : ''})`);
-              hasPaymentMonthBalance = true;
-              
-              // Add to outstandingBalances
-              if (!outstandingBalances) outstandingBalances = [];
-              paymentMonthBalance = {
-                monthKey: paymentMonthKey,
+            hasPaymentMonthBalance = true;
+            
+            // Add to outstandingBalances
+            if (!outstandingBalances) outstandingBalances = [];
+            paymentMonthBalance = {
+              monthKey: paymentMonthKey,
                 year: paymentMonthDate.getFullYear(),
                 month: paymentMonthDate.getMonth() + 1,
                 monthName: paymentMonthDate.toLocaleString('default', { month: 'long' }),
                 rent: { owed: netAccrualAmount, paid: totalPaid, outstanding: outstanding }, // Use net accrual after negotiated discounts
-                adminFee: { owed: 0, paid: 0, outstanding: 0 },
-                deposit: { owed: 0, paid: 0, outstanding: 0 },
-                totalOutstanding: outstanding,
-                transactionId: accrualForMonth._id,
-                date: accrualForMonth.date
-              };
-              outstandingBalances.push(paymentMonthBalance);
-            } else {
-              console.log(`ℹ️ Payment month ${paymentMonthKey} is fully paid (net accrual: $${netAccrualAmount}, paid: $${totalPaid}${totalNegotiatedDiscount > 0 ? `, negotiated discounts: $${totalNegotiatedDiscount}` : ''})`);
-            }
+              adminFee: { owed: 0, paid: 0, outstanding: 0 },
+              deposit: { owed: 0, paid: 0, outstanding: 0 },
+              totalOutstanding: outstanding,
+              transactionId: accrualForMonth._id,
+              date: accrualForMonth.date
+            };
+            outstandingBalances.push(paymentMonthBalance);
           } else {
-            console.log(`ℹ️ No accrual found for payment month ${paymentMonthKey}`);
+              console.log(`ℹ️ Payment month ${paymentMonthKey} is fully paid (net accrual: $${netAccrualAmount}, paid: $${totalPaid}${totalNegotiatedDiscount > 0 ? `, negotiated discounts: $${totalNegotiatedDiscount}` : ''})`);
+          }
+        } else {
+          console.log(`ℹ️ No accrual found for payment month ${paymentMonthKey}`);
           }
         }
       }

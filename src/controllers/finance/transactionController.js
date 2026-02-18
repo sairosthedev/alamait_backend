@@ -3291,7 +3291,7 @@ class TransactionController {
                     }
                 };
             });
-            
+
             // Calculate totals from only the accrual entries being reversed
             const totalAccrualDebit = accrualEntries.reduce((sum, e) => sum + (e.debit || 0), 0);
             const totalAccrualCredit = accrualEntries.reduce((sum, e) => sum + (e.credit || 0), 0);

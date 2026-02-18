@@ -402,6 +402,32 @@ class RentalAccrualService {
             
             console.log(`   Student ID: ${studentId}`);
             
+            // 🆕 CRITICAL: Get debtor ID for sourceId (should use debtor ID, not user ID)
+            const Debtor = require('../models/Debtor');
+            const mongoose = require('mongoose');
+            
+            // Try multiple query formats to find the debtor
+            let debtor = await Debtor.findOne({ user: studentId }).select('_id accountCode').lean();
+            if (!debtor) {
+                // Try with ObjectId conversion
+                if (mongoose.Types.ObjectId.isValid(studentId)) {
+                    debtor = await Debtor.findOne({ user: new mongoose.Types.ObjectId(studentId) }).select('_id accountCode').lean();
+                }
+            }
+            if (!debtor) {
+                // Try as string
+                debtor = await Debtor.findOne({ user: String(studentId) }).select('_id accountCode').lean();
+            }
+            
+            let debtorId = null;
+            if (debtor) {
+                debtorId = debtor._id.toString();
+                console.log(`   ✅ Debtor found! Debtor ID: ${debtorId}, Account Code: ${debtor.accountCode || 'N/A'}`);
+            } else {
+                console.warn(`   ⚠️ No debtor found for student ${studentId} (tried multiple formats), will use student ID as sourceId`);
+                console.warn(`   ⚠️ This will create transactions with user ID format instead of debtor ID format`);
+            }
+            
             // 🚫 PREVENT FUTURE MONTH LEASE STARTS: Only create lease starts for current or past months
             const now = new Date();
             const leaseStartDate = new Date(application.startDate);
@@ -570,38 +596,95 @@ class RentalAccrualService {
             console.log(`   Admin Fee: $${adminFee}`);
             console.log(`   Security Deposit: $${securityDeposit}`);
             
-            // Get required accounts
-            const accountsReceivable = await this.ensureStudentARAccount(
-                studentId, // Use extracted student ID
-                `${application.firstName} ${application.lastName}`
-            );
+            // 🆕 CRITICAL: Use debtor's account code if debtor exists, otherwise use ensureStudentARAccount
+            let accountsReceivable;
+            let arAccountCode;
+            
+            if (debtor && debtor.accountCode) {
+                // Use debtor's account code directly
+                arAccountCode = debtor.accountCode;
+                console.log(`✅ Using debtor's account code: ${arAccountCode}`);
+                
+                // Validate it's a string and uses debtor ID format
+                if (typeof arAccountCode !== 'string') {
+                    console.error(`❌ CRITICAL: debtor.accountCode is not a string! Type: ${typeof arAccountCode}, Value:`, arAccountCode);
+                    arAccountCode = `1100-${debtorId}`;
+                    console.log(`   ✅ Fixed: Using debtor ID as account code: ${arAccountCode}`);
+                } else if (!arAccountCode.startsWith('1100-') || !arAccountCode.includes(debtorId)) {
+                    // Verify it uses debtor ID format
+                    console.warn(`⚠️ Debtor account code (${arAccountCode}) doesn't match debtor ID format, using correct format`);
+                    arAccountCode = `1100-${debtorId}`;
+                    console.log(`   ✅ Fixed: Using debtor ID as account code: ${arAccountCode}`);
+                }
+                
+                // Get or create the account with the correct code
+                accountsReceivable = await Account.findOne({ code: arAccountCode });
+                if (!accountsReceivable) {
+                    // Account doesn't exist, create it
+                    const mainAR = await Account.findOne({ code: '1100' });
+                    if (!mainAR) {
+                        throw new Error('Main AR account (1100) not found');
+                    }
+                    
+                    accountsReceivable = new Account({
+                        code: arAccountCode,
+                        name: `Accounts Receivable - ${application.firstName} ${application.lastName}`,
+                        type: 'Asset',
+                        category: 'Current Assets',
+                        subcategory: 'Accounts Receivable',
+                        description: 'Student-specific AR control account (uses Debtor ID for persistence)',
+                        isActive: true,
+                        parentAccount: mainAR._id,
+                        level: 2,
+                        sortOrder: 0,
+                        metadata: new Map([
+                            ['parent', '1100'],
+                            ['hasParent', 'true'],
+                            ['studentId', String(studentId)],
+                            ['debtorId', debtorId],
+                            ['accountCodeFormat', 'debtor_id']
+                        ])
+                    });
+                    await accountsReceivable.save();
+                    console.log(`✅ Created AR account with debtor ID: ${arAccountCode}`);
+                }
+            } else {
+                // Fallback: use ensureStudentARAccount (but this should use debtor ID if debtor exists)
+                accountsReceivable = await this.ensureStudentARAccount(
+                    studentId, // Use extracted student ID
+                    `${application.firstName} ${application.lastName}`
+                );
+                
+                // 🆕 CRITICAL SAFETY CHECK: Ensure accountsReceivable.code is a string
+                arAccountCode = accountsReceivable.code;
+                if (typeof arAccountCode !== 'string') {
+                    console.error(`❌ CRITICAL: accountsReceivable.code is not a string! Type: ${typeof arAccountCode}, Value:`, arAccountCode);
+                    // Try to extract debtor ID from the object
+                    if (typeof arAccountCode === 'object' && arAccountCode !== null) {
+                        if (debtor?._id) {
+                            arAccountCode = `1100-${debtor._id.toString()}`;
+                            console.log(`   ✅ Fixed: Extracted debtor ID and created account code: ${arAccountCode}`);
+                        } else {
+                            arAccountCode = `1100-${studentId}`;
+                            console.log(`   ✅ Fixed: Using student ID as account code: ${arAccountCode}`);
+                        }
+                    } else {
+                        arAccountCode = debtorId ? `1100-${debtorId}` : `1100-${studentId}`;
+                        console.log(`   ✅ Fixed: Using ${debtorId ? 'debtor' : 'student'} ID as account code: ${arAccountCode}`);
+                    }
+                } else if (debtorId && !arAccountCode.includes(debtorId)) {
+                    // If we have a debtor ID but the account code doesn't use it, fix it
+                    console.warn(`⚠️ Account code (${arAccountCode}) doesn't use debtor ID (${debtorId}), but debtor exists`);
+                    console.warn(`   This might cause inconsistencies. Consider updating the account code.`);
+                }
+            }
+            
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             const adminIncome = await Account.findOne({ code: '4002' }); // Administrative Fees
             const depositLiability = await Account.findOne({ code: '2020' }); // Tenant Security Deposits
             
             if (!accountsReceivable || !rentalIncome || !depositLiability) {
                 throw new Error('Required accounts not found');
-            }
-            
-            // 🆕 CRITICAL SAFETY CHECK: Ensure accountsReceivable.code is a string
-            let arAccountCode = accountsReceivable.code;
-            if (typeof arAccountCode !== 'string') {
-                console.error(`❌ CRITICAL: accountsReceivable.code is not a string! Type: ${typeof arAccountCode}, Value:`, arAccountCode);
-                // Try to extract debtor ID from the object
-                if (typeof arAccountCode === 'object' && arAccountCode !== null) {
-                    const Debtor = require('../models/Debtor');
-                    const debtor = await Debtor.findOne({ user: studentId }).select('_id').lean();
-                    if (debtor?._id) {
-                        arAccountCode = `1100-${debtor._id.toString()}`;
-                        console.log(`   ✅ Fixed: Extracted debtor ID and created account code: ${arAccountCode}`);
-                    } else {
-                        arAccountCode = `1100-${studentId}`;
-                        console.log(`   ✅ Fixed: Using student ID as account code: ${arAccountCode}`);
-                    }
-                } else {
-                    arAccountCode = `1100-${studentId}`;
-                    console.log(`   ✅ Fixed: Using student ID as account code: ${arAccountCode}`);
-                }
             }
             
             // Create transaction for lease start
@@ -702,8 +785,8 @@ class RentalAccrualService {
                 totalDebit,
                 totalCredit,
                 source: 'rental_accrual',
-                sourceId: studentId, // Use extracted student ID
-                sourceModel: 'Lease',
+                sourceId: debtorId || studentId, // 🆕 CRITICAL: Use debtor ID if available, otherwise fallback to student ID
+                sourceModel: debtorId ? 'Debtor' : 'Lease', // Use 'Debtor' if debtor exists, otherwise 'Lease'
                 residence: application.residence,
                 createdBy: '68b7909295210ad2fa2c5dcf', // System user ID
                 status: 'posted',
@@ -711,6 +794,7 @@ class RentalAccrualService {
                     applicationId: application._id.toString(),
                     applicationCode: application.applicationCode,
                     studentId: studentId, // Use extracted student ID
+                    debtorId: debtorId || null, // 🆕 Add debtor ID to metadata
                     studentName: `${application.firstName} ${application.lastName}`,
                     residence: application.residence,
                     room: application.allocatedRoom,

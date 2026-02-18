@@ -112,10 +112,16 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
         const getName = (res) => (res?.name ? res.name : (debtor.residenceName || 'Unknown'));
         
         // Get debtor's AR account
-        // 🆕 CRITICAL FIX: Ensure accountCode is a string, not an object
+        // 🆕 CRITICAL: Use debtor's accountCode as the source of truth
+        // The debtor.accountCode field is what should be used, not derived from debtor ID
+        const debtorId = debtor._id.toString();
+        const fallbackAccountCode = `1100-${debtorId}`; // Only used if debtor.accountCode is invalid
+        
         let arAccountCode = debtor.accountCode;
-        if (typeof arAccountCode !== 'string') {
-            console.error(`❌ CRITICAL: debtor.accountCode is not a string! Type: ${typeof arAccountCode}, Value:`, arAccountCode);
+        
+        // Validate and fix debtor.accountCode if it's invalid
+        if (!arAccountCode || typeof arAccountCode !== 'string') {
+            console.error(`❌ CRITICAL: debtor.accountCode is missing or not a string! Type: ${typeof arAccountCode}, Value:`, arAccountCode);
             // If accountCode is an object, extract the debtor ID
             if (typeof arAccountCode === 'object' && arAccountCode !== null) {
                 // If it's an object, try to extract the _id
@@ -125,38 +131,65 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
                     console.warn(`⚠️ Debtor accountCode was an object (bug), extracted ID: ${arAccountCode}`);
                 } else {
                     // Fallback to debtor._id
-                    arAccountCode = `1100-${debtor._id.toString()}`;
+                    arAccountCode = fallbackAccountCode;
                     console.warn(`⚠️ Debtor accountCode was an object but no _id found, using debtor._id: ${arAccountCode}`);
                 }
             } else {
-                // Unexpected type, use debtor ID
-                arAccountCode = `1100-${debtor._id.toString()}`;
-                console.warn(`⚠️ Debtor accountCode has unexpected type (${typeof arAccountCode}), using debtor ID: ${arAccountCode}`);
+                // Missing or invalid, use fallback
+                arAccountCode = fallbackAccountCode;
+                console.warn(`⚠️ Debtor accountCode is missing/invalid, using fallback: ${arAccountCode}`);
             }
+        } else {
+            // ✅ Debtor has a valid accountCode - USE IT (this is the source of truth)
+            // Only validate format, don't override it
+            if (!arAccountCode.startsWith('1100-')) {
+                console.warn(`⚠️ Debtor accountCode format is incorrect: ${arAccountCode}`);
+                console.warn(`   Expected format: 1100-{id}, but will use debtor's accountCode anyway`);
+            }
+            console.log(`✅ Using debtor's accountCode: ${arAccountCode} (from debtor record)`);
         }
         
         // 🆕 FINAL SAFETY CHECK: Ensure arAccountCode is always a string
         if (typeof arAccountCode !== 'string') {
             console.error(`❌ CRITICAL: arAccountCode is still not a string! Type: ${typeof arAccountCode}, Value:`, arAccountCode);
-            arAccountCode = `1100-${debtor._id.toString()}`;
-            console.log(`   ✅ Fixed: Using debtor ID as account code: ${arAccountCode}`);
+            arAccountCode = fallbackAccountCode;
+            console.log(`   ✅ Fixed: Using fallback account code: ${arAccountCode}`);
         }
         
+        // 🆕 CRITICAL: Use debtor's accountCode to find/create the account
+        // The debtor.accountCode is the source of truth - don't override it
         const debtorAccount = await Account.findOne({ code: arAccountCode });
         if (!debtorAccount) {
-            // Try to find or create the account with the correct code
-            console.log(`⚠️ Account not found with code: ${arAccountCode}, attempting to create...`);
-            const RentalAccrualService = require('./rentalAccrualService');
-            try {
-                const createdAccount = await RentalAccrualService.ensureStudentARAccount(
-                    debtor.user._id || debtor.user,
-                    `${debtor.user.firstName} ${debtor.user.lastName}`
-                );
-                arAccountCode = createdAccount.code;
-                console.log(`✅ Created/found account with code: ${arAccountCode}`);
-            } catch (accountError) {
-                throw new Error(`Debtor account not found and could not be created: ${arAccountCode} - ${accountError.message}`);
+            // Account doesn't exist with debtor's accountCode, create it using that code
+            console.log(`⚠️ Account not found with debtor's accountCode: ${arAccountCode}, creating...`);
+            const Account = require('../models/Account');
+            const mainAR = await Account.findOne({ code: '1100' });
+            if (!mainAR) {
+                throw new Error('Main AR account (1100) not found');
             }
+            
+            // Create account using the debtor's accountCode (don't override it)
+            const newAccount = new Account({
+                code: arAccountCode, // Use debtor's accountCode as-is
+                name: `Accounts Receivable - ${debtor.user.firstName} ${debtor.user.lastName}`,
+                type: 'Asset',
+                category: 'Current Assets',
+                subcategory: 'Accounts Receivable',
+                description: 'Student-specific AR control account (uses Debtor accountCode)',
+                isActive: true,
+                parentAccount: mainAR._id,
+                level: 2,
+                sortOrder: 0,
+                metadata: new Map([
+                    ['parent', '1100'],
+                    ['hasParent', 'true'],
+                    ['studentId', debtor.user._id?.toString() || debtor.user?.toString() || ''],
+                    ['debtorId', debtorId],
+                    ['accountCodeFormat', arAccountCode.includes(debtorId) ? 'debtor_id' : 'unknown']
+                ])
+            });
+            await newAccount.save();
+            console.log(`✅ Created AR account with debtor's accountCode: ${arAccountCode}`);
         } else {
             // 🆕 SAFETY CHECK: Ensure the account's code is a string
             if (typeof debtorAccount.code !== 'string') {
@@ -174,8 +207,16 @@ async function backfillTransactionsForDebtor(debtor, options = {}) {
                     }
                 }
             } else {
-                // Use the account's code (might be different from debtor.accountCode if it was fixed)
-                arAccountCode = debtorAccount.code;
+                // ✅ Use debtor's accountCode (source of truth), not the account's code
+                // The debtor.accountCode is what should be used for consistency
+                // Only use account's code if it matches debtor's accountCode
+                if (debtorAccount.code === arAccountCode) {
+                    console.log(`✅ Account found with matching code: ${arAccountCode}`);
+                } else {
+                    console.warn(`⚠️ Account code mismatch: Account has ${debtorAccount.code}, but debtor has ${arAccountCode}`);
+                    console.warn(`   Using debtor's accountCode: ${arAccountCode} (debtor.accountCode is source of truth)`);
+                    // Keep using debtor's accountCode - don't override it
+                }
             }
         }
         
