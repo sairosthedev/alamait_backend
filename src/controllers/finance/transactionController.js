@@ -2559,24 +2559,68 @@ class TransactionController {
                 }
             }
 
-            // Get or create student-specific A/R account
+            // 🆕 CRITICAL: Get debtor to use the correct AR account code (debtor account code, not user ID)
+            const Debtor = require('../../models/Debtor');
+            let debtor = await Debtor.findOne({ user: studentId });
+            
+            // If not found by user, try to find by application or other methods
+            if (!debtor) {
+                const Application = require('../../models/Application');
+                const application = await Application.findOne({ student: studentId });
+                if (application) {
+                    debtor = await Debtor.findOne({ application: application._id });
+                }
+            }
+            
+            if (!debtor) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Debtor not found for student ${studentName}. Please create debtor account first.`
+                });
+            }
+            
+            // 🆕 CRITICAL: Use debtor's account code (1100-{debtorId}) instead of user ID format
+            const debtorAccountCode = debtor.accountCode || `1100-${debtor._id.toString()}`;
+            console.log(`✅ Using debtor account code: ${debtorAccountCode} (Debtor: ${debtor.debtorCode})`);
+            
+            // Get or verify student-specific A/R account using debtor account code
             const Account = require('../../models/Account');
             let studentARAccount = await Account.findOne({
-                code: `1100-${studentId}`,
+                code: debtorAccountCode,
                 type: 'Asset'
             });
 
             if (!studentARAccount) {
+                // Account should exist, but create it if missing
+                const mainAR = await Account.findOne({ code: '1100' });
+                if (!mainAR) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Main AR account (1100) not found'
+                    });
+                }
+                
                 studentARAccount = new Account({
-                    code: `1100-${studentId}`,
+                    code: debtorAccountCode,
                     name: `Accounts Receivable - ${studentName}`,
                     type: 'Asset',
                     category: 'Current Assets',
-                    description: `Accounts receivable for ${studentName}`,
-                    isActive: true
+                    subcategory: 'Accounts Receivable',
+                    description: `Accounts receivable for ${studentName} (uses Debtor ID for persistence)`,
+                    isActive: true,
+                    parentAccount: mainAR._id,
+                    level: 2,
+                    metadata: new Map([
+                        ['parent', '1100'],
+                        ['hasParent', 'true'],
+                        ['debtorId', debtor._id.toString()],
+                        ['originalUserId', studentId]
+                    ])
                 });
                 await studentARAccount.save();
                 console.log(`✅ Created student-specific A/R account: ${studentARAccount.code}`);
+            } else {
+                console.log(`✅ Found existing AR account: ${studentARAccount.code}`);
             }
 
             // Get the appropriate income account based on payment type
@@ -2746,8 +2790,9 @@ class TransactionController {
                         }
                     },
                     // Credit: Student's A/R account (reduce A/R by discount amount)
+                    // 🆕 CRITICAL: Use debtor account code to match accruals
                     {
-                        accountCode: studentARAccount.code,
+                        accountCode: debtorAccountCode, // Use debtor account code, not user ID format
                         accountName: studentARAccount.name,
                         accountType: 'Asset',
                         debit: 0,
@@ -2756,6 +2801,7 @@ class TransactionController {
                         metadata: {
                             studentName,
                             studentId,
+                            debtorId: debtor._id.toString(), // 🆕 Include debtor ID
                             residenceId: residenceId || originalAccrual?.metadata?.residenceId || originalAccrual?.residence,
                             transactionType: 'negotiated_payment_adjustment',
                             paymentType: paymentType,
@@ -2798,26 +2844,11 @@ class TransactionController {
             await transaction.save();
 
             console.log('✅ Negotiated payment transaction created successfully:', transaction._id);
+            console.log(`   Using debtor account code: ${debtorAccountCode}`);
 
             // Update debtor's totalOwed to reflect the negotiated amount as the new "original outstanding"
+            // 🆕 CRITICAL: Use the debtor we already found above (don't query again)
             try {
-                const Debtor = require('../../models/Debtor');
-                let debtor = null;
-                
-                // Try multiple methods to find the debtor (for both active and expired students)
-                // Method 1: Find by user field (for active students)
-                debtor = await Debtor.findOne({ user: studentId });
-                
-                // Method 2: Find by accountCode (for expired students)
-                if (!debtor) {
-                    debtor = await Debtor.findOne({ accountCode: `1100-${studentId}` });
-                }
-                
-                // Method 3: Find by ObjectId user field
-                if (!debtor) {
-                    debtor = await Debtor.findOne({ user: new mongoose.Types.ObjectId(studentId) });
-                }
-                
                 if (debtor) {
                     // Reduce totalOwed by the discount amount so negotiated amount becomes the new "original outstanding"
                     const newTotalOwed = Math.max(0, debtor.totalOwed - discountAmount);
@@ -2836,13 +2867,13 @@ class TransactionController {
                     console.log('✅ Updated debtor totalOwed for negotiated payment:');
                     console.log(`   Student: ${studentName}`);
                     console.log(`   Debtor Code: ${debtor.debtorCode}`);
+                    console.log(`   Debtor Account Code: ${debtorAccountCode}`);
                     console.log(`   Old Total Owed: $${oldTotalOwed}`);
                     console.log(`   New Total Owed: $${newTotalOwed}`);
                     console.log(`   Discount Applied: $${discountAmount}`);
                     console.log(`   New Current Balance: $${debtor.currentBalance}`);
                 } else {
                     console.log(`⚠️ No debtor found for student: ${studentName} (${studentId})`);
-                    console.log(`   Tried methods: user field, accountCode, ObjectId`);
                 }
             } catch (debtorUpdateError) {
                 console.error('❌ Error updating debtor for negotiated payment:', debtorUpdateError);

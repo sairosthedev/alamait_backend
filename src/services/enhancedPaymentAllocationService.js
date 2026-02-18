@@ -1399,14 +1399,37 @@ class EnhancedPaymentAllocationService {
       });
       
       // 🆕 Include manual transactions (negotiations, reversals, etc.) that affect AR
+      // 🆕 CRITICAL: Negotiated payments must use the correct debtor account code
       const manualAdjustments = allUserTransactions.filter(tx => {
         const isManual = tx.source === 'manual';
-        const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => e.accountCode === arAccountCode && e.accountType === 'Asset');
-        const matchesStudent = tx.metadata?.studentId?.toString() === userIdString || tx.metadata?.userId?.toString() === userIdString;
-        return isManual && (touchesAR || matchesStudent);
+        // Check if transaction touches the debtor's AR account code (exact match required)
+        const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => 
+          e.accountCode === arAccountCode && e.accountType === 'Asset'
+        );
+        const matchesStudent = tx.metadata?.studentId?.toString() === userIdString || 
+                             tx.metadata?.studentId?.toString() === actualUserId ||
+                             tx.metadata?.userId?.toString() === userIdString ||
+                             tx.metadata?.userId?.toString() === actualUserId;
+        const isNegotiated = tx.metadata?.type === 'negotiated_payment_adjustment' || 
+                            tx.metadata?.transactionType === 'negotiated_payment_adjustment' ||
+                            (tx.description && /negotiated|discount/i.test(tx.description));
+        
+        // Include if it's manual and (touches AR with correct account code, matches student, or is a negotiated payment)
+        return isManual && (touchesAR || matchesStudent || isNegotiated);
       });
       
       console.log(`📊 Found ${accruals.length} accrual transactions, ${payments.length} payment transactions, and ${manualAdjustments.length} manual adjustments`);
+      
+      // 🆕 DEBUG: Log manual adjustments found
+      if (manualAdjustments.length > 0) {
+        console.log(`🔧 Manual adjustments found:`);
+        manualAdjustments.forEach(adj => {
+          console.log(`   - ${adj.transactionId}: ${adj.description}`);
+          console.log(`     Type: ${adj.metadata?.type || adj.metadata?.transactionType || 'unknown'}`);
+          console.log(`     AR Account Code: ${adj.entries?.find(e => e.accountCode?.startsWith('1100-'))?.accountCode || 'N/A'}`);
+          console.log(`     Expected AR Code: ${arAccountCode}`);
+        });
+      }
       
       // Debug: Log payment transactions found
       if (payments.length > 0) {
@@ -1470,8 +1493,8 @@ class EnhancedPaymentAllocationService {
             monthName: accrualDate.toLocaleString('default', { month: 'long' }),
             date: accrualDate,
             rent: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0, negotiatedDiscount: 0 }, // 🆕 Track original and negotiated separately
-            adminFee: { owed: 0, paid: 0, outstanding: 0 },
-            deposit: { owed: 0, paid: 0, outstanding: 0 },
+            adminFee: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0 }, // 🆕 Track original admin fee from accrual
+            deposit: { owed: 0, paid: 0, outstanding: 0, originalOwed: 0 }, // 🆕 Track original deposit from accrual
             totalOutstanding: 0,
             transactionId: accrual._id,
             source: accrual.source,
@@ -1524,8 +1547,10 @@ class EnhancedPaymentAllocationService {
               
               if (description.includes('admin fee') || description.includes('administrative')) {
                 monthlyOutstanding[monthKey].adminFee.owed += entry.debit;
+                monthlyOutstanding[monthKey].adminFee.originalOwed = (monthlyOutstanding[monthKey].adminFee.originalOwed || 0) + entry.debit; // 🆕 Track original admin fee
               } else if (description.includes('security deposit') || description.includes('deposit')) {
                 monthlyOutstanding[monthKey].deposit.owed += entry.debit;
+                monthlyOutstanding[monthKey].deposit.originalOwed = (monthlyOutstanding[monthKey].deposit.originalOwed || 0) + entry.debit; // 🆕 Track original deposit
               } else {
                 // Default to rent for monthly accruals
                 monthlyOutstanding[monthKey].rent.owed += entry.debit;
@@ -1658,6 +1683,25 @@ class EnhancedPaymentAllocationService {
             }
           }
           
+          // 🆕 For negotiated payments, try to find matching accrual by date
+          if (!monthKey && (adjustment.metadata?.type === 'negotiated_payment_adjustment' || adjustment.metadata?.transactionType === 'negotiated_payment_adjustment')) {
+            // Look for accruals that might match this adjustment by date
+            const adjDate = new Date(adjustment.date);
+            const matchingAccrual = accruals.find(acc => {
+              const accDate = new Date(acc.date);
+              // Check if adjustment date is in the same month as accrual
+              return adjDate.getFullYear() === accDate.getFullYear() && 
+                     adjDate.getMonth() === accDate.getMonth();
+            });
+            if (matchingAccrual) {
+              monthKey = matchingAccrual.metadata?.month || (() => {
+                const d = new Date(matchingAccrual.date);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+              })();
+              console.log(`   ✅ Found matching accrual month by date: ${monthKey}`);
+            }
+          }
+          
           // Fallback to transaction date
           if (!monthKey) {
             const d = new Date(adjustment.date);
@@ -1666,19 +1710,38 @@ class EnhancedPaymentAllocationService {
         }
         
         if (!monthKey || !monthlyOutstanding[monthKey]) {
-          console.log(`   ⚠️ No matching month found for adjustment: ${monthKey}`);
-          return;
+          console.log(`   ⚠️ No matching month found for adjustment: ${monthKey || 'unknown'}`);
+          console.log(`      Available months: ${Object.keys(monthlyOutstanding).join(', ')}`);
+          // 🆕 Try to apply to closest month if exact match not found
+          if (monthKey && !monthlyOutstanding[monthKey]) {
+            // Find the closest month
+            const availableMonths = Object.keys(monthlyOutstanding).sort();
+            const closestMonth = availableMonths.find(m => m >= monthKey) || availableMonths[availableMonths.length - 1];
+            if (closestMonth) {
+              console.log(`   🔄 Applying to closest month: ${closestMonth} (requested: ${monthKey})`);
+              monthKey = closestMonth;
+            } else {
+              return; // No months available
+            }
+          } else if (!monthKey) {
+            return; // Could not determine month
+          }
         }
         
         console.log(`   📅 Applying to month: ${monthKey}`);
         
         // Process AR entries in the adjustment
         adjustment.entries.forEach(entry => {
-          if (entry.accountCode === arAccountCode && entry.accountType === 'Asset') {
+          // 🆕 CRITICAL: Check if entry matches the debtor's AR account code (exact match required)
+          // Negotiated payments must use the correct debtor account code
+          const matchesAR = entry.accountCode === arAccountCode;
+          
+          if (matchesAR && entry.accountType === 'Asset') {
             const amount = entry.credit || 0;
             const description = (entry.description || '').toLowerCase();
             
             console.log(`   💰 AR adjustment: ${entry.debit > 0 ? 'debit' : 'credit'} $${amount} - ${entry.description}`);
+            console.log(`      Entry AR Code: ${entry.accountCode}, Expected: ${arAccountCode}`);
             
             if (adjustment.metadata?.type === 'negotiated_payment_adjustment' || adjustment.metadata?.transactionType === 'negotiated_payment_adjustment') {
               // Negotiated payment reduces rent owed
