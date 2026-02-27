@@ -327,7 +327,42 @@ class AccrualCorrectionService {
             
             for (const { accrual, accrualMonth, accrualYear } of incorrectAccruals) {
                 try {
-                    console.log(`🔄 Reversing accrual: ${accrual._id} (${accrualMonth}/${accrualYear})`);
+                    console.log(`🔄 Checking accrual for reversal: ${accrual._id} (${accrualMonth}/${accrualYear})`);
+                    
+                    // 🆕 ENHANCED: Check if reversal already exists before creating
+                    const existingReversal = await TransactionEntry.findOne({
+                        source: 'rental_accrual_reversal',
+                        $or: [
+                            { 'metadata.originalAccrualId': accrual._id },
+                            { 'metadata.originalTransactionId': accrual.transactionId },
+                            { sourceId: accrual._id },
+                            { reference: accrual._id.toString() }
+                        ],
+                        status: { $ne: 'deleted' }
+                    }).session(session);
+                    
+                    if (existingReversal) {
+                        console.log(`   ⏭️ Reversal already exists for accrual ${accrual._id} (reversal ID: ${existingReversal._id})`);
+                        reversedAccruals.push({
+                            originalAccrual: accrual._id,
+                            reversalTransaction: existingReversal._id,
+                            alreadyExisted: true
+                        });
+                        continue; // Skip this accrual, reversal already exists
+                    }
+                    
+                    // Also check if original transaction is already marked as reversed
+                    if (accrual.status === 'reversed' || accrual.metadata?.reversed === true) {
+                        console.log(`   ⏭️ Accrual ${accrual._id} is already marked as reversed`);
+                        reversedAccruals.push({
+                            originalAccrual: accrual._id,
+                            reversalTransaction: null,
+                            alreadyReversed: true
+                        });
+                        continue; // Skip this accrual, already reversed
+                    }
+                    
+                    console.log(`   ✅ Creating reversal for accrual: ${accrual._id} (${accrualMonth}/${accrualYear})`);
                     
                     // 🆕 CRITICAL: Get debtor account code for AR entries
                     // Reversals should always use the current debtor account code, not the old one from the accrual

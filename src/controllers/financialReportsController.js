@@ -1105,7 +1105,7 @@ class FinancialReportsController {
             monthNames.forEach((month, index) => {
                 const monthKey = `${period}-${String(index + 1).padStart(2, '0')}`;
                 const monthData = detailedCashFlow.detailed_breakdown.monthly_breakdown[monthKey] || {
-                    income: { total: 0, rental_income: 0, admin_fees: 0, deposits: 0, utilities: 0, advance_payments: 0 },
+                    income: { total: 0, rental_income: 0, admin_fees: 0, deposits: 0, utilities: 0, advance_payments: 0, other_income: 0 },
                     expenses: { total: 0, maintenance: 0, utilities: 0, cleaning: 0, security: 0, management: 0 },
                     net_cash_flow: 0,
                     transaction_count: 0,
@@ -1141,6 +1141,7 @@ class FinancialReportsController {
                         deposits: monthData.income.deposits,
                         utilities: monthData.income.utilities,
                         advance_payments: monthData.income.advance_payments,
+                        other_income: monthData.income.other_income || 0,
                         transactions: monthData.income.transactions || [] // Include detailed income transactions
                     },
                     // Add detailed expense transactions
@@ -2338,7 +2339,15 @@ class FinancialReportsController {
      */
     static async getCashFlowAccountDetails(req, res) {
         try {
-            const { period, month, accountCode, residenceId } = req.query;
+            let { period, month, accountCode, residenceId } = req.query;
+            
+            // 🆕 Parse account code if it contains compound key (e.g., "20002__interbranch_newlands" -> "20002")
+            // This handles cases where the frontend sends compound keys but we need just the account code
+            if (accountCode && accountCode.includes('__')) {
+                const parts = accountCode.split('__');
+                accountCode = parts[0]; // Use only the account code part (before __)
+                console.log(`📊 Parsed compound account code: ${req.query.accountCode} -> ${accountCode}`);
+            }
             
             console.log(`📊 Getting cash flow account details for account ${accountCode} in ${month} ${period}${residenceId ? ` (residence: ${residenceId})` : ''}`);
             
@@ -2382,21 +2391,25 @@ class FinancialReportsController {
                 }
             } else {
                 // Special handling for virtual income accounts
-                if (accountCode === 'other_income' || accountCode === '4006') {
+                // 🆕 CRITICAL: Check for other_income FIRST to prevent confusion with 4003
+                if (accountCode === 'other_income' || accountCode === '4006' || 
+                    (typeof accountCode === 'string' && accountCode.toLowerCase().includes('other') && accountCode.toLowerCase().includes('income'))) {
                     // Create a virtual account object for other_income
                     account = {
-                        code: accountCode === 'other_income' ? '4006' : accountCode,
+                        code: '4006', // Always use 4006 for other income
                         name: 'Other Income',
                         type: 'Income',
                         category: 'Income',
                         isVirtual: true
                     };
-                } else if (accountCode === '4003') {
-                    // Account code 4003 is used for deposits in cashflow (virtual account)
-                    // Create a virtual account object for deposits
+                } else if (accountCode === '4003' || accountCode === 'deposits' || 
+                          (typeof accountCode === 'string' && accountCode.toLowerCase().includes('deposit') && !accountCode.toLowerCase().includes('other'))) {
+                    // Account code 4003 is used for FORFEITED deposits income (virtual account)
+                    // Regular deposits are liabilities (2020, 2028, etc.)
+                    // Create a virtual account object for forfeited deposits
                     account = {
                         code: '4003',
-                        name: 'Deposits Income',
+                        name: 'Forfeited Deposits Income',
                         type: 'Income',
                         category: 'Income',
                         isVirtual: true
@@ -2414,13 +2427,60 @@ class FinancialReportsController {
                         isVirtual: true,
                         isRefundAccount: true
                     };
+                } else if (accountCode === 'investing_activities') {
+                    // Handle investing activities as a virtual account
+                    account = {
+                        code: 'investing_activities',
+                        name: 'Investing Activities',
+                        type: 'Investing',
+                        category: 'Investing Activities',
+                        isVirtual: true
+                    };
                 } else {
-                    account = await Account.findOne({ code: accountCode });
-                    if (!account) {
-                        return res.status(404).json({
-                            success: false,
-                            message: 'Account not found'
-                        });
+                    // Check if this is a loan account code (20001, 20002, or 13xx)
+                    const isLoanAccount = accountCode === '20001' || 
+                                         accountCode === '20002' || 
+                                         accountCode.startsWith('13');
+                    
+                    if (isLoanAccount) {
+                        // Try to find the account, but if not found, create a virtual loan account
+                        account = await Account.findOne({ code: accountCode });
+                        if (!account) {
+                            // Create virtual loan account
+                            account = {
+                                code: accountCode,
+                                name: accountCode === '20001' ? 'Loan to Belvedere' : 
+                                      accountCode === '20002' ? 'Interbranch Newlands' :
+                                      `Loans Receivable - ${accountCode}`,
+                                type: 'Asset',
+                                category: 'Current Assets',
+                                subcategory: 'Loans Receivable',
+                                isVirtual: true
+                            };
+                        }
+                    } else {
+                        account = await Account.findOne({ code: accountCode });
+                        if (!account) {
+                            // 🆕 Check if this is an expense name (not a code) - create virtual expense account
+                            // Expense names like "counches", "outside_benches_and_umbrella" won't be in Account collection
+                            const isNumericAccountCode = /^\d+$/.test(accountCode);
+                            if (!isNumericAccountCode) {
+                                // This might be an expense name - create virtual account
+                                // We'll verify it exists in cashFlowData.expenses later
+                                account = {
+                                    code: accountCode,
+                                    name: accountCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                                    type: 'Expense',
+                                    category: 'Operating Expenses',
+                                    isVirtual: true
+                                };
+                            } else {
+                                return res.status(404).json({
+                                    success: false,
+                                    message: 'Account not found'
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -2583,10 +2643,21 @@ class FinancialReportsController {
                         expenseCategory = expenseCategoryMap[accountCode];
                     }
                     
-                    // If we found a category, get the amount from monthly breakdown
-                    // Prioritize operating_activities.breakdown (what cash flow statement uses)
-                    if (expenseCategory) {
-                        let totalExpense = 0;
+                    // 🆕 PRIORITY: Check expenses object directly by account code (e.g., 5007, 5003)
+                    // Expenses are stored by account code in monthData.expenses[accountCode]
+                    let totalExpense = 0;
+                    let expenseFoundByCode = false;
+                    
+                    for (const monthKey of monthsToCheck) {
+                        const monthData = monthlyBreakdown[monthKey];
+                        if (monthData && monthData.expenses && monthData.expenses[accountCode] !== undefined) {
+                            totalExpense += monthData.expenses[accountCode] || 0;
+                            expenseFoundByCode = true;
+                        }
+                    }
+                    
+                    // If not found by account code, try category mapping
+                    if (!expenseFoundByCode && expenseCategory) {
                         for (const monthKey of monthsToCheck) {
                             const monthData = monthlyBreakdown[monthKey];
                             if (monthData) {
@@ -2603,8 +2674,10 @@ class FinancialReportsController {
                                 }
                             }
                         }
-                        
-                        // Always set accountData if we found a category (even if total is 0, to match cash flow statement)
+                    }
+                    
+                    // Always set accountData if we found the expense (by code or category)
+                    if (expenseFoundByCode || expenseCategory) {
                         accountData = {
                             totalDebit: totalExpense,
                             totalCredit: 0,
@@ -2617,12 +2690,159 @@ class FinancialReportsController {
                 }
                 
                 // Also check direct expenses object (fallback)
-                if (!accountData && cashFlowData.expenses && cashFlowData.expenses[accountCode]) {
-                    accountData = {
-                        ...cashFlowData.expenses[accountCode],
-                        type: 'expense',
-                        category: 'expense'
-                    };
+                // This handles both account codes (5007) and expense names (counches, outside_benches_and_umbrella)
+                if (!accountData && cashFlowData.expenses) {
+                    // First try exact account code match
+                    if (cashFlowData.expenses[accountCode] !== undefined) {
+                        const expenseAmount = cashFlowData.expenses[accountCode];
+                        accountData = {
+                            totalDebit: expenseAmount,
+                            totalCredit: 0,
+                            netAmount: expenseAmount,
+                            transactionCount: 0,
+                            type: 'expense',
+                            category: 'expense'
+                        };
+                    } else {
+                        // Try to find by expense name (case-insensitive, handle underscores/spaces)
+                        // Expense names in cashFlowData.expenses might be like "Counches", "Outside benches and umbrella"
+                        const accountCodeLower = accountCode.toLowerCase().replace(/_/g, ' ');
+                        const matchingKey = Object.keys(cashFlowData.expenses).find(key => {
+                            // Skip metadata keys
+                            if (key === 'total' || key === 'transactions' || key === 'accountNames' || 
+                                key === 'cleaning' || key === 'council_rates' || key === 'electricity' ||
+                                key === 'gas' || key === 'insurance' || key === 'internet' ||
+                                key === 'maintenance' || key === 'management' || key === 'other_expenses' ||
+                                key === 'plumbing' || key === 'sanitary' || key === 'security' ||
+                                key === 'solar' || key === 'utilities' || key === 'water') {
+                                return false;
+                            }
+                            const keyLower = key.toLowerCase();
+                            // Check if account code matches the expense name (handle variations)
+                            return keyLower === accountCodeLower || 
+                                   keyLower.replace(/[^a-z0-9]/g, ' ') === accountCodeLower.replace(/[^a-z0-9]/g, ' ') ||
+                                   keyLower.includes(accountCodeLower) ||
+                                   accountCodeLower.includes(keyLower);
+                        });
+                        
+                        if (matchingKey && cashFlowData.expenses[matchingKey] !== undefined) {
+                            const expenseAmount = cashFlowData.expenses[matchingKey];
+                            accountData = {
+                                totalDebit: expenseAmount,
+                                totalCredit: 0,
+                                netAmount: expenseAmount,
+                                transactionCount: 0,
+                                type: 'expense',
+                                category: 'expense'
+                            };
+                        }
+                    }
+                }
+                
+                // Search in investing activities section for loan accounts (20001, 20002, 13xx)
+                if (!accountData && (accountCode === '20001' || accountCode === '20002' || accountCode.startsWith('13') || accountCode === 'investing_activities') && cashFlowData.monthly_breakdown) {
+                    const monthlyBreakdown = cashFlowData.monthly_breakdown;
+                    
+                    // If month is specified, get data for that specific month
+                    let targetMonthKey = null;
+                    if (month && period) {
+                        targetMonthKey = month.toLowerCase(); // e.g., "january"
+                    }
+                    
+                    // Check the specific month if provided, otherwise check all months
+                    const monthsToCheck = targetMonthKey ? [targetMonthKey] : Object.keys(monthlyBreakdown);
+                    
+                    let totalLoanOutflow = 0;
+                    
+                    for (const monthKey of monthsToCheck) {
+                        const monthData = monthlyBreakdown[monthKey];
+                        if (monthData && monthData.investing_activities && monthData.investing_activities.breakdown) {
+                            const breakdown = monthData.investing_activities.breakdown;
+                            
+                            // If requesting specific loan account code, get that account's amount
+                            // Check both the account code directly and any compound keys that might exist
+                            if (accountCode !== 'investing_activities') {
+                                // First try exact match with account code
+                                if (breakdown[accountCode] !== undefined) {
+                                    totalLoanOutflow += breakdown[accountCode] || 0;
+                                } else {
+                                    // If not found, check for compound keys (e.g., "20002__interbranch_newlands")
+                                    // Find keys that start with the account code followed by __
+                                    const matchingKeys = Object.keys(breakdown).filter(key => 
+                                        key.startsWith(accountCode + '__') || key === accountCode
+                                    );
+                                    matchingKeys.forEach(key => {
+                                        totalLoanOutflow += breakdown[key] || 0;
+                                    });
+                                }
+                            } else if (accountCode === 'investing_activities') {
+                                // For "investing_activities", collect all loan accounts with their individual amounts
+                                // This will be handled separately to show breakdown by account code
+                                Object.keys(breakdown).forEach(key => {
+                                    // Check if key is a loan account code (20001, 20002, 13xx) or starts with these codes
+                                    const isLoanKey = key === '20001' || 
+                                                     key === '20002' || 
+                                                     key.startsWith('13') || 
+                                                     key === 'loans_given' ||
+                                                     key.startsWith('20001__') ||
+                                                     key.startsWith('20002__') ||
+                                                     (key.startsWith('13') && key.includes('__'));
+                                    if (isLoanKey) {
+                                        totalLoanOutflow += breakdown[key] || 0;
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    
+                    // Set accountData for loan accounts
+                    if (accountCode === 'investing_activities') {
+                        // For "investing_activities", return breakdown by individual account codes
+                        const loanBreakdown = {};
+                        for (const monthKey of monthsToCheck) {
+                            const monthData = monthlyBreakdown[monthKey];
+                            if (monthData && monthData.investing_activities && monthData.investing_activities.breakdown) {
+                                const breakdown = monthData.investing_activities.breakdown;
+                                Object.keys(breakdown).forEach(key => {
+                                    // Check if key is a loan account code (20001, 20002, 13xx)
+                                    const isLoanKey = key === '20001' || 
+                                                     key === '20002' || 
+                                                     key.startsWith('13') || 
+                                                     key === 'loans_given' ||
+                                                     key.startsWith('20001__') ||
+                                                     key.startsWith('20002__') ||
+                                                     (key.startsWith('13') && key.includes('__'));
+                                    if (isLoanKey && breakdown[key] > 0) {
+                                        // Extract clean account code (remove __ suffix if present)
+                                        const cleanAccountCode = key.includes('__') ? key.split('__')[0] : key;
+                                        if (!loanBreakdown[cleanAccountCode]) {
+                                            loanBreakdown[cleanAccountCode] = 0;
+                                        }
+                                        loanBreakdown[cleanAccountCode] += breakdown[key] || 0;
+                                    }
+                                });
+                            }
+                        }
+                        
+                        accountData = {
+                            totalDebit: totalLoanOutflow,
+                            totalCredit: 0,
+                            netAmount: totalLoanOutflow,
+                            transactionCount: 0, // Will be calculated from transactions
+                            type: 'investing',
+                            category: 'investing_activities',
+                            breakdown: loanBreakdown // Include breakdown by account code
+                        };
+                    } else if (totalLoanOutflow > 0 || accountCode === '20001' || accountCode === '20002' || accountCode.startsWith('13')) {
+                        accountData = {
+                            totalDebit: totalLoanOutflow,
+                            totalCredit: 0,
+                            netAmount: totalLoanOutflow,
+                            transactionCount: 0, // Will be calculated from transactions
+                            type: 'investing',
+                            category: 'investing_activities'
+                        };
+                    }
                 }
                 
                 // Search in cash flow section
@@ -2659,10 +2879,17 @@ class FinancialReportsController {
                 const accountTransactions = await TransactionEntry.find(query);
                 
                 // Calculate totals
+                // 🆕 EXCLUDE expense accruals from totals (same as transactions array filtering)
+                // Expense accruals don't represent actual cash movements, so exclude them from cash flow
                 let totalDebit = 0;
                 let totalCredit = 0;
                 
                 accountTransactions.forEach(transaction => {
+                    // Skip expense accruals - they don't involve cash, so exclude from cash flow
+                    if (transaction.source === 'expense_accrual' || transaction.source === 'expense_accrual_reversal') {
+                        return; // Skip this transaction
+                    }
+                    
                     const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
                     if (accountEntry) {
                         totalDebit += accountEntry.debit || 0;
@@ -2710,37 +2937,22 @@ class FinancialReportsController {
                 // Match the same sources as the cash flow service uses
                 // Special handling for other_income - fetch ALL payment transactions (will filter by description)
                 if (accountCode === '4006' || accountCode === 'other_income') {
-                    // For other_income, fetch ONLY transactions that debit cash account (1000) and credit debtors
+                    // For other_income, fetch transactions that debit cash account (1000) and credit debtors
                     // Uses cash account code 1000 (regex ^100), NOT account code 4003
                     // This includes: DR Cash CR Debtor (council payments, etc.)
+                    // 🆕 Fetch broadly - include ALL transactions with cash debit, then filter by AR credit and description
                     query = {
                         $or: [
                             {
                                 // Any transaction with cash account debit (cash received) - account code 1000 series
                                 // Regex ^100 matches 1000, 1001, etc. but NOT 4003
                                 'entries.accountCode': { $regex: '^100' }, // Cash account entry (1000, 1001, etc.) - NOT 4003
-                                'entries.debit': { $gt: 0 }, // Cash is debited (money coming in)
-                                source: { 
-                                    $in: [
-                                        'payment', 
-                                        'expense_payment', 
-                                        'rental_payment', 
-                                        'manual', 
-                                        'payment_collection', 
-                                        'bank_transfer', 
-                                        'advance_payment', 
-                                        'debt_settlement', 
-                                        'current_payment',
-                                        'accounts_receivable_collection',
-                                        'payment_allocation'
-                                    ] 
-                                }
+                                'entries.debit': { $gt: 0 } // Cash is debited (money coming in)
                             },
                             {
-                                // Manual transactions with cash debit (DR Cash CR Debtor, etc.)
-                                source: 'manual',
-                                'entries.accountCode': { $regex: '^100' }, // Cash account entry (1000) - NOT 4003
-                                'entries.debit': { $gt: 0 } // Cash is debited
+                                // Also include transactions with AR credit (1100 series) - DR Cash CR Debtor pattern
+                                'entries.accountCode': { $regex: '^1100' }, // AR/Debtor account entry
+                                'entries.credit': { $gt: 0 } // AR is credited (reducing receivable = income)
                             }
                         ],
                         status: { $nin: ['reversed', 'draft'] }
@@ -2761,9 +2973,19 @@ class FinancialReportsController {
                             },
                             {
                                 // Transactions with forfeiture descriptions
-                                description: { 
-                                    $regex: /forfeit|no-show|no show|breach.*contract/i 
-                                },
+                                // 🆕 EXCLUDE other income keywords (council, rates) - those belong in 4006
+                                $and: [
+                                    {
+                                        description: { 
+                                            $regex: /forfeit|no-show|no show|breach.*contract/i 
+                                        }
+                                    },
+                                    {
+                                        description: { 
+                                            $not: /council|rates|other income/i 
+                                        }
+                                    }
+                                ],
                                 // Must have account 4003 entry OR forfeiture metadata
                                 $or: [
                                     { 'entries.accountCode': '4003' },
@@ -2837,11 +3059,47 @@ class FinancialReportsController {
                         status: { $nin: ['reversed', 'draft'] }
                     };
                 } else {
-                    // For all other expense accounts, ONLY include transactions with the specific account code
-                    query = {
-                        'entries.accountCode': accountCode, // Direct expense account entries ONLY
-                        status: { $nin: ['reversed', 'draft'] }
-                    };
+                    // For expense accounts, check if accountCode is actually an expense name (not a code)
+                    // Expense names like "counches", "outside_benches_and_umbrella" won't match account codes
+                    const isNumericAccountCode = /^\d+$/.test(accountCode);
+                    
+                    if (isNumericAccountCode) {
+                        // Numeric account code (e.g., 5007) - query by account code
+                        query = {
+                            'entries.accountCode': accountCode, // Direct expense account entries ONLY
+                            status: { $nin: ['reversed', 'draft'] }
+                        };
+                    } else {
+                        // Expense name (e.g., "counches", "outside_benches_and_umbrella") - query by description
+                        // Normalize the account code to match description patterns
+                        const expenseNamePattern = accountCode.toLowerCase()
+                            .replace(/_/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                        
+                        query = {
+                            $or: [
+                                {
+                                    // Match by description (case-insensitive)
+                                    description: { $regex: new RegExp(expenseNamePattern.replace(/\s+/g, '\\s+'), 'i') }
+                                },
+                                {
+                                    // Match by account name in entries
+                                    'entries.accountName': { $regex: new RegExp(expenseNamePattern.replace(/\s+/g, '\\s+'), 'i') }
+                                }
+                            ],
+                            // Must have an expense account entry (5xxx) or cash credit (expense payment)
+                            $and: [
+                                {
+                                    $or: [
+                                        { 'entries.accountCode': { $regex: '^5' } }, // Expense account
+                                        { 'entries.accountCode': { $regex: '^100' }, 'entries.credit': { $gt: 0 } } // Cash paid out
+                                    ]
+                                }
+                            ],
+                            status: { $nin: ['reversed', 'draft'] }
+                        };
+                    }
                 }
             } else if (depositAccountCodes.includes(accountCode)) {
                 // For deposit accounts, show payment transactions with cash and deposits
@@ -2886,6 +3144,25 @@ class FinancialReportsController {
                                 { 'entries.accountCode': '2200' }, // Advance Payments Liability
                                 { 'entries.accountCode': { $regex: '^1100-' } } // AR accounts
                             ]
+                        }
+                    ],
+                    status: { $nin: ['reversed', 'draft'] }
+                };
+            } else if (accountCode === 'investing_activities') {
+                // 🆕 For "investing_activities", query all loan account transactions (20001, 20002, 13xx)
+                // Loans given are transactions that debit loan accounts AND credit cash
+                // Query for transactions that have loan account entries, then filter for those with cash credits
+                query = {
+                    $or: [
+                        { 'entries.accountCode': '20001', 'entries.debit': { $gt: 0 } }, // Loan to Belvedere
+                        { 'entries.accountCode': '20002', 'entries.debit': { $gt: 0 } }, // Interbranch Newlands (if used for loans)
+                        { 'entries.accountCode': { $regex: '^13' }, 'entries.debit': { $gt: 0 } }, // All 13xx loan accounts
+                        // Also check by account name for loan accounts
+                        {
+                            'entries.accountName': { 
+                                $regex: /loan.*receivable|loans.*receivable|loan.*to|interbranch/i 
+                            },
+                            'entries.debit': { $gt: 0 } // Loan account debited (loan given)
                         }
                     ],
                     status: { $nin: ['reversed', 'draft'] }
@@ -2942,8 +3219,12 @@ class FinancialReportsController {
                     residence: residenceObjectId
                 };
                 
-                // If query has $or, wrap both in $and
-                if (query.$or && Array.isArray(query.$or)) {
+                // 🆕 Handle different query structures properly
+                if (query.$and && Array.isArray(query.$and)) {
+                    // Query already has $and array - add residence filter to it
+                    query.$and.push(residenceFilter);
+                } else if (query.$or && Array.isArray(query.$or)) {
+                    // Query has $or - wrap both in $and
                     query = {
                         $and: [
                             { $or: query.$or },
@@ -2951,7 +3232,7 @@ class FinancialReportsController {
                         ]
                     };
                 } else {
-                    // For simple queries, add residence filter using $and
+                    // Simple query - add residence filter using $and
                     query = {
                         $and: [
                             query,
@@ -2964,11 +3245,53 @@ class FinancialReportsController {
             }
             
             // Add forfeiture exclusion (same as cash flow service)
-            query['metadata.isForfeiture'] = { $ne: true };
+            // 🆕 EXCEPT for account 4003 (Forfeited Deposits Income) - we WANT forfeiture transactions
+            if (accountCode !== '4003') {
+                // 🆕 Add to $and array if query has $and structure, otherwise add directly
+                if (query.$and && Array.isArray(query.$and)) {
+                    query.$and.push({ 'metadata.isForfeiture': { $ne: true } });
+                } else {
+                    query['metadata.isForfeiture'] = { $ne: true };
+                }
+            }
             
             let transactions = await TransactionEntry.find(query)
                 .sort({ date: -1 })
                 .limit(500); // Get more transactions to filter by description
+            
+            // 🆕 For investing_activities, filter to only include transactions with cash account credits
+            // Loans given must have both: loan account debit AND cash account credit
+            if (accountCode === 'investing_activities') {
+                transactions = transactions.filter(tx => {
+                    if (!tx.entries || tx.entries.length === 0) return false;
+                    
+                    // Check if transaction has a loan account debit
+                    const hasLoanDebit = tx.entries.some(entry => {
+                        const entryAccountCode = String(entry.accountCode || '').trim();
+                        const entryAccountName = (entry.accountName || '').toLowerCase();
+                        const isLoanByCode = entryAccountCode === '20001' || 
+                                           entryAccountCode === '20002' || 
+                                           entryAccountCode.startsWith('13');
+                        const isLoanByName = entryAccountName.includes('loan receivable') || 
+                                           entryAccountName.includes('loans receivable') ||
+                                           entryAccountName.includes('loan to') ||
+                                           entryAccountName.includes('interbranch');
+                        return (isLoanByCode || isLoanByName) && (entry.debit || 0) > 0;
+                    });
+                    
+                    // Check if transaction has a cash account credit (cash going out)
+                    const hasCashCredit = tx.entries.some(entry => {
+                        const entryAccountCode = String(entry.accountCode || '').trim();
+                        return (entryAccountCode.startsWith('100') || entryAccountCode.startsWith('101')) && 
+                               (entry.credit || 0) > 0;
+                    });
+                    
+                    // Only include if both conditions are met
+                    return hasLoanDebit && hasCashCredit;
+                });
+                
+                console.log(`💰 Filtered investing activities transactions: ${transactions.length} loan transactions found`);
+            }
             
             // For income accounts in cash flow, ONLY include payment transactions (cash received)
             // Use the EXACT same categorization logic as the cash flow service
@@ -2999,13 +3322,52 @@ class FinancialReportsController {
                 }
                 
                 transactions = transactions.filter(tx => {
+                    const description = (tx.description || '').toLowerCase();
+                    
+                    // 🆕 SPECIAL CASE: Account 4003 (Forfeited Deposits Income) - forfeitures are reclassifications, not cash receipts
+                    // Forfeited deposits are recorded as: DR Liability (2200/2028) CR 4003 (Income)
+                    // These transactions DON'T have cash entries - they're accounting reclassifications
+                    if (accountCode === '4003') {
+                        // REQUIRE: Must have account code 4003 in entries OR forfeiture metadata
+                        const has4003Entry = tx.entries?.some(e => 
+                            String(e.accountCode || '').trim() === '4003' && 
+                            (e.accountType === 'Income' || e.credit > 0)
+                        );
+                        const hasForfeitureMetadata = tx.metadata?.isForfeiture === true;
+                        
+                        // Check description for forfeiture keywords
+                        const isForfeitureDescription = description.includes('forfeit') || 
+                                                      description.includes('no-show') || 
+                                                      description.includes('no show') ||
+                                                      (description.includes('breach') && description.includes('contract'));
+                        
+                        // Must have either 4003 entry/metadata OR forfeiture description
+                        const isForfeiture = has4003Entry || hasForfeitureMetadata || isForfeitureDescription;
+                        
+                        // EXCLUDE: Other income transactions (council rates, etc.) - they don't belong in 4003
+                        const isOtherIncome = description.includes('council') || 
+                                             description.includes('rates') ||
+                                             description.includes('other income');
+                        
+                        // EXCLUDE regular deposit receipts (they have deposit liability accounts credited, not debited)
+                        // Forfeitures DEBIT liability accounts, regular deposits CREDIT them
+                        const hasDepositLiabilityCredit = tx.entries?.some(e => {
+                            const code = String(e.accountCode || '').trim();
+                            const depositLiabilityCodes = ['2028', '20002', '2020', '2002', '20020', '2201'];
+                            return depositLiabilityCodes.includes(code) && (e.credit || 0) > 0;
+                        });
+                        
+                        // Only include if it's a forfeiture AND doesn't have deposit liability credits AND is not other income
+                        return isForfeiture && !hasDepositLiabilityCredit && !isOtherIncome;
+                    }
+                    
+                    // For other income accounts, require cash receipts
                     // Exclude accrual transactions - they don't involve cash
                     if (tx.source === 'rental_accrual' || tx.source === 'expense_accrual') {
                         return false;
                     }
                     
                     // Exclude transactions with "accrual" in description (unless it's a payment allocation)
-                        const description = (tx.description || '').toLowerCase();
                     if (description.includes('accrual') && !description.includes('payment allocation')) {
                         return false;
                     }
@@ -3034,25 +3396,6 @@ class FinancialReportsController {
                             return description.includes('admin') || 
                                    description.includes('administrative') || 
                                    description.includes('fee');
-                        } else if (accountCode === '4003') {
-                            // 🆕 CRITICAL: Account 4003 is "Forfeited Deposits Income" - only forfeited deposits
-                            // Regular deposit receipts are liabilities (2020, 2028, etc.) and should NOT appear here
-                            // Only include forfeited deposits (forfeiture transactions)
-                            const isForfeiture = description.includes('forfeit') || 
-                                               description.includes('no-show') || 
-                                               description.includes('no show') ||
-                                               tx.metadata?.isForfeiture === true ||
-                                               tx.entries?.some(e => e.accountCode === '4003' && e.accountType === 'Income');
-                            
-                            // EXCLUDE regular deposit receipts (they have deposit liability accounts)
-                            const hasDepositLiability = tx.entries?.some(e => {
-                                const code = String(e.accountCode || '').trim();
-                                const depositLiabilityCodes = ['2028', '20002', '2020', '2002', '20020', '2201'];
-                                return depositLiabilityCodes.includes(code) && (e.credit || 0) > 0;
-                            });
-                            
-                            // Only include if it's a forfeiture AND doesn't have deposit liability accounts
-                            return isForfeiture && !hasDepositLiability;
                         } else if (accountCode === '4006' || accountCode === 'other_income') {
                             // Other income - ONLY transactions that debited cash (1000) and credited debtors (1100 series)
                             // Must be DR Cash CR Debtor pattern - NOT account code 4003 or deposit liability accounts
@@ -3086,13 +3429,14 @@ class FinancialReportsController {
                             }
                             
                             // Exclude rent, admin, deposits, utilities, advance payments by description
+                            // 🆕 BUT ALLOW council rates and similar transactions even if they have expense accounts
                             const isRent = description.includes('rent') || 
                                          description.includes('rental') || 
                                          description.includes('accommodation') || 
                                          description.includes('payment allocation');
                             const isAdmin = description.includes('admin') || 
                                           description.includes('administrative') || 
-                                          description.includes('fee');
+                                          (description.includes('fee') && !description.includes('council'));
                             const isDeposit = description.includes('deposit') || 
                                             description.includes('security');
                             const isUtilities = description.includes('utilit') || 
@@ -3102,13 +3446,19 @@ class FinancialReportsController {
                                             description.includes('prepaid') || 
                                             description.includes('future');
                             
+                            // 🆕 ALLOW: Council rates and similar transactions - these are other income
+                            // Even if they have expense accounts (DR Cash CR AR DR Expense CR Cash pattern)
+                            const isCouncilRates = description.includes('council') || 
+                                                  description.includes('rates');
+                            
                             // Check if this is an internal cash transfer (cash to cash) - exclude
+                            // BUT allow if it has AR credit (DR Cash CR AR DR Expense CR Cash is valid other income)
                             const hasCashCredit = tx.entries?.some(e => {
                                 const code = String(e.accountCode || '').trim();
                                 return code.match(/^100/) && (e.credit || 0) > 0;
                             });
                             if (hasCashCredit && cashEntry) {
-                                // Check if there's a non-cash entry (debtor, income, etc.) - if not, it's an internal transfer
+                                // Check if there's a non-cash entry (debtor, income, expense, etc.) - if not, it's an internal transfer
                                 const hasNonCashEntry = tx.entries?.some(e => {
                                     const code = String(e.accountCode || '').trim();
                                     const accountType = (e.accountType || '').toLowerCase();
@@ -3122,10 +3472,13 @@ class FinancialReportsController {
                                 if (!hasNonCashEntry) {
                                     return false; // Internal cash transfer - exclude
                                 }
+                                // 🆕 If it has AR credit, it's valid other income even if it has expense accounts
+                                // This handles: DR Cash CR AR DR Expense CR Cash pattern (council rates, etc.)
                             }
                             
                             // Include if it's other income (council, DR Cash CR Debtor, etc.) and not any of the excluded categories
-                            return !isRent && !isAdmin && !isDeposit && !isUtilities && !isAdvance;
+                            // OR if it's council rates (which may have expense accounts but is still income)
+                            return isCouncilRates || (!isRent && !isAdmin && !isDeposit && !isUtilities && !isAdvance);
                         }
                         // For other income accounts, include all payment transactions
                         return true;
@@ -3148,6 +3501,25 @@ class FinancialReportsController {
                 // Limit to 100 after filtering
                 transactions = transactions.slice(0, 100);
             } else if (account.type === 'Expense') {
+                // 🆕 EXCLUDE expense accruals from transactions array (they don't involve cash)
+                // Expense accruals are excluded from cash flow as they don't represent actual cash movements
+                transactions = transactions.filter(tx => {
+                    // Exclude expense accrual transactions - they don't involve cash
+                    if (tx.source === 'expense_accrual' || tx.source === 'expense_accrual_reversal') {
+                        return false;
+                    }
+                    
+                    // Also exclude transactions with "accrual" in description (unless it's a payment allocation)
+                    const description = (tx.description || '').toLowerCase();
+                    if (description.includes('accrual') && !description.includes('payment allocation')) {
+                        return false;
+                    }
+                    
+                    return true;
+                });
+                
+                console.log(`💰 Filtered expense transactions (excluded accruals): ${transactions.length} transactions remaining for account ${accountCode}`);
+                
                 // First, filter by month if month is specified (expenses use transaction date)
                 // For expenses, we use transaction date for month filtering (not monthSettled like payments)
                 if (month && period) {
@@ -3319,6 +3691,12 @@ class FinancialReportsController {
                         }
                     }
                 } else if (account.type === 'Expense') {
+                    // 🆕 EXCLUDE expense accruals from monthly breakdown (they don't involve cash)
+                    // Expense accruals are excluded from cash flow as they don't represent actual cash movements
+                    if (transaction.source === 'expense_accrual' || transaction.source === 'expense_accrual_reversal') {
+                        return; // Skip this transaction - no cash movement
+                    }
+                    
                     // For expense accounts, use ONLY the specific expense account entry amount
                     // For multi-entry transactions, only count the amount for this specific account code
                 const accountEntry = transaction.entries.find(entry => entry.accountCode === accountCode);
@@ -3373,9 +3751,11 @@ class FinancialReportsController {
                 }
             });
             
-            // Calculate cashFlowData from monthlyBreakdown to ensure consistency
+            // Calculate cashFlowType from monthlyBreakdown to ensure consistency
             let cashFlowType = 'cash_flow';
-            if (account.type === 'Income') {
+            if (accountCode === 'investing_activities') {
+                cashFlowType = 'investing';
+            } else if (account.type === 'Income') {
                 cashFlowType = 'income';
             } else if (account.type === 'Expense') {
                 cashFlowType = 'expense';
@@ -3384,11 +3764,64 @@ class FinancialReportsController {
             }
             
             // Use cash flow service data if available (to ensure it matches the cash flow statement)
+            // 🆕 EXCEPTION: For asset accounts (like 12002), always calculate from transactions to match account details
             // Otherwise calculate from transactions
             let finalCashFlowData;
             let finalMonthlyBreakdown = monthlyBreakdown; // Default to transaction-based breakdown
             
-            if (accountData && (accountData.totalCredit !== undefined || accountData.totalDebit !== undefined || accountData.netAmount !== undefined)) {
+            // 🆕 For asset accounts, always calculate from transactions (not from cash flow service)
+            // This ensures account details match the actual account balance
+            if (account.type === 'Asset' && accountCode && String(accountCode).trim().startsWith('12')) {
+                // Calculate totals directly from transactions for fixed asset accounts
+                let assetTotalDebit = 0;
+                let assetTotalCredit = 0;
+                
+                transactions.forEach(tx => {
+                    const accountEntry = tx.entries?.find(e => String(e.accountCode || '').trim() === String(accountCode).trim());
+                    if (accountEntry) {
+                        assetTotalDebit += accountEntry.debit || 0;
+                        assetTotalCredit += accountEntry.credit || 0;
+                    }
+                });
+                
+                finalCashFlowData = {
+                    totalDebit: assetTotalDebit,
+                    totalCredit: assetTotalCredit,
+                    netAmount: assetTotalDebit - assetTotalCredit, // Assets: debit - credit
+                    transactionCount: transactions.length,
+                    type: cashFlowType
+                };
+                
+                // Calculate monthly breakdown from transactions
+                const assetMonthlyBreakdown = {};
+                transactions.forEach(tx => {
+                    const txDate = new Date(tx.date);
+                    const monthKey = txDate.toISOString().slice(0, 7); // YYYY-MM
+                    if (!assetMonthlyBreakdown[monthKey]) {
+                        const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                                          'july', 'august', 'september', 'october', 'november', 'december'];
+                        const monthName = monthNames[txDate.getMonth()];
+                        assetMonthlyBreakdown[monthKey] = {
+                            month: monthName,
+                            totalDebit: 0,
+                            totalCredit: 0,
+                            netAmount: 0,
+                            transactionCount: 0
+                        };
+                    }
+                    
+                    const accountEntry = tx.entries?.find(e => String(e.accountCode || '').trim() === String(accountCode).trim());
+                    if (accountEntry) {
+                        assetMonthlyBreakdown[monthKey].totalDebit += accountEntry.debit || 0;
+                        assetMonthlyBreakdown[monthKey].totalCredit += accountEntry.credit || 0;
+                        assetMonthlyBreakdown[monthKey].netAmount += (accountEntry.debit || 0) - (accountEntry.credit || 0);
+                        assetMonthlyBreakdown[monthKey].transactionCount += 1;
+                    }
+                });
+                
+                // Convert to array format
+                finalMonthlyBreakdown = Object.values(assetMonthlyBreakdown);
+            } else if (accountData && (accountData.totalCredit !== undefined || accountData.totalDebit !== undefined || accountData.netAmount !== undefined)) {
                 // Use the data from cash flow service (ensures it matches the cash flow statement)
                 // This works for both income (totalCredit) and expenses (totalDebit)
                 finalCashFlowData = {
@@ -3425,7 +3858,26 @@ class FinancialReportsController {
                         let monthTotalDebit = 0;
                         let monthNetAmount = 0;
                         
-                        if (account.type === 'Income') {
+                        if (accountCode === 'investing_activities') {
+                            // For investing_activities, get from investing_activities.breakdown
+                            if (monthData.investing_activities && monthData.investing_activities.breakdown) {
+                                const breakdown = monthData.investing_activities.breakdown;
+                                // Sum all loan account outflows
+                                Object.keys(breakdown).forEach(key => {
+                                    const isLoanKey = key === '20001' || 
+                                                     key === '20002' || 
+                                                     key.startsWith('13') || 
+                                                     key === 'loans_given' ||
+                                                     key.startsWith('20001__') ||
+                                                     key.startsWith('20002__') ||
+                                                     (key.startsWith('13') && key.includes('__'));
+                                    if (isLoanKey && breakdown[key] > 0) {
+                                        monthTotalDebit += breakdown[key] || 0;
+                                    }
+                                });
+                            }
+                            monthNetAmount = -monthTotalDebit; // Negative because it's an outflow
+                        } else if (account.type === 'Income') {
                             // For income accounts, get from income section
                             if (accountCode === '4001' && monthData.income?.rental_income) {
                                 monthTotalCredit = monthData.income.rental_income || 0;
@@ -3470,7 +3922,31 @@ class FinancialReportsController {
                                 expenseCategory = 'solar';
                             }
                             
-                            if (expenseCategory && monthData.operating_activities?.breakdown) {
+                            // 🆕 PRIORITY: Check expenses object directly by account code first (e.g., 5007, 5003)
+                            // Also check by expense name (e.g., "Counches", "Outside benches and umbrella")
+                            if (monthData.expenses && monthData.expenses[accountCode] !== undefined) {
+                                monthTotalDebit = monthData.expenses[accountCode] || 0;
+                            } else if (!/^\d+$/.test(accountCode)) {
+                                // Expense name (not numeric code) - try to find by name match
+                                const accountCodeLower = accountCode.toLowerCase().replace(/_/g, ' ');
+                                const matchingKey = Object.keys(monthData.expenses || {}).find(key => {
+                                    // Skip metadata keys
+                                    const metadataKeys = ['total', 'transactions', 'accountNames', 'cleaning', 'council_rates', 
+                                                         'electricity', 'gas', 'insurance', 'internet', 'maintenance', 
+                                                         'management', 'other_expenses', 'plumbing', 'sanitary', 'security', 
+                                                         'solar', 'utilities', 'water'];
+                                    if (metadataKeys.includes(key)) return false;
+                                    const keyLower = key.toLowerCase();
+                                    return keyLower === accountCodeLower || 
+                                           keyLower.replace(/[^a-z0-9]/g, ' ') === accountCodeLower.replace(/[^a-z0-9]/g, ' ') ||
+                                           keyLower.includes(accountCodeLower) ||
+                                           accountCodeLower.includes(keyLower);
+                                });
+                                if (matchingKey && monthData.expenses[matchingKey] !== undefined) {
+                                    monthTotalDebit = monthData.expenses[matchingKey] || 0;
+                                }
+                            } else if (expenseCategory && monthData.operating_activities?.breakdown) {
+                                // Fallback to category mapping
                                 monthTotalDebit = monthData.operating_activities.breakdown[expenseCategory] || 0;
                             }
                             monthNetAmount = monthTotalDebit;
@@ -3661,15 +4137,17 @@ class FinancialReportsController {
                                 }
                             }
                         } else {
-                            // For non-expense accounts, use cash entry or account entry
-                            if (cashEntry) {
-                                // For cash flow, show cash movement
-                                amount = cashEntry.debit || cashEntry.credit || 0;
-                                type = cashEntry.debit > 0 ? 'debit' : 'credit';
-                            } else if (accountEntry) {
-                                // Use account entry amount directly
+                            // For non-expense accounts (assets, liabilities, equity, etc.), use account entry or cash entry
+                            // 🆕 For asset accounts in account details, show ALL transactions (even without cash entries)
+                            // This allows users to see all transactions affecting the account, not just cash flow transactions
+                            if (accountEntry) {
+                                // Use account entry amount directly (for account details, show all transactions)
                                 amount = accountEntry.debit || accountEntry.credit || 0;
                                 type = accountEntry.debit > 0 ? 'debit' : 'credit';
+                            } else if (cashEntry) {
+                                // Fallback: For cash flow, show cash movement
+                                amount = cashEntry.debit || cashEntry.credit || 0;
+                                type = cashEntry.debit > 0 ? 'debit' : 'credit';
                             }
                         }
                     }
@@ -4065,7 +4543,27 @@ class FinancialReportsController {
                     totalDebit: finalCashFlowData.totalDebit,
                     totalCredit: finalCashFlowData.totalCredit,
                     netAmount: finalCashFlowData.netAmount
-                }
+                },
+                // 🆕 Add breakdown for investing_activities showing individual loan account codes
+                ...(accountCode === 'investing_activities' && accountData && accountData.breakdown ? {
+                    breakdown: accountData.breakdown
+                } : {}),
+                // 🆕 Add breakdown for expense accounts showing individual expense account codes
+                // For expense accounts, show breakdown from cashFlowData.expenses object (by account code)
+                ...(account.type === 'Expense' && cashFlowData && cashFlowData.expenses ? {
+                    breakdown: Object.keys(cashFlowData.expenses)
+                        .filter(key => {
+                            // Only include numeric account codes (5xxx) and exclude metadata keys like 'total', 'transactions', 'accountNames', etc.
+                            return /^\d+$/.test(key) && key.startsWith('5');
+                        })
+                        .reduce((acc, key) => {
+                            const amount = cashFlowData.expenses[key] || 0;
+                            if (amount > 0) {
+                                acc[key] = amount;
+                            }
+                            return acc;
+                        }, {})
+                } : {})
             };
             
             res.json(response);

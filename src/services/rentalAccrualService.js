@@ -290,7 +290,36 @@ class RentalAccrualService {
             }
         }
         
-        let child = await Account.findOne({ code: childCode });
+        // 🆕 CRITICAL: If debtor exists, also check for accounts with wrong format (student ID instead of debtor ID)
+        // This handles cases where accounts were created with the wrong format
+        if (debtor?._id) {
+            const wrongFormatCode = `1100-${studentId}`;
+            const wrongFormatAccount = await Account.findOne({ code: wrongFormatCode });
+            if (wrongFormatAccount && wrongFormatAccount.code !== childCode) {
+                console.warn(`⚠️ Found account with wrong format (student ID): ${wrongFormatCode}`);
+                console.warn(`   Expected format (debtor ID): ${childCode}`);
+                console.warn(`   Will use correct account or fix existing one`);
+                
+                // Try to find the correct account first
+                const correctAccount = await Account.findOne({ code: childCode });
+                if (correctAccount) {
+                    console.log(`   ✅ Found correct account with debtor ID format, using it`);
+                    child = correctAccount;
+                } else {
+                    // Fix the wrong format account
+                    console.log(`   🔧 Fixing account code from ${wrongFormatCode} to ${childCode}`);
+                    wrongFormatAccount.code = childCode;
+                    await wrongFormatAccount.save();
+                    child = wrongFormatAccount;
+                    console.log(`   ✅ Fixed account code in database`);
+                }
+            }
+        }
+        
+        if (!child) {
+            child = await Account.findOne({ code: childCode });
+        }
+        
         if (child) {
             // 🆕 SAFETY CHECK: Ensure the account's code is a string, not an object
             if (typeof child.code !== 'string') {
@@ -317,8 +346,31 @@ class RentalAccrualService {
                 }
             }
             
+            // 🆕 CRITICAL: Verify the account code matches the expected debtor ID format
+            // If debtor exists, the account code MUST be in debtor ID format, not user ID format
             if (child && typeof child.code === 'string') {
-                console.log(`✅ AR account already exists: ${childCode}`);
+                if (debtor?._id) {
+                    const expectedCode = `1100-${debtor._id.toString()}`;
+                    if (child.code !== expectedCode) {
+                        console.error(`❌ CRITICAL: Account code mismatch! Expected: ${expectedCode}, Found: ${child.code}`);
+                        console.error(`   This account uses the wrong format (user ID instead of debtor ID). Will fix or create correct account.`);
+                        
+                        // Check if correct account exists
+                        const correctAccount = await Account.findOne({ code: expectedCode });
+                        if (correctAccount) {
+                            console.log(`   ✅ Found correct account with debtor ID format: ${expectedCode}`);
+                            return correctAccount;
+                        } else {
+                            // Fix the existing account's code
+                            console.log(`   🔧 Fixing account code from ${child.code} to ${expectedCode}`);
+                            child.code = expectedCode;
+                            await child.save();
+                            console.log(`   ✅ Fixed account code in database`);
+                        }
+                    }
+                }
+                
+                console.log(`✅ AR account already exists: ${child.code}`);
                 return child;
             }
         }
@@ -450,31 +502,54 @@ class RentalAccrualService {
                 };
             }
             
-            // Check if lease start entries already exist for THIS SPECIFIC APPLICATION
-            // Also check by student ID and date to prevent duplicates from race conditions
-            // Note: studentId is already declared above
+            // 🆕 ENHANCED: Comprehensive duplicate detection for lease starts
+            // Check by multiple criteria to prevent duplicates from any source
             const leaseStartDateStr = leaseStartDate.toISOString().split('T')[0]; // YYYY-MM-DD
             
+            // Build comprehensive duplicate check array
+            const duplicateChecks = [
+                // Existing checks - by application
+                { 'metadata.applicationId': application._id, 'metadata.type': 'lease_start' },
+                { 'metadata.applicationCode': application.applicationCode, 'metadata.type': 'lease_start' },
+                { source: 'rental_accrual', sourceModel: 'Application', sourceId: application._id },
+                // 🆕 ENHANCED: Check by description patterns (catches both "Lease start for" and "Lease start accounting entries")
+                // Check by application code in description (if present)
+                { description: { $regex: new RegExp(`Lease start.*${application.applicationCode}`, 'i') } },
+                // Check by student name in description (catches both formats)
+                { description: { $regex: new RegExp(`Lease start.*${application.firstName}.*${application.lastName}`, 'i') } },
+                { description: { $regex: new RegExp(`Lease start accounting entries.*${application.firstName}.*${application.lastName}`, 'i') } },
+                // 🆕 CRITICAL: Check by student name + date (catches duplicates regardless of description format)
+                ...(studentId ? [{
+                    source: 'rental_accrual',
+                    'metadata.type': 'lease_start',
+                    'metadata.studentId': studentId,
+                    date: {
+                        $gte: new Date(leaseStartDateStr),
+                        $lt: new Date(new Date(leaseStartDateStr).setDate(new Date(leaseStartDateStr).getDate() + 1))
+                    },
+                    status: { $ne: 'deleted' }
+                }] : []),
+            ];
+            
+            // 🆕 Add debtor-based checks if debtor exists (prevents duplicates across different applications for same student)
+            if (debtorId) {
+                duplicateChecks.push(
+                    { source: 'rental_accrual', 'metadata.type': 'lease_start', 'metadata.debtorId': debtorId },
+                    { source: 'rental_accrual', sourceModel: 'Debtor', sourceId: debtorId, 'metadata.type': 'lease_start' }
+                );
+            }
+            
+            // 🆕 Add account code check if available (catches duplicates by AR account)
+            if (debtor && debtor.accountCode && typeof debtor.accountCode === 'string') {
+                duplicateChecks.push(
+                    { source: 'rental_accrual', 'metadata.type': 'lease_start', 'entries.accountCode': debtor.accountCode }
+                );
+            }
+            
+            // Note: Student ID + date check is already added above in duplicateChecks array
+            
             const existingEntries = await TransactionEntry.findOne({
-                $or: [
-                    // Check for transactions specific to this application
-                    { 'metadata.applicationId': application._id, 'metadata.type': 'lease_start' },
-                    { 'metadata.applicationCode': application.applicationCode, 'metadata.type': 'lease_start' },
-                    // Check for transactions with this specific debtor (if it exists)
-                    { source: 'rental_accrual', sourceModel: 'Application', sourceId: application._id },
-                    { description: { $regex: new RegExp(`Lease start.*${application.applicationCode}`) } },
-                    // 🆕 CRITICAL: Also check by student ID and date to catch race condition duplicates
-                    ...(studentId ? [{
-                        source: 'rental_accrual',
-                        'metadata.type': 'lease_start',
-                        'metadata.studentId': studentId,
-                        date: {
-                            $gte: new Date(leaseStartDateStr),
-                            $lt: new Date(new Date(leaseStartDateStr).setDate(new Date(leaseStartDateStr).getDate() + 1))
-                        },
-                        status: { $ne: 'deleted' }
-                    }] : [])
-                ],
+                $or: duplicateChecks,
                 status: { $ne: 'deleted' } // Exclude deleted transactions
             });
             
@@ -811,22 +886,41 @@ class RentalAccrualService {
             });
             
             // 🆕 CRITICAL: Final duplicate check right before save to prevent race conditions
-            // This catches duplicates created by concurrent processes
-            const finalDuplicateCheck = await TransactionEntry.findOne({
+            // This catches duplicates created by concurrent processes or different services (transactionBackfillService vs rentalAccrualService)
+            const finalDuplicateCheckQuery = {
                 source: 'rental_accrual',
                 'metadata.type': 'lease_start',
-                'metadata.studentId': application.student.toString(),
                 date: {
                     $gte: new Date(leaseStartDateStr),
                     $lt: new Date(new Date(leaseStartDateStr).setDate(new Date(leaseStartDateStr).getDate() + 1))
                 },
                 status: { $ne: 'deleted' },
-                _id: { $ne: transactionEntry._id } // Exclude this transaction if it already has an ID
-            });
+                $or: [
+                    // Check by student ID
+                    { 'metadata.studentId': studentId },
+                    // Check by application ID
+                    { 'metadata.applicationId': application._id.toString() },
+                    // Check by application code
+                    { 'metadata.applicationCode': application.applicationCode },
+                    // Check by debtor ID if available
+                    ...(debtorId ? [{ 'metadata.debtorId': debtorId }] : []),
+                    // Check by description patterns (catches both "Lease start for" and "Lease start accounting entries")
+                    { description: { $regex: new RegExp(`Lease start.*${application.firstName}.*${application.lastName}`, 'i') } },
+                    { description: { $regex: new RegExp(`Lease start accounting entries.*${application.firstName}.*${application.lastName}`, 'i') } }
+                ]
+            };
+            
+            // Exclude this transaction if it already has an ID
+            if (transactionEntry._id) {
+                finalDuplicateCheckQuery._id = { $ne: transactionEntry._id };
+            }
+            
+            const finalDuplicateCheck = await TransactionEntry.findOne(finalDuplicateCheckQuery);
             
             if (finalDuplicateCheck) {
                 console.log(`   ⚠️ Final duplicate check: Lease start already exists for ${application.firstName} ${application.lastName} on ${leaseStartDateStr} - aborting`);
                 console.log(`   Existing transaction: ${finalDuplicateCheck.transactionId} (${finalDuplicateCheck.createdAt})`);
+                console.log(`   Existing description: ${finalDuplicateCheck.description}`);
                 return { 
                     success: false, 
                     error: 'Duplicate lease start detected in final check', 
@@ -1384,11 +1478,23 @@ class RentalAccrualService {
                 }
             }
 
-            // 🆕 CRITICAL: Use a more robust duplicate check that queries by exact metadata fields AND sourceId
-            // This prevents race conditions better than the general checkExistingMonthlyAccrual
+            // 🆕 ENHANCED: Comprehensive duplicate detection for monthly accruals
+            // Multiple checks to prevent duplicates from any source or ID format
             const monthKey = `${year}-${String(month).padStart(2, '0')}`;
             const studentIdString = student.student.toString();
             const sourceId = student.student; // Lease/student ID used as sourceId
+            
+            // Get debtor ID if available (for enhanced duplicate detection)
+            let debtorIdForCheck = null;
+            if (student.debtor) {
+                debtorIdForCheck = typeof student.debtor === 'string' ? student.debtor : student.debtor.toString();
+            } else if (student.debtorAccountCode && student.debtorAccountCode.startsWith('1100-')) {
+                // Extract debtor ID from account code if provided
+                const debtorIdFromCode = student.debtorAccountCode.replace('1100-', '');
+                if (mongoose.Types.ObjectId.isValid(debtorIdFromCode)) {
+                    debtorIdForCheck = debtorIdFromCode;
+                }
+            }
             
             // Check 1: By metadata (studentId + month + year)
             const existingAccrualExact = await TransactionEntry.findOne({
@@ -1419,6 +1525,26 @@ class RentalAccrualService {
                 return { success: false, error: 'Accrual already exists for this lease and month', existingTransaction: existingBySourceId._id };
             }
             
+            // 🆕 Check 2.5: By debtor ID + month + year (if debtor ID available)
+            if (debtorIdForCheck) {
+                const existingByDebtorId = await TransactionEntry.findOne({
+                    source: 'rental_accrual',
+                    'metadata.type': 'monthly_rent_accrual',
+                    'metadata.accrualMonth': month,
+                    'metadata.accrualYear': year,
+                    $or: [
+                        { 'metadata.debtorId': debtorIdForCheck },
+                        { sourceModel: 'Debtor', sourceId: debtorIdForCheck }
+                    ],
+                    status: { $ne: 'deleted' }
+                });
+                
+                if (existingByDebtorId) {
+                    console.log(`   ⚠️ Monthly accrual already exists (debtor ID check) for ${student.firstName} ${student.lastName} - ${monthKey} (ID: ${existingByDebtorId._id}, debtorId: ${debtorIdForCheck})`);
+                    return { success: false, error: 'Accrual already exists for this debtor and month', existingTransaction: existingByDebtorId._id };
+                }
+            }
+            
             // Check 3: By description pattern (catches duplicates with same description)
             const existingByDescription = await TransactionEntry.findOne({
                 source: 'rental_accrual',
@@ -1437,7 +1563,7 @@ class RentalAccrualService {
                 month, 
                 year, 
                 student._id, 
-                student.debtor
+                student.debtor || debtorIdForCheck
             );
             
             if (existingAccrual) {
@@ -1466,10 +1592,31 @@ class RentalAccrualService {
             console.log(`   📅 Month end date: ${monthEnd.toISOString()}`);
             
             // Get required accounts
-            const accountsReceivable = await this.ensureStudentARAccount(
-                student.student, // Use student ID, not application ID
-                `${student.firstName} ${student.lastName}`
-            );
+            // 🆕 CRITICAL: If debtor information is provided, use it to ensure consistent account code
+            // This ensures tenantAccrualCheckService uses the same debtor as monthly cron service
+            let accountsReceivable;
+            if (student.debtor && student.debtorAccountCode) {
+                // Use the debtor account code that was already validated by the calling service
+                console.log(`✅ Using provided debtor account code: ${student.debtorAccountCode}`);
+                const Account = require('../models/Account');
+                accountsReceivable = await Account.findOne({ code: student.debtorAccountCode });
+                if (!accountsReceivable) {
+                    // Account doesn't exist yet, create it using ensureStudentARAccount
+                    console.log(`   ⚠️ Account ${student.debtorAccountCode} not found, creating via ensureStudentARAccount`);
+                    accountsReceivable = await this.ensureStudentARAccount(
+                        student.student,
+                        `${student.firstName} ${student.lastName}`
+                    );
+                } else {
+                    console.log(`   ✅ Found account with debtor account code: ${student.debtorAccountCode}`);
+                }
+            } else {
+                // No debtor info provided, use standard method (for monthly cron service)
+                accountsReceivable = await this.ensureStudentARAccount(
+                    student.student, // Use student ID, not application ID
+                    `${student.firstName} ${student.lastName}`
+                );
+            }
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             
             if (!accountsReceivable || !rentalIncome) {
@@ -1724,17 +1871,18 @@ class RentalAccrualService {
                 }
                 
                 // Strategy 4: Find any unallocated advance payments (check if they have account 2200 entry)
-                // Also check for payment transactions that have account 2200 (they might be advance payments)
+                // Only look for transactions that are EXPLICITLY advance payments (source: 'advance_payment')
+                // OR payment transactions that have account 2200 AND were made before the month starts
+                // This prevents matching regular payments that mention the month in description
                 if (advancePayments.length === 0) {
                     const allAdvancePayments = await TransactionEntry.find({
                         $or: [
+                            // Explicit advance payments
                             { source: 'advance_payment' },
+                            // Payment transactions with account 2200 (deferred income) - these are advance payments
                             { 
                                 source: 'payment',
-                                $or: [
-                                    { 'entries.accountCode': '2200' }, // Payment transactions with deferred income
-                                    { description: { $regex: new RegExp(monthKey, 'i') } } // Or description mentions the month
-                                ]
+                                'entries.accountCode': '2200'
                             }
                         ],
                         $or: [
@@ -1744,24 +1892,32 @@ class RentalAccrualService {
                             { 'entries.accountCode': `1100-${studentIdStr}` } // Fallback for old format
                         ],
                         status: 'posted',
-                        date: { $lt: monthStart }
+                        date: { $lt: monthStart } // Must be before the accrual month
                     }).sort({ date: 1 });
                     
-                    // Filter to only those that match this month and haven't been allocated
+                    // Filter to only those that:
+                    // 1. Have account 2200 (deferred income) - this confirms it's an advance payment
+                    // 2. Haven't been allocated to another month
+                    // 3. Match the student/debtor
                     advancePayments = allAdvancePayments.filter(tx => {
-                        const has2200 = tx.entries && tx.entries.some(e => e.accountCode === '2200');
+                        const has2200 = tx.entries && tx.entries.some(e => e.accountCode === '2200' && e.credit > 0);
                         const notAllocated = !tx.metadata?.monthSettled || tx.metadata.monthSettled === null;
-                        // Check if description mentions the month (for payment transactions without 2200)
-                        const mentionsMonth = tx.description && (
-                            tx.description.includes(monthKey) || 
-                            tx.description.includes(`${month}/${year}`) ||
-                            tx.description.includes(`for ${year}-${String(month).padStart(2, '0')}`)
-                        );
-                        // Include if: (has 2200 and not allocated) OR (mentions month and not allocated and made before month)
-                        return (has2200 && notAllocated) || (mentionsMonth && notAllocated && tx.date < monthStart);
+                        
+                        // Only include if:
+                        // - It's an explicit advance_payment source, OR
+                        // - It has account 2200 (deferred income) and hasn't been allocated
+                        const isAdvancePayment = tx.source === 'advance_payment';
+                        const isPaymentWith2200 = tx.source === 'payment' && has2200;
+                        
+                        return (isAdvancePayment || isPaymentWith2200) && notAllocated;
                     });
                     
                     console.log(`   Strategy 4: Found ${advancePayments.length} unallocated advance/payment transaction(s) for ${monthKey}`);
+                    if (advancePayments.length > 0) {
+                        advancePayments.forEach((tx, idx) => {
+                            console.log(`      ${idx + 1}. ${tx.transactionId} - ${tx.source} - $${tx.totalCredit || tx.totalDebit} - ${tx.description}`);
+                        });
+                    }
                 }
                 
                 if (advancePayments.length > 0) {
@@ -1779,14 +1935,29 @@ class RentalAccrualService {
                         );
                         
                         if (deferredEntry) {
+                            // Get amount from the 2200 (deferred income) credit entry
                             advanceAmount = deferredEntry.credit || 0;
-                        } else if (studentAREntry) {
-                            advanceAmount = studentAREntry.credit || 0;
-                            console.log(`   ⚠️ Payment transaction ${advancePayment.transactionId} doesn't have account 2200, using AR credit amount`);
+                            console.log(`   ✅ Found advance payment amount from account 2200: $${advanceAmount}`);
+                        } else if (advancePayment.source === 'advance_payment') {
+                            // For explicit advance payments, try to get from AR credit or totalCredit
+                            if (studentAREntry) {
+                                advanceAmount = studentAREntry.credit || 0;
+                                console.log(`   ⚠️ Advance payment ${advancePayment.transactionId} doesn't have account 2200, using AR credit amount: $${advanceAmount}`);
+                            } else {
+                                // Try to get amount from totalCredit
+                                advanceAmount = advancePayment.totalCredit || 0;
+                                console.log(`   ⚠️ Could not find amount in entries, using totalCredit: $${advanceAmount}`);
+                            }
                         } else {
-                            // Try to get amount from totalCredit
-                            advanceAmount = advancePayment.totalCredit || 0;
-                            console.log(`   ⚠️ Could not find amount in entries, using totalCredit: $${advanceAmount}`);
+                            // If it's a payment transaction without 2200, it's not actually an advance payment
+                            console.log(`   ⚠️ Payment transaction ${advancePayment.transactionId} doesn't have account 2200 entry - skipping (not an advance payment)`);
+                            continue;
+                        }
+                        
+                        // Validate that we have a valid advance amount
+                        if (advanceAmount <= 0) {
+                            console.log(`   ⚠️ Invalid advance amount (${advanceAmount}) - skipping`);
+                            continue;
                         }
                         
                         if (advanceAmount > 0) {
@@ -1817,20 +1988,26 @@ class RentalAccrualService {
                             }
                             
                             // Add deferred income debit entry
-                            transactionEntry.entries.push({
-                                accountCode: '2200',
-                                accountName: 'Advance Payment Liability',
-                                accountType: 'Liability',
-                                debit: advanceAmount,
-                                credit: 0,
-                                description: `Advance payment applied to ${monthKey} accrual`
-                            });
+                            // When applying an advance payment to an accrual:
+                            // 1. Credit AR (reduces what student owes)
+                            // 2. Credit 2200 (reduces the advance payment liability - we've used it)
+                            // This balances because we're reducing both the receivable and the liability
                             
-                            // Add AR credit entry
+                            // Add AR credit entry (reduces what student owes)
                             transactionEntry.entries.push({
                                 accountCode: accountsReceivable.code,
                                 accountName: accountsReceivable.name,
                                 accountType: accountsReceivable.type,
+                                debit: 0,
+                                credit: advanceAmount,
+                                description: `Advance payment applied to ${monthKey} accrual`
+                            });
+                            
+                            // Credit Advance Payment Liability (reduces the liability - we've used the advance)
+                            transactionEntry.entries.push({
+                                accountCode: '2200',
+                                accountName: 'Advance Payment Liability',
+                                accountType: 'Liability',
                                 debit: 0,
                                 credit: advanceAmount,
                                 description: `Advance payment applied to ${monthKey} accrual`

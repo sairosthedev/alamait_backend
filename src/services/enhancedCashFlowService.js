@@ -348,7 +348,8 @@ class EnhancedCashFlowService {
                                        operatingActivities.cash_paid_for_expenses;
             
             const netInvestingCashFlow = -(investingActivities.purchase_of_equipment + 
-                                       investingActivities.purchase_of_buildings);
+                                       investingActivities.purchase_of_buildings +
+                                       investingActivities.loans_given);
             
             const netFinancingCashFlow = financingActivities.owners_contribution + 
                                        financingActivities.loan_proceeds;
@@ -2281,7 +2282,25 @@ class EnhancedCashFlowService {
                             const accountType = line.accountType || line.account?.type;
                             const debit = line.debit || 0;
                             
+                            // 🆕 EXCLUDE: Loans Receivable (13xx, 20002 with Interbranch) from expenses - they're investing activities
+                            // Check by account code, name, type, or subcategory
+                            const lineSubcategory = (line.subcategory || line.account?.subcategory || '').toLowerCase();
+                            const accountCodeStr = String(accountCode || '').trim();
+                            const accountNameLower = accountName ? accountName.toLowerCase() : '';
+                            const isLoanReceivable = accountCodeStr.startsWith('13') || 
+                                                    (accountCodeStr === '20002' && accountNameLower.includes('interbranch')) ||
+                                                    (accountName && (accountNameLower.includes('loan receivable') || 
+                                                                     accountNameLower.includes('loans receivable') ||
+                                                                     accountNameLower.includes('loan to') ||
+                                                                     accountNameLower.includes('interbranch'))) ||
+                                                    (accountType && accountType.toLowerCase() === 'asset' && (lineSubcategory.includes('loan') || lineSubcategory.includes('receivable')));
+                            
                             if (accountType === 'Expense' || accountType === 'expense') {
+                                // Skip loans receivable - they're not expenses
+                                if (isLoanReceivable) {
+                                    return; // Skip this line, continue to next (use return in forEach, not continue)
+                                }
+                                
                                 // Check if this expense was already processed
                                 let expenseId = null;
                                 if (entry.reference) {
@@ -2744,6 +2763,7 @@ class EnhancedCashFlowService {
     static calculateInvestingActivities(transactionEntries, residenceId = null) {
         let purchase_of_equipment = 0;
         let purchase_of_buildings = 0;
+        let loans_given = 0;
         
         // Filter transactions by residence if specified
         let filteredEntries = transactionEntries;
@@ -2757,10 +2777,44 @@ class EnhancedCashFlowService {
         filteredEntries.forEach(entry => {
             if (entry.entries && entry.entries.length > 0) {
                 entry.entries.forEach(line => {
-                    const accountName = line.accountName;
+                    const accountName = line.accountName || '';
+                    const accountCode = String(line.accountCode || '').trim();
                     const debit = line.debit || 0;
                     
-                    if (accountName.toLowerCase().includes('equipment') || 
+                    // 🆕 CRITICAL: Loans given (Loans Receivable - properly categorized)
+                    // Loans given are investing activities (cash outflow)
+                    // Check by account code (13xx), account name, type, subcategory, or description
+                    const lineAccountType = (line.accountType || line.account?.type || '').toLowerCase();
+                    const lineSubcategory = (line.subcategory || line.account?.subcategory || '').toLowerCase();
+                    const entryDescription = (entry.description || '').toLowerCase();
+                    
+                    const isLoanByCode = accountCode.startsWith('13') || 
+                                         (accountCode === '20002' && accountName.toLowerCase().includes('interbranch'));
+                    const isLoanByName = accountName.toLowerCase().includes('loan receivable') ||
+                                        accountName.toLowerCase().includes('loans receivable') ||
+                                        accountName.toLowerCase().includes('loan to') ||
+                                        accountName.toLowerCase().includes('interbranch');
+                    const isLoanByType = lineAccountType === 'asset' && (
+                        lineSubcategory.includes('loan') || 
+                        lineSubcategory.includes('receivable')
+                    );
+                    const isLoanByDescription = entryDescription.includes('loan to') ||
+                                               entryDescription.includes('loan given') ||
+                                               entryDescription.includes('loans receivable');
+                    
+                    if (isLoanByCode || isLoanByName || isLoanByType || isLoanByDescription) {
+                        // Only count if there's a cash payment (cash account credit) - actual cash outflow
+                        const hasCashPayment = entry.entries.some(e => {
+                            const eAccountCode = String(e.accountCode || '').trim();
+                            const isCashAccount = eAccountCode.startsWith('100') || eAccountCode.startsWith('101');
+                            return isCashAccount && (e.credit || 0) > 0;
+                        });
+                        if (hasCashPayment && debit > 0) {
+                            loans_given += debit;
+                            // Track individual loan account codes for breakdown
+                            // This will be used in the detailed breakdown
+                        }
+                    } else if (accountName.toLowerCase().includes('equipment') || 
                         accountName.toLowerCase().includes('furniture') ||
                         accountName.toLowerCase().includes('machinery')) {
                         purchase_of_equipment += debit;
@@ -2768,14 +2822,15 @@ class EnhancedCashFlowService {
                                accountName.toLowerCase().includes('construction') ||
                                accountName.toLowerCase().includes('property')) {
                         purchase_of_buildings += debit;
-                        }
-                    });
-                }
-            });
-            
-                    return {
+                    }
+                });
+            }
+        });
+        
+        return {
             purchase_of_equipment,
-            purchase_of_buildings
+            purchase_of_buildings,
+            loans_given // 🆕 Added loans given to investing activities
         };
     }
     
@@ -3348,10 +3403,16 @@ class EnhancedCashFlowService {
             // Extract expense account from accrual transaction
             // Use the account code directly from the accrual entry - it's the source of truth
             if (accrualTransaction && accrualTransaction.entries && accrualTransaction.entries.length > 0) {
+                // 🆕 Include fixed asset accounts (12xx) - these are capital expenses that should be tracked
                 const expenseEntry = accrualTransaction.entries.find(e => {
                     const accCode = String(e.accountCode || '').trim();
                     const accType = e.accountType;
-                    return accCode.startsWith('5') && accType === 'Expense' && e.debit > 0;
+                    const hasDebit = (e.debit || 0) > 0;
+                    
+                    // Include expense accounts (5xxx) or fixed assets (12xx) when debited
+                    return (accCode.startsWith('5') || accCode.startsWith('12')) && 
+                           (accType === 'Expense' || accType === 'Asset') && 
+                           hasDebit;
                 });
                 
                 if (expenseEntry) {
@@ -4860,6 +4921,7 @@ class EnhancedCashFlowService {
                         deposits: 0,
                         utilities: 0,
                         advance_payments: 0,
+                        other_income: 0,
                         // Individual expense categories
                         electricity: 0,
                         water: 0,
@@ -4884,7 +4946,8 @@ class EnhancedCashFlowService {
                     admin_fees: 0,
                     deposits: 0,
                     utilities: 0,
-                    advance_payments: 0
+                    advance_payments: 0,
+                    other_income: 0
                 },
                 expenses: { 
                     total: 0, 
@@ -4965,10 +5028,12 @@ class EnhancedCashFlowService {
                 !processedTransactions.has(entry.transactionId + '_expense')) {
                 
                 // Extract all expense entries from this transaction
+                // 🆕 Include fixed asset accounts (12xx) - these are capital expenses that should be tracked
                 const expenseEntries = entry.entries.filter(e => {
                     const accCode = String(e.accountCode || '').trim();
                     const accType = e.accountType;
-                    return (accType === 'Expense' || accCode.startsWith('5')) && (e.debit || 0) > 0;
+                    // Include expense accounts (5xxx) and fixed asset accounts (12xx) when debited
+                    return (accType === 'Expense' || accType === 'Asset' || accCode.startsWith('5') || accCode.startsWith('12')) && (e.debit || 0) > 0;
                 });
                 
                 // Also check for liability accounts used as expenses (like 2028 for security)
@@ -4979,8 +5044,14 @@ class EnhancedCashFlowService {
                 
                 const allExpenseEntries = [...expenseEntries, ...liabilityExpenseEntries];
                 
-                // If transaction has multiple expense entries, process them all first
-                if (allExpenseEntries.length > 1) {
+                // 🆕 For fixed asset accounts (12xx), process even single-entry transactions (to match account details)
+                // If transaction has multiple expense entries OR is a fixed asset account, process them first
+                const hasFixedAssetEntry = allExpenseEntries.some(e => {
+                    const accCode = String(e.accountCode || '').trim();
+                    return accCode.startsWith('12');
+                });
+                
+                if (allExpenseEntries.length > 1 || hasFixedAssetEntry) {
                     console.log(`🔍 Transaction ${entry.transactionId} has ${allExpenseEntries.length} expense entries - extracting and processing them first...`);
                     
                     // Get all cash credits in this transaction
@@ -4990,14 +5061,21 @@ class EnhancedCashFlowService {
                                e.accountType === 'Asset' && (e.credit || 0) > 0;
                     });
                     
-                    // Only process if we have cash credits (cash flow basis)
-                    if (cashCredits.length > 0) {
-                        // Process each expense entry and match it with a cash credit
+                    // 🆕 For fixed asset accounts (12xx), include even without cash credits (to match account details)
+                    // For other accounts, only process if we have cash credits (cash flow basis)
+                    const hasFixedAssetEntries = allExpenseEntries.some(e => {
+                        const accCode = String(e.accountCode || '').trim();
+                        return accCode.startsWith('12');
+                    });
+                    
+                    if (cashCredits.length > 0 || hasFixedAssetEntries) {
+                        // Process each expense entry and match it with a cash credit (if available)
                         for (const expenseEntry of allExpenseEntries) {
                             const expenseAccountCode = expenseEntry.accountCode;
                             const expenseAccountName = expenseEntry.accountName;
                             const expenseAmount = expenseEntry.debit || 0;
                             const expenseKey = `${entry.transactionId}_expense_${expenseAccountCode}`;
+                            const isFixedAsset = String(expenseAccountCode || '').trim().startsWith('12');
                             
                             // Skip if this expense entry was already processed
                             if (processedTransactions.has(expenseKey)) {
@@ -5008,31 +5086,38 @@ class EnhancedCashFlowService {
                             // Find matching cash credit for this expense (by amount)
                             let matchingCashCredit = cashCredits.find(c => (c.credit || 0) === expenseAmount);
                             
-                            // If exact match not found, use first available cash credit
-                            // (for transactions where cash credits are not exactly matched by amount)
+                            // 🆕 For fixed asset accounts (12xx), if exact match not found, use first available cash credit
+                            // Since all fixed asset transactions have cash credits, we should always find one
                             if (!matchingCashCredit && cashCredits.length > 0) {
-                                // Track which cash credits have been used
-                                const usedCashCredits = new Set();
-                                for (const otherExpense of allExpenseEntries) {
-                                    if (otherExpense !== expenseEntry) {
-                                        const matchingCash = cashCredits.find(c => 
-                                            (c.credit || 0) === (otherExpense.debit || 0) && 
-                                            !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
-                                        );
-                                        if (matchingCash) {
-                                            usedCashCredits.add(matchingCash._id?.toString() || matchingCash.id?.toString() || JSON.stringify(matchingCash));
+                                if (isFixedAsset) {
+                                    // For fixed asset accounts, use first available cash credit (they all have cash credits)
+                                    matchingCashCredit = cashCredits[0];
+                                } else {
+                                    // For other accounts, track which cash credits have been used
+                                    const usedCashCredits = new Set();
+                                    for (const otherExpense of allExpenseEntries) {
+                                        if (otherExpense !== expenseEntry) {
+                                            const matchingCash = cashCredits.find(c => 
+                                                (c.credit || 0) === (otherExpense.debit || 0) && 
+                                                !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
+                                            );
+                                            if (matchingCash) {
+                                                usedCashCredits.add(matchingCash._id?.toString() || matchingCash.id?.toString() || JSON.stringify(matchingCash));
+                                            }
                                         }
                                     }
+                                    
+                                    // Find first unused cash credit
+                                    matchingCashCredit = cashCredits.find(c => 
+                                        !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
+                                    );
                                 }
-                                
-                                // Find first unused cash credit
-                                matchingCashCredit = cashCredits.find(c => 
-                                    !usedCashCredits.has(c._id?.toString() || c.id?.toString() || JSON.stringify(c))
-                                );
                             }
                             
-                            // Only process if we have a matching cash credit (ensures cash flow basis)
-                            if (matchingCashCredit && (matchingCashCredit.credit || 0) > 0) {
+                            // 🆕 For fixed asset accounts (12xx), always include (they have cash credits, so always process)
+                            // For other accounts, only process if we have a matching cash credit (ensures cash flow basis)
+                            // Since fixed asset accounts should match account details, always process them if they exist
+                            if (isFixedAsset || (matchingCashCredit && (matchingCashCredit.credit || 0) > 0)) {
                                 const expenseName = expenseAccountCode; // Use account code as category
                                 
                                 // Initialize the expense category if it doesn't exist
@@ -5069,6 +5154,10 @@ class EnhancedCashFlowService {
                                 processedTransactions.add(expenseKey);
                                 
                                 console.log(`✅ Extracted and processed expense ${expenseAccountCode} (${expenseAccountName}) for ${expenseAmount} from transaction ${entry.transactionId}`);
+                            } else if (!isFixedAsset) {
+                                // 🆕 Log when expense entry is found but no cash credit exists (not included in cash flow)
+                                // Fixed asset accounts are included even without cash credits
+                                console.log(`⚠️ Expense entry ${expenseAccountCode} (${expenseAccountName}) for ${expenseAmount} from transaction ${entry.transactionId} excluded from cash flow - no cash credit entry found`);
                             }
                         }
                         
@@ -5110,8 +5199,18 @@ class EnhancedCashFlowService {
                 const credit = line.credit || 0;
                 const debit = line.debit || 0;
                 
-                // Check if this entry credits a deposit account (deposit receipt)
-                if (credit > 0 && (
+                // 🆕 CRITICAL: Exclude loan accounts from deposit processing
+                // Check if this is a loan account (20001, 20002 with Interbranch, 13xx)
+                const isLoanAccount = accountCode.startsWith('13') || 
+                                     (accountCode === '20002' && accountName.includes('interbranch')) ||
+                                     accountCode === '20001' ||
+                                     accountName.includes('loan receivable') ||
+                                     accountName.includes('loans receivable') ||
+                                     accountName.includes('loan to') ||
+                                     accountName.includes('interbranch');
+                
+                // Check if this entry credits a deposit account (deposit receipt) - EXCLUDE loan accounts
+                if (!isLoanAccount && credit > 0 && (
                     depositAccountCodes.includes(accountCode) ||
                     (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security'))
                 )) {
@@ -5119,8 +5218,8 @@ class EnhancedCashFlowService {
                     depositCreditAmount += credit; // Sum all deposit credits
                 }
                 
-                // Check if this entry debits a deposit account (deposit return/refund)
-                if (debit > 0 && (
+                // Check if this entry debits a deposit account (deposit return/refund) - EXCLUDE loan accounts
+                if (!isLoanAccount && debit > 0 && (
                     depositAccountCodes.includes(accountCode) ||
                     (accountCode.startsWith('200') && accountName.includes('deposit') && accountName.includes('security'))
                 )) {
@@ -5174,9 +5273,32 @@ class EnhancedCashFlowService {
                 });
             }
             
+            // 🆕 PRIORITY 0: Check for LOANS first - loans should NOT be processed as deposit returns
+            // Check if any entry is a loan account (20001, 20002 with Interbranch, 13xx)
+            let isLoanInDepositCheck = false;
+            if (entry.entries && entry.entries.length > 0) {
+                for (const line of entry.entries) {
+                    const lineAccountCode = String(line.accountCode || '').trim();
+                    const lineAccountName = (line.accountName || '').toLowerCase();
+                    const isLoanByCode = lineAccountCode.startsWith('13') || 
+                                       (lineAccountCode === '20002' && lineAccountName.includes('interbranch')) ||
+                                       lineAccountCode === '20001';
+                    const isLoanByName = lineAccountName.includes('loan receivable') || 
+                                       lineAccountName.includes('loans receivable') ||
+                                       lineAccountName.includes('loan to') ||
+                                       lineAccountName.includes('interbranch');
+                    
+                    if ((isLoanByCode || isLoanByName) && (line.debit || 0) > 0) {
+                        isLoanInDepositCheck = true;
+                        break;
+                    }
+                }
+            }
+            
             // PRIORITY 1: Check for deposit RETURN first (debits deposit account, credits Cash) = expense
             // Account 2028 can be used for both deposit returns and security expenses - both should use account 2028 as expense code
             // EXCLUDE: Opening balance entries (dr 10005, cr 2028) - these are balance sheet adjustments, not cash flows
+            // EXCLUDE: Loan accounts - loans are investing activities, not deposit returns
             const hasOpeningBalanceDebit = entry.entries.some(e => 
                 String(e.accountCode || '').trim() === '10005' && (e.debit || 0) > 0
             );
@@ -5186,7 +5308,7 @@ class EnhancedCashFlowService {
             
             if (hasDepositDebit && !hasDepositCredit && hasCashCredit && depositDebitAmount > 0 && 
                 !processedTransactions.has(entry.transactionId + '_deposit_return') && 
-                !hasOpeningBalanceDebit && !hasDepositReceipt) {
+                !hasOpeningBalanceDebit && !hasDepositReceipt && !isLoanInDepositCheck) {
                 // This is a deposit return/refund (debits deposit account, credits Cash)
                 // This should be treated as an expense/outflow, not income
                 console.log(`✅ [generateReliableMonthlyBreakdown] DEPOSIT RETURN DETECTED: transactionId=${entry.transactionId}, description="${entry.description}", depositDebitAmount=${depositDebitAmount}, hasCashCredit=${hasCashCredit}`);
@@ -5198,9 +5320,10 @@ class EnhancedCashFlowService {
                 const afterTotal = monthlyData[monthName].expenses.total;
                 
                 // PRIORITY: Try to find account code from original accrual transaction (same as regular expenses)
-                let expenseAccountCode = null;
-                let expenseAccountName = null;
-                let expenseName = entry.description || 'Deposit return';
+                // 🆕 Initialize with default account code instead of description
+                let expenseAccountCode = '5099'; // Default to Other Operating Expenses
+                let expenseAccountName = 'Other Operating Expenses';
+                let expenseName = expenseAccountCode; // Always use account code as key
                 
                 // Check if account 2028 is debited in this transaction
                 const has2028Debit = entry.entries.some(e => 
@@ -5224,6 +5347,23 @@ class EnhancedCashFlowService {
                         if (directAccrualAccount && directAccrualAccount.accountCode && directAccrualAccount.accountName) {
                             expenseAccountCode = directAccrualAccount.accountCode;
                             expenseAccountName = directAccrualAccount.accountName;
+                            
+                            // 🆕 CRITICAL: Check if this is a loan account before creating expense name
+                            const expenseAccountCodeStr = String(expenseAccountCode).trim();
+                            const expenseAccountNameLower = (expenseAccountName || '').toLowerCase();
+                            const isLoanAccount = expenseAccountCodeStr.startsWith('13') || 
+                                                 (expenseAccountCodeStr === '20002' && expenseAccountNameLower.includes('interbranch')) ||
+                                                 expenseAccountCodeStr === '20001' ||
+                                                 expenseAccountNameLower.includes('loan receivable') ||
+                                                 expenseAccountNameLower.includes('loans receivable') ||
+                                                 expenseAccountNameLower.includes('loan to') ||
+                                                 expenseAccountNameLower.includes('interbranch');
+                            
+                            if (isLoanAccount) {
+                                console.log(`💰 Loan account excluded from deposit return expenses: ${entry.transactionId} - Account: ${expenseAccountCode} - ${expenseAccountName}`);
+                                break; // Skip rest of this transaction - don't process as expense
+                            }
+                            
                             expenseName = `${expenseAccountCode} - ${expenseAccountName}`;
                             console.log(`✅ Found accrual account via database query for deposit return ${entry.transactionId}: ${expenseName}`);
                         } else {
@@ -5236,18 +5376,39 @@ class EnhancedCashFlowService {
                             if (depositAccountEntry) {
                                 expenseAccountCode = depositAccountEntry.accountCode;
                                 expenseAccountName = depositAccountEntry.accountName || 'Security Deposit';
+                                
+                                // 🆕 CRITICAL: Check if this is a loan account before creating expense name
+                                const expenseAccountCodeStr = String(expenseAccountCode).trim();
+                                const expenseAccountNameLower = (expenseAccountName || '').toLowerCase();
+                                const isLoanAccount = expenseAccountCodeStr.startsWith('13') || 
+                                                     (expenseAccountCodeStr === '20002' && expenseAccountNameLower.includes('interbranch')) ||
+                                                     expenseAccountCodeStr === '20001' ||
+                                                     expenseAccountNameLower.includes('loan receivable') ||
+                                                     expenseAccountNameLower.includes('loans receivable') ||
+                                                     expenseAccountNameLower.includes('loan to') ||
+                                                     expenseAccountNameLower.includes('interbranch');
+                                
+                                if (isLoanAccount) {
+                                    console.log(`💰 Loan account excluded from deposit return expenses: ${entry.transactionId} - Account: ${expenseAccountCode} - ${expenseAccountName}`);
+                                    break; // Skip rest of this transaction - don't process as expense
+                                }
+                                
                                 expenseName = `${expenseAccountCode} - ${expenseAccountName}`;
                                 console.log(`✅ Using deposit account from transaction for deposit return: ${expenseName}`);
                             } else {
-                                // Last resort: Use description as category name (original behavior)
-                                expenseName = entry.description || 'Deposit return';
-                                console.log(`⚠️ Using description as category name for deposit return (no account found): ${expenseName}`);
+                                // Last resort: Use default account code (never use description as key)
+                                expenseAccountCode = '5099';
+                                expenseAccountName = 'Other Operating Expenses';
+                                expenseName = expenseAccountCode;
+                                console.log(`⚠️ Using default account code for deposit return (no account found): ${expenseName}`);
                             }
                         }
                     } catch (accrualLookupError) {
                         console.error(`❌ Error looking up accrual account for deposit return ${entry.transactionId}:`, accrualLookupError);
-                        // Fallback: Use description as category name
-                        expenseName = entry.description || 'Deposit return';
+                        // Fallback: Use default account code (never use description as key)
+                        expenseAccountCode = '5099';
+                        expenseAccountName = 'Other Operating Expenses';
+                        expenseName = expenseAccountCode;
                     }
                 }
                 
@@ -5576,6 +5737,108 @@ class EnhancedCashFlowService {
                         break; // Skip rest of this transaction, continue to next transaction
                     }
                     
+                    // 🆕 EXCLUDE: Loans given - check BEFORE expense processing
+                    // Check by account code (13xx), account name, type, category, subcategory, or description
+                    // A loan given transaction has: DR Loan Account (13xx or account name "Loan to X"), CR Cash
+                    let isLoanTransaction = false;
+                    let loanDebitAmount = 0;
+                    if (entry.entries && entry.entries.length > 0) {
+                        for (const line of entry.entries) {
+                            const lineAccountCode = String(line.accountCode || '').trim();
+                            const lineAccountName = (line.accountName || '').toLowerCase();
+                            const lineAccountType = (line.accountType || line.account?.type || '').toLowerCase();
+                            const lineSubcategory = (line.subcategory || line.account?.subcategory || '').toLowerCase();
+                            
+                            // Check by account code: 13xx (standard loans receivable) OR 20002 (if used for loans like "Interbranch")
+                            const isLoanByCode = lineAccountCode.startsWith('13') || 
+                                                 (lineAccountCode === '20002' && lineAccountName.includes('interbranch'));
+                            
+                            // Check by account name: contains loan keywords or "Interbranch"
+                            const isLoanByName = lineAccountName.includes('loan receivable') || 
+                                               lineAccountName.includes('loans receivable') ||
+                                               lineAccountName.includes('loan to') ||
+                                               lineAccountName.includes('interbranch');
+                            
+                            // Check by account type: Asset (loans receivable are assets)
+                            // AND subcategory: "loans receivable" or similar
+                            const isLoanByType = lineAccountType === 'asset' && (
+                                lineSubcategory.includes('loan') || 
+                                lineSubcategory.includes('receivable')
+                            );
+                            
+                            // Check by description
+                            const isLoanByDescription = entry.description && (
+                                entry.description.toLowerCase().includes('loan to') ||
+                                entry.description.toLowerCase().includes('loan given') ||
+                                entry.description.toLowerCase().includes('loans receivable')
+                            );
+                            
+                            // Check if this line is a loan account DEBIT (loan receivable increases)
+                            if ((isLoanByCode || isLoanByName || isLoanByType || isLoanByDescription) && (line.debit || 0) > 0) {
+                                isLoanTransaction = true;
+                                loanDebitAmount = line.debit || 0;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // If we found a loan account debit, check if there's a cash credit (cash going out)
+                    if (isLoanTransaction) {
+                        // Check if there's a cash payment (cash account credit) - loans given involve cash outflow
+                        const hasCashPayment = entry.entries && entry.entries.some(line => {
+                            const lineAccountCode = String(line.accountCode || '').trim();
+                            const isCashAccount = lineAccountCode.startsWith('100') || lineAccountCode.startsWith('101');
+                            const hasCashCredit = line.credit > 0;
+                            return isCashAccount && hasCashCredit;
+                        });
+                        
+                        if (hasCashPayment && !processedTransactions.has(entry.transactionId + '_loan')) {
+                            // This is a loan given - record in investing activities
+                            // Use the loan debit amount (the amount of the loan), not the cash credit amount
+                            const loanAmount = loanDebitAmount || amount;
+                            monthlyData[monthName].investing_activities.outflows += loanAmount;
+                            
+                            // Find the loan account code from the transaction entries
+                            let loanAccountCode = null;
+                            let loanAccountName = null;
+                            for (const line of entry.entries) {
+                                const lineAccountCode = String(line.accountCode || '').trim();
+                                const lineAccountName = (line.accountName || '').toLowerCase();
+                                const isLoanByCode = lineAccountCode.startsWith('13') || 
+                                                   (lineAccountCode === '20002' && lineAccountName.includes('interbranch')) ||
+                                                   lineAccountCode === '20001';
+                                const isLoanByName = lineAccountName.includes('loan receivable') || 
+                                                   lineAccountName.includes('loans receivable') ||
+                                                   lineAccountName.includes('loan to') ||
+                                                   lineAccountName.includes('interbranch');
+                                
+                                if ((isLoanByCode || isLoanByName) && (line.debit || 0) > 0) {
+                                    loanAccountCode = lineAccountCode;
+                                    loanAccountName = line.accountName || lineAccountName;
+                                    break;
+                                }
+                            }
+                            
+                            // Use the loan account code as the breakdown key (e.g., "20002", "20001", "1301")
+                            // If no account code found, fall back to "loans_given"
+                            const breakdownKey = loanAccountCode || 'loans_given';
+                            if (!monthlyData[monthName].investing_activities.breakdown[breakdownKey]) {
+                                monthlyData[monthName].investing_activities.breakdown[breakdownKey] = 0;
+                            }
+                            monthlyData[monthName].investing_activities.breakdown[breakdownKey] += loanAmount;
+                            
+                            // Also maintain a total "loans_given" for backward compatibility
+                            if (!monthlyData[monthName].investing_activities.breakdown.loans_given) {
+                                monthlyData[monthName].investing_activities.breakdown.loans_given = 0;
+                            }
+                            monthlyData[monthName].investing_activities.breakdown.loans_given += loanAmount;
+                            
+                            processedTransactions.add(entry.transactionId + '_loan');
+                            console.log(`💰 Loan given recorded in investing activities: ${entry.transactionId} - $${loanAmount} (Account: ${loanAccountCode || 'N/A'}, Description: ${entry.description || 'N/A'})`);
+                            break; // Skip rest of this transaction - don't process as expense
+                        }
+                    }
+                    
                     // Skip internal cash transfers and movements between cash accounts
                     // Use the proper isInternalCashTransfer function for consistency
                     if (this.isInternalCashTransfer(entry)) {
@@ -5592,10 +5855,12 @@ class EnhancedCashFlowService {
                     
                     // Check if any expense entry from this transaction was already processed individually
                     // This prevents double-counting when iterating through entry lines
+                    // 🆕 Include fixed asset accounts (12xx) - these are capital expenses that should be tracked
                     const hasProcessedExpenseEntry = entry.entries.some(e => {
                         const accCode = String(e.accountCode || '').trim();
                         const accType = e.accountType;
-                        if ((accType === 'Expense' || accCode.startsWith('5')) && (e.debit || 0) > 0) {
+                        // Include expense accounts (5xxx) and fixed asset accounts (12xx) when debited
+                        if ((accType === 'Expense' || accType === 'Asset' || accCode.startsWith('5') || accCode.startsWith('12')) && (e.debit || 0) > 0) {
                             const expenseKey = `${entry.transactionId}_expense_${accCode}`;
                             return processedTransactions.has(expenseKey);
                         }
@@ -5614,9 +5879,10 @@ class EnhancedCashFlowService {
                         processedTransactions.add(entry.transactionId + '_expense');
 
                         // Find expense account from accrual transaction (payment flow)
+                        // 🆕 Initialize as null - will be set from accrual, transaction entries, or default to 5099
                         let expenseAccountCode = null;
                         let expenseAccountName = null;
-                        let expenseName = entry.description || 'Unnamed Expense';
+                        let expenseName = null; // Will be set to account code once found
                         
                         try {
                             const accrualAccount = await this.findExpenseAccrualAccount(entry);
@@ -5627,12 +5893,18 @@ class EnhancedCashFlowService {
                                 console.log(`✅ Found expense account from accrual: ${expenseAccountCode} - ${expenseAccountName} for payment ${entry.transactionId}`);
                             } else {
                                 // FALLBACK 1: Try to extract expense account directly from transaction entries
-                                // Check for expense accounts (5xxx) OR specific liability accounts used for expenses (e.g., 2028 for security)
-                                let expenseLine = entry.entries.find(e => 
-                                    (e.accountType === 'Expense' || e.accountType === 'Liability') && 
-                                    (e.debit || 0) > 0 &&
-                                    e.accountCode && String(e.accountCode).startsWith('5')
-                                );
+                                // Check for expense accounts (5xxx), fixed assets (12xx), OR specific liability accounts used for expenses (e.g., 2028 for security)
+                                // 🆕 Include fixed asset accounts (12xx) - these are capital expenses that should be tracked
+                                let expenseLine = entry.entries.find(e => {
+                                    const accCode = String(e.accountCode || '').trim();
+                                    const accType = e.accountType;
+                                    const hasDebit = (e.debit || 0) > 0;
+                                    
+                                    // Include expense accounts (5xxx), fixed assets (12xx), or liability accounts (2xxx) when debited
+                                    return (accType === 'Expense' || accType === 'Asset' || accType === 'Liability') && 
+                                           hasDebit &&
+                                           (accCode.startsWith('5') || accCode.startsWith('12') || accCode.startsWith('2'));
+                                });
                                 
                                 // SPECIAL CASE: Check for account 2028 (security expense) - dr 2028, cr cash 1000
                                 if (!expenseLine) {
@@ -5865,9 +6137,11 @@ class EnhancedCashFlowService {
                                         expenseName = expenseAccountCode; // Use account code as category
                                         console.log(`✅ Inferred expense account from description: ${expenseAccountCode} - ${expenseAccountName} for payment ${entry.transactionId}`);
                                     } else {
-                                        // FALLBACK 3: Use description (last resort)
-                                        expenseName = entry.description || 'Unnamed Expense';
-                                        console.log(`⚠️ No accrual, expense account, or keyword match found for payment ${entry.transactionId}, using description: ${expenseName}`);
+                                        // FALLBACK 3: Use default account code (never use description as key)
+                                        expenseAccountCode = '5099';
+                                        expenseAccountName = 'Other Operating Expenses';
+                                        expenseName = expenseAccountCode;
+                                        console.log(`⚠️ No accrual, expense account, or keyword match found for payment ${entry.transactionId}, using default account code: ${expenseName}`);
                                     }
                                 }
                             }
@@ -5875,11 +6149,17 @@ class EnhancedCashFlowService {
                             console.error(`❌ Error finding accrual account for payment ${entry.transactionId}:`, error);
                             // Try to extract expense account directly from transaction entries as fallback
                             // Check for expense accounts (5xxx) OR specific liability accounts used for expenses (e.g., 2028 for security)
-                            let expenseLine = entry.entries.find(e => 
-                                (e.accountType === 'Expense' || e.accountType === 'Liability') && 
-                                (e.debit || 0) > 0 &&
-                                e.accountCode && String(e.accountCode).startsWith('5')
-                            );
+                            // 🆕 Include fixed asset accounts (12xx) - these are capital expenses that should be tracked
+                            let expenseLine = entry.entries.find(e => {
+                                const accCode = String(e.accountCode || '').trim();
+                                const accType = e.accountType;
+                                const hasDebit = (e.debit || 0) > 0;
+                                
+                                // Include expense accounts (5xxx), fixed assets (12xx), or liability accounts (2xxx) when debited
+                                return (accType === 'Expense' || accType === 'Asset' || accType === 'Liability') && 
+                                       hasDebit &&
+                                       (accCode.startsWith('5') || accCode.startsWith('12') || accCode.startsWith('2'));
+                            });
                             
                             // SPECIAL CASE: Check for account 2028 (security expense) - dr 2028, cr cash 1000
                             if (!expenseLine) {
@@ -5940,8 +6220,68 @@ class EnhancedCashFlowService {
                                     expenseName = expenseAccountCode;
                                     console.log(`✅ Fallback: Inferred expense account from description: ${expenseAccountCode} - ${expenseAccountName} for payment ${entry.transactionId}`);
                                 } else {
-                                    expenseName = entry.description || 'Unnamed Expense';
+                                    // 🆕 CRITICAL: Check if this is a loan account before using description as expense name
+                                    // Check transaction entries for loan accounts (20001, 20002 with Interbranch, 13xx)
+                                    let isLoanInTransaction = false;
+                                    if (entry.entries && entry.entries.length > 0) {
+                                        for (const line of entry.entries) {
+                                            const lineAccountCode = String(line.accountCode || '').trim();
+                                            const lineAccountName = (line.accountName || '').toLowerCase();
+                                            const isLoanByCode = lineAccountCode.startsWith('13') || 
+                                                               (lineAccountCode === '20002' && lineAccountName.includes('interbranch')) ||
+                                                               lineAccountCode === '20001';
+                                            const isLoanByName = lineAccountName.includes('loan receivable') || 
+                                                               lineAccountName.includes('loans receivable') ||
+                                                               lineAccountName.includes('loan to') ||
+                                                               lineAccountName.includes('interbranch');
+                                            
+                                            if ((isLoanByCode || isLoanByName) && (line.debit || 0) > 0) {
+                                                isLoanInTransaction = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (isLoanInTransaction) {
+                                        // This is a loan transaction - skip expense processing
+                                        console.log(`💰 Loan transaction excluded from expenses (fallback check): ${entry.transactionId} - ${entry.description || 'N/A'}`);
+                                        break; // Skip rest of this transaction - don't process as expense
+                                    }
+                                    
+                                    // Never use description as key - use default account code
+                                    expenseAccountCode = '5099';
+                                    expenseAccountName = 'Other Operating Expenses';
+                                    expenseName = expenseAccountCode;
                                 }
+                            }
+                        }
+                        
+                        // 🆕 FINAL CHECK: Ensure expenseName is set before using it
+                        if (!expenseName && expenseAccountCode) {
+                            expenseName = expenseAccountCode;
+                        } else if (!expenseAccountCode && !expenseName) {
+                            // Ultimate fallback - should never happen, but just in case
+                            expenseAccountCode = '5099';
+                            expenseAccountName = 'Other Operating Expenses';
+                            expenseName = expenseAccountCode;
+                        }
+                        
+                        // 🆕 FINAL CHECK: Before adding to expenses, verify this is not a loan account
+                        // Double-check to prevent loans from being added as expenses
+                        if (expenseAccountCode && expenseName) {
+                            const expenseAccountCodeStr = String(expenseAccountCode).trim();
+                            const expenseAccountNameLower = (expenseAccountName || '').toLowerCase();
+                            const isLoanAccount = expenseAccountCodeStr.startsWith('13') || 
+                                                 (expenseAccountCodeStr === '20002' && expenseAccountNameLower.includes('interbranch')) ||
+                                                 expenseAccountCodeStr === '20001' ||
+                                                 expenseAccountNameLower.includes('loan receivable') ||
+                                                 expenseAccountNameLower.includes('loans receivable') ||
+                                                 expenseAccountNameLower.includes('loan to') ||
+                                                 expenseAccountNameLower.includes('interbranch');
+                            
+                            if (isLoanAccount) {
+                                console.log(`💰 Loan account excluded from expenses (final check): ${entry.transactionId} - Account: ${expenseAccountCode} - ${expenseAccountName || 'N/A'}`);
+                                break; // Skip rest of this transaction - don't process as expense
                             }
                         }
                         
@@ -5977,7 +6317,9 @@ class EnhancedCashFlowService {
                 
                 // FALLBACK: Debit to Expense accounts (5000 series) - for completeness
                 // BUT ONLY if there's an actual cash payment (cash account credit) - exclude accruals
+                // 🆕 EXCLUDE loans receivable (13xx) from expenses - they're investing activities
                 else if (isDebit && accountCode && accountCode.startsWith('5') && 
+                         !accountCode.startsWith('13') && // Exclude loans receivable
                          !processedTransactions.has(entry.transactionId + '_expense')) {
                     
                     // FIRST: Check if this is an internal cash transfer - EXCLUDE
@@ -5999,7 +6341,10 @@ class EnhancedCashFlowService {
                     
                     // ONLY process if there's a cash payment AND it's not an internal transfer
                     // This ensures we only count actual cash expenses, not accrued expenses
-                    if (!hasCashPayment) {
+                    // 🆕 EXCEPTION: Fixed asset accounts (12xx) are included even without cash payments (to match account details)
+                    const isFixedAsset = accountCode && String(accountCode).trim().startsWith('12');
+                    
+                    if (!hasCashPayment && !isFixedAsset) {
                         console.log(`💰 Accrual expense excluded (no cash payment): ${entry.transactionId} - Description: ${entry.description}`);
                         continue; // Skip this line item, continue with next line in same transaction
                     }
@@ -6043,6 +6388,58 @@ class EnhancedCashFlowService {
                         category: 'expense'
                     });
                 }
+                }
+                
+                // 🆕 FIXED ASSET ACCOUNTS (12xx): Process even without cash credits (to match account details)
+                // Fixed asset accounts should be included in cash flow to match account details totals
+                if (isDebit && accountCode && String(accountCode).trim().startsWith('12') && 
+                         !processedTransactions.has(entry.transactionId + '_expense')) {
+                    
+                    // Check if this is an internal cash transfer - EXCLUDE
+                    if (this.isInternalCashTransfer(entry)) {
+                        console.log(`💰 Internal cash transfer excluded from fixed asset processing: ${entry.transactionId}`);
+                        break; // Skip rest of this transaction, continue to next transaction
+                    }
+                    
+                    // Include fixed asset accounts even without cash payments (to match account details)
+                    monthlyData[monthName].operating_activities.outflows += amount;
+                    monthlyData[monthName].expenses.total += amount;
+                    processedTransactions.add(entry.transactionId + '_expense');
+                    
+                    // Use account code directly from transaction
+                    const expenseAccountCode = accountCode;
+                    const expenseAccountName = accountName;
+                    const expenseName = expenseAccountCode; // Use account code as category
+                    
+                    // Initialize the expense category if it doesn't exist
+                    if (!monthlyData[monthName].expenses[expenseName]) {
+                        monthlyData[monthName].expenses[expenseName] = 0;
+                    }
+                    if (!monthlyData[monthName].operating_activities.breakdown[expenseName]) {
+                        monthlyData[monthName].operating_activities.breakdown[expenseName] = 0;
+                    }
+                    
+                    // Store account name
+                    if (expenseAccountCode && expenseAccountName) {
+                        monthlyData[monthName].expenses.accountNames[expenseAccountCode] = expenseAccountName;
+                    }
+                    
+                    // Add amount to the specific expense name (by account code)
+                    monthlyData[monthName].expenses[expenseName] += amount;
+                    monthlyData[monthName].operating_activities.breakdown[expenseName] += amount;
+                    
+                    // Add to transactions with account code info
+                    monthlyData[monthName].expenses.transactions.push({
+                        transactionId: entry.transactionId,
+                        date: entry.date,
+                        amount: amount,
+                        description: entry.description,
+                        accountCode: expenseAccountCode || null,
+                        accountName: expenseAccountName || null,
+                        category: 'expense'
+                    });
+                    
+                    console.log(`✅ Fixed asset account ${expenseAccountCode} (${expenseAccountName}) processed for ${amount} from transaction ${entry.transactionId} (no cash credit required)`);
                 }
 
                 // FINANCING: Owner contributions (Equity accounts)
@@ -7942,7 +8339,16 @@ class EnhancedCashFlowService {
             operating_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
             investing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
             financing_activities: { inflows: 0, outflows: 0, net: 0, breakdown: {} },
-            net_cash_flow: 0
+            net_cash_flow: 0,
+            income: {
+                total: 0,
+                rental_income: 0,
+                admin_fees: 0,
+                deposits: 0,
+                utilities: 0,
+                advance_payments: 0,
+                other_income: 0
+            }
         };
         
         Object.values(monthlyBreakdown).forEach(monthData => {
@@ -7966,6 +8372,17 @@ class EnhancedCashFlowService {
             yearlyTotals.financing_activities.net += monthData.financing_activities?.net || 0;
             
             yearlyTotals.net_cash_flow += monthData.net_cash_flow || 0;
+            
+            // 🆕 Aggregate income breakdown from monthly data
+            if (monthData.income) {
+                yearlyTotals.income.total += monthData.income.total || 0;
+                yearlyTotals.income.rental_income += monthData.income.rental_income || 0;
+                yearlyTotals.income.admin_fees += monthData.income.admin_fees || 0;
+                yearlyTotals.income.deposits += monthData.income.deposits || 0;
+                yearlyTotals.income.utilities += monthData.income.utilities || 0;
+                yearlyTotals.income.advance_payments += monthData.income.advance_payments || 0;
+                yearlyTotals.income.other_income += monthData.income.other_income || 0;
+            }
         });
         
         // Log for debugging (especially for October)
@@ -7974,7 +8391,8 @@ class EnhancedCashFlowService {
             console.log(`📊 Yearly Totals Calculation - October:`, {
                 expensesTotal: octoberData.expenses?.total,
                 operatingOutflows: octoberData.operating_activities?.outflows,
-                usedForYearly: octoberData.expenses?.total || octoberData.operating_activities?.outflows
+                usedForYearly: octoberData.expenses?.total || octoberData.operating_activities?.outflows,
+                otherIncome: octoberData.income?.other_income
             });
         }
         

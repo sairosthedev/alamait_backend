@@ -68,8 +68,10 @@ class LeaseUpdateService {
                 console.log(`   Start: ${originalStartDate?.toISOString().split('T')[0]} → ${application.startDate.toISOString().split('T')[0]}`);
                 console.log(`   End: ${originalEndDate?.toISOString().split('T')[0]} → ${application.endDate.toISOString().split('T')[0]}`);
                 
-                // 🆕 CRITICAL: If end date was moved earlier, automatically reverse accruals for months after new end date
-                // Do this BEFORE updating debtor so we have the correct end date
+                // 🆕 CRITICAL: Handle lease date changes - reverse or create accruals as needed
+                // Do this BEFORE updating debtor so we have the correct dates
+                
+                // 1. If end date was moved earlier, reverse accruals for months after new end date
                 if (originalEndDate && new Date(leaseUpdates.endDate) < new Date(originalEndDate)) {
                     console.log(`⚠️ Application end date moved earlier - automatically reversing accruals...`);
                     console.log(`   Original end date: ${originalEndDate.toISOString().split('T')[0]}`);
@@ -101,6 +103,46 @@ class LeaseUpdateService {
                     } catch (accrualError) {
                         console.error(`❌ Error automatically reversing accruals: ${accrualError.message}`);
                         // Don't throw - lease update should still succeed even if accrual reversal fails
+                    }
+                }
+                
+                // 2. If lease was extended (end date moved later), check for missing accruals and create them
+                if (originalEndDate && new Date(leaseUpdates.endDate) > new Date(originalEndDate)) {
+                    console.log(`📅 Application end date moved later - checking for missing accruals...`);
+                    console.log(`   Original end date: ${originalEndDate.toISOString().split('T')[0]}`);
+                    console.log(`   New end date: ${leaseUpdates.endDate}`);
+                    
+                    try {
+                        await this.createMissingAccrualsForExtendedLease(
+                            application,
+                            originalEndDate,
+                            new Date(leaseUpdates.endDate),
+                            updatedBy,
+                            session
+                        );
+                    } catch (accrualError) {
+                        console.error(`❌ Error creating missing accruals for extended lease: ${accrualError.message}`);
+                        // Don't throw - lease update should still succeed even if accrual creation fails
+                    }
+                }
+                
+                // 3. If start date was moved earlier, check for missing accruals from new start to old start
+                if (originalStartDate && new Date(leaseUpdates.startDate) < new Date(originalStartDate)) {
+                    console.log(`📅 Application start date moved earlier - checking for missing accruals...`);
+                    console.log(`   Original start date: ${originalStartDate.toISOString().split('T')[0]}`);
+                    console.log(`   New start date: ${leaseUpdates.startDate}`);
+                    
+                    try {
+                        await this.createMissingAccrualsForExtendedLease(
+                            application,
+                            new Date(leaseUpdates.startDate),
+                            originalStartDate,
+                            updatedBy,
+                            session
+                        );
+                    } catch (accrualError) {
+                        console.error(`❌ Error creating missing accruals for earlier start date: ${accrualError.message}`);
+                        // Don't throw - lease update should still succeed even if accrual creation fails
                     }
                 }
                 
@@ -136,41 +178,7 @@ class LeaseUpdateService {
                     console.log(`   End: ${originalDebtorEndDate?.toISOString().split('T')[0]} → ${debtor.leaseInfo.endDate.toISOString().split('T')[0]}`);
                     console.log(`   Total Owed: $${originalTotalOwed} → $${debtor.totalOwed}`);
                     
-                    // 🆕 CRITICAL: If end date was moved earlier, reverse accruals for months after new end date
-                    if (originalDebtorEndDate && new Date(leaseUpdates.endDate) < new Date(originalDebtorEndDate)) {
-                        console.log(`⚠️ Lease end date moved earlier - checking for accruals to reverse...`);
-                        console.log(`   Original end date: ${originalDebtorEndDate.toISOString().split('T')[0]}`);
-                        console.log(`   New end date: ${leaseUpdates.endDate}`);
-                        
-                        try {
-                            const AccrualCorrectionService = require('./accrualCorrectionService');
-                            const User = require('../models/User');
-                            const adminUser = await User.findById(updatedBy).lean();
-                            
-                            if (adminUser) {
-                                const correctionResult = await AccrualCorrectionService.correctAccrualsForEarlyLeaseEnd(
-                                    application._id.toString(),
-                                    leaseUpdates.endDate,
-                                    adminUser,
-                                    `Lease end date updated - student left early`,
-                                    false // Don't update lease end date again (already updated)
-                                );
-                                
-                                if (correctionResult.success) {
-                                    console.log(`✅ Reversed ${correctionResult.reversedCount || 0} accrual(s) for months after new lease end date`);
-                                    console.log(`   Reversed transactions: ${correctionResult.reversedTransactions?.length || 0}`);
-                                } else {
-                                    console.error(`❌ Failed to reverse accruals: ${correctionResult.error}`);
-                                }
-                            } else {
-                                console.warn(`⚠️ Could not find admin user ${updatedBy} for accrual reversal`);
-                            }
-                        } catch (accrualError) {
-                            console.error(`❌ Error reversing accruals: ${accrualError.message}`);
-                            // Don't throw - lease update should still succeed even if accrual reversal fails
-                        }
-                    }
-                    
+                    // Note: Accrual reversal/creation is handled earlier in the function (before debtor update)
                     // TODO: Create audit log for debtor update
                     console.log(`📝 Audit: Debtor ${debtor.debtorCode} updated by user ${updatedBy}`);
                     console.log(`   Before: Start: ${originalDebtorStartDate?.toISOString().split('T')[0]}, End: ${originalDebtorEndDate?.toISOString().split('T')[0]}, Total: $${originalTotalOwed}`);
@@ -385,6 +393,184 @@ class LeaseUpdateService {
             
         } catch (error) {
             console.error('❌ Error getting student lease info:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Create missing accruals for extended lease period
+     * @param {Object} application - Application record
+     * @param {Date} periodStart - Start of the period to check
+     * @param {Date} periodEnd - End of the period to check
+     * @param {string} updatedBy - User ID who is making the update
+     * @param {Object} session - MongoDB session
+     */
+    static async createMissingAccrualsForExtendedLease(application, periodStart, periodEnd, updatedBy, session) {
+        try {
+            console.log(`🔍 Checking for missing accruals from ${periodStart.toISOString().split('T')[0]} to ${periodEnd.toISOString().split('T')[0]}`);
+            
+            const RentalAccrualService = require('./rentalAccrualService');
+            const TransactionEntry = require('../models/TransactionEntry');
+            const Debtor = require('../models/Debtor');
+            const now = new Date();
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+            
+            // Get student ID from application
+            const studentId = application.student?.toString() || application.student;
+            if (!studentId) {
+                console.warn(`⚠️ Cannot find student ID from application - skipping accrual check`);
+                return;
+            }
+            
+            // Look up debtor to get debtorId for more accurate accrual checking
+            const debtor = await Debtor.findOne({ user: studentId }).session(session).lean();
+            const debtorId = debtor?._id?.toString();
+            const arAccountCode = debtor?.accountCode ? (typeof debtor.accountCode === 'string' && debtor.accountCode.startsWith('1100-') ? debtor.accountCode : `1100-${debtorId}`) : (debtorId ? `1100-${debtorId}` : null);
+            
+            console.log(`   📋 Student ID: ${studentId}, Debtor ID: ${debtorId || 'N/A'}, AR Account Code: ${arAccountCode || 'N/A'}`);
+            
+            // Calculate months to check
+            const startMonth = periodStart.getMonth() + 1;
+            const startYear = periodStart.getFullYear();
+            const endMonth = periodEnd.getMonth() + 1;
+            const endYear = periodEnd.getFullYear();
+            
+            let month = startMonth;
+            let year = startYear;
+            let accrualsCreated = 0;
+            let accrualsSkipped = 0;
+            const errors = [];
+            
+            // Iterate through each month in the extended period
+            while (year < endYear || (year === endYear && month <= endMonth)) {
+                // Skip future months - only create accruals up to current month
+                if (year > currentYear || (year === currentYear && month > currentMonth)) {
+                    console.log(`   ⏭️ Skipping future month ${month}/${year} - will be created when month arrives`);
+                    month++;
+                    if (month > 12) {
+                        month = 1;
+                        year++;
+                    }
+                    continue;
+                }
+                
+                // Skip the lease start month (handled by lease_start process)
+                const leaseStartDate = new Date(application.startDate);
+                const leaseStartMonth = leaseStartDate.getMonth() + 1;
+                const leaseStartYear = leaseStartDate.getFullYear();
+                
+                if (month === leaseStartMonth && year === leaseStartYear) {
+                    console.log(`   ⏭️ Skipping lease start month ${month}/${year} - handled by lease_start process`);
+                    month++;
+                    if (month > 12) {
+                        month = 1;
+                        year++;
+                    }
+                    continue;
+                }
+                
+                // Check if accrual already exists for this month
+                // Use multiple checks to ensure we find existing accruals
+                console.log(`   🔍 Checking for existing accrual for ${month}/${year}...`);
+                let existingAccrual = await RentalAccrualService.checkExistingMonthlyAccrual(
+                    studentId,
+                    month,
+                    year,
+                    application._id,
+                    debtorId
+                );
+                
+                // Also check by AR account code if we have it
+                if (!existingAccrual && arAccountCode) {
+                    console.log(`   🔍 Checking by AR account code ${arAccountCode} for ${month}/${year}...`);
+                    const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+                    existingAccrual = await TransactionEntry.findOne({
+                        source: 'rental_accrual',
+                        status: { $ne: 'deleted' },
+                        'entries.accountCode': arAccountCode,
+                        $and: [
+                            {
+                                $or: [
+                                    { 'metadata.type': 'monthly_rent_accrual' },
+                                    { description: { $regex: /Monthly.*accrual/i } }
+                                ]
+                            },
+                            {
+                                $or: [
+                                    { 'metadata.accrualMonth': month, 'metadata.accrualYear': year },
+                                    { 'metadata.month': monthKey },
+                                    { description: { $regex: new RegExp(monthKey) } }
+                                ]
+                            }
+                        ]
+                    }).session(session);
+                }
+                
+                if (existingAccrual) {
+                    console.log(`   ✅ Accrual already exists for ${month}/${year} (ID: ${existingAccrual._id}, date: ${existingAccrual.date?.toISOString().split('T')[0]})`);
+                    accrualsSkipped++;
+                } else {
+                    // Create missing accrual
+                    try {
+                        console.log(`   🔄 No accrual found - creating missing accrual for ${month}/${year}...`);
+                        
+                        // Create student-like object from application for createStudentRentAccrual
+                        const studentData = {
+                            student: studentId,
+                            firstName: application.firstName,
+                            lastName: application.lastName,
+                            email: application.email || '',
+                            residence: application.residence,
+                            allocatedRoom: application.allocatedRoom || application.allocatedRoomDetails?.roomNumber || '',
+                            startDate: application.startDate,
+                            endDate: application.endDate,
+                            application: application._id,
+                            applicationCode: application.applicationCode
+                        };
+                        
+                        const result = await RentalAccrualService.createStudentRentAccrual(studentData, month, year);
+                        
+                        if (result.success) {
+                            console.log(`   ✅ Created accrual for ${month}/${year}: $${result.amount}`);
+                            accrualsCreated++;
+                        } else {
+                            console.log(`   ⚠️ Failed to create accrual for ${month}/${year}: ${result.error}`);
+                            errors.push({ month, year, error: result.error });
+                        }
+                    } catch (error) {
+                        console.error(`   ❌ Error creating accrual for ${month}/${year}: ${error.message}`);
+                        errors.push({ month, year, error: error.message });
+                    }
+                }
+                
+                // Move to next month
+                month++;
+                if (month > 12) {
+                    month = 1;
+                    year++;
+                }
+            }
+            
+            console.log(`✅ Missing accrual check completed:`);
+            console.log(`   Created: ${accrualsCreated}`);
+            console.log(`   Skipped (already exist): ${accrualsSkipped}`);
+            if (errors.length > 0) {
+                console.log(`   Errors: ${errors.length}`);
+                errors.forEach(err => {
+                    console.log(`      - ${err.month}/${err.year}: ${err.error}`);
+                });
+            }
+            
+            return {
+                success: true,
+                accrualsCreated,
+                accrualsSkipped,
+                errors
+            };
+            
+        } catch (error) {
+            console.error(`❌ Error creating missing accruals: ${error.message}`);
             throw error;
         }
     }
