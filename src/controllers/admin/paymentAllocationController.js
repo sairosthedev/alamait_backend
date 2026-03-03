@@ -8,6 +8,7 @@ const User = require('../../models/User');
 const { Residence } = require('../../models/Residence');
 const Lease = require('../../models/Lease');
 const mongoose = require('mongoose');
+const cacheService = require('../../services/cacheService');
 
 /**
  * Payment Allocation Controller
@@ -555,90 +556,95 @@ const getOutstandingBalancesSummary = async (req, res) => {
 
         console.log(`📊 Getting outstanding balances summary`);
 
-        // Build query for AR transactions
-        const query = {
-            'entries.accountCode': { $regex: '^1100-' },
-            'entries.accountType': 'asset',
-            'entries.debit': { $gt: 0 }
-        };
+        const cacheKey = `ar-outstanding-summary-${JSON.stringify({
+            residence: residence || 'all',
+            startDate: startDate || null,
+            endDate: endDate || null
+        })}`;
 
-        if (residence) {
-            query.residence = new mongoose.Types.ObjectId(residence);
-        }
-
-        if (startDate && endDate) {
-            query.date = {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
+        const summaryData = await cacheService.getOrSet(cacheKey, 60, async () => {
+            // Build query for AR transactions
+            const query = {
+                'entries.accountCode': { $regex: '^1100-' },
+                'entries.accountType': 'asset',
+                'entries.debit': { $gt: 0 }
             };
-        }
 
-        // Get all AR transactions (lean + projection for performance)
-        const arTransactions = await TransactionEntry.find(query)
-            .select('entries totalDebit metadata residence date')
-            .populate('residence', 'name')
-            .sort({ date: 1 })
-            .lean();
+            if (residence) {
+                query.residence = new mongoose.Types.ObjectId(residence);
+            }
 
-        // Calculate summary statistics
-        let totalOutstanding = 0;
-        let totalStudents = 0;
-        let totalTransactions = 0;
-        const studentBalances = {};
+            if (startDate && endDate) {
+                query.date = {
+                    $gte: new Date(startDate),
+                    $lte: new Date(endDate)
+                };
+            }
 
-        arTransactions.forEach(transaction => {
-            const arEntry = transaction.entries.find(e => 
-                e.accountCode.startsWith('1100-') && e.debit > 0
-            );
+            // Get all AR transactions (lean + projection for performance)
+            const arTransactions = await TransactionEntry.find(query)
+                .select('entries totalDebit metadata residence date')
+                .populate('residence', 'name')
+                .sort({ date: 1 })
+                .lean();
 
-            if (arEntry) {
-                const studentId = arEntry.accountCode.split('-')[4];
-                const remainingBalance = arEntry.debit;
+            // Calculate summary statistics
+            let totalOutstanding = 0;
+            let totalStudents = 0;
+            let totalTransactions = 0;
+            const studentBalances = {};
 
-                if (remainingBalance > 0) {
-                    if (!studentBalances[studentId]) {
-                        studentBalances[studentId] = 0;
-                        totalStudents++;
+            arTransactions.forEach(transaction => {
+                const arEntry = transaction.entries.find(e => 
+                    e.accountCode.startsWith('1100-') && e.debit > 0
+                );
+
+                if (arEntry) {
+                    // AR account code is 1100-{debtorId}; use debtorId as key
+                    const studentId = arEntry.accountCode.split('-')[1];
+                    const remainingBalance = arEntry.debit;
+
+                    if (remainingBalance > 0) {
+                        if (!studentBalances[studentId]) {
+                            studentBalances[studentId] = 0;
+                            totalStudents++;
+                        }
+                        studentBalances[studentId] += remainingBalance;
+                        totalOutstanding += remainingBalance;
+                        totalTransactions++;
                     }
-                    studentBalances[studentId] += remainingBalance;
-                    totalOutstanding += remainingBalance;
-                    totalTransactions++;
                 }
-            }
-        });
+            });
 
-        // Get residence breakdown
-        const residenceBreakdown = await TransactionEntry.aggregate([
-            { $match: query },
-            {
-                $lookup: {
-                    from: 'residences',
-                    localField: 'residence',
-                    foreignField: '_id',
-                    as: 'residenceDetails'
+            // Get residence breakdown
+            const residenceBreakdown = await TransactionEntry.aggregate([
+                { $match: query },
+                {
+                    $lookup: {
+                        from: 'residences',
+                        localField: 'residence',
+                        foreignField: '_id',
+                        as: 'residenceDetails'
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$residence',
+                        residenceName: { $first: { $arrayElemAt: ['$residenceDetails.name', 0] } },
+                        totalOutstanding: { $sum: '$totalDebit' },
+                        studentCount: { $addToSet: '$metadata.studentId' }
+                    }
+                },
+                {
+                    $project: {
+                        residenceName: 1,
+                        totalOutstanding: 1,
+                        studentCount: { $size: '$studentCount' }
+                    }
                 }
-            },
-            {
-                $group: {
-                    _id: '$residence',
-                    residenceName: { $first: { $arrayElemAt: ['$residenceDetails.name', 0] } },
-                    totalOutstanding: { $sum: '$totalDebit' },
-                    studentCount: { $addToSet: '$metadata.studentId' }
-                }
-            },
-            {
-                $project: {
-                    residenceName: 1,
-                    totalOutstanding: 1,
-                    studentCount: { $size: '$studentCount' }
-                }
-            }
-        ]);
+            ]);
 
-        res.status(200).json({
-            success: true,
-            message: 'Outstanding balances summary retrieved successfully',
-            data: {
+            return {
                 summary: {
                     totalOutstanding,
                     totalStudents,
@@ -651,7 +657,13 @@ const getOutstandingBalancesSummary = async (req, res) => {
                     startDate,
                     endDate
                 }
-            }
+            };
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Outstanding balances summary retrieved successfully',
+            data: summaryData
         });
 
     } catch (error) {
@@ -976,7 +988,16 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
 
         console.log(`👥 Getting students with outstanding balances by month (using debtor logic)`);
 
-        // Get all AR transactions for all students
+        // Cache key per residence + sorting options
+        const cacheKey = `ar-monthly-outstanding-${JSON.stringify({
+            residence: residence || 'all',
+            limit: Number(limit) || 20,
+            sortBy,
+            sortOrder
+        })}`;
+
+        const result = await cacheService.getOrSet(cacheKey, 60, async () => {
+            // Get all AR transactions for all students
         // Use same calculation logic as balance sheet: cumulative balances by transaction date up to month end
         const transactionQuery = {
             'entries.accountCode': { $regex: '^1100-' },
@@ -1016,7 +1037,7 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
         const allARTransactions = await TransactionEntry.find(transactionQuery).sort({ date: 1 }).lean();
 
         console.log(`📊 Found ${allARTransactions.length} AR transactions${residence ? ` for residence ${residence}` : ''}`);
-        
+
         // Track residence per student from transactions
         const studentResidenceMap = new Map();
 
@@ -1833,26 +1854,25 @@ const getStudentsWithOutstandingBalancesByMonth = async (req, res) => {
         
         console.log(`📊 Monthly outstanding balances view: ${monthlyViewArray.length} months with outstanding balances`);
         console.log(`📊 Total students in monthly view: ${allStudentsWithDetails.length} (${activeCount} active, ${expiredCount} expired)`);
-        
+
+        return {
+            summary: overallTotals,
+            monthlyView: monthlyViewArray,
+            students: allStudentsWithDetails,
+            monthlySummary: monthlyViewArray.map(month => ({
+                monthKey: month.monthKey,
+                year: month.year,
+                month: month.month,
+                monthName: month.monthName,
+                ...month.totals
+            }))
+        };
+        });
+
         res.status(200).json({
             success: true,
             message: 'Students with monthly outstanding balances retrieved successfully',
-            data: {
-                // Overall summary (from ALL students)
-                summary: overallTotals,
-                // Monthly view: organized by month, each month contains ALL students who owe
-                monthlyView: monthlyViewArray,
-                // Legacy format: students organized by student (all students, no limit)
-                students: allStudentsWithDetails,
-                // Monthly summary (totals per month)
-                monthlySummary: monthlyViewArray.map(month => ({
-                    monthKey: month.monthKey,
-                    year: month.year,
-                    month: month.month,
-                    monthName: month.monthName,
-                    ...month.totals
-                }))
-            }
+            data: result
         });
 
     } catch (error) {
