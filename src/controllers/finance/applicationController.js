@@ -31,13 +31,15 @@ exports.getAllApplications = async (req, res) => {
         const sortOptions = {};
         sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
-        // Get all applications (no pagination)
+        // Get all applications (no pagination for now, but with projection for performance)
         const applications = await Application.find(filter)
+            .select('firstName lastName email phone requestType status paymentStatus applicationDate startDate endDate preferredRoom alternateRooms currentRoom requestedRoom reason allocatedRoom waitlistedRoom roomOccupancy applicationCode residence')
             .sort(sortOptions)
             .lean();
 
-        // Get all residences to check room status
-        const residences = await Residence.find({}, 'name rooms address manager');
+        // Get all residences to check room status (lean + projection to reduce payload)
+        const residences = await Residence.find({}, 'name rooms address manager')
+            .lean();
         
         // Create a map of room statuses
         const roomStatusMap = {};

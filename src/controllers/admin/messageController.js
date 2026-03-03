@@ -12,20 +12,6 @@ exports.getMessages = async (req, res) => {
             return res.status(503).json({ error: 'Database service unavailable' });
         }
 
-        // Log request details
-        console.log('Request details:', {
-            user: req.user ? {
-                id: req.user._id,
-                role: req.user.role,
-                email: req.user.email
-            } : 'No user found',
-            query: req.query,
-            headers: {
-                ...req.headers,
-                authorization: req.headers.authorization ? '[REDACTED]' : undefined
-            }
-        });
-
         if (!req.user) {
             console.error('No user found in request');
             return res.status(401).json({ error: 'Authentication required' });
@@ -36,8 +22,9 @@ exports.getMessages = async (req, res) => {
             return res.status(403).json({ error: 'Admin access required' });
         }
 
-        const { filter = 'all', search, page = 1, limit = 10 } = req.query;
+        const { filter = 'all', search, page = 1, limit = 10, read } = req.query;
         const skip = (page - 1) * limit;
+        const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
 
         // Build base query
         let query = {};
@@ -52,45 +39,45 @@ exports.getMessages = async (req, res) => {
         } else if (filter === 'discussions') {
             query.type = 'discussion';
         } else if (filter === 'group') {
-            // Messages sent to all students (group messages)
             query.recipients = { $exists: true, $ne: [] };
         }
 
         // Add condition to exclude student-to-student messages for admin view
         if (filter !== 'received') {
             query.$or = [
-                { author: req.user._id },  // Messages from admin
-                { type: 'announcement' }   // All announcements
+                { author: req.user._id },
+                { type: 'announcement' }
             ];
+        }
+
+        // Filter by read state (read=false => unread by current user)
+        if (read === 'false') {
+            query.$nor = query.$nor || [];
+            query.$nor.push({ 'readBy.user': req.user._id });
+        } else if (read === 'true') {
+            query['readBy.user'] = req.user._id;
         }
 
         // Apply search filter if provided
         if (search) {
-            query.$and = [
-                {
-                    $or: [
-                        { title: { $regex: search, $options: 'i' } },
-                        { content: { $regex: search, $options: 'i' } }
-                    ]
-                }
-            ];
+            query.$and = query.$and || [];
+            query.$and.push({
+                $or: [
+                    { title: { $regex: search, $options: 'i' } },
+                    { content: { $regex: search, $options: 'i' } }
+                ]
+            });
         }
 
-        console.log('Database query:', JSON.stringify(query));
-
         try {
-            // Get total count for pagination
-            console.log('Counting documents...');
-            const total = await Message.countDocuments(query).exec();
-            console.log('Total messages found:', total);
-
-            // Fetch messages with pagination
-            console.log('Fetching messages...');
-            const messages = await Message.find(query)
-                .sort({ pinned: -1, createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .populate({
+            // Count and fetch in parallel for faster response
+            const [total, messages] = await Promise.all([
+                Message.countDocuments(query).exec(),
+                Message.find(query)
+                    .sort({ pinned: -1, createdAt: -1 })
+                    .skip(skip)
+                    .limit(limitNum)
+                    .populate({
                     path: 'author',
                     select: 'firstName lastName role',
                     model: 'User'
@@ -120,12 +107,10 @@ exports.getMessages = async (req, res) => {
                     select: 'name _id',
                     model: 'Residence'
                 })
-                .lean()
-                .exec();
+                    .lean()
+                    .exec()
+            ]);
 
-            console.log('Messages fetched successfully:', messages.length);
-
-            // Format messages
             const formattedMessages = messages.map(message => {
                 try {
                     // Calculate delivery status summary

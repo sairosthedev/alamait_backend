@@ -56,7 +56,7 @@ class CashFlowController {
      */
     static async getAccountTransactionDetails(req, res) {
         try {
-            const { period, month, accountCode, residenceId, sourceType } = req.query;
+            const { period, month, accountCode, residenceId, sourceType, page = '1', limit: limitParam = '50' } = req.query;
             
             // Validate required parameters
             if (!period || !month || !accountCode) {
@@ -66,10 +66,10 @@ class CashFlowController {
                 });
             }
             
-            console.log(`🔍 Getting transaction details for ${accountCode} in ${month} ${period}`);
-            console.log(`📋 Query parameters:`, { period, month, accountCode, residenceId, sourceType });
+            const pageNum = Math.max(1, parseInt(page, 10) || 1);
+            const limitNum = Math.min(200, Math.max(1, parseInt(limitParam, 10) || 50));
+            const skip = (pageNum - 1) * limitNum;
             
-            // Define date range for the specific month
             const monthNames = {
                 'january': 0, 'february': 1, 'march': 2, 'april': 3, 'may': 4, 'june': 5,
                 'july': 6, 'august': 7, 'september': 8, 'october': 9, 'november': 10, 'december': 11
@@ -86,30 +86,11 @@ class CashFlowController {
             const startDate = new Date(period, monthIndex, 1);
             const endDate = new Date(period, monthIndex + 1, 0);
             
-            console.log(`📅 Date range: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]}`);
-            
-            // Use the same logic as the cash flow service to get the correct data
-            let entries = [];
-            
-            // For cash basis, use the same payment query as cash flow
-            const paymentQuery = {
-                source: {
-                    $in: [
-                        'rental_payment',      // When rent is actually received
-                        'expense_payment',     // When expenses are actually paid
-                        'manual',              // Manual cash transactions
-                        'payment_collection',  // Cash payments
-                        'bank_transfer',       // Bank transfers
-                        'payment',             // Cash payments (rent, deposits, etc.)
-                        'advance_payment',     // Advance payments from students
-                        'debt_settlement',     // Debt settlement payments
-                        'current_payment'      // Current period payments
-                    ]
-                },
-                // Exclude forfeiture transactions as they don't involve cash movement
-                'metadata.isForfeiture': { $ne: true },
-                // Add month/date filter to the query
-                date: { $gte: startDate, $lte: endDate }
+            // Single fast query: all posted entries touching this account in the month (index-friendly)
+            const baseQuery = {
+                date: { $gte: startDate, $lte: endDate },
+                status: 'posted',
+                'entries.accountCode': accountCode
             };
             
             if (residenceId) {
@@ -117,103 +98,28 @@ class CashFlowController {
                 const residenceObjectId = mongoose.Types.ObjectId.isValid(residenceId) 
                     ? new mongoose.Types.ObjectId(residenceId) 
                     : residenceId;
-                
-                // Build residence filter
-                const residenceFilter = {
-                    $or: [
-                        { residence: residenceObjectId },
-                        { residence: residenceId },
-                        { 'metadata.residenceId': residenceId },
-                        { 'metadata.residenceId': residenceObjectId },
-                        { 'metadata.residence': residenceId },
-                        { 'metadata.residence': residenceObjectId }
-                    ]
-                };
-                
-                // Combine date filter and residence filter using $and
-                paymentQuery.$and = [
-                    { date: { $gte: startDate, $lte: endDate } },
-                    residenceFilter
+                baseQuery.$or = [
+                    { residence: residenceObjectId },
+                    { residence: residenceId },
+                    { 'metadata.residenceId': residenceId },
+                    { 'metadata.residenceId': residenceObjectId },
+                    { 'metadata.residence': residenceId },
+                    { 'metadata.residence': residenceObjectId }
                 ];
-                // Remove the direct date property since we're using $and
-                delete paymentQuery.date;
             }
             
-            const paymentEntries = await TransactionEntry.find(paymentQuery).populate('entries');
+            const [paymentEntries, totalCount] = await Promise.all([
+                TransactionEntry.find(baseQuery)
+                    .select('transactionId date description reference source status entries totalDebit totalCredit metadata residence')
+                    .sort({ date: -1 })
+                    .skip(skip)
+                    .limit(limitNum)
+                    .lean(),
+                TransactionEntry.countDocuments(baseQuery)
+            ]);
             
-            // Update payment entries to use actual payment dates (same as cash flow)
-            for (const entry of paymentEntries) {
-                let payment = null;
-                
-                // Try to find payment by reference (payment ID)
-                if (entry.reference) {
-                    try {
-                        payment = await Payment.findById(entry.reference);
-                    } catch (error) {
-                        console.log(`⚠️ Could not find payment by reference for entry ${entry._id}:`, error.message);
-                    }
-                }
-                
-                // If payment found, update the entry date to use the actual payment date
-                if (payment && payment.date) {
-                    const originalDate = entry.date;
-                    entry.date = new Date(payment.date);
-                    console.log(`📅 Updated transaction ${entry._id} date from ${originalDate} to payment date: ${payment.date}`);
-                } else {
-                    console.log(`⚠️ No payment found for entry ${entry._id} with reference ${entry.reference}`);
-                }
-            }
-            
-            // Filter entries to only include those within the date range AND matching the requested month
-            const requestedMonth = monthIndex + 1; // 1-based month
-            const requestedYear = parseInt(period);
-            const requestedMonthKey = `${requestedYear}-${String(requestedMonth).padStart(2, '0')}`; // e.g., "2025-11"
-            
-            const filteredEntries = paymentEntries.filter(entry => {
-                // First check date range
-                if (entry.date < startDate || entry.date > endDate) {
-                    return false;
-                }
-                
-                // Then check month metadata/description to ensure it's for the requested month
-                // Check metadata.monthSettled for payment allocations
-                if (entry.metadata?.monthSettled) {
-                    return entry.metadata.monthSettled === requestedMonthKey;
-                }
-                
-                // Check metadata.accrualMonth and accrualYear for accrual transactions
-                if (entry.metadata?.accrualMonth && entry.metadata?.accrualYear) {
-                    return entry.metadata.accrualMonth === requestedMonth && 
-                           entry.metadata.accrualYear === requestedYear;
-                }
-                
-                // Parse description for payment allocations: "Payment allocation: rent for 2025-11"
-                const description = entry.description || '';
-                const monthMatch = description.match(/for\s+(\d{4})-(\d{1,2})/i);
-                if (monthMatch) {
-                    const descYear = parseInt(monthMatch[1]);
-                    const descMonth = parseInt(monthMatch[2]);
-                    return descYear === requestedYear && descMonth === requestedMonth;
-                }
-                
-                // Parse description for accruals: "Monthly rent accrual: Student Name - 11/2025"
-                const accrualMatch = description.match(/-?\s*(\d{1,2})\/(\d{4})/);
-                if (accrualMatch) {
-                    const descMonth = parseInt(accrualMatch[1]);
-                    const descYear = parseInt(accrualMatch[2]);
-                    return descYear === requestedYear && descMonth === requestedMonth;
-                }
-                
-                // If no month metadata found, include it if it's within the date range (fallback)
-                return true;
-            });
-            
-            entries = filteredEntries;
-            
-            console.log(`💳 Found ${entries.length} payment transaction entries for ${requestedMonthKey} (after month filtering)`);
-            
-            // Filter for transactions that contain the specific account code
-            let transactionEntries = entries.filter(entry => {
+            // Entries already filtered by date range and accountCode in query
+            let transactionEntries = paymentEntries.filter(entry => {
                 if (!entry.entries || !Array.isArray(entry.entries)) return false;
                 return entry.entries.some(line => line.accountCode === accountCode);
             });
@@ -396,45 +302,30 @@ class CashFlowController {
             
             console.log(`💳 Found ${transactionEntries.length} transaction entries with account code ${accountCode} after filtering`);
             
-            // If no transactions found after filtering, fall back to showing all transactions for this account code
+            // If no transactions found after filtering, use all for this account (drop sourceType filter)
             if (transactionEntries.length === 0) {
-                console.log(`⚠️ No transactions found after filtering for ${accountCode}, falling back to all transactions for this account`);
-                transactionEntries = entries.filter(entry => {
-                    if (!entry.entries || !Array.isArray(entry.entries)) return false;
-                    return entry.entries.some(line => line.accountCode === accountCode);
-                });
-                console.log(`💳 Fallback found ${transactionEntries.length} transaction entries with account code ${accountCode}`);
+                transactionEntries = paymentEntries.filter(entry => entry.entries && entry.entries.some(line => line.accountCode === accountCode));
             }
             
-            // Filter for the specific account and extract relevant transactions
-            const accountTransactions = [];
+            // Batch load payments for references (avoids N+1)
+            const refIds = [...new Set(transactionEntries.map(e => e.reference).filter(Boolean))];
+            const paymentsMap = {};
+            if (refIds.length > 0) {
+                const payments = await Payment.find({ _id: { $in: refIds } }).populate('student', 'firstName lastName').lean();
+                payments.forEach(p => { paymentsMap[p._id.toString()] = p; });
+            }
             
+            const accountTransactions = [];
             for (const entry of transactionEntries) {
                 if (entry.entries && Array.isArray(entry.entries)) {
                     for (const line of entry.entries) {
                         if (line.accountCode === accountCode) {
-                            // Try to find corresponding payment for additional details
-                            let payment = null;
-                            let studentName = 'N/A';
-                            
-                            // Try to find payment by reference
-                            if (entry.reference) {
-                                try {
-                                    payment = await Payment.findById(entry.reference).populate('student');
-                                    if (payment && payment.student) {
-                                        studentName = `${payment.student.firstName} ${payment.student.lastName}`;
-                                    }
-                                } catch (error) {
-                                    // Ignore error
-                                }
-                            }
-                            
-                            // Extract debtor name from account name if available
+                            const payment = entry.reference ? paymentsMap[entry.reference.toString()] : null;
+                            const studentName = (payment && payment.student) ? `${payment.student.firstName} ${payment.student.lastName}` : 'N/A';
                             let debtorName = 'N/A';
                             if (line.accountName && line.accountName.includes('-')) {
                                 debtorName = line.accountName.split('-')[1]?.trim() || 'N/A';
                             }
-                            
                             accountTransactions.push({
                                 transactionId: entry.transactionId,
                                 date: entry.date,
@@ -443,8 +334,8 @@ class CashFlowController {
                                 description: entry.description,
                                 accountCode: line.accountCode,
                                 accountName: line.accountName,
-                                debtorName: debtorName,
-                                studentName: studentName,
+                                debtorName,
+                                studentName,
                                 reference: entry.reference,
                                 source: entry.source,
                                 paymentId: payment ? payment.paymentId : null,
@@ -456,24 +347,18 @@ class CashFlowController {
                 }
             }
             
-            // Sort by date and amount
             accountTransactions.sort((a, b) => {
                 const dateCompare = new Date(a.date) - new Date(b.date);
-                if (dateCompare !== 0) return dateCompare;
-                return b.amount - a.amount;
+                return dateCompare !== 0 ? dateCompare : b.amount - a.amount;
             });
             
-            // Calculate summary statistics
             const summary = {
-                totalTransactions: accountTransactions.length,
+                totalTransactions: totalCount,
                 totalAmount: accountTransactions.reduce((sum, tx) => sum + tx.amount, 0),
                 totalCredits: accountTransactions.filter(tx => tx.type === 'credit').reduce((sum, tx) => sum + tx.amount, 0),
                 totalDebits: accountTransactions.filter(tx => tx.type === 'debit').reduce((sum, tx) => sum + tx.amount, 0),
                 uniqueStudents: [...new Set(accountTransactions.map(tx => tx.studentName).filter(name => name !== 'N/A'))].length,
-                dateRange: {
-                    start: startDate.toISOString().split('T')[0],
-                    end: endDate.toISOString().split('T')[0]
-                }
+                dateRange: { start: startDate.toISOString().split('T')[0], end: endDate.toISOString().split('T')[0] }
             };
             
             res.json({
@@ -485,7 +370,13 @@ class CashFlowController {
                     period,
                     sourceType: sourceType || null,
                     summary,
-                    transactions: accountTransactions
+                    transactions: accountTransactions,
+                    pagination: {
+                        page: pageNum,
+                        limit: limitNum,
+                        totalCount,
+                        totalPages: Math.ceil(totalCount / limitNum)
+                    }
                 }
             });
             

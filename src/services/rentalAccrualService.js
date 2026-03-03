@@ -237,9 +237,17 @@ class RentalAccrualService {
             throw new Error('Main AR account (1100) not found');
         }
 
+        // Normalize: accept ObjectId, string, or populated document with _id (so debtor lookup always works)
+        const userId = (studentId && typeof studentId === 'object' && studentId._id)
+            ? studentId._id
+            : studentId;
+        if (!userId) {
+            throw new Error('ensureStudentARAccount: studentId is required');
+        }
+
         // 🆕 CRITICAL: Always use debtor account code, not user ID
         const Debtor = require('../models/Debtor');
-        const debtor = await Debtor.findOne({ user: studentId }).select('accountCode _id').lean();
+        const debtor = await Debtor.findOne({ user: userId }).select('accountCode _id').lean();
         
         let childCode;
         if (debtor?.accountCode) {
@@ -259,7 +267,7 @@ class RentalAccrualService {
             } else if (typeof debtor.accountCode === 'string') {
                 // Normal case: accountCode is a string
             childCode = debtor.accountCode;
-            console.log(`✅ Using debtor account code: ${childCode} for student ${studentId}`);
+            console.log(`✅ Using debtor account code: ${childCode} for student ${userId}`);
             } else {
                 // Unexpected type, fallback to debtor ID
                 childCode = `1100-${debtor._id.toString()}`;
@@ -272,7 +280,7 @@ class RentalAccrualService {
                 console.log(`⚠️ Debtor exists but no accountCode, using debtor ID: ${childCode}`);
             } else {
                 // Last resort: use user ID (should not happen if debtor exists)
-                childCode = `1100-${studentId}`;
+                childCode = `1100-${userId.toString ? userId.toString() : userId}`;
                 console.warn(`⚠️ No debtor found, using user ID format: ${childCode} (this should be fixed)`);
             }
         }
@@ -285,7 +293,7 @@ class RentalAccrualService {
                 childCode = `1100-${debtor._id.toString()}`;
                 console.log(`   ✅ Fixed: Using debtor ID as account code: ${childCode}`);
             } else {
-                childCode = `1100-${studentId}`;
+                childCode = `1100-${userId.toString ? userId.toString() : userId}`;
                 console.log(`   ✅ Fixed: Using student ID as account code: ${childCode}`);
             }
         }
@@ -296,7 +304,7 @@ class RentalAccrualService {
         // 🆕 CRITICAL: If debtor exists, also check for accounts with wrong format (student ID instead of debtor ID)
         // This handles cases where accounts were created with the wrong format
         if (debtor?._id) {
-            const wrongFormatCode = `1100-${studentId}`;
+            const wrongFormatCode = `1100-${userId.toString ? userId.toString() : userId}`;
             const wrongFormatAccount = await Account.findOne({ code: wrongFormatCode });
             if (wrongFormatAccount && wrongFormatAccount.code !== childCode) {
                 console.warn(`⚠️ Found account with wrong format (student ID): ${wrongFormatCode}`);
@@ -386,7 +394,7 @@ class RentalAccrualService {
                 childCode = `1100-${debtor._id.toString()}`;
                 console.log(`   ✅ Fixed: Using debtor ID as account code: ${childCode}`);
             } else {
-                childCode = `1100-${studentId}`;
+                childCode = `1100-${userId.toString ? userId.toString() : userId}`;
                 console.log(`   ✅ Fixed: Using student ID as account code: ${childCode}`);
             }
         }
@@ -394,7 +402,7 @@ class RentalAccrualService {
         // Create account with debtor account code format
         child = new Account({
             code: String(childCode), // Explicitly convert to string as final safeguard
-            name: `Accounts Receivable - ${studentName || studentId}`,
+            name: `Accounts Receivable - ${studentName || (userId && (userId.toString ? userId.toString() : userId))}`,
             type: 'Asset',
             category: 'Current Assets',
             subcategory: 'Accounts Receivable',
@@ -406,7 +414,7 @@ class RentalAccrualService {
             metadata: new Map([
                 ['parent', '1100'],
                 ['hasParent', 'true'],
-                ['studentId', String(studentId)],
+                ['studentId', String(userId && (userId.toString ? userId.toString() : userId))],
                 ['debtorId', debtor?._id?.toString() || ''],
                 ['accountCodeFormat', debtor?._id ? 'debtor_id' : 'user_id']
             ])
@@ -419,7 +427,7 @@ class RentalAccrualService {
         await logSystemOperation('create', 'Account', child._id, {
             source: 'Rental Accrual Service',
             type: 'student_ar_account',
-            studentId: studentId,
+            studentId: userId,
             studentName: studentName,
             debtorId: debtor?._id?.toString(),
             parentAccount: '1100',
@@ -1548,6 +1556,22 @@ class RentalAccrualService {
                     console.log(`   ⚠️ Skipping ${studentName} - no valid student or application ID`);
                     continue;
                 }
+
+                // Resolve debtor and AR account code so monthly accruals use 1100-debtorId (not 1100-studentId)
+                let debtorIdForStudent = null;
+                let debtorAccountCodeForStudent = null;
+                try {
+                    const Debtor = require('../models/Debtor');
+                    const debtorDoc = await Debtor.findOne({ user: studentId }).select('_id accountCode').lean();
+                    if (debtorDoc) {
+                        debtorIdForStudent = debtorDoc._id;
+                        debtorAccountCodeForStudent = typeof debtorDoc.accountCode === 'string'
+                            ? debtorDoc.accountCode
+                            : `1100-${debtorDoc._id.toString()}`;
+                    }
+                } catch (e) {
+                    // Non-fatal; createStudentRentAccrual will fall back to ensureStudentARAccount
+                }
                 
                 try {
                     // Check if lease start accrual exists
@@ -1656,7 +1680,10 @@ class RentalAccrualService {
                                 console.log(`      🔍 [DRY RUN] Would create monthly accrual for ${checkMonth}/${checkYear}`);
                                 monthlyAccrualsCreated++;
                             } else {
-                                const monthlyResult = await this.createStudentRentAccrual(student, checkMonth, checkYear);
+                                const studentWithDebtor = debtorIdForStudent && debtorAccountCodeForStudent
+                                    ? { ...student, debtor: debtorIdForStudent, debtorAccountCode: debtorAccountCodeForStudent }
+                                    : student;
+                                const monthlyResult = await this.createStudentRentAccrual(studentWithDebtor, checkMonth, checkYear);
                                 if (monthlyResult && monthlyResult.success) {
                                     console.log(`      ✅ Created monthly accrual for ${checkMonth}/${checkYear}`);
                                     monthlyAccrualsCreated++;
@@ -1948,20 +1975,27 @@ class RentalAccrualService {
                 if (!accountsReceivable) {
                     // Account doesn't exist yet, create it using ensureStudentARAccount
                     console.log(`   ⚠️ Account ${student.debtorAccountCode} not found, creating via ensureStudentARAccount`);
+                    const userIdForAR = (student.student && typeof student.student === 'object' && student.student._id)
+                        ? student.student._id
+                        : (student.student || studentIdValue);
                     accountsReceivable = await this.ensureStudentARAccount(
-                        student.student,
+                        userIdForAR,
                         `${student.firstName} ${student.lastName}`
                     );
                 } else {
                     console.log(`   ✅ Found account with debtor account code: ${student.debtorAccountCode}`);
                 }
-            } else {
-                // No debtor info provided, use standard method (for monthly cron service)
-                accountsReceivable = await this.ensureStudentARAccount(
-                student.student, // Use student ID, not application ID
-                `${student.firstName} ${student.lastName}`
-            );
-            }
+                } else {
+                    // No debtor info provided, use standard method (for monthly cron service)
+                    // Pass resolved student ID (not populated object) so Debtor.findOne({ user }) matches
+                    const userIdForAR = (student.student && typeof student.student === 'object' && student.student._id)
+                        ? student.student._id
+                        : (student.student || studentIdValue);
+                    accountsReceivable = await this.ensureStudentARAccount(
+                        userIdForAR,
+                        `${student.firstName} ${student.lastName}`
+                    );
+                }
             const rentalIncome = await Account.findOne({ code: '4001' }); // Student Accommodation Rent
             
             if (!accountsReceivable || !rentalIncome) {

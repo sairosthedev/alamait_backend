@@ -1351,59 +1351,45 @@ class EnhancedPaymentAllocationService {
       }
       
       // Separate different types of transactions
+      // AR balances must come ONLY from monthly accruals and lease starts (rental_accrual), not from advance_payment or other sources
       const accruals = allUserTransactions.filter(tx => {
-        // 🆕 CRITICAL: Always use the debtor's accountCode (could be debtor ID or user ID format)
-        // Check if transaction has AR debit entry matching the debtor's account code
-        const hasARDebit = tx.entries && tx.entries.some(entry => 
-          entry.accountCode === arAccountCode && 
-          entry.accountType === 'Asset' && 
-          entry.debit > 0
+        if (tx.source !== 'rental_accrual') {
+          return false;
+        }
+        const isLeaseStart = tx.metadata?.type === 'lease_start';
+        const isMonthlyRent = tx.metadata?.type === 'monthly_rent_accrual';
+        if (!isLeaseStart && !isMonthlyRent) {
+          return false;
+        }
+        const hasMatchingAccount = tx.entries && tx.entries.some(entry =>
+          entry.accountCode === arAccountCode
         );
-        
-        if (hasARDebit) {
-          console.log(`🔍 Found AR debit transaction: ${tx.transactionId} - ${tx.description} (AR: ${arAccountCode})`);
+        if (hasMatchingAccount) {
+          console.log(`🔍 Accrual (${tx.metadata?.type}): ${tx.transactionId} - ${tx.description} (AR: ${arAccountCode})`);
           return true;
         }
-        
-        // Include rental accruals that match the account code
-        if (tx.source === 'rental_accrual') {
-          const hasMatchingAccount = tx.entries && tx.entries.some(entry => 
-            entry.accountCode === arAccountCode
-          );
-          if (hasMatchingAccount) {
-            return true;
-          }
-        }
-        
-        // For lease start transactions, check if they have the correct account code
-        if (tx.metadata?.type === 'lease_start' || tx.source === 'lease_start') {
-          const hasMatchingAccount = tx.entries && tx.entries.some(entry => 
-            entry.accountCode === arAccountCode
-          );
-          if (hasMatchingAccount) {
-            return true;
-          }
-        }
-        
         return false;
       });
       
       // 🆕 Include payment and allocation transactions linked by studentId, sourceId, or AR account credit
-      // 🆕 CRITICAL: Exclude advance_payment transactions - they net to zero in AR and should not affect outstanding balances
+      // For outstanding AR by month we care about any transaction that CREDITS the debtor's AR account:
+      // - Normal payments (source: 'payment')
+      // - Legacy advance payments (source: 'advance_payment') that credit AR
+      // - Advance payment applications / AR collections that credit AR for a specific month
       const payments = allUserTransactions.filter(tx => {
-        // 🆕 EXCLUDE advance payment transactions - they have AR entries that net to zero
-        // Advance payments: DR Cash, CR AR, DR AR, CR Deferred Income (AR nets to zero)
-        if (tx.source === 'advance_payment') {
-          console.log(`⏭️ Skipping advance payment transaction: ${tx.transactionId} - AR entries net to zero`);
-          return false;
-        }
-        
         const isAllocation = tx.metadata?.allocationType === 'payment_allocation';
-        const isPayment = tx.source === 'payment';
-        const matchesStudent = tx.metadata?.studentId?.toString() === userIdString || tx.metadata?.userId?.toString() === userIdString || (tx.sourceId && tx.sourceId.toString() === userIdString);
-        const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e => e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0);
-        // Include if it's a payment allocation, or if it's a payment (NOT advance_payment) that matches student or touches AR
-        return isAllocation || (isPayment && (matchesStudent || touchesAR));
+        const isPaymentSource = tx.source === 'payment'
+          || tx.source === 'advance_payment'
+          || tx.source === 'advance_payment_application'
+          || tx.source === 'accounts_receivable_collection';
+        const matchesStudent = tx.metadata?.studentId?.toString() === userIdString
+          || tx.metadata?.userId?.toString() === userIdString
+          || (tx.sourceId && tx.sourceId.toString() === userIdString);
+        const touchesAR = Array.isArray(tx.entries) && tx.entries.some(e =>
+          e.accountCode === arAccountCode && e.accountType === 'Asset' && e.credit > 0
+        );
+        // Include if it's a payment/allocation that matches the student or directly credits the debtor AR account
+        return (isAllocation || isPaymentSource) && (matchesStudent || touchesAR);
       });
       
       // 🆕 Include manual transactions (negotiations, reversals, etc.) that affect AR
@@ -1483,13 +1469,16 @@ class EnhancedPaymentAllocationService {
       // Track outstanding balances by month and type
       const monthlyOutstanding = {};
       
-      // Process accruals to build debt structure
+      // Process accruals to build debt structure (only rental_accrual: lease_start + monthly_rent_accrual)
       accruals.forEach(accrual => {
-        // Prefer explicit metadata.month if present (YYYY-MM), fallback to date
-        const monthKey = accrual.metadata?.month || (() => {
-          const d = new Date(accrual.date);
-          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        })();
+        // Prefer metadata.month (YYYY-MM), then accrualYear/accrualMonth, then date
+        const monthKey = accrual.metadata?.month ||
+          (accrual.metadata?.accrualYear != null && accrual.metadata?.accrualMonth != null
+            ? `${accrual.metadata.accrualYear}-${String(accrual.metadata.accrualMonth).padStart(2, '0')}`
+            : (() => {
+                const d = new Date(accrual.date);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+              })());
         const [yearStr, monStr] = monthKey.split('-');
         const accrualDate = new Date(`${monthKey}-01T00:00:00.000Z`);
         

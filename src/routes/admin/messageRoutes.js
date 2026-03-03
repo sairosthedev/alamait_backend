@@ -42,7 +42,12 @@ router.get('/', auth, checkRole('admin'), messageController.getMessages);
 router.get('/unread-count', auth, checkRole('admin'), async (req, res) => {
     try {
         const Message = require('../../models/Message');
-        const count = await Message.countDocuments({ read: false });
+        // Count messages visible to admin that they haven't read (readBy does not contain current user)
+        const query = {
+            $or: [{ author: req.user._id }, { type: 'announcement' }],
+            $nor: [{ 'readBy.user': req.user._id }]
+        };
+        const count = await Message.countDocuments(query);
         res.json({ count });
     } catch (error) {
         console.error('Error getting unread messages count:', error);

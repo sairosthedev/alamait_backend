@@ -573,10 +573,12 @@ const getOutstandingBalancesSummary = async (req, res) => {
             };
         }
 
-        // Get all AR transactions
+        // Get all AR transactions (lean + projection for performance)
         const arTransactions = await TransactionEntry.find(query)
+            .select('entries totalDebit metadata residence date')
             .populate('residence', 'name')
-            .sort({ date: 1 });
+            .sort({ date: 1 })
+            .lean();
 
         // Calculate summary statistics
         let totalOutstanding = 0;
@@ -693,16 +695,17 @@ const getARInvoices = async (req, res) => {
         // Calculate pagination
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Get accrual transactions
-        const accrualTransactions = await TransactionEntry.find(query)
-            .populate('residence', 'name')
-            .populate('sourceId', 'firstName lastName')
-            .sort({ date: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
-
-        // Get total count for pagination
-        const totalCount = await TransactionEntry.countDocuments(query);
+        // Get accrual transactions (lean + projection for performance)
+        const [accrualTransactions, totalCount] = await Promise.all([
+            TransactionEntry.find(query)
+                .select('transactionId date entries metadata residence description totalDebit status')
+                .populate('residence', 'name')
+                .sort({ date: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
+            TransactionEntry.countDocuments(query)
+        ]);
 
         // Format invoices
         const invoices = accrualTransactions.map(transaction => {

@@ -414,36 +414,33 @@ exports.getAllMonthlyRequests = async (req, res) => {
         }
 
         const skip = (page - 1) * limit;
-        
-        const monthlyRequests = await MonthlyRequest.find(query)
-            .populate('residence', 'name')
-            .populate('submittedBy', 'firstName lastName email')
-            .populate('approvedBy', 'firstName lastName email')
-            .populate('monthlyApprovals.approvedBy', 'firstName lastName email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
 
-        const total = await MonthlyRequest.countDocuments(query);
+        const [total, monthlyRequests] = await Promise.all([
+            MonthlyRequest.countDocuments(query),
+            MonthlyRequest.find(query)
+                .select('title description residence month year status isTemplate items totalEstimatedCost monthlyApprovals submittedBy approvedBy createdAt')
+                .populate('residence', 'name')
+                .populate('submittedBy', 'firstName lastName email')
+                .populate('approvedBy', 'firstName lastName email')
+                .populate('monthlyApprovals.approvedBy', 'firstName lastName email')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
 
-
-
-        // Process monthly requests to include monthly approval status for templates
+        // Process monthly requests to include monthly approval status for templates (request is plain object from .lean())
         const processedRequests = [];
-        
         monthlyRequests.forEach(request => {
             if (request.isTemplate) {
-                // For templates, create entries for each month that has monthly approvals
                 if (month && year) {
-                    // If specific month/year is requested, only show that month
                     const monthlyApproval = request.monthlyApprovals?.find(
                         approval => approval.month === parseInt(month) && approval.year === parseInt(year)
                     );
-                    
                     if (monthlyApproval) {
-                        const processedRequest = {
-                            ...request.toObject(),
-                            // Use monthly approval status as the finance status for this specific month
+                        processedRequests.push({
+                            ...request,
                             financeStatus: monthlyApproval.status,
                             effectiveStatus: monthlyApproval.status,
                             effectiveItems: monthlyApproval.items || request.items,
@@ -452,15 +449,12 @@ exports.getAllMonthlyRequests = async (req, res) => {
                             month: parseInt(month),
                             year: parseInt(year),
                             isMonthlyEntry: true
-                        };
-                        processedRequests.push(processedRequest);
+                        });
                     }
                 } else {
-                    // If no specific month/year, show all monthly approvals
                     request.monthlyApprovals?.forEach(approval => {
-                        const processedRequest = {
-                            ...request.toObject(),
-                            // Use monthly approval status as the finance status for this specific month
+                        processedRequests.push({
+                            ...request,
                             financeStatus: approval.status,
                             effectiveStatus: approval.status,
                             effectiveItems: approval.items || request.items,
@@ -469,37 +463,33 @@ exports.getAllMonthlyRequests = async (req, res) => {
                             month: approval.month,
                             year: approval.year,
                             isMonthlyEntry: true
-                        };
-                        processedRequests.push(processedRequest);
+                        });
                     });
                 }
             } else {
-                // For non-templates, use the request status as finance status
-                const processedRequest = {
-                    ...request.toObject(),
+                processedRequests.push({
+                    ...request,
                     financeStatus: request.status,
                     effectiveStatus: request.status,
                     effectiveItems: request.items,
                     effectiveTotalCost: request.totalEstimatedCost,
                     isMonthlyEntry: false
-                };
-                processedRequests.push(processedRequest);
+                });
             }
         });
 
-        // Apply status filter to processed requests
         let filteredRequests = processedRequests;
         if (status) {
-            filteredRequests = processedRequests.filter(request => request.financeStatus === status);
+            filteredRequests = processedRequests.filter(r => r.financeStatus === status);
         }
 
         res.status(200).json({
             monthlyRequests: filteredRequests,
             pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / limit),
+                currentPage: parseInt(page, 10) || 1,
+                totalPages: Math.ceil(total / limitNum),
                 totalItems: total,
-                itemsPerPage: parseInt(limit)
+                itemsPerPage: limitNum
             }
         });
     } catch (error) {

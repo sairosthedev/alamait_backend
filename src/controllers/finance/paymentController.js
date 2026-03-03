@@ -5,23 +5,28 @@ const { Residence } = require('../../models/Residence');
 const Application = require('../../models/Application');
 const Lease = require('../../models/Lease');
 const Debtor = require('../../models/Debtor');
+const cacheService = require('../../services/cacheService');
 
 /**
  * Get all student payments with pagination and filtering
  */
 exports.getStudentPayments = async (req, res) => {
     try {
-        const { 
-            page = 1, 
-            limit = 10, 
-            status, 
-            residence, 
-            startDate, 
+        const {
+            page = 1,
+            limit = 10,
+            status,
+            residence,
+            startDate,
             endDate,
             student,
             paymentType
         } = req.query;
-        
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+        const skip = (pageNum - 1) * limitNum;
+
         const query = {};
         
         // Apply filters
@@ -72,7 +77,7 @@ exports.getStudentPayments = async (req, res) => {
                 query.student = studentUser._id;
             }
         }
-        
+
         // Date filtering
         if (startDate || endDate) {
             query.date = {};
@@ -86,52 +91,67 @@ exports.getStudentPayments = async (req, res) => {
             }
         }
 
-        // Query the database directly without pagination to better match admin method
-        const payments = await Payment.find(query)
-            .populate('residence', 'name location')
-            .populate('createdBy', 'firstName lastName')
-            .populate('updatedBy', 'firstName lastName')
-            .populate('proofOfPayment.verifiedBy', 'firstName lastName')
-            .sort({ date: -1 });
-            
-        // Transform payments data and handle expired students
-        const formattedPayments = await Promise.all(payments.map(async (payment) => {
-            // Get student information (including expired students)
-            let studentInfo = null;
-            if (payment.student || payment.user) {
-                const studentId = payment.student || payment.user;
-                const studentResult = await findStudentById(studentId);
-                if (studentResult) {
-                    studentInfo = studentResult.student;
-                }
-            }
-            let paymentType = 'Other';
-            
-            // Improved payment type detection
+        // Cache key per filter set + page
+        const cacheKey = `finance-payments-${JSON.stringify({
+            status: status || 'all',
+            residence: residence || 'all',
+            startDate: startDate || null,
+            endDate: endDate || null,
+            student: student || 'all',
+            paymentType: paymentType || 'all',
+            page: pageNum,
+            limit: limitNum
+        })}`;
+
+        // Query the database with pagination and projection for performance, with short-lived cache
+        const { payments, total } = await cacheService.getOrSet(cacheKey, 60, async () => {
+            const [paymentsResult, totalCount] = await Promise.all([
+                Payment.find(query)
+                    .select('paymentId totalAmount rentAmount adminFee deposit date status method paymentMonth payments student user residence createdBy updatedBy proofOfPayment applicationStatus clarificationRequests room roomType')
+                    .populate('residence', 'name location')
+                    .populate('createdBy', 'firstName lastName')
+                    .populate('updatedBy', 'firstName lastName')
+                    .populate('proofOfPayment.verifiedBy', 'firstName lastName')
+                    .populate('student', 'firstName lastName email role')
+                    .sort({ date: -1 })
+                    .skip(skip)
+                    .limit(limitNum)
+                    .lean(),
+                Payment.countDocuments(query)
+            ]);
+
+            return { payments: paymentsResult, total: totalCount };
+        });
+
+        // Transform payments data (use populated student; avoid N+1 lookups)
+        const formattedPayments = payments.map(payment => {
+            const studentInfo = payment.student || null;
+            let derivedPaymentType = 'Other';
+
             if (payment.rentAmount > 0 && payment.adminFee === 0 && payment.deposit === 0) {
-                paymentType = 'Rent';
+                derivedPaymentType = 'Rent';
             } else if (payment.deposit > 0 && payment.rentAmount === 0 && payment.adminFee === 0) {
-                paymentType = 'Deposit';
+                derivedPaymentType = 'Deposit';
             } else if (payment.adminFee > 0 && payment.rentAmount === 0 && payment.deposit === 0) {
-                paymentType = 'Admin Fee';
+                derivedPaymentType = 'Admin Fee';
             } else if (payment.rentAmount > 0 && payment.adminFee > 0 && payment.deposit === 0) {
-                paymentType = 'Rent + Admin Fee';
+                derivedPaymentType = 'Rent + Admin Fee';
             } else if (payment.rentAmount > 0 && payment.deposit > 0 && payment.adminFee === 0) {
-                paymentType = 'Rent + Deposit';
+                derivedPaymentType = 'Rent + Deposit';
             } else if (payment.rentAmount > 0 && payment.adminFee > 0 && payment.deposit > 0) {
-                paymentType = 'Rent + Admin Fee + Deposit';
+                derivedPaymentType = 'Rent + Admin Fee + Deposit';
             } else if (payment.adminFee > 0 && payment.deposit > 0 && payment.rentAmount === 0) {
-                paymentType = 'Admin Fee + Deposit';
+                derivedPaymentType = 'Admin Fee + Deposit';
             }
-            
-            const admin = payment.createdBy ? 
-                `${payment.createdBy.firstName} ${payment.createdBy.lastName}` : 
-                'System';
-                
+
+            const admin = payment.createdBy
+                ? `${payment.createdBy.firstName} ${payment.createdBy.lastName}`
+                : 'System';
+
             return {
                 id: payment.paymentId,
                 student: studentInfo ? `${studentInfo.firstName} ${studentInfo.lastName}` : 'Unknown',
-                admin: admin,
+                admin,
                 residence: payment.residence ? payment.residence.name : 'Unknown',
                 room: payment.room || 'Not Assigned',
                 roomType: payment.roomType || '',
@@ -141,7 +161,7 @@ exports.getStudentPayments = async (req, res) => {
                 deposit: payment.deposit || 0,
                 amount: payment.totalAmount,
                 datePaid: safeDateFormat(payment.date),
-                paymentType: paymentType,
+                paymentType: derivedPaymentType,
                 status: payment.status,
                 proof: payment.proofOfPayment?.fileUrl || null,
                 method: payment.method || '',
@@ -150,20 +170,16 @@ exports.getStudentPayments = async (req, res) => {
                 residenceId: payment.residence ? payment.residence._id : null,
                 applicationStatus: payment.applicationStatus || null,
                 clarificationRequests: payment.clarificationRequests || [],
-                studentInfo: studentInfo // Include full student info for expired students
+                studentInfo // Include full student info when available
             };
-        }));
-        
-        const total = formattedPayments.length;
-        const startIndex = (page - 1) * limit;
-        const endIndex = startIndex + parseInt(limit);
-        const paginatedPayments = formattedPayments.slice(startIndex, endIndex);
-        
+        });
+
         res.json({
-            payments: paginatedPayments,
-            page: parseInt(page),
-            totalPages: Math.ceil(total / parseInt(limit)),
-            totalPayments: total
+            payments: formattedPayments,
+            page: pageNum,
+            totalPages: Math.ceil(total / limitNum),
+            totalPayments: total,
+            limit: limitNum
         });
     } catch (error) {
         console.error('Error in getStudentPayments:', error);
@@ -969,6 +985,16 @@ exports.processPayment = async (req, res) => {
             }
         }
         
+        // Send immediate success response; heavy processing continues in background
+        res.status(201).json({
+            success: true,
+            message: "Payment created successfully with double-entry accounting (processing allocation in background)",
+            payment
+        });
+        
+        // Run Smart FIFO allocation, transaction verification, and emails in the background (non-blocking)
+        (async () => {
+        
         // Always trigger Smart FIFO allocation
         try {
             console.log('🎯 Starting Smart FIFO allocation...');
@@ -1207,20 +1233,12 @@ exports.processPayment = async (req, res) => {
             source: { $in: ['payment', 'advance_payment'] },
             status: { $ne: 'reversed' }
         });
-
-        // Return success response (reflect actual transaction state)
-        return res.status(201).json({
-            success: true,
-            message: "Payment created successfully with double-entry accounting",
-            payment: updatedPayment,
-            accounting: {
-                transactionCreated: !!existingTx,
-                transactionId: existingTx?.transactionId || null,
-                message: existingTx 
-                    ? "Double-entry accounting transaction created"
-                    : "Transaction will be created by post-save hook if needed"
-            }
-        });
+        
+        console.log('ℹ️ Background verification for payment', updatedPayment.paymentId, 'transactionCreated:', !!existingTx);
+        
+        })();
+        
+        return;
 
     } catch (error) {
         console.error('❌ Error processing payment:', error);

@@ -689,6 +689,7 @@ const requestSchema = new mongoose.Schema({
 });
 
 // Add indexes for common queries
+// Basic indexes
 requestSchema.index({ status: 1 });
 requestSchema.index({ type: 1 });
 requestSchema.index({ submittedBy: 1 });
@@ -727,6 +728,16 @@ requestSchema.index({ category: 1, status: 1, createdAt: -1 });
 
 // Residence + type + status (residence-specific requests)
 requestSchema.index({ residence: 1, type: 1, status: 1 });
+
+// Optimized for pending-count aggregation:
+// status + approval flags match the $match stages used in getPendingCount
+requestSchema.index({
+    status: 1,
+    type: 1,
+    'approval.admin.approved': 1,
+    'approval.finance.approved': 1,
+    'approval.ceo.approved': 1
+});
 
 // Custom validation for conditional field requirements
 requestSchema.pre('validate', function(next) {

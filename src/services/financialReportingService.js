@@ -53,7 +53,9 @@ class FinancialReportingService {
                     ];
                 }
                 
-                let accrualEntries = await TransactionEntry.find(accrualQuery).lean();
+                let accrualEntries = await TransactionEntry.find(accrualQuery)
+                    .select('date entries source status residence metadata')
+                    .lean();
                 
                 // For accrual basis, include only expense accruals (and optionally manual adjustments)
                 const expenseQuery = {
@@ -70,7 +72,9 @@ class FinancialReportingService {
                     ];
                 }
                 
-                const expenseEntries = await TransactionEntry.find(expenseQuery).lean();
+                const expenseEntries = await TransactionEntry.find(expenseQuery)
+                    .select('date entries source status residence metadata')
+                    .lean();
                 
                 console.log(`Found ${accrualEntries.length} rental accrual entries and ${expenseEntries.length} expense entries for accrual basis`);
                 

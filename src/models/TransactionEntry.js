@@ -365,4 +365,11 @@ transactionEntrySchema.index(
   }
 );
 
+// Speed: cash flow drill-down and reporting (date + source + status)
+transactionEntrySchema.index({ date: 1, source: 1, status: 1 });
+// Speed: accrual checks by month/year
+transactionEntrySchema.index({ 'metadata.accrualYear': 1, 'metadata.accrualMonth': 1, source: 1, status: 1 });
+// Speed: payment allocation month filter
+transactionEntrySchema.index({ 'metadata.monthSettled': 1, date: 1 });
+
 module.exports = mongoose.model('TransactionEntry', transactionEntrySchema); 

@@ -25,8 +25,8 @@ const performanceMonitor = (req, res, next) => {
     res.json = function(data) {
         const duration = Date.now() - startTime;
         
-        // Log slow requests (> 1 second)
-        if (duration > 1000) {
+        // Log slow requests (> 800ms)
+        if (duration > 800) {
             const logEntry = {
                 timestamp: new Date().toISOString(),
                 method,

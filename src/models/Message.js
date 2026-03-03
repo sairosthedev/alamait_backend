@@ -122,6 +122,9 @@ messageSchema.index({ 'recipients': 1, type: 1, createdAt: -1 });
 // Recipients + pinned + createdAt (common query pattern for students)
 messageSchema.index({ 'recipients': 1, pinned: -1, createdAt: -1 });
 
+// Unread count: messages not read by a user (readBy.user)
+messageSchema.index({ 'readBy.user': 1 });
+
 // Residence + type + createdAt (residence-specific messages)
 messageSchema.index({ residence: 1, type: 1, createdAt: -1 });
 

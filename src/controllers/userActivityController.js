@@ -20,15 +20,18 @@ exports.trackPageView = async (req, res) => {
 
         const { page, pageTitle, previousPage, duration, metadata } = req.body;
 
-        await UserActivityService.trackPageView(userId, req, {
+        // Fire-and-forget tracking to keep API response fast
+        UserActivityService.trackPageView(userId, req, {
             page,
             pageTitle,
             previousPage,
             duration,
             metadata
+        }).catch(error => {
+            console.error('Error tracking page view (non-blocking):', error);
         });
 
-        res.json({ success: true, message: 'Page view tracked' });
+        res.json({ success: true, message: 'Page view accepted' });
     } catch (error) {
         console.error('Error tracking page view:', error);
         res.status(500).json({ error: 'Failed to track page view' });
@@ -49,16 +52,18 @@ exports.trackNavigation = async (req, res) => {
 
         const { fromPage, toPage, fromPageTitle, toPageTitle, navigationMethod, metadata } = req.body;
 
-        await UserActivityService.trackNavigation(userId, req, {
+        UserActivityService.trackNavigation(userId, req, {
             fromPage,
             toPage,
             fromPageTitle,
             toPageTitle,
             navigationMethod,
             metadata
+        }).catch(error => {
+            console.error('Error tracking navigation (non-blocking):', error);
         });
 
-        res.json({ success: true, message: 'Navigation tracked' });
+        res.json({ success: true, message: 'Navigation accepted' });
     } catch (error) {
         console.error('Error tracking navigation:', error);
         res.status(500).json({ error: 'Failed to track navigation' });
@@ -92,7 +97,7 @@ exports.trackAction = async (req, res) => {
             metadata
         } = req.body;
 
-        await UserActivityService.trackAction(userId, req, {
+        UserActivityService.trackAction(userId, req, {
             page,
             pageTitle,
             action,
@@ -105,9 +110,11 @@ exports.trackAction = async (req, res) => {
             status,
             errorMessage,
             metadata
+        }).catch(error => {
+            console.error('Error tracking action (non-blocking):', error);
         });
 
-        res.json({ success: true, message: 'Action tracked' });
+        res.json({ success: true, message: 'Action accepted' });
     } catch (error) {
         console.error('Error tracking action:', error);
         res.status(500).json({ error: 'Failed to track action' });
@@ -138,7 +145,7 @@ exports.trackFormSubmit = async (req, res) => {
             errorMessage
         } = req.body;
 
-        await UserActivityService.trackFormSubmit(userId, req, {
+        UserActivityService.trackFormSubmit(userId, req, {
             page,
             pageTitle,
             formId,
@@ -148,9 +155,11 @@ exports.trackFormSubmit = async (req, res) => {
             collection,
             status,
             errorMessage
+        }).catch(error => {
+            console.error('Error tracking form submit (non-blocking):', error);
         });
 
-        res.json({ success: true, message: 'Form submission tracked' });
+        res.json({ success: true, message: 'Form submission accepted' });
     } catch (error) {
         console.error('Error tracking form submit:', error);
         res.status(500).json({ error: 'Failed to track form submission' });
@@ -180,7 +189,7 @@ exports.trackButtonClick = async (req, res) => {
             collection
         } = req.body;
 
-        await UserActivityService.trackButtonClick(userId, req, {
+        UserActivityService.trackButtonClick(userId, req, {
             page,
             pageTitle,
             buttonId,
@@ -189,9 +198,11 @@ exports.trackButtonClick = async (req, res) => {
             data,
             recordId,
             collection
+        }).catch(error => {
+            console.error('Error tracking button click (non-blocking):', error);
         });
 
-        res.json({ success: true, message: 'Button click tracked' });
+        res.json({ success: true, message: 'Button click accepted' });
     } catch (error) {
         console.error('Error tracking button click:', error);
         res.status(500).json({ error: 'Failed to track button click' });
@@ -221,7 +232,7 @@ exports.trackDataView = async (req, res) => {
             metadata
         } = req.body;
 
-        await UserActivityService.trackDataView(userId, req, {
+        UserActivityService.trackDataView(userId, req, {
             page,
             pageTitle,
             dataType,
@@ -230,9 +241,11 @@ exports.trackDataView = async (req, res) => {
             filters,
             sort,
             metadata
+        }).catch(error => {
+            console.error('Error tracking data view (non-blocking):', error);
         });
 
-        res.json({ success: true, message: 'Data view tracked' });
+        res.json({ success: true, message: 'Data view accepted' });
     } catch (error) {
         console.error('Error tracking data view:', error);
         res.status(500).json({ error: 'Failed to track data view' });
@@ -294,43 +307,48 @@ exports.track = async (req, res) => {
             });
         }
 
-        let result;
-
-        switch (inferredActivityType.toLowerCase()) {
-            case 'page_view':
-                result = await UserActivityService.trackPageView(userId, req, activityData);
-                break;
-            case 'page_navigation':
-            case 'navigation':
-                result = await UserActivityService.trackNavigation(userId, req, activityData);
-                break;
-            case 'action':
-                result = await UserActivityService.trackAction(userId, req, activityData);
-                break;
-            case 'form_submit':
-            case 'form_submission':
-                result = await UserActivityService.trackFormSubmit(userId, req, activityData);
-                break;
-            case 'button_click':
-            case 'button_clicked':
-                result = await UserActivityService.trackButtonClick(userId, req, activityData);
-                break;
-            case 'data_view':
-                result = await UserActivityService.trackDataView(userId, req, activityData);
-                break;
-            default:
-                // Default to generic action tracking
-                result = await UserActivityService.trackAction(userId, req, {
-                    ...activityData,
-                    action: inferredActivityType || 'unknown'
-                });
-        }
-
+        // Fire-and-forget generic tracking based on inferred activity type
+        const trackingPromise = (async () => {
+            try {
+                switch (inferredActivityType.toLowerCase()) {
+                    case 'page_view':
+                        await UserActivityService.trackPageView(userId, req, activityData);
+                        break;
+                    case 'page_navigation':
+                    case 'navigation':
+                        await UserActivityService.trackNavigation(userId, req, activityData);
+                        break;
+                    case 'action':
+                        await UserActivityService.trackAction(userId, req, activityData);
+                        break;
+                    case 'form_submit':
+                    case 'form_submission':
+                        await UserActivityService.trackFormSubmit(userId, req, activityData);
+                        break;
+                    case 'button_click':
+                    case 'button_clicked':
+                        await UserActivityService.trackButtonClick(userId, req, activityData);
+                        break;
+                    case 'data_view':
+                        await UserActivityService.trackDataView(userId, req, activityData);
+                        break;
+                    default:
+                        await UserActivityService.trackAction(userId, req, {
+                            ...activityData,
+                            action: inferredActivityType || 'unknown'
+                        });
+                }
+            } catch (error) {
+                console.error('Error tracking activity (non-blocking):', error);
+            }
+        })();
+        
         res.json({ 
             success: true, 
             message: `${inferredActivityType} tracked successfully`,
             activityType: inferredActivityType,
-            activityId: result?._id || null
+            // Activity is tracked asynchronously; ID may not be available immediately
+            activityId: null
         });
     } catch (error) {
         console.error('Error tracking activity:', error);

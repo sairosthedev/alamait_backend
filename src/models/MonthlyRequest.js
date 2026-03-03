@@ -376,6 +376,7 @@ const monthlyRequestSchema = new mongoose.Schema({
 // Index for efficient querying
 monthlyRequestSchema.index({ residence: 1, month: 1, year: 1 });
 monthlyRequestSchema.index({ status: 1 });
+monthlyRequestSchema.index({ status: 1, createdAt: -1 }); // list by status (e.g. rejected) + sort
 monthlyRequestSchema.index({ isTemplate: 1 });
 
 // Pre-save middleware to calculate total cost and format description

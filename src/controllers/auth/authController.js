@@ -269,33 +269,31 @@ exports.login = async (req, res) => {
             console.log('User Agent:', userAgent);
             console.log('-'.repeat(80));
             
-            // Log to audit log with system user ID for failed attempts
-            try {
-                await createAuditLog({
-                    action: 'login',
-                    collection: 'User',
-                    recordId: null,
-                    userId: '68b7909295210ad2fa2c5dcf', // System user ID for failed attempts
-                    details: JSON.stringify({
-                        event: 'failed_login_attempt',
-                        reason: 'user_not_found',
-                        email: email,
-                        timestamp: attemptTime,
-                        deviceIp: deviceInfo.deviceIp,
-                        deviceIdentifier: deviceInfo.deviceIdentifier,
-                        deviceAddress: deviceInfo.deviceAddress,
-                        deviceHash: deviceInfo.deviceHash,
-                        deviceType: deviceInfo.deviceType,
-                        deviceName: deviceInfo.deviceName
-                    }),
-                    ipAddress: deviceInfo.deviceIp, // Use real IP
-                    userAgent: userAgent,
-                    statusCode: 401,
-                    errorMessage: 'Invalid credentials - User not found'
-                });
-            } catch (auditError) {
+            // Fire-and-forget audit log (don't block login response)
+            createAuditLog({
+                action: 'login',
+                collection: 'User',
+                recordId: null,
+                userId: '68b7909295210ad2fa2c5dcf', // System user ID for failed attempts
+                details: JSON.stringify({
+                    event: 'failed_login_attempt',
+                    reason: 'user_not_found',
+                    email: email,
+                    timestamp: attemptTime,
+                    deviceIp: deviceInfo.deviceIp,
+                    deviceIdentifier: deviceInfo.deviceIdentifier,
+                    deviceAddress: deviceInfo.deviceAddress,
+                    deviceHash: deviceInfo.deviceHash,
+                    deviceType: deviceInfo.deviceType,
+                    deviceName: deviceInfo.deviceName
+                }),
+                ipAddress: deviceInfo.deviceIp, // Use real IP
+                userAgent: userAgent,
+                statusCode: 401,
+                errorMessage: 'Invalid credentials - User not found'
+            }).catch(auditError => {
                 console.error('Failed to log audit entry for failed login:', auditError);
-            }
+            });
             
             return res.status(401).json({ error: 'Invalid credentials' });
         }
@@ -330,29 +328,27 @@ exports.login = async (req, res) => {
                 console.log('User Agent:', userAgent);
                 console.log('-'.repeat(80));
                 
-                // Log to audit log
-                try {
-                    await logAuthOperation(
-                        'login',
-                        user._id,
-                        JSON.stringify({
-                            event: 'failed_login_attempt',
-                            reason: 'invalid_password',
-                            email: user.email,
-                            timestamp: attemptTime,
-                            deviceIp: deviceInfo.deviceIp,
-                            deviceIdentifier: deviceInfo.deviceIdentifier,
-                            deviceAddress: deviceInfo.deviceAddress,
-                            deviceHash: deviceInfo.deviceHash,
-                            deviceType: deviceInfo.deviceType,
-                            deviceName: deviceInfo.deviceName
-                        }),
-                        deviceInfo.deviceIp, // Use real IP
-                        userAgent
-                    );
-                } catch (auditError) {
+                // Fire-and-forget audit log (don't block login response)
+                logAuthOperation(
+                    'login',
+                    user._id,
+                    JSON.stringify({
+                        event: 'failed_login_attempt',
+                        reason: 'invalid_password',
+                        email: user.email,
+                        timestamp: attemptTime,
+                        deviceIp: deviceInfo.deviceIp,
+                        deviceIdentifier: deviceInfo.deviceIdentifier,
+                        deviceAddress: deviceInfo.deviceAddress,
+                        deviceHash: deviceInfo.deviceHash,
+                        deviceType: deviceInfo.deviceType,
+                        deviceName: deviceInfo.deviceName
+                    }),
+                    deviceInfo.deviceIp, // Use real IP
+                    userAgent
+                ).catch(auditError => {
                     console.error('Failed to log audit entry for failed login:', auditError);
-                }
+                });
                 
                 return res.status(401).json({ error: 'Invalid credentials' });
             }
@@ -414,36 +410,8 @@ exports.login = async (req, res) => {
         }
         
         await user.save();
-
-        // Log successful login to audit log with device information
-        try {
-            await logAuthOperation(
-                'login',
-                user._id,
-                JSON.stringify({
-                    event: 'successful_login',
-                    email: user.email,
-                    role: user.role,
-                    timestamp: loginTime,
-                    deviceIp: deviceInfo.deviceIp,
-                    deviceIdentifier: deviceInfo.deviceIdentifier,
-                    deviceAddress: deviceInfo.deviceAddress,
-                    deviceHash: deviceInfo.deviceHash,
-                    deviceType: deviceInfo.deviceType,
-                    deviceName: deviceInfo.deviceName
-                }),
-                deviceInfo.deviceIp, // Use real IP
-                userAgent
-            );
-            
-            // Also track in UserActivity for comprehensive activity tracking
-            const UserActivityService = require('../services/userActivityService');
-            await UserActivityService.trackLogin(user._id, req, deviceInfo);
-        } catch (auditError) {
-            console.error('Failed to log audit entry for successful login:', auditError);
-            // Don't fail the login if audit logging fails
-        }
-
+        
+        // Send response immediately after critical work (auth + user save)
         res.json({
             token,
             user: {
@@ -455,6 +423,38 @@ exports.login = async (req, res) => {
                 isVerified: user.isVerified
             }
         });
+        
+        // Fire-and-forget logging and activity tracking (non-blocking)
+        logAuthOperation(
+            'login',
+            user._id,
+            JSON.stringify({
+                event: 'successful_login',
+                email: user.email,
+                role: user.role,
+                timestamp: loginTime,
+                deviceIp: deviceInfo.deviceIp,
+                deviceIdentifier: deviceInfo.deviceIdentifier,
+                deviceAddress: deviceInfo.deviceAddress,
+                deviceHash: deviceInfo.deviceHash,
+                deviceType: deviceInfo.deviceType,
+                deviceName: deviceInfo.deviceName
+            }),
+            deviceInfo.deviceIp, // Use real IP
+            userAgent
+        ).catch(auditError => {
+            console.error('Failed to log audit entry for successful login:', auditError);
+        });
+        
+        // Track login in UserActivity (best-effort, non-blocking)
+        try {
+            const UserActivityService = require('../services/userActivityService');
+            UserActivityService.trackLogin(user._id, req, deviceInfo).catch(activityError => {
+                console.error('Failed to track login activity:', activityError);
+            });
+        } catch (activityInitError) {
+            console.error('Failed to initialise UserActivityService for login tracking:', activityInitError);
+        }
     } catch (error) {
         console.error('Error in login:', error);
         res.status(500).json({ error: 'Server error' });
